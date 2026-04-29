@@ -1,0 +1,17 @@
+{
+  "name": "orchcode-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/agent-runtime",
+    "apps/desktop",
+    "packages/protocol"
+  ],
+  "scripts": {
+    "build": "npm run build -w @orchcode/protocol && npm run build -w @orchcode/agent-runtime && npm run build -w @orchcode/desktop",
+    "typecheck": "npm run build -w @orchcode/protocol && npm run typecheck -w @orchcode/protocol && npm run typecheck -w @orchcode/agent-runtime && npm run typecheck -w @orchcode/desktop",
+    "test": "npm run test -w @orchcode/agent-runtime",
+    "agent:dev": "npm run dev -w @orchcode/agent-runtime",
+    "dev": "npm run tauri:dev -w @orchcode/desktop"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+target/
+.vite/
+.playwright-mcp/
+*.log
+.orchcode-agent-runtime/
+.env
+.env.*
+*.pem
+id_rsa
+id_ed25519
+credentials.json
