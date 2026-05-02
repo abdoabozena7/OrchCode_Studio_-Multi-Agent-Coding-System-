@@ -1,6 +1,7 @@
 import type {
   AccessProfile,
   AgentRuntimeSession,
+  AppEvent,
   CreateRuntimeSessionResponse,
   PatchApprovalResponse,
   RuntimeExecutionMode,
@@ -46,6 +47,38 @@ export async function rejectRuntimePatch(sessionId: string, patchId: string) {
   return runtimeFetch<PatchApprovalResponse>(`/sessions/${sessionId}/patches/${patchId}/reject`, {
     method: "POST"
   });
+}
+
+export function subscribeRuntimeEvents(
+  sessionId: string,
+  handlers: {
+    onEvent?: (event: AppEvent) => void;
+    onSession?: (session: AgentRuntimeSession) => void;
+    onError?: () => void;
+  }
+) {
+  const source = new EventSource(`${runtimeBaseUrl}/sessions/${sessionId}/events`);
+  const handleEvent = (raw: MessageEvent<string>) => {
+    const event = JSON.parse(raw.data) as AppEvent;
+    handlers.onEvent?.(event);
+    if (event.type === "runtime.session.updated") {
+      handlers.onSession?.(event.session);
+    }
+  };
+  const eventTypes: AppEvent["type"][] = [
+    "runtime.session.updated",
+    "runtime.progress.updated",
+    "runtime.patch.stats.updated",
+    "runtime.run.completed",
+    "runtime.orchestration.event",
+    "runtime.patch.proposed",
+    "runtime.command.requested"
+  ];
+  for (const type of eventTypes) {
+    source.addEventListener(type, handleEvent as EventListener);
+  }
+  source.onerror = () => handlers.onError?.();
+  return () => source.close();
 }
 
 async function runtimeFetch<T>(path: string, init?: RequestInit): Promise<T> {

@@ -242,7 +242,12 @@ export class AgentRuntime {
           orchestrationEvents: [],
           approvalDecisions: [],
           safetySettings: accessProfileDefaults(draft.accessProfile),
-          lockedFiles: {}
+          lockedFiles: {},
+          selectedWorkerAgents: [],
+          mandatoryGateAgents: ["Product Orchestrator", "Business Orchestrator", "Engineering Orchestrator", "SecurityAgent", "ReviewerAgent"],
+          workOrders: [],
+          qualityGateResults: [],
+          retryCount: 0
         };
       });
     }

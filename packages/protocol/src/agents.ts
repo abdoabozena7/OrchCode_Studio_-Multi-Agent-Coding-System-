@@ -1,3 +1,5 @@
+import type { WorkerSelfCheck } from "./orchestration.js";
+
 export type AgentRole =
   | "Product Orchestrator"
   | "Business Orchestrator"
@@ -38,6 +40,7 @@ export type WorkerOutput = {
   patchProposalIds: string[];
   commandRequestIds: string[];
   risks: string[];
+  selfCheck?: WorkerSelfCheck;
   status: "completed" | "blocked" | "failed";
   createdAt: string;
 };

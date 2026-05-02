@@ -6,13 +6,15 @@ import type {
   ProjectMap,
   TaskGraph,
   TaskNode,
-  TechnicalPlan
+  TechnicalPlan,
+  WorkOrder
 } from "@orchcode/protocol";
 import { estimateComplexity, parsePromptDirective } from "../runtime/delegation.js";
 
 type OrchestratorResult = {
   technicalPlan: TechnicalPlan;
   delegationDecision: DelegationDecision;
+  workOrders: WorkOrder[];
 };
 
 export class EngineeringOrchestrator {
@@ -24,6 +26,7 @@ export class EngineeringOrchestrator {
   }): OrchestratorResult {
     const workerSelection = selectWorkers(input.productBrief.goal, input.projectMap);
     const nodes = createNodes(input.sessionId, input.productBrief, input.projectMap, workerSelection.roles);
+    const workOrders = createWorkOrders(input.sessionId, input.productBrief, input.businessBrief, nodes);
     const graph: TaskGraph = {
       sessionId: input.sessionId,
       nodes,
@@ -60,7 +63,8 @@ export class EngineeringOrchestrator {
             ? "medium"
             : "low",
         taskGraph: graph
-      }
+      },
+      workOrders
     };
   }
 }
@@ -92,13 +96,17 @@ function selectWorkers(goal: string, projectMap: ProjectMap) {
   const needsTests = normalized.includes("test") || normalized.includes("validate") || projectMap.testCommands.length > 0;
   const needsSecurity = normalized.includes("auth") || normalized.includes("security") || needsBackend;
 
-  if (projectMap.importantFiles.length && !isStaticUiProject) {
+  if (isGame && isStaticUiProject) {
+    addRole("GameLogicAgent", "Own playable rules: movement, food, scoring, collision, and reset.");
+    addRole("ThreeJsRenderingAgent", "Own Three.js scene, camera, grid, meshes, lighting, and animation.");
+    addRole("FrontendIntegrationAgent", "Own HTML/CSS/JS integration, HUD, controls, and preview readiness.");
+  } else if (projectMap.importantFiles.length && !isStaticUiProject) {
     addRole("CodebaseMapperAgent", "Map the existing codebase before proposing targeted changes.");
   }
-  if (isGame || needsFrontend || needsBackend) {
+  if (!isGame && (needsFrontend || needsBackend)) {
     addRole("ArchitectAgent", "Shape the implementation before specialist patches are proposed.");
   }
-  if (needsFrontend || isStaticUiProject) {
+  if (!isGame && (needsFrontend || isStaticUiProject)) {
     addRole(
       "FrontendAgent",
       isStaticUiProject
@@ -109,8 +117,10 @@ function selectWorkers(goal: string, projectMap: ProjectMap) {
   if (needsBackend && !isStaticUiProject) {
     addRole("RustBackendAgent", "Handle backend or Tauri-sensitive implementation work.");
   }
-  addRole("ToolingTerminalAgent", "Prepare safe validation and preview/run guidance.");
-  if (needsTests || roles.length >= 3) {
+  if (!directive.requestedAgentCount) {
+    addRole("ToolingTerminalAgent", "Prepare safe validation and preview/run guidance.");
+  }
+  if ((needsTests || roles.length >= 3) && !directive.requestedAgentCount) {
     addRole("TestAgent", "Plan validation for the generated change surface.");
   }
   if (needsSecurity && !directive.requestedAgentCount) {
@@ -121,7 +131,10 @@ function selectWorkers(goal: string, projectMap: ProjectMap) {
   }
 
   if (directive.requestedAgentCount && directive.requestedAgentCount > 0) {
-    const trimmedRoles = roles.slice(0, directive.requestedAgentCount);
+    const trimmedRoles =
+      isGame && isStaticUiProject
+        ? trimGameRoles(roles, directive.requestedAgentCount)
+        : roles.slice(0, directive.requestedAgentCount);
     const trimmedReasons = reasons.filter((reason) => trimmedRoles.includes(reason.agentName));
     return {
       roles: trimmedRoles,
@@ -142,6 +155,16 @@ function selectWorkers(goal: string, projectMap: ProjectMap) {
   };
 }
 
+function trimGameRoles(roles: string[], requestedCount: number) {
+  if (requestedCount <= 1) {
+    return roles.includes("FrontendIntegrationAgent") ? ["FrontendIntegrationAgent"] : roles.slice(0, 1);
+  }
+  if (requestedCount === 2) {
+    return ["GameLogicAgent", "FrontendIntegrationAgent"].filter((role) => roles.includes(role));
+  }
+  return roles.slice(0, requestedCount);
+}
+
 function createNodes(sessionId: string, productBrief: ProductBrief, projectMap: ProjectMap, roles: string[]): TaskNode[] {
   const frontendFiles = projectMap.importantFiles.filter((file) => /src|app|component|vite|package|html|css|js/.test(file)).slice(0, 3);
   const backendFiles = projectMap.importantFiles.filter((file) => /Cargo|src-tauri|rust|tauri|server|api/.test(file)).slice(0, 3);
@@ -154,6 +177,54 @@ function createNodes(sessionId: string, productBrief: ProductBrief, projectMap: 
   };
 
   for (const role of roles) {
+    if (role === "GameLogicAgent") {
+      pushNode({
+        id: `${sessionId}_game_logic`,
+        title: "Build gameplay logic",
+        description: "Implement snake movement, food, scoring, collision, and restart behavior.",
+        assignedAgent: role,
+        status: "pending",
+        dependsOn: [],
+        fileLocks: ["main.js"],
+        expectedOutput: "Playable game logic patch contribution",
+        riskLevel: "medium"
+      });
+      continue;
+    }
+
+    if (role === "ThreeJsRenderingAgent") {
+      pushNode({
+        id: `${sessionId}_three_rendering`,
+        title: "Build Three.js rendering",
+        description: "Implement scene, camera, lighting, grid, snake meshes, food mesh, and animation loop.",
+        assignedAgent: role,
+        status: "pending",
+        dependsOn: [],
+        fileLocks: ["main.js"],
+        expectedOutput: "Three.js rendering patch contribution",
+        riskLevel: "medium"
+      });
+      continue;
+    }
+
+    if (role === "FrontendIntegrationAgent") {
+      pushNode({
+        id: `${sessionId}_frontend_integration`,
+        title: "Integrate static app",
+        description: "Create HTML/CSS/JS shell, HUD, controls, and preview-ready files.",
+        assignedAgent: role,
+        status: "pending",
+        dependsOn: [
+          `${sessionId}_game_logic`,
+          `${sessionId}_three_rendering`
+        ].filter((dependency) => previousNodeIds.includes(dependency)),
+        fileLocks: ["index.html", "styles.css", "main.js"],
+        expectedOutput: "Integrated playable static app patch",
+        riskLevel: "medium"
+      });
+      continue;
+    }
+
     if (role === "CodebaseMapperAgent") {
       pushNode({
         id: `${sessionId}_map`,
@@ -277,6 +348,26 @@ function createNodes(sessionId: string, productBrief: ProductBrief, projectMap: 
   }
 
   return nodes;
+}
+
+function createWorkOrders(
+  sessionId: string,
+  productBrief: ProductBrief,
+  businessBrief: BusinessBrief,
+  nodes: TaskNode[]
+): WorkOrder[] {
+  const criteria = [...new Set([...productBrief.successCriteria, ...businessBrief.acceptanceCriteria])];
+  return nodes.map((node) => ({
+    id: `work_${node.id}`,
+    sessionId,
+    agentName: node.assignedAgent,
+    dynamicRole: node.assignedAgent.replace(/Agent$/, "").replace(/([a-z])([A-Z])/g, "$1 $2"),
+    objective: node.description,
+    acceptanceCriteria: criteria,
+    requiredArtifacts: node.fileLocks,
+    allowedTools: ["workspace.read_file", "workspace.search_code", "patch.propose", "command.request_run"],
+    dependsOn: node.dependsOn.map((dependency) => `work_${dependency}`)
+  }));
 }
 
 function defaultFrontendLocks(goal: string) {

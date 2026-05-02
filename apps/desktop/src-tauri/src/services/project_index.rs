@@ -1,4 +1,5 @@
 use crate::models::WorkspaceInfo;
+use crate::services::paths::display_path;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,7 +45,7 @@ impl ProjectIndexService {
         let test_commands = guess_test_commands(workspace, &package_managers, &languages);
 
         WorkspaceInfo {
-            path: workspace.to_string_lossy().to_string(),
+            path: display_path(workspace),
             name: workspace
                 .file_name()
                 .and_then(|name| name.to_str())

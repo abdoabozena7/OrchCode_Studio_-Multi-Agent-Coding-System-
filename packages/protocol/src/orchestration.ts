@@ -23,6 +23,98 @@ export type DelegationDecision = {
   rationale: string;
 };
 
+export type WorkOrder = {
+  id: string;
+  sessionId: string;
+  agentName: string;
+  dynamicRole: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  requiredArtifacts: string[];
+  allowedTools: string[];
+  dependsOn: string[];
+};
+
+export type WorkerSelfCheck = {
+  workOrderId: string;
+  passedCriteria: string[];
+  failedCriteria: string[];
+  missingItems: string[];
+  confidence: number;
+};
+
+export type QualityGateResult = {
+  id: string;
+  sessionId: string;
+  gateName: "ReviewerGate" | "SecurityGate" | "TestGate";
+  status: "passed" | "failed";
+  blockingReasons: string[];
+  reviewerNotes: string[];
+  createdAt: string;
+};
+
+export type PatchChangeStats = {
+  path: string;
+  added: number;
+  removed: number;
+  changeType: "create" | "modify" | "delete";
+};
+
+export type RuntimeProgressStage =
+  | "planning"
+  | "inspecting"
+  | "assigning"
+  | "working"
+  | "patching"
+  | "reviewing"
+  | "applying"
+  | "completed"
+  | "blocked";
+
+export type RuntimeProgressStatus = "queued" | "running" | "completed" | "blocked" | "failed";
+
+export type RuntimeProgressEvent = {
+  id: string;
+  sessionId: string;
+  stage: RuntimeProgressStage;
+  agentName?: string;
+  role?: string;
+  taskTitle?: string;
+  summary: string;
+  status: RuntimeProgressStatus;
+  targetFiles: string[];
+  patchStats?: PatchChangeStats[];
+  createdAt: string;
+};
+
+export type AgentWorkStatus = {
+  agentName: string;
+  role: string;
+  taskTitle: string;
+  objective: string;
+  status: RuntimeProgressStatus;
+  targetFiles: string[];
+  summary?: string;
+  selfCheck?: WorkerSelfCheck;
+  updatedAt: string;
+};
+
+export type RunSummary = {
+  status: "completed" | "blocked" | "failed";
+  summary: string;
+  filesChanged: PatchChangeStats[];
+  appliedPatchIds: string[];
+  proposedPatchIds: string[];
+  commandResults: string[];
+  gates: Array<{
+    name: string;
+    status: "passed" | "failed";
+    notes: string[];
+  }>;
+  nextAction?: string;
+  createdAt: string;
+};
+
 export type ProductBrief = {
   goal: string;
   userIntent:
@@ -123,6 +215,11 @@ export type OrchestrationState = {
   approvalDecisions: import("./approvals.js").ApprovalRecord[];
   safetySettings: SafetySettings;
   lockedFiles: Record<string, string>;
+  selectedWorkerAgents: string[];
+  mandatoryGateAgents: string[];
+  workOrders: WorkOrder[];
+  qualityGateResults: QualityGateResult[];
+  retryCount: number;
 };
 
 export type OrchestrationRunContext = {

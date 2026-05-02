@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -50,7 +50,58 @@ test("auto mode chooses orchestrated workers dynamically and respects explicit c
   assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
   assert.equal(session?.delegationDecision?.requestedAgentCount, 3);
   assert.equal(session?.delegationDecision?.selectedAgentCount, 3);
+  assert.deepEqual(session?.delegationDecision?.selectedAgentRoles, ["GameLogicAgent", "ThreeJsRenderingAgent", "FrontendIntegrationAgent"]);
+  assert.deepEqual(session?.orchestration?.selectedWorkerAgents, ["GameLogicAgent", "ThreeJsRenderingAgent", "FrontendIntegrationAgent"]);
+  assert.deepEqual(session?.orchestration?.mandatoryGateAgents, [
+    "Product Orchestrator",
+    "Business Orchestrator",
+    "Engineering Orchestrator",
+    "SecurityAgent",
+    "ReviewerAgent"
+  ]);
   assert.deepEqual(session?.patchProposals[0]?.filesChanged.map((file) => file.path), ["index.html", "styles.css", "main.js"]);
+  assert.equal(session?.orchestration?.qualityGateResults.every((gate) => gate.status === "passed"), true);
+  assert.equal(session?.patchProposals[0]?.status, "applied");
+  assert.ok((session?.progressEvents.length ?? 0) >= 8);
+  assert.equal(session?.agentWorkStatuses.length, 3);
+  assert.ok(session?.runSummary);
+  assert.deepEqual(session?.runSummary?.filesChanged.map((file) => file.path), ["index.html", "styles.css", "main.js"]);
+  assert.equal(session?.runSummary?.gates.every((gate) => gate.status === "passed"), true);
+
+  const mainJs = await readFile(path.join(workspace, "main.js"), "utf8");
+  assert.match(mainJs, /class SnakeGame/);
+  assert.match(mainJs, /three\.module\.js/);
+  assert.match(mainJs, /spawnFood/);
+  assert.match(mainJs, /scoreLabel/);
+  assert.match(mainJs, /isWallCollision/);
+  assert.match(mainJs, /isSelfCollision/);
+  assert.match(mainJs, /restartGame/);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("explicit one-agent request still uses one worker plus mandatory gates", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-one-agent-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-one-agent-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "mock",
+    executionMode: "auto_mode",
+    accessProfile: "full_access",
+    userPrompt: "use 1 agent to make a html css js 3d snake game with threejs"
+  });
+  await runtime.runTurn(created.sessionId, "use 1 agent to make a html css js 3d snake game with threejs");
+  const session = runtime.getSession(created.sessionId);
+
+  assert.equal(session?.delegationDecision?.selectedAgentCount, 1);
+  assert.deepEqual(session?.delegationDecision?.selectedAgentRoles, ["FrontendIntegrationAgent"]);
+  assert.equal(session?.orchestration?.mandatoryGateAgents.includes("ReviewerAgent"), true);
+  assert.equal(session?.status, "completed");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

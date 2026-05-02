@@ -4,6 +4,7 @@ import type {
   PreviewRecommendation,
   ProjectMap,
   TaskNode,
+  WorkOrder,
   WorkerOutput
 } from "@orchcode/protocol";
 import { randomUUID } from "node:crypto";
@@ -15,6 +16,8 @@ export type WorkerContext = {
   workspacePath: string;
   projectMap: ProjectMap;
   tools: ToolRegistry;
+  workOrder?: WorkOrder;
+  previousOutputs: WorkerOutput[];
 };
 
 export abstract class BaseWorker {
@@ -31,12 +34,13 @@ export abstract class BaseWorker {
       id: `worker_${randomUUID()}`,
       sessionId: context.sessionId,
       taskId: task.id,
-      agentName: this.agentName,
+      agentName: context.workOrder?.agentName ?? this.agentName,
       summary: result.summary,
       details: result.details,
       patchProposalIds: result.patch ? [result.patch.id] : [],
       commandRequestIds: result.commandRequest ? [result.commandRequest.id] : [],
       risks: result.risks,
+      selfCheck: result.selfCheck,
       status: "completed",
       createdAt: new Date().toISOString()
     };
@@ -55,6 +59,7 @@ export abstract class BaseWorker {
     summary: string;
     details: string[];
     risks: string[];
+    selfCheck?: WorkerOutput["selfCheck"];
     patch?: PatchProposal;
     commandRequest?: CommandRequest;
     previewRecommendation?: PreviewRecommendation;

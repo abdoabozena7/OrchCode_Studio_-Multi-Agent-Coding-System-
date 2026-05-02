@@ -2,13 +2,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
+  AgentWorkStatus,
   AgentRuntimeSession,
   AgentRuntimeMode,
   CommandExecutionRecord,
   CommandRequest,
   OrchestrationEvent,
   PatchProposal,
+  RunSummary,
   RuntimeMessage,
+  RuntimeProgressEvent,
   SafetySettings,
   Task,
   ToolCall
@@ -37,6 +40,8 @@ export class SessionManager {
       const raw = await readFile(this.statePath, "utf8");
       const parsed = JSON.parse(raw) as PersistedState;
       for (const session of parsed.sessions ?? []) {
+        session.progressEvents ??= [];
+        session.agentWorkStatuses ??= [];
         this.sessions.set(session.id, session);
       }
     } catch {
@@ -86,6 +91,8 @@ export class SessionManager {
       commandRequests: [],
       commandExecutions: [],
       reasoningSummaries: [],
+      progressEvents: [],
+      agentWorkStatuses: [],
       orchestration:
         executionMode === "orchestrated_mode"
           ? {
@@ -96,7 +103,12 @@ export class SessionManager {
               orchestrationEvents: [],
               approvalDecisions: [],
               safetySettings,
-              lockedFiles: {}
+              lockedFiles: {},
+              selectedWorkerAgents: [],
+              mandatoryGateAgents: ["Product Orchestrator", "Business Orchestrator", "Engineering Orchestrator", "SecurityAgent", "ReviewerAgent"],
+              workOrders: [],
+              qualityGateResults: [],
+              retryCount: 0
             }
           : undefined,
       createdAt: now,
@@ -212,6 +224,35 @@ export class SessionManager {
       session.orchestration.orchestrationEvents.push(event);
     });
     this.eventBus.publish({ type: "runtime.orchestration.event", sessionId, event });
+  }
+
+  async addProgressEvent(sessionId: string, progress: RuntimeProgressEvent) {
+    await this.updateSession(sessionId, (session) => {
+      session.progressEvents.push(progress);
+    });
+    this.eventBus.publish({ type: "runtime.progress.updated", sessionId, progress });
+  }
+
+  async updateAgentWorkStatus(sessionId: string, status: AgentWorkStatus) {
+    await this.updateSession(sessionId, (session) => {
+      const index = session.agentWorkStatuses.findIndex((candidate) => candidate.agentName === status.agentName);
+      if (index >= 0) {
+        session.agentWorkStatuses[index] = {
+          ...session.agentWorkStatuses[index],
+          ...status,
+          targetFiles: status.targetFiles
+        };
+      } else {
+        session.agentWorkStatuses.push(status);
+      }
+    });
+  }
+
+  async setRunSummary(sessionId: string, summary: RunSummary) {
+    await this.updateSession(sessionId, (session) => {
+      session.runSummary = summary;
+    });
+    this.eventBus.publish({ type: "runtime.run.completed", sessionId, summary });
   }
 
   private requireSession(sessionId: string) {

@@ -1,8 +1,8 @@
 import {
   Bot,
   ChevronDown,
-  CircleAlert,
   Code2,
+  Copy,
   Diff,
   FileText,
   FolderOpen,
@@ -23,13 +23,16 @@ import {
 } from "lucide-react";
 import type {
   AccessProfile,
+  AppEvent,
   AgentRuntimeSession,
+  AgentWorkStatus,
   CommandResult,
   FileEntry,
   GitStatus,
   ModelInfo,
   ModelProviderConfig,
   ModelProviderType,
+  PatchChangeStats,
   SafetySettings,
   WorkspaceInfo
 } from "@orchcode/protocol";
@@ -40,7 +43,8 @@ import {
   createRuntimeSession,
   getRuntimeSession,
   rejectRuntimePatch,
-  runRuntimeTurn
+  runRuntimeTurn,
+  subscribeRuntimeEvents
 } from "../lib/agentRuntime";
 import {
   clearModelProviderConfig,
@@ -50,6 +54,7 @@ import {
   listAvailableModels,
   listWorkspaceFiles,
   openWorkspace,
+  openExternalTarget,
   pickWorkspaceDirectory,
   runWorkspaceCommand,
   saveModelProviderConfig,
@@ -77,6 +82,30 @@ type QueuedPrompt = {
 };
 
 type BottomView = "none" | "terminal" | "diff";
+
+type RecentWorkspaceEntry = {
+  path: string;
+  name: string;
+  lastOpenedAt: string;
+  lastSessionId?: string;
+};
+
+type RecentSessionEntry = {
+  id: string;
+  workspacePath: string;
+  workspaceName: string;
+  title: string;
+  status: string;
+  updatedAt: string;
+};
+
+const RECENT_WORKSPACES_KEY = "orchcode.recentWorkspaces";
+const RECENT_SESSIONS_KEY = "orchcode.recentSessions";
+const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
+const PROMPT_HISTORY_KEY = "orchcode.promptHistory";
+const MAX_RECENT_WORKSPACES = 8;
+const MAX_RECENT_SESSIONS = 12;
+const MAX_PROMPT_HISTORY = 50;
 
 const providerPresets: ProviderPreset[] = [
   {
@@ -145,6 +174,10 @@ const accessOptions: AccessOption[] = [
 export function App() {
   const workspaceInputRef = useRef<HTMLInputElement | null>(null);
   const queueIdRef = useRef(0);
+  const runtimeEventUnsubscribeRef = useRef<(() => void) | null>(null);
+  const lastCommandCountRef = useRef(0);
+  const lastPreviewTargetRef = useRef("");
+  const suppressPreviewOpenRef = useRef(false);
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -155,9 +188,12 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [runtimeSession, setRuntimeSession] = useState<AgentRuntimeSession | null>(null);
   const [thinkFirst, setThinkFirst] = useState(false);
-  const [accessProfile, setAccessProfile] = useState<AccessProfile>("default_permissions");
+  const [accessProfile, setAccessProfile] = useState<AccessProfile>("full_access");
   const [accessMenuOpen, setAccessMenuOpen] = useState(false);
-  const [safetySettings, setSafetySettings] = useState<SafetySettings>(defaultSafetySettings);
+  const [safetySettings, setSafetySettings] = useState<SafetySettings>({
+    ...defaultSafetySettings,
+    ...accessProfileDefaults("full_access")
+  });
   const [providerConfig, setProviderConfig] = useState<ModelProviderConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [message, setMessage] = useState("Select a workspace and start from the composer.");
@@ -166,11 +202,31 @@ export function App() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [bottomView, setBottomView] = useState<BottomView>("none");
+  const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspaceEntry[]>([]);
+  const [recentSessions, setRecentSessions] = useState<RecentSessionEntry[]>([]);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
+  const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
 
   useEffect(() => {
-    void getModelProviderConfig()
-      .then(setProviderConfig)
-      .catch(() => setProviderConfig(null));
+    void (async () => {
+      try {
+        setProviderConfig(await getModelProviderConfig());
+      } catch {
+        setProviderConfig(null);
+      }
+      const storedWorkspaces = readStoredJson<RecentWorkspaceEntry[]>(RECENT_WORKSPACES_KEY, []);
+      const storedSessions = readStoredJson<RecentSessionEntry[]>(RECENT_SESSIONS_KEY, []);
+      const storedPromptHistory = readStoredJson<string[]>(PROMPT_HISTORY_KEY, []);
+      setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
+      setRecentSessions(storedSessions);
+      setPromptHistory(storedPromptHistory);
+      const lastWorkspacePath = localStorage.getItem(LAST_WORKSPACE_KEY);
+      if (lastWorkspacePath) {
+        setWorkspacePath(normalizeWorkspacePath(lastWorkspacePath));
+      }
+    })();
+    return () => runtimeEventUnsubscribeRef.current?.();
   }, []);
 
   useEffect(() => {
@@ -187,6 +243,71 @@ export function App() {
     setQueuedPrompts(rest);
     void submitPrompt(next.text, next.mode);
   }, [agentBusy, queuedPrompts]);
+
+  useEffect(() => {
+    if (!runtimeSession) {
+      lastCommandCountRef.current = 0;
+      return;
+    }
+    const count = runtimeSession.commandExecutions.length;
+    if (count > lastCommandCountRef.current) {
+      const latestExecution = runtimeSession.commandExecutions.at(-1);
+      if (latestExecution) {
+        setTerminalCommand(latestExecution.command);
+        setTerminalResult({
+          command: latestExecution.command,
+          cwd: latestExecution.cwd,
+          risk: latestExecution.risk,
+          status: latestExecution.status,
+          exitCode: latestExecution.exitCode,
+          stdout: latestExecution.stdout,
+          stderr: latestExecution.stderr,
+          message: latestExecution.message
+        });
+      }
+      setBottomView("terminal");
+    }
+    lastCommandCountRef.current = count;
+  }, [runtimeSession]);
+
+  useEffect(() => {
+    if (!runtimeSession?.nextAction || runtimeSession.nextAction.kind !== "preview_ready") return;
+    const target = `${runtimeSession.id}:${runtimeSession.nextAction.preview.type}:${runtimeSession.nextAction.preview.target}`;
+    if (lastPreviewTargetRef.current === target) return;
+    if (suppressPreviewOpenRef.current) {
+      lastPreviewTargetRef.current = target;
+      suppressPreviewOpenRef.current = false;
+      return;
+    }
+    lastPreviewTargetRef.current = target;
+    void handleOpenPreview(runtimeSession.nextAction.preview);
+  }, [runtimeSession]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    setRecentWorkspaces((current) => {
+      const next = upsertRecentWorkspace(current, workspace, runtimeSession?.id);
+      persistRecentWorkspaces(next);
+      return next;
+    });
+    localStorage.setItem(LAST_WORKSPACE_KEY, workspace.path);
+  }, [workspace, runtimeSession?.id]);
+
+  useEffect(() => {
+    if (!runtimeSession || !workspace) return;
+    setRecentSessions((current) => {
+      const next = upsertRecentSession(current, runtimeSession, workspace);
+      persistRecentSessions(next);
+      return next;
+    });
+    setRecentWorkspaces((current) => {
+      const next = current.map((entry) =>
+        entry.path === workspace.path ? { ...entry, lastSessionId: runtimeSession.id, lastOpenedAt: new Date().toISOString() } : entry
+      );
+      persistRecentWorkspaces(next);
+      return next;
+    });
+  }, [runtimeSession, workspace]);
 
   const sessionTitle = runtimeSession?.agentName ?? "OrchCode";
   const hasSessionView = Boolean(runtimeSession);
@@ -210,12 +331,45 @@ export function App() {
     setDiffText(nextDiff.trim() ? nextDiff : "No git diff available.");
   }
 
+  async function activateWorkspace(
+    nextPath: string,
+    options?: { restoreSession?: boolean; silent?: boolean; recentWorkspaceEntries?: RecentWorkspaceEntry[] }
+  ) {
+    const trimmed = nextPath.trim();
+    if (!trimmed) return;
+    const normalizedPath = normalizeWorkspacePath(trimmed);
+    runtimeEventUnsubscribeRef.current?.();
+    runtimeEventUnsubscribeRef.current = null;
+    setRuntimeSession(null);
+    const nextWorkspace = await openWorkspace(normalizedPath);
+    setWorkspacePath(normalizedPath);
+    setWorkspace(nextWorkspace);
+    if (!options?.silent) {
+      setMessage(`Workspace open: ${nextWorkspace.name}`);
+    }
+    await refreshWorkspaceState(nextWorkspace);
+
+    if (!options?.restoreSession) return;
+    const workspaceEntry = (options?.recentWorkspaceEntries ?? recentWorkspaces).find((entry) => normalizeWorkspacePath(entry.path) === normalizedPath);
+    const recentSessionId = workspaceEntry?.lastSessionId;
+    if (!recentSessionId) return;
+    try {
+      suppressPreviewOpenRef.current = true;
+      const restoredSession = await getRuntimeSession(recentSessionId);
+      subscribeToRuntimeSession(recentSessionId);
+      setRuntimeSession(restoredSession);
+    } catch {
+      setRecentSessions((current) => {
+        const next = current.filter((entry) => entry.id !== recentSessionId);
+        persistRecentSessions(next);
+        return next;
+      });
+    }
+  }
+
   async function handleOpenWorkspace() {
     try {
-      const nextWorkspace = await openWorkspace(workspacePath.trim());
-      setWorkspace(nextWorkspace);
-      setMessage(`Workspace open: ${nextWorkspace.name}`);
-      await refreshWorkspaceState(nextWorkspace);
+      await activateWorkspace(workspacePath, { restoreSession: true });
     } catch (error) {
       setMessage(String(error));
     }
@@ -228,11 +382,7 @@ export function App() {
         setMessage("Workspace selection canceled.");
         return;
       }
-      setWorkspacePath(selected);
-      const nextWorkspace = await openWorkspace(selected);
-      setWorkspace(nextWorkspace);
-      setMessage(`Workspace open: ${nextWorkspace.name}`);
-      await refreshWorkspaceState(nextWorkspace);
+      await activateWorkspace(selected, { restoreSession: true });
     } catch (error) {
       setMessage(String(error));
     }
@@ -251,6 +401,46 @@ export function App() {
     }
   }
 
+  function subscribeToRuntimeSession(sessionId: string) {
+    runtimeEventUnsubscribeRef.current?.();
+    runtimeEventUnsubscribeRef.current = subscribeRuntimeEvents(sessionId, {
+      onSession: setRuntimeSession,
+      onEvent: (event: AppEvent) => {
+        if (event.type === "runtime.progress.updated") {
+          setMessage(event.progress.summary);
+        }
+        if (event.type === "runtime.run.completed") {
+          setMessage(event.summary.nextAction ?? event.summary.summary);
+        }
+      },
+      onError: () => {
+        setMessage("Live updates disconnected. I will refresh the session when the run finishes.");
+      }
+    });
+  }
+
+  async function handleSelectRecentWorkspace(entry: RecentWorkspaceEntry) {
+    try {
+      await activateWorkspace(entry.path, { restoreSession: true });
+      setSidebarCollapsed(false);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleRestoreRecentSession(entry: RecentSessionEntry) {
+    try {
+      await activateWorkspace(entry.workspacePath, { restoreSession: false });
+      suppressPreviewOpenRef.current = true;
+      subscribeToRuntimeSession(entry.id);
+      setRuntimeSession(await getRuntimeSession(entry.id));
+      setSidebarCollapsed(false);
+      setMessage(`Restored session: ${entry.title}`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
   async function submitPrompt(nextPrompt?: string, queuedMode?: QueuedPrompt["mode"]) {
     const input = nextPrompt ?? prompt;
     if (!workspace) {
@@ -262,11 +452,24 @@ export function App() {
       return;
     }
 
+    const normalizedInput = input.trim();
+    setPromptHistory((current) => {
+      const next = [normalizedInput, ...current.filter((entry) => entry !== normalizedInput)].slice(0, MAX_PROMPT_HISTORY);
+      localStorage.setItem(PROMPT_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+    setPromptHistoryIndex(null);
+    setPromptDraftBeforeHistory("");
+
     setAgentBusy(true);
     setActivityOpen(false);
     setBottomView("none");
     try {
-      const sessionId = runtimeSession?.id
+      const canReuseSession =
+        runtimeSession &&
+        workspace &&
+        runtimeSession.workspacePath === workspace.path;
+      const sessionId = canReuseSession
         ? runtimeSession.id
         : (
             await createRuntimeSession({
@@ -279,10 +482,12 @@ export function App() {
               userPrompt: input
             })
           ).sessionId;
+      subscribeToRuntimeSession(sessionId);
+      setRuntimeSession(await getRuntimeSession(sessionId));
+      setPrompt("");
       await runRuntimeTurn(sessionId, input);
       const nextSession = await getRuntimeSession(sessionId);
       setRuntimeSession(nextSession);
-      setPrompt("");
       await refreshWorkspaceState();
       setMessage(
         queuedMode === "steer"
@@ -354,6 +559,8 @@ export function App() {
   }
 
   function handleNewChat() {
+    runtimeEventUnsubscribeRef.current?.();
+    runtimeEventUnsubscribeRef.current = null;
     setPrompt("");
     setRuntimeSession(null);
     setActivityOpen(false);
@@ -393,17 +600,72 @@ export function App() {
     };
     setQueuedPrompts((current) => (mode === "steer" ? [entry, ...current] : [...current, entry]));
     setPrompt("");
+    setPromptHistoryIndex(null);
+    setPromptDraftBeforeHistory("");
     setMessage(mode === "steer" ? "Added as steer. It will run next." : "Added to queue. It will run after the current task.");
   }
 
-  function handleOpenPreview() {
-    if (!runtimeSession?.previewRecommendation || !workspace) return;
-    const preview = runtimeSession.previewRecommendation;
+  function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      void handleRunAgent();
+      return;
+    }
+
+    if (event.key === "ArrowUp" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      const target = event.currentTarget;
+      const isCollapsed = target.selectionStart === target.selectionEnd;
+      const isAtTop = target.selectionStart === 0;
+      if (!isCollapsed || (!isAtTop && prompt.trim())) return;
+      event.preventDefault();
+      if (!promptHistory.length) return;
+      setPromptHistoryIndex((current) => {
+        const nextIndex = current === null ? 0 : Math.min(current + 1, promptHistory.length - 1);
+        if (current === null) {
+          setPromptDraftBeforeHistory(prompt);
+        }
+        setPrompt(promptHistory[nextIndex] ?? "");
+        return nextIndex;
+      });
+      return;
+    }
+
+    if (event.key === "ArrowDown" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (promptHistoryIndex === null) return;
+      event.preventDefault();
+      setPromptHistoryIndex((current) => {
+        if (current === null) return null;
+        const nextIndex = current - 1;
+        if (nextIndex < 0) {
+          setPrompt(promptDraftBeforeHistory);
+          return null;
+        }
+        setPrompt(promptHistory[nextIndex] ?? "");
+        return nextIndex;
+      });
+    }
+  }
+
+  async function handleOpenPreview(preview = runtimeSession?.previewRecommendation) {
+    if (!preview || !workspace) return;
     const target =
       preview.type === "url"
         ? preview.target
         : `file:///${`${workspace.path}\\${preview.target}`.replaceAll("\\", "/")}`;
-    window.open(target, "_blank", "noopener,noreferrer");
+    try {
+      await openExternalTarget(target);
+    } catch (error) {
+      setMessage(`Preview open failed: ${String(error)}`);
+    }
+  }
+
+  async function handleCopyText(text: string, label = "Copied output.") {
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage(label);
+    } catch (error) {
+      setMessage(`Copy failed: ${String(error)}`);
+    }
   }
 
   return (
@@ -469,6 +731,34 @@ export function App() {
                 <small>{runtimeSession.tasks.length}</small>
               </button>
             ) : null}
+
+            {recentWorkspaces
+              .filter((entry) => entry.path !== workspace?.path)
+              .map((entry) => {
+                const lastSession = recentSessions.find((sessionEntry) => sessionEntry.id === entry.lastSessionId);
+                return (
+                  <button key={entry.path} className="project-item" onClick={() => void handleSelectRecentWorkspace(entry)}>
+                    <div>
+                      <strong>{entry.name}</strong>
+                      <span>{lastSession?.status ?? "Recent workspace"}</span>
+                    </div>
+                    <small>{shortenPath(entry.path)}</small>
+                  </button>
+                );
+              })}
+
+            {recentSessions
+              .filter((entry) => entry.id !== runtimeSession?.id)
+              .slice(0, 4)
+              .map((entry) => (
+                <button key={entry.id} className="project-item" onClick={() => void handleRestoreRecentSession(entry)}>
+                  <div>
+                    <strong>{entry.title}</strong>
+                    <span>{entry.status}</span>
+                  </div>
+                  <small>{entry.workspaceName}</small>
+                </button>
+              ))}
           </section>
 
           <button className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
@@ -522,6 +812,7 @@ export function App() {
               <ThreadFeed
                 session={runtimeSession}
                 onOpenActivity={() => setActivityOpen(true)}
+                onOpenDiff={() => setBottomView("diff")}
                 onQuickReply={submitPrompt}
                 onOpenPreview={handleOpenPreview}
               />
@@ -530,20 +821,19 @@ export function App() {
             <div className="composer-shell">
               <textarea
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  if (promptHistoryIndex !== null) {
+                    setPromptHistoryIndex(null);
+                  }
+                }}
+                onKeyDown={handlePromptKeyDown}
                 placeholder="Ask the agent to inspect, plan, explain, or prepare a patch..."
                 rows={4}
               />
 
               <div className="composer-topline">
                 <div className="composer-select-row">
-                  <button
-                    className={providerConfig?.isValid ? "composer-chip valid" : "composer-chip invalid"}
-                    onClick={() => setSettingsOpen(true)}
-                  >
-                    {providerConfig?.isValid ? <ShieldCheck size={14} /> : <CircleAlert size={14} />}
-                    <span>{providerConfig?.isValid ? "Provider ready" : "Provider settings"}</span>
-                  </button>
                   <button
                     className={`composer-chip ${thinkFirst ? "active-toggle" : ""}`}
                     onClick={() => setThinkFirst((current) => !current)}
@@ -647,19 +937,19 @@ export function App() {
                   <div className="terminal-controls">
                     <input value={terminalCommand} onChange={(event) => setTerminalCommand(event.target.value)} />
                     <button onClick={handleRunCommand}>Run safe command</button>
+                    {terminalResult ? (
+                      <button
+                        onClick={() =>
+                          void handleCopyText(formatTerminalResult(terminalResult), "Copied terminal output.")
+                        }
+                      >
+                        <Copy size={14} />
+                        Copy
+                      </button>
+                    ) : null}
                   </div>
                   <pre>
-                    {terminalResult
-                      ? [
-                          `$ ${terminalResult.command}`,
-                          `risk: ${terminalResult.risk} status: ${terminalResult.status}`,
-                          terminalResult.message ?? "",
-                          terminalResult.stdout,
-                          terminalResult.stderr
-                        ]
-                          .filter(Boolean)
-                          .join("\n")
-                      : "Safe commands execute here. Medium commands require approval. Dangerous commands stay blocked."}
+                    {terminalResult ? formatTerminalResult(terminalResult) : "Safe commands execute here. Medium commands require approval. Dangerous commands stay blocked."}
                   </pre>
                 </div>
               ) : (
@@ -764,12 +1054,18 @@ export function App() {
                     <strong>{request.command}</strong>
                     <span>{request.risk} | {request.status}</span>
                     <p>{request.reason}</p>
-                    <button
-                      onClick={() => handleRunSuggestedCommand(request.command)}
-                      disabled={request.risk !== "safe" || request.status === "blocked"}
-                    >
-                      Run safe command
-                    </button>
+                    {request.status === "executed" ? (
+                      <button disabled>Ran automatically</button>
+                    ) : request.status === "blocked" ? (
+                      <button disabled>Blocked by policy</button>
+                    ) : (
+                      <button
+                        onClick={() => handleRunSuggestedCommand(request.command)}
+                        disabled={request.risk !== "safe"}
+                      >
+                        Run safe command
+                      </button>
+                    )}
                   </div>
                 ))
               )}
@@ -865,44 +1161,34 @@ function DrawerSection({
 function ThreadFeed({
   session,
   onOpenActivity,
+  onOpenDiff,
   onQuickReply,
   onOpenPreview
 }: {
   session: AgentRuntimeSession;
   onOpenActivity: () => void;
+  onOpenDiff: () => void;
   onQuickReply: (message: string) => void | Promise<void>;
   onOpenPreview: () => void;
 }) {
-  const latestPatch = session.patchProposals[0];
-  const latestCommand = session.commandRequests.at(-1);
-
+  const patchStats = getSessionPatchStats(session);
   return (
     <div className="thread-feed">
       {session.messages.map((message) => (
         <div key={message.id} className={`thread-entry ${message.role}`}>
-          <div className="thread-entry-label">{message.role === "user" ? "You" : message.role === "assistant" ? session.agentName : "System"}</div>
+          <div className="thread-entry-header">
+            <div className="thread-entry-label">{message.role === "user" ? "You" : message.role === "assistant" ? session.agentName : "System"}</div>
+            <CopyMessageButton text={message.content} />
+          </div>
           <div className="thread-entry-body">{message.content}</div>
         </div>
       ))}
 
-      {session.delegationDecision ? (
-        <CompactNote
-          title="How I handled it"
-          action={
-            <button className="activity-link" onClick={onOpenActivity}>
-              Details
-            </button>
-          }
-        >
-          {session.delegationDecision.rationale}
-        </CompactNote>
-      ) : null}
-
-      {session.status === "running" ? <CompactNote title="Working">{session.reasoningSummaries.at(-1) ?? "The agent is working on your request."}</CompactNote> : null}
-
-      {latestPatch ? <CompactNote title="Changes ready">{latestPatch.summary}</CompactNote> : null}
-
-      {latestCommand ? <CompactNote title="Suggested action">{latestCommand.reason}</CompactNote> : null}
+      <ProgressTimeline session={session} />
+      <WorkingTeamCard session={session} onOpenActivity={onOpenActivity} />
+      <CodeChangesCard session={session} patchStats={patchStats} onOpenActivity={onOpenActivity} onOpenDiff={onOpenDiff} />
+      <RunResultCard session={session} onOpenPreview={onOpenPreview} />
+      <RunSummaryCard session={session} />
 
       {session.nextAction?.kind === "confirm_plan" ? (
         <ActionCard
@@ -925,6 +1211,7 @@ function ThreadFeed({
             <>
               <button onClick={() => void onQuickReply("Run it now.")}>Run it now</button>
               <button onClick={() => void onQuickReply("Show me the results first.")}>Show results</button>
+              <button onClick={onOpenActivity}>Details</button>
             </>
           }
         />
@@ -943,6 +1230,225 @@ function ThreadFeed({
         />
       ) : null}
     </div>
+  );
+}
+
+function CopyMessageButton({ text }: { text: string }) {
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Ignore copy failures in passive message actions.
+    }
+  }
+
+  return (
+    <button className="thread-copy-button" onClick={() => void handleCopy()} title="Copy message">
+      <Copy size={14} />
+    </button>
+  );
+}
+
+function ProgressTimeline({ session }: { session: AgentRuntimeSession }) {
+  const events = session.progressEvents.slice(-12);
+  if (!events.length && session.status !== "running") return null;
+  return (
+    <section className="run-card timeline-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Current work</strong>
+          <span>{events.at(-1)?.summary ?? "Starting the run and preparing the plan."}</span>
+        </div>
+      </div>
+      <div className="timeline-list">
+        {(events.length ? events : []).map((event) => (
+          <div key={event.id} className={`timeline-item ${event.status}`}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>{event.taskTitle ?? event.stage}</strong>
+              <span>
+                {event.agentName ? `${event.agentName} | ` : ""}
+                {event.summary}
+              </span>
+              {event.targetFiles.length ? <small>{event.targetFiles.slice(0, 4).join(", ")}</small> : null}
+            </div>
+          </div>
+        ))}
+        {!events.length ? (
+          <div className="timeline-item running">
+            <span className="timeline-dot" />
+            <div>
+              <strong>Preparing</strong>
+              <span>The agent is starting your request.</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function RunResultCard({
+  session,
+  onOpenPreview
+}: {
+  session: AgentRuntimeSession;
+  onOpenPreview: () => void;
+}) {
+  const latestExecution = session.commandExecutions.at(-1);
+  if (!latestExecution && !session.previewRecommendation) return null;
+  return (
+    <section className="run-card summary-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Run result</strong>
+          <span>
+            {latestExecution
+              ? `${latestExecution.command} | ${latestExecution.status}`
+              : session.previewRecommendation?.description ?? "Preview prepared"}
+          </span>
+        </div>
+      </div>
+      <div className="summary-list">
+        {latestExecution ? (
+          <>
+            <div className="summary-line compact">Command: {latestExecution.command}</div>
+            <div className="summary-line compact">Mode: {shouldDescribeBackground(latestExecution.command) ? "Background" : "Foreground"}</div>
+            <div className="summary-line compact">Status: {latestExecution.status}</div>
+            {latestExecution.message ? <div className="summary-line compact">{latestExecution.message}</div> : null}
+          </>
+        ) : null}
+        {session.previewRecommendation ? (
+          <>
+            <div className="summary-line compact">Preview: {session.previewRecommendation.target}</div>
+            <div className="command-actions">
+              <button onClick={onOpenPreview}>
+                <Globe size={14} />
+                Open preview
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function WorkingTeamCard({
+  session,
+  onOpenActivity
+}: {
+  session: AgentRuntimeSession;
+  onOpenActivity: () => void;
+}) {
+  const statuses: AgentWorkStatus[] = session.agentWorkStatuses.length
+    ? session.agentWorkStatuses
+    : (session.orchestration?.workOrders ?? []).map((order) => ({
+        agentName: order.agentName,
+        role: order.dynamicRole,
+        taskTitle: order.objective,
+        objective: order.objective,
+        status: "queued" as const,
+        targetFiles: order.requiredArtifacts,
+        updatedAt: new Date().toISOString()
+      }));
+  if (!statuses.length) return null;
+  return (
+    <section className="run-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Working team</strong>
+          <span>{session.delegationDecision?.rationale ?? "Specialists are selected from the task requirements."}</span>
+        </div>
+        <button className="activity-link" onClick={onOpenActivity}>Details</button>
+      </div>
+      <div className="work-team-grid">
+        {statuses.map((status) => (
+          <div className={`work-agent ${status.status}`} key={status.agentName}>
+            <div className="work-agent-title">
+              <strong>{prettyAgentName(status.agentName)}</strong>
+              <span>{status.status}</span>
+            </div>
+            <p>{status.objective || status.taskTitle}</p>
+            {status.targetFiles.length ? <small>{status.targetFiles.slice(0, 3).join(", ")}</small> : null}
+            {status.selfCheck ? (
+              <small>
+                Self-check: {status.selfCheck.failedCriteria.length || status.selfCheck.missingItems.length ? "needs work" : "passed"}
+              </small>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CodeChangesCard({
+  session,
+  patchStats,
+  onOpenActivity,
+  onOpenDiff
+}: {
+  session: AgentRuntimeSession;
+  patchStats: PatchChangeStats[];
+  onOpenActivity: () => void;
+  onOpenDiff: () => void;
+}) {
+  if (!session.patchProposals.length && !patchStats.length) return null;
+  return (
+    <section className="run-card code-changes-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Code changes</strong>
+          <span>
+            {session.patchProposals.length} proposal(s) | {patchStats.length} file(s)
+          </span>
+        </div>
+        <div className="command-actions">
+          <button onClick={onOpenDiff}>Review changes</button>
+          <button onClick={onOpenActivity}>Open file list</button>
+        </div>
+      </div>
+      <div className="changed-file-list">
+        {patchStats.map((file) => (
+          <div className="changed-file-row" key={file.path}>
+            <span>{file.path}</span>
+            <strong>
+              +{file.added} -{file.removed}
+            </strong>
+          </div>
+        ))}
+      </div>
+      <div className="patch-status-line">
+        {session.patchProposals.map((proposal) => (
+          <span key={proposal.id}>
+            {proposal.title}: {proposal.status}
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RunSummaryCard({ session }: { session: AgentRuntimeSession }) {
+  if (!session.runSummary) return null;
+  return (
+    <section className="run-card summary-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Result</strong>
+          <span>{session.runSummary.summary}</span>
+        </div>
+      </div>
+      <div className="summary-list">
+        {session.runSummary.gates.map((gate) => (
+          <div className="summary-line compact" key={gate.name}>
+            {gate.name}: {gate.status}
+          </div>
+        ))}
+        {session.runSummary.nextAction ? <div className="summary-line compact">{session.runSummary.nextAction}</div> : null}
+      </div>
+    </section>
   );
 }
 
@@ -1024,6 +1530,65 @@ function StatusRow({ label, status, detail }: { label: string; status: string; d
   );
 }
 
+function getSessionPatchStats(session: AgentRuntimeSession): PatchChangeStats[] {
+  if (session.runSummary?.filesChanged.length) return session.runSummary.filesChanged;
+  const progressStats = session.progressEvents.flatMap((event) => event.patchStats ?? []);
+  if (progressStats.length) return mergePatchStats(progressStats);
+  return mergePatchStats(session.patchProposals.flatMap((proposal) => computePatchStats(proposal.unifiedDiff, proposal.filesChanged)));
+}
+
+function computePatchStats(
+  unifiedDiff: string,
+  filesChanged: Array<{ path: string; changeType: PatchChangeStats["changeType"] }>
+): PatchChangeStats[] {
+  const stats = new Map<string, PatchChangeStats>();
+  for (const file of filesChanged) {
+    stats.set(file.path, { path: file.path, added: 0, removed: 0, changeType: file.changeType });
+  }
+  let currentPath = filesChanged[0]?.path;
+  for (const line of unifiedDiff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+      currentPath = match?.[2] ?? currentPath;
+      if (currentPath && !stats.has(currentPath)) {
+        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
+      }
+      continue;
+    }
+    if (line.startsWith("+++ b/")) {
+      currentPath = line.slice("+++ b/".length);
+      if (!stats.has(currentPath)) {
+        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
+      }
+      continue;
+    }
+    if (!currentPath) continue;
+    const target = stats.get(currentPath) ?? { path: currentPath, added: 0, removed: 0, changeType: "modify" as const };
+    if (line.startsWith("+") && !line.startsWith("+++")) target.added += 1;
+    if (line.startsWith("-") && !line.startsWith("---")) target.removed += 1;
+    stats.set(currentPath, target);
+  }
+  return [...stats.values()];
+}
+
+function mergePatchStats(stats: PatchChangeStats[]) {
+  const merged = new Map<string, PatchChangeStats>();
+  for (const stat of stats) {
+    const current = merged.get(stat.path);
+    merged.set(stat.path, {
+      path: stat.path,
+      changeType: stat.changeType,
+      added: (current?.added ?? 0) + stat.added,
+      removed: (current?.removed ?? 0) + stat.removed
+    });
+  }
+  return [...merged.values()];
+}
+
+function prettyAgentName(name: string) {
+  return name.replace(/Agent$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
 function accessProfileLabel(profile: AccessProfile) {
   return accessOptions.find((option) => option.value === profile)?.label ?? "Default permissions";
 }
@@ -1054,6 +1619,87 @@ function summarizeLatestQueueEntry(entry: QueuedPrompt | undefined) {
   if (!entry) return "";
   const compact = entry.text.replace(/\s+/g, " ").trim();
   return compact.length > 58 ? `${compact.slice(0, 58)}...` : compact;
+}
+
+function formatTerminalResult(result: CommandResult) {
+  return [
+    `$ ${result.command}`,
+    `risk: ${result.risk} status: ${result.status}`,
+    normalizeTerminalText(result.message ?? ""),
+    normalizeTerminalText(result.stdout),
+    normalizeTerminalText(result.stderr)
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeTerminalText(text: string) {
+  if (!text) return "";
+  return text.replace(
+    /Serving HTTP on :: port (\d+) \(http:\/\/\[\:\:\]:(\d+)\/\) \.\.\./g,
+    (_match, shownPort, urlPort) =>
+      `Serving HTTP on port ${shownPort}.\nLocal preview: http://127.0.0.1:${urlPort}/\nOriginal server output: http://[::]:${urlPort}/`
+  );
+}
+
+function shouldDescribeBackground(command: string) {
+  return /\b(dev|serve|http\.server|vite|next dev|react-scripts start)\b/i.test(command);
+}
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistRecentWorkspaces(entries: RecentWorkspaceEntry[]) {
+  localStorage.setItem(RECENT_WORKSPACES_KEY, JSON.stringify(entries));
+}
+
+function persistRecentSessions(entries: RecentSessionEntry[]) {
+  localStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(entries));
+}
+
+function upsertRecentWorkspace(
+  current: RecentWorkspaceEntry[],
+  workspace: WorkspaceInfo,
+  sessionId?: string
+) {
+  const nextEntry: RecentWorkspaceEntry = {
+    path: workspace.path,
+    name: workspace.name,
+    lastOpenedAt: new Date().toISOString(),
+    lastSessionId: sessionId
+  };
+  return [nextEntry, ...current.filter((entry) => entry.path !== workspace.path)].slice(0, MAX_RECENT_WORKSPACES);
+}
+
+function upsertRecentSession(
+  current: RecentSessionEntry[],
+  session: AgentRuntimeSession,
+  workspace: WorkspaceInfo
+) {
+  const nextEntry: RecentSessionEntry = {
+    id: session.id,
+    workspacePath: workspace.path,
+    workspaceName: workspace.name,
+    title: session.agentName || session.userPrompt || "Session",
+    status: humanSessionStatus(session, false),
+    updatedAt: session.updatedAt
+  };
+  return [nextEntry, ...current.filter((entry) => entry.id !== session.id)].slice(0, MAX_RECENT_SESSIONS);
+}
+
+function shortenPath(targetPath: string) {
+  const compact = targetPath.replaceAll("\\", "/");
+  return compact.length > 28 ? `...${compact.slice(-28)}` : compact;
+}
+
+function normalizeWorkspacePath(targetPath: string) {
+  return targetPath.startsWith("\\\\?\\") ? targetPath.slice(4) : targetPath;
 }
 
 function SettingsDialog({

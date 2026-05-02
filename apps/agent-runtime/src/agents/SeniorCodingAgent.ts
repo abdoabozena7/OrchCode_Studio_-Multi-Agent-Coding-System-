@@ -1,12 +1,29 @@
-import type { AgentLifecycleStage, AgentPlan, PatchProposal, Task } from "@orchcode/protocol";
+import type {
+  AgentLifecycleStage,
+  AgentPlan,
+  PatchProposal,
+  PreviewRecommendation,
+  RunSummary,
+  RuntimeProgressStage,
+  Task
+} from "@orchcode/protocol";
 import { accessProfileDefaults } from "@orchcode/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { seniorCodingAgentPrompt } from "../prompts/seniorCodingAgentPrompt.js";
 import { agentPlanSchema } from "../schemas/sessionSchemas.js";
 import { patchProposalSchema } from "../schemas/patchSchemas.js";
 import { CommandExecutor } from "../runtime/CommandExecutor.js";
-import { SessionManager } from "../runtime/SessionManager.js";
+import { inferProjectLaunch, type LaunchRecommendation } from "../runtime/ProjectLaunchInference.js";
+import { randomId, SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+
+type SimpleIntent = "explain" | "inspect" | "modify" | "run_project" | "run_command" | "preview_result";
+
+type WorkspaceScan = {
+  projectSummary: ReturnType<ToolRegistry["workspace"]["getProjectSummary"]>;
+  files: ReturnType<ToolRegistry["workspace"]["listFiles"]>;
+  gitStatus: string;
+};
 
 export class SeniorCodingAgent {
   private readonly commandExecutor = new CommandExecutor();
@@ -32,19 +49,104 @@ export class SeniorCodingAgent {
     }
 
     const tools = new ToolRegistry(session.workspacePath);
-    await this.setStage(sessionId, "REPO_SCAN", "Inspecting repository structure and git status.");
+    const intent = classifySimpleIntent(message);
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.delegationDecision = options?.delegationDecision;
+      draft.resolvedExecutionMode = "simple_mode";
+      draft.agentName = "Senior Coding Agent";
+      draft.status = "running";
+      draft.lifecycleStage = "INTAKE";
+    });
 
+    await this.updateWorkStatus(sessionId, "Goal", "Clarify the request and choose the safest local workflow.", "running");
+    await this.trace(sessionId, "planning", "Goal", `Handle this as ${intentLabel(intent)} without guessing hidden file contents.`, "completed");
+    await this.trace(sessionId, "planning", "Decision", `This request maps to ${intentLabel(intent)}.`, "completed");
+
+    const scan = await this.scanWorkspace(sessionId, tools);
+    const plan = await this.createPlan(sessionId, message, scan, intent);
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.plan = plan;
+    });
+
+    if (options?.thinkFirst) {
+      await this.trace(sessionId, "planning", "Next decision", "The plan is ready. I am stopping before action because Think first is enabled.", "completed");
+      await this.finish(
+        sessionId,
+        "PLAN",
+        "needs_approval",
+        "Plan is ready for review before implementation.",
+        {
+          status: "blocked",
+          summary: "Prepared a plan and stopped before acting because Think first is enabled.",
+          filesChanged: [],
+          appliedPatchIds: [],
+          proposedPatchIds: [],
+          commandResults: [],
+          gates: [],
+          nextAction: "Review the plan, then tell the agent to proceed.",
+          createdAt: new Date().toISOString()
+        },
+        {
+          kind: "confirm_plan",
+          message: "Plan is ready. Want me to proceed with implementation?"
+        },
+        "I reviewed the workspace and prepared a plan first. Tell me to proceed when you want implementation to start."
+      );
+      return this.sessionManager.getSession(sessionId)!;
+    }
+
+    switch (intent) {
+      case "run_project":
+        await this.sessionManager.replaceTasks(sessionId, createTasks(sessionId, ["Inspect workspace", "Infer launch path", "Run project"]));
+        await this.handleRunProject(sessionId, message, tools, scan, plan);
+        break;
+      case "run_command":
+        await this.sessionManager.replaceTasks(sessionId, createTasks(sessionId, ["Inspect workspace", "Validate command", "Run command"]));
+        await this.handleRunCommand(sessionId, message, tools, scan, plan);
+        break;
+      case "explain":
+      case "inspect":
+      case "preview_result":
+        await this.sessionManager.replaceTasks(
+          sessionId,
+          createTasks(sessionId, ["Inspect workspace", intent === "explain" ? "Explain findings" : "Summarize findings"])
+        );
+        await this.handleInspectLikeIntent(sessionId, intent, message, tools, scan, plan);
+        break;
+      case "modify":
+      default:
+        await this.sessionManager.replaceTasks(sessionId, createTasks(sessionId, ["Inspect workspace", "Gather context", "Prepare patch proposal"]));
+        await this.handleModify(sessionId, message, tools, scan, plan);
+        break;
+    }
+
+    return this.sessionManager.getSession(sessionId)!;
+  }
+
+  private async scanWorkspace(sessionId: string, tools: ToolRegistry): Promise<WorkspaceScan> {
+    await this.updateLifecycle(sessionId, "REPO_SCAN");
+    await this.trace(sessionId, "planning", "Decision", "Before acting, I need project shape, likely files, and git state.", "completed");
+
+    await this.trace(sessionId, "inspecting", "Tool call", "workspace.get_project_summary", "running");
     const projectSummary = tools.workspace.getProjectSummary();
     await this.sessionManager.addToolCall(
       sessionId,
       tools.createToolCall({
         sessionId,
         toolName: "workspace.get_project_summary",
-        inputSummary: session.workspacePath,
+        inputSummary: tools.getWorkspacePath(),
         outputSummary: `${Object.keys(projectSummary.languages).join(", ") || "No languages detected"}; ${projectSummary.importantFiles.length} important files`
       })
     );
+    await this.trace(
+      sessionId,
+      "inspecting",
+      "Observed result",
+      `Project summary: ${Object.keys(projectSummary.languages).join(", ") || "no detected stack"}; ${projectSummary.importantFiles.length} important file(s).`,
+      "completed"
+    );
 
+    await this.trace(sessionId, "inspecting", "Tool call", "workspace.list_files (max 180)", "running");
     const files = tools.workspace.listFiles(180);
     await this.sessionManager.addToolCall(
       sessionId,
@@ -55,7 +157,9 @@ export class SeniorCodingAgent {
         outputSummary: `${files.length} files/directories scanned`
       })
     );
+    await this.trace(sessionId, "inspecting", "Observed result", `Scanned ${files.length} file entries inside the workspace boundary.`, "completed");
 
+    await this.trace(sessionId, "inspecting", "Tool call", "git.status", "running");
     const gitStatus = tools.git.status();
     await this.sessionManager.addToolCall(
       sessionId,
@@ -66,45 +170,54 @@ export class SeniorCodingAgent {
         outputSummary: gitStatus.trim() || "Clean or not a git repo"
       })
     );
+    await this.trace(
+      sessionId,
+      "inspecting",
+      "Observed result",
+      gitStatus.trim() ? `Git status returned: ${gitStatus.trim()}.` : "Git is clean, or the workspace is not a repository.",
+      "completed"
+    );
 
-    await this.setStage(sessionId, "PLAN", "Creating a technical plan.");
+    return { projectSummary, files, gitStatus };
+  }
+
+  private async createPlan(
+    sessionId: string,
+    message: string,
+    scan: WorkspaceScan,
+    intent: SimpleIntent
+  ) {
+    await this.updateLifecycle(sessionId, "PLAN");
+    await this.trace(sessionId, "planning", "Decision", `Create a plan for ${intentLabel(intent)} using the current workspace scan.`, "completed");
     const plan = await this.llmProvider.generateStructured<AgentPlan>(
       {
         systemPrompt: seniorCodingAgentPrompt,
         userPrompt: message,
-        context: { projectSummary, files: files.slice(0, 40), gitStatus }
+        context: {
+          intent,
+          projectSummary: scan.projectSummary,
+          files: scan.files.slice(0, 40),
+          gitStatus: scan.gitStatus
+        }
       },
       agentPlanSchema
     );
-    await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.plan = plan;
-      draft.delegationDecision = options?.delegationDecision;
-      draft.resolvedExecutionMode = "simple_mode";
-      draft.agentName = "Senior Coding Agent";
-      draft.reasoningSummaries.push("Created a minimal plan after scanning workspace and git state.");
-    });
+    await this.trace(sessionId, "planning", "Observed result", `Plan ready with ${plan.steps.length} step(s).`, "completed");
+    await this.trace(sessionId, "planning", "Next decision", nextPlanStep(intent), "completed");
+    return plan;
+  }
 
-    if (options?.thinkFirst) {
-      await this.setStage(sessionId, "PLAN", "Plan is ready for review before implementation.");
-      await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
-        content: "I reviewed the workspace and prepared a plan first. Tell me to proceed when you want implementation to start."
-      });
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.status = "needs_approval";
-        draft.nextAction = {
-          kind: "confirm_plan",
-          message: "Plan is ready. Want me to proceed with implementation?"
-        };
-      });
-      return this.sessionManager.getSession(sessionId)!;
-    }
-
-    const tasks = createTasks(sessionId);
-    await this.sessionManager.replaceTasks(sessionId, tasks);
-
-    await this.setStage(sessionId, "CONTEXT_GATHERING", "Searching and reading likely context.");
+  private async handleInspectLikeIntent(
+    sessionId: string,
+    intent: Extract<SimpleIntent, "explain" | "inspect" | "preview_result">,
+    message: string,
+    tools: ToolRegistry,
+    scan: WorkspaceScan,
+    plan: AgentPlan
+  ) {
+    await this.updateLifecycle(sessionId, "CONTEXT_GATHERING");
     const searchTerm = inferSearchTerm(message);
+    await this.trace(sessionId, "inspecting", "Tool call", `workspace.search_code (${searchTerm})`, "running");
     const searchMatches = tools.workspace.searchCode(searchTerm, 25);
     await this.sessionManager.addToolCall(
       sessionId,
@@ -115,10 +228,12 @@ export class SeniorCodingAgent {
         outputSummary: `${searchMatches.length} matches`
       })
     );
+    await this.trace(sessionId, "inspecting", "Observed result", `Found ${searchMatches.length} code/search match(es) for ${searchTerm}.`, "completed");
 
-    const readableTarget = chooseReadableFile(searchMatches, files);
-    let readPreview = "No file selected for read";
+    const readableTarget = chooseReadableFile(searchMatches, scan.files);
+    let readPreview = "No relevant file selected.";
     if (readableTarget) {
+      await this.trace(sessionId, "inspecting", "Tool call", `workspace.read_file (${readableTarget})`, "running", [readableTarget]);
       const content = tools.workspace.readFile(readableTarget);
       readPreview = `${readableTarget}: ${content.slice(0, 240).replace(/\s+/g, " ")}`;
       await this.sessionManager.addToolCall(
@@ -130,16 +245,371 @@ export class SeniorCodingAgent {
           outputSummary: readPreview
         })
       );
+      await this.trace(sessionId, "inspecting", "Observed result", `Read ${readableTarget} to anchor the summary in real code.`, "completed", [
+        readableTarget
+      ]);
     }
 
-    await this.setStage(sessionId, "PATCH_PROPOSAL", "Preparing a reviewable patch proposal.");
+    const intro =
+      intent === "explain"
+        ? `I inspected the workspace to explain it, not to change it.`
+        : intent === "preview_result"
+          ? `I inspected the current workspace state before trying to surface a preview.`
+          : `I inspected the workspace and summarized the current shape.`;
+    const summaryLines = [
+      intro,
+      `Detected stack: ${Object.keys(scan.projectSummary.languages).join(", ") || "no primary stack detected"}.`,
+      scan.projectSummary.importantFiles.length
+        ? `Important files: ${scan.projectSummary.importantFiles.slice(0, 6).join(", ")}.`
+        : "No important files were detected yet.",
+      searchMatches.length ? `Search hits for "${searchTerm}": ${searchMatches.length}.` : `No search hits for "${searchTerm}".`,
+      `Plan summary: ${plan.summary}`
+    ];
+
+    await this.finish(
+      sessionId,
+      "DONE",
+      "completed",
+      summaryLines.join(" "),
+      {
+        status: "completed",
+        summary: intent === "explain" ? "Explained the current project state." : "Inspected the current project state.",
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: [],
+        nextAction: readableTarget ? `Most relevant file inspected: ${readableTarget}` : "No file changes were proposed.",
+        createdAt: new Date().toISOString()
+      },
+      undefined,
+      summaryLines.join("\n")
+    );
+  }
+
+  private async handleRunProject(
+    sessionId: string,
+    message: string,
+    tools: ToolRegistry,
+    scan: WorkspaceScan,
+    plan: AgentPlan
+  ) {
+    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    await this.trace(sessionId, "working", "Decision", "This is an execution request, so I will infer a launch path instead of proposing a patch.", "completed");
+
+    const recommendation = inferProjectLaunch(tools.getWorkspacePath(), tools.workspace);
+    await this.sessionManager.addToolCall(
+      sessionId,
+      tools.createToolCall({
+        sessionId,
+        toolName: "workspace.inspect_launch",
+        inputSummary: "Detect runnable project entry",
+        outputSummary: recommendation?.reason ?? "No runnable entry found",
+        status: recommendation ? "success" : "error"
+      })
+    );
+
+    if (!recommendation) {
+      await this.trace(
+        sessionId,
+        "blocked",
+        "Observed result",
+        "I did not find a runnable project shape. I checked for index.html and package.json dev/start scripts.",
+        "blocked"
+      );
+      await this.finish(
+        sessionId,
+        "DONE",
+        "failed",
+        "I could not run this workspace because I did not find a browser entry file or a package.json dev/start script.",
+        {
+          status: "failed",
+          summary: "No runnable project shape was detected.",
+          filesChanged: [],
+          appliedPatchIds: [],
+          proposedPatchIds: [],
+          commandResults: [],
+          gates: [],
+          nextAction: "Add a runnable entry point like index.html or a package.json dev/start script.",
+          createdAt: new Date().toISOString()
+        },
+        undefined,
+        "I looked for index.html and package.json dev/start scripts, but this workspace does not expose a runnable entry point yet."
+      );
+      return;
+    }
+
+    await this.trace(sessionId, "working", "Observed result", `${recommendation.reason} Confidence: ${recommendation.confidence}.`, "completed");
+    await this.trace(
+      sessionId,
+      "working",
+      "Next decision",
+      recommendation.command
+        ? `Use ${recommendation.command} and expose ${recommendation.preview.target}.`
+        : `Open ${recommendation.preview.target} directly.`,
+      "completed"
+    );
+
+    const commandResult = await this.executeLaunchRecommendation(sessionId, tools, recommendation);
+    const currentSession = this.sessionManager.getSession(sessionId)!;
+    const previewReady =
+      commandResult?.status === "executed" || (!recommendation.command && currentSession.accessProfile === "full_access");
+    const summaryText = buildRunProjectSummary(scan, plan, recommendation, commandResult);
+    const nextAction =
+      previewReady
+        ? recommendation.preview.type === "url"
+          ? `Preview ready at ${recommendation.preview.target}`
+          : `Open ${recommendation.preview.target} to inspect the result.`
+        : recommendation.command
+          ? `Suggested command: ${recommendation.command}`
+          : `Open ${recommendation.preview.target}`;
+
+    await this.finish(
+      sessionId,
+      "DONE",
+      commandResult?.status === "blocked" ? "needs_approval" : "completed",
+      summaryText,
+      {
+        status: commandResult?.status === "blocked" ? "blocked" : "completed",
+        summary: commandResult?.status === "executed" ? "Started the project preview flow." : "Prepared the project launch flow.",
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: commandResult ? [summarizeCommandExecution(commandResult)] : recommendation.command ? [recommendation.command] : [],
+        gates: [],
+        nextAction,
+        createdAt: new Date().toISOString()
+      },
+      previewReady
+        ? {
+            kind: "preview_ready",
+            message: commandResult?.message ?? "Preview is ready.",
+            preview: recommendation.preview
+          }
+        : undefined,
+      summaryText,
+      recommendation.preview
+    );
+  }
+
+  private async executeLaunchRecommendation(sessionId: string, tools: ToolRegistry, recommendation: LaunchRecommendation) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.previewRecommendation = recommendation.preview;
+    });
+
+    if (!recommendation.command) {
+      await this.trace(sessionId, "completed", "Action taken", `Prepared direct preview: ${recommendation.preview.target}.`, "completed");
+      return null;
+    }
+
+    const session = this.sessionManager.getSession(sessionId)!;
+    const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
+    const commandRequest = tools.command.requestRun(
+      sessionId,
+      recommendation.command,
+      `Run the workspace using the inferred ${recommendation.strategy.replaceAll("_", " ")} strategy.`
+    );
+    await this.sessionManager.addCommandRequest(sessionId, commandRequest);
+    await this.sessionManager.addToolCall(
+      sessionId,
+      tools.createToolCall({
+        sessionId,
+        toolName: "command.request_run",
+        inputSummary: recommendation.command,
+        outputSummary: `${commandRequest.risk} command ${commandRequest.status}`
+      })
+    );
+    await this.trace(sessionId, "working", "Tool call", `command.request_run (${recommendation.command})`, "completed");
+    await this.trace(
+      sessionId,
+      commandRequest.risk === "safe" ? "working" : "blocked",
+      "Observed result",
+      `Command policy classified this as ${commandRequest.risk}.`,
+      commandRequest.risk === "dangerous" ? "blocked" : "completed"
+    );
+
+    const canAutoRun = session.accessProfile === "full_access" && safetySettings.autoRunSafeCommands && commandRequest.risk === "safe";
+    if (!canAutoRun) {
+      await this.trace(
+        sessionId,
+        "blocked",
+        "Action taken",
+        `I inferred the right launch command but did not run it automatically under ${session.accessProfile}.`,
+        "blocked"
+      );
+      return null;
+    }
+
+    const execution = recommendation.background
+      ? this.commandExecutor.runInBackground(sessionId, recommendation.command, session.workspacePath, commandRequest.id)
+      : this.commandExecutor.run(sessionId, recommendation.command, session.workspacePath, commandRequest.id);
+    await this.sessionManager.addCommandExecution(sessionId, execution);
+    await this.trace(
+      sessionId,
+      execution.status === "executed" ? "applying" : execution.status === "blocked" ? "blocked" : "working",
+      "Action taken",
+      execution.status === "executed"
+        ? `Started ${recommendation.command}${recommendation.background ? " in the background" : ""}.`
+        : execution.message ?? `Did not run ${recommendation.command}.`,
+      execution.status === "executed" ? "completed" : execution.status === "blocked" ? "blocked" : "failed"
+    );
+    return execution;
+  }
+
+  private async handleRunCommand(
+    sessionId: string,
+    message: string,
+    tools: ToolRegistry,
+    scan: WorkspaceScan,
+    plan: AgentPlan
+  ) {
+    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    const command = inferExplicitCommand(message);
+    if (!command) {
+      await this.finish(
+        sessionId,
+        "DONE",
+        "failed",
+        "I could not extract a concrete command to run from that request.",
+        {
+          status: "failed",
+          summary: "No explicit command was found.",
+          filesChanged: [],
+          appliedPatchIds: [],
+          proposedPatchIds: [],
+          commandResults: [],
+          gates: [],
+          nextAction: "Say `run <command>` or `execute <command>` with the exact command text.",
+          createdAt: new Date().toISOString()
+        },
+        undefined,
+        "I need a concrete command like `run npm test` or `execute git status`."
+      );
+      return;
+    }
+
+    await this.trace(sessionId, "working", "Decision", `Run the explicit command instead of preparing a patch: ${command}.`, "completed");
+    const request = tools.command.requestRun(sessionId, command, "User explicitly asked to run this command.");
+    await this.sessionManager.addCommandRequest(sessionId, request);
+    await this.sessionManager.addToolCall(
+      sessionId,
+      tools.createToolCall({
+        sessionId,
+        toolName: "command.request_run",
+        inputSummary: command,
+        outputSummary: `${request.risk} command ${request.status}`
+      })
+    );
+    await this.trace(sessionId, "working", "Observed result", `Command policy classified ${command} as ${request.risk}.`, "completed");
+
+    const session = this.sessionManager.getSession(sessionId)!;
+    const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
+    const canAutoRun = session.accessProfile === "full_access" && safetySettings.autoRunSafeCommands && request.risk === "safe";
+    let execution: ReturnType<CommandExecutor["run"]> | null = null;
+    if (canAutoRun) {
+      const background = shouldRunInBackground(command);
+      execution = background
+        ? this.commandExecutor.runInBackground(sessionId, command, session.workspacePath, request.id)
+        : this.commandExecutor.run(sessionId, command, session.workspacePath, request.id);
+      await this.sessionManager.addCommandExecution(sessionId, execution);
+      await this.trace(
+        sessionId,
+        execution.status === "executed" ? "applying" : execution.status === "blocked" ? "blocked" : "working",
+        "Action taken",
+        execution.status === "executed" ? `Executed ${command}${background ? " in the background" : ""}.` : execution.message ?? `Did not execute ${command}.`,
+        execution.status === "executed" ? "completed" : execution.status === "blocked" ? "blocked" : "failed"
+      );
+    } else {
+      await this.trace(
+        sessionId,
+        "blocked",
+        "Action taken",
+        `I validated the command but left it interactive under ${session.accessProfile}.`,
+        "blocked"
+      );
+    }
+
+    const summaryText = [
+      `I treated this as a command request, not a code-change request.`,
+      `Workspace scan: ${Object.keys(scan.projectSummary.languages).join(", ") || "no primary stack detected"}.`,
+      `Plan summary: ${plan.summary}`,
+      execution?.status === "executed"
+        ? `Executed ${command}.`
+        : `Prepared ${command} as the next action without auto-running it.`
+    ].join(" ");
+
+    await this.finish(
+      sessionId,
+      "DONE",
+      execution?.status === "blocked" ? "needs_approval" : "completed",
+      summaryText,
+      {
+        status: execution?.status === "blocked" ? "blocked" : "completed",
+        summary: execution?.status === "executed" ? "Executed the requested command." : "Prepared the requested command.",
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: execution ? [summarizeCommandExecution(execution)] : [command],
+        gates: [],
+        nextAction: execution ? execution.message ?? command : `Run ${command} when you want to continue.`,
+        createdAt: new Date().toISOString()
+      },
+      undefined,
+      summaryText
+    );
+  }
+
+  private async handleModify(
+    sessionId: string,
+    message: string,
+    tools: ToolRegistry,
+    scan: WorkspaceScan,
+    plan: AgentPlan
+  ) {
+    await this.updateLifecycle(sessionId, "CONTEXT_GATHERING");
+    const searchTerm = inferSearchTerm(message);
+    await this.trace(sessionId, "working", "Decision", "This request needs a patch proposal, so I am gathering the narrowest relevant context first.", "completed");
+
+    await this.trace(sessionId, "inspecting", "Tool call", `workspace.search_code (${searchTerm})`, "running");
+    const searchMatches = tools.workspace.searchCode(searchTerm, 25);
+    await this.sessionManager.addToolCall(
+      sessionId,
+      tools.createToolCall({
+        sessionId,
+        toolName: "workspace.search_code",
+        inputSummary: searchTerm,
+        outputSummary: `${searchMatches.length} matches`
+      })
+    );
+    await this.trace(sessionId, "inspecting", "Observed result", `Found ${searchMatches.length} search match(es) for ${searchTerm}.`, "completed");
+
+    const readableTarget = chooseReadableFile(searchMatches, scan.files);
+    let readPreview = "No file selected for read";
+    if (readableTarget) {
+      await this.trace(sessionId, "inspecting", "Tool call", `workspace.read_file (${readableTarget})`, "running", [readableTarget]);
+      const content = tools.workspace.readFile(readableTarget);
+      readPreview = `${readableTarget}: ${content.slice(0, 240).replace(/\s+/g, " ")}`;
+      await this.sessionManager.addToolCall(
+        sessionId,
+        tools.createToolCall({
+          sessionId,
+          toolName: "workspace.read_file",
+          inputSummary: readableTarget,
+          outputSummary: readPreview
+        })
+      );
+      await this.trace(sessionId, "inspecting", "Observed result", `Read ${readableTarget} before generating a patch.`, "completed", [readableTarget]);
+    }
+
+    await this.updateLifecycle(sessionId, "PATCH_PROPOSAL");
+    await this.trace(sessionId, "working", "Next decision", "Generate a reviewable patch proposal instead of writing files directly.", "completed");
     const generatedPatch = await this.llmProvider.generateStructured<Omit<PatchProposal, "id" | "sessionId" | "createdAt">>(
       {
         systemPrompt: seniorCodingAgentPrompt,
         userPrompt: message,
         context: {
           summaryFile: "AGENT_PROPOSAL.md",
-          projectSummary,
+          projectSummary: scan.projectSummary,
           searchMatches,
           readPreview
         }
@@ -158,11 +628,22 @@ export class SeniorCodingAgent {
         status: validation.valid ? "success" : "error"
       })
     );
+    await this.trace(
+      sessionId,
+      validation.valid ? "patching" : "blocked",
+      "Observed result",
+      validation.valid ? `Patch proposal ready: ${proposal.title}.` : `Patch validation failed: ${validation.errors.join("; ")}`,
+      validation.valid ? "completed" : "blocked",
+      proposal.filesChanged.map((file) => file.path)
+    );
+
     if (validation.valid) {
       await this.sessionManager.addPatchProposal(sessionId, proposal);
     }
 
+    const session = this.sessionManager.getSession(sessionId)!;
     const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
+    let patchSummary = "Stopped before applying the patch because approval is required.";
     if (validation.valid && safetySettings.autoApplyValidatedPatches) {
       const applyResult = tools.patch.applyProposal(proposal);
       await this.sessionManager.updateSession(sessionId, (draft) => {
@@ -171,16 +652,34 @@ export class SeniorCodingAgent {
           target.status = "applied";
         }
       });
+      patchSummary = applyResult.applied
+        ? "Applied the validated patch automatically under the current access policy."
+        : `Prepared the patch but did not apply it: ${applyResult.message}`;
+      await this.trace(
+        sessionId,
+        applyResult.applied ? "applying" : "blocked",
+        "Action taken",
+        patchSummary,
+        applyResult.applied ? "completed" : "blocked",
+        proposal.filesChanged.map((file) => file.path)
+      );
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
-        content: applyResult.applied
-          ? "I applied the validated patch automatically under the current access policy."
-          : `I prepared the patch but did not apply it: ${applyResult.message}`
+        content: patchSummary
       });
+    } else {
+      await this.trace(
+        sessionId,
+        "blocked",
+        "Action taken",
+        "The patch remains review-only until you approve it.",
+        "blocked",
+        proposal.filesChanged.map((file) => file.path)
+      );
     }
 
-    await this.setStage(sessionId, "OPTIONAL_COMMAND_REQUEST", "Suggesting a safe validation command.");
-    const command = projectSummary.testCommands[0] ?? "git diff --check";
+    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    const command = scan.projectSummary.testCommands[0] ?? "git diff --check";
     const commandRequest = tools.command.requestRun(
       sessionId,
       command,
@@ -196,58 +695,188 @@ export class SeniorCodingAgent {
         outputSummary: `${commandRequest.risk} command ${commandRequest.status}`
       })
     );
-
+    await this.trace(sessionId, "reviewing", "Tool call", `command.request_run (${command})`, "completed");
     if (commandRequest.risk === "safe" && safetySettings.autoRunSafeCommands) {
       const execution = this.commandExecutor.run(sessionId, commandRequest.command, session.workspacePath, commandRequest.id);
       await this.sessionManager.addCommandExecution(sessionId, execution);
+      await this.trace(
+        sessionId,
+        execution.status === "executed" ? "reviewing" : "blocked",
+        "Observed result",
+        execution.status === "executed"
+          ? `Executed the safest validation command automatically: ${commandRequest.command}.`
+          : execution.message ?? `Did not execute ${commandRequest.command}.`,
+        execution.status === "executed" ? "completed" : "blocked"
+      );
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
         content: `I queued the safest validation command automatically: ${commandRequest.command}`
       });
     }
 
-    await this.setStage(sessionId, "REVIEW_REQUEST", "Patch proposal is waiting for user review.");
-    await this.sessionManager.addMessage(sessionId, {
-      role: "assistant",
-      content:
-        "I created a plan, inspected the workspace with controlled tools, and prepared a patch proposal. Review and approve or reject it before any file write is attempted."
-    });
-    await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.status =
-        safetySettings.autoApplyValidatedPatches && validation.valid ? "completed" : proposal.requiresApproval ? "needs_approval" : "completed";
-      draft.reasoningSummaries.push(
-        safetySettings.autoApplyValidatedPatches && validation.valid
-          ? "Applied the validated patch automatically under the current access policy."
-          : "Stopped before applying the patch because approval is required."
-      );
-    });
+    const mockOnlyProposal =
+      proposal.filesChanged.length === 1 &&
+      proposal.filesChanged[0]?.path === "AGENT_PROPOSAL.md" &&
+      /^Mock implementation note$/i.test(proposal.title);
+    const reviewMessage = mockOnlyProposal
+      ? "I created a mock planning note instead of a real code patch. In mock mode, this request still needs a real provider before it can produce a credible implementation."
+      : "I created a plan, inspected the workspace with controlled tools, and prepared a patch proposal. Review and approve or reject it before any file write is attempted.";
 
-    return this.sessionManager.getSession(sessionId)!;
+    await this.finish(
+      sessionId,
+      "REVIEW_REQUEST",
+      safetySettings.autoApplyValidatedPatches && validation.valid ? "completed" : proposal.requiresApproval ? "needs_approval" : "completed",
+      reviewMessage,
+      {
+        status: validation.valid ? "completed" : "blocked",
+        summary: mockOnlyProposal ? "Prepared a mock-only note instead of a credible code patch." : patchSummary,
+        filesChanged: [],
+        appliedPatchIds: proposal.status === "applied" ? [proposal.id] : [],
+        proposedPatchIds: [proposal.id],
+        commandResults: [command],
+        gates: [
+          {
+            name: "Patch validation",
+            status: validation.valid ? "passed" : "failed",
+            notes: validation.errors
+          }
+        ],
+        nextAction: proposal.status === "applied" ? "Patch applied under current access policy." : "Review the patch proposal before any write occurs.",
+        createdAt: new Date().toISOString()
+      },
+      undefined,
+      reviewMessage
+    );
   }
 
-  private async setStage(sessionId: string, stage: AgentLifecycleStage, summary: string) {
+  private async finish(
+    sessionId: string,
+    lifecycleStage: AgentLifecycleStage,
+    status: "completed" | "needs_approval" | "failed",
+    summary: string,
+    runSummary: RunSummary,
+    nextAction?: import("@orchcode/protocol").SessionNextAction,
+    assistantMessage?: string,
+    previewRecommendation?: PreviewRecommendation
+  ) {
+    await this.updateLifecycle(sessionId, lifecycleStage, status);
+    await this.updateWorkStatus(sessionId, stageLabel(lifecycleStage), summary, status === "failed" ? "failed" : "completed");
+    await this.trace(
+      sessionId,
+      status === "failed" ? "blocked" : "completed",
+      "Action taken",
+      summary,
+      status === "failed" ? "failed" : "completed"
+    );
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.status = "running";
-      draft.lifecycleStage = stage;
+      draft.status = status;
+      draft.lifecycleStage = lifecycleStage;
+      draft.nextAction = nextAction;
+      if (previewRecommendation) {
+        draft.previewRecommendation = previewRecommendation;
+      }
       draft.reasoningSummaries.push(summary);
+    });
+    await this.sessionManager.setRunSummary(sessionId, runSummary);
+    if (assistantMessage) {
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: assistantMessage
+      });
+    }
+  }
+
+  private async updateLifecycle(
+    sessionId: string,
+    stage: AgentLifecycleStage,
+    status: "running" | "completed" | "needs_approval" | "failed" = "running"
+  ) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.lifecycleStage = stage;
+      draft.status = status;
+    });
+  }
+
+  private async updateWorkStatus(
+    sessionId: string,
+    taskTitle: string,
+    objective: string,
+    status: "queued" | "running" | "completed" | "blocked" | "failed",
+    targetFiles: string[] = []
+  ) {
+    await this.sessionManager.updateAgentWorkStatus(sessionId, {
+      agentName: "Senior Coding Agent",
+      role: "Senior Coding Agent",
+      taskTitle,
+      objective,
+      status,
+      targetFiles,
+      summary: objective,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  private async trace(
+    sessionId: string,
+    stage: RuntimeProgressStage,
+    taskTitle: string,
+    summary: string,
+    status: "queued" | "running" | "completed" | "blocked" | "failed",
+    targetFiles: string[] = []
+  ) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.reasoningSummaries.push(`${taskTitle}: ${summary}`);
+    });
+    await this.sessionManager.addProgressEvent(sessionId, {
+      id: randomId("progress"),
+      sessionId,
+      stage,
+      agentName: "Senior Coding Agent",
+      role: "Senior",
+      taskTitle,
+      summary,
+      status,
+      targetFiles,
+      createdAt: new Date().toISOString()
     });
   }
 }
 
-function createTasks(sessionId: string): Task[] {
+function createTasks(sessionId: string, titles: string[]): Task[] {
   const now = new Date().toISOString();
-  return [
-    { id: "task_scan", sessionId, title: "Scan repository", status: "done", agentRole: "Senior Coding Agent", createdAt: now },
-    { id: "task_plan", sessionId, title: "Create technical plan", status: "done", agentRole: "Senior Coding Agent", createdAt: now },
-    { id: "task_patch", sessionId, title: "Prepare patch proposal", status: "done", agentRole: "Senior Coding Agent", createdAt: now }
-  ];
+  return titles.map((title) => ({
+    id: randomId("task"),
+    sessionId,
+    title,
+    status: "done",
+    agentRole: "Senior Coding Agent",
+    createdAt: now
+  }));
+}
+
+function classifySimpleIntent(message: string): SimpleIntent {
+  const normalized = normalize(message);
+  if (/\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/.test(normalized)) return "run_project";
+  if (/^\s*(run|execute)\s+.+/.test(normalized) && !/\b(project|app|preview|site|game)\b/.test(normalized)) return "run_command";
+  if (/\b(open preview|show preview|preview result|open result)\b/.test(normalized)) return "preview_result";
+  if (/\b(explain|what does|how does|walk me through|describe)\b/.test(normalized)) return "explain";
+  if (/\b(inspect|analyze|scan|review|summarize|tell me about)\b/.test(normalized)) return "inspect";
+  return "modify";
+}
+
+function inferExplicitCommand(message: string) {
+  const normalized = message.trim();
+  const stripped = normalized.replace(/^(please\s+)?(run|execute)\s+/i, "");
+  return stripped && stripped !== normalized ? stripped.trim() : "";
 }
 
 function inferSearchTerm(message: string) {
-  return message
-    .split(/\W+/)
-    .find((part) => part.length > 4)
-    ?.toLowerCase() ?? "TODO";
+  return (
+    message
+      .split(/\W+/)
+      .find((part) => part.length > 4)
+      ?.toLowerCase() ?? "TODO"
+  );
 }
 
 function chooseReadableFile(
@@ -256,6 +885,68 @@ function chooseReadableFile(
 ) {
   return (
     matches[0]?.path ??
-    files.find((file) => !file.isDir && !file.isSecretCandidate && /\.(ts|tsx|rs|js|md|json)$/i.test(file.path))?.path
+    files.find((file) => !file.isDir && !file.isSecretCandidate && /\.(ts|tsx|rs|js|md|json|html|css)$/i.test(file.path))?.path
   );
+}
+
+function normalize(message: string) {
+  return message.trim().toLowerCase();
+}
+
+function intentLabel(intent: SimpleIntent) {
+  return intent.replaceAll("_", " ");
+}
+
+function nextPlanStep(intent: SimpleIntent) {
+  switch (intent) {
+    case "run_project":
+      return "Infer the safest launch path and start it if access allows.";
+    case "run_command":
+      return "Validate the explicit command against command policy, then run it if allowed.";
+    case "explain":
+      return "Inspect likely files and explain the project without modifying it.";
+    case "inspect":
+    case "preview_result":
+      return "Inspect the workspace and summarize the current state without changing files.";
+    case "modify":
+    default:
+      return "Gather narrow context and prepare a reviewable patch proposal.";
+  }
+}
+
+function summarizeCommandExecution(
+  execution: ReturnType<CommandExecutor["run"]> | ReturnType<CommandExecutor["runInBackground"]>
+) {
+  return `${execution.command}: ${execution.status}${execution.message ? ` (${execution.message})` : ""}`;
+}
+
+function buildRunProjectSummary(
+  scan: WorkspaceScan,
+  plan: AgentPlan,
+  recommendation: LaunchRecommendation,
+  execution: ReturnType<CommandExecutor["run"]> | ReturnType<CommandExecutor["runInBackground"]> | null
+) {
+  return [
+    `I treated this as a run request, not a code-change request.`,
+    `Detected stack: ${Object.keys(scan.projectSummary.languages).join(", ") || "no primary stack detected"}.`,
+    `Plan summary: ${plan.summary}`,
+    `Launch strategy: ${recommendation.strategy.replaceAll("_", " ")}.`,
+    execution?.status === "executed"
+      ? `Started ${recommendation.command ?? recommendation.preview.target}${recommendation.background ? " in the background" : ""}.`
+      : recommendation.command
+        ? `Prepared ${recommendation.command} and ${recommendation.preview.target}.`
+        : `Prepared ${recommendation.preview.target} for direct preview.`
+  ].join(" ");
+}
+
+function shouldRunInBackground(command: string) {
+  return /\b(dev|serve|http\.server|uvicorn|vite|next dev|react-scripts start)\b/i.test(command);
+}
+
+function stageLabel(stage: AgentLifecycleStage) {
+  return stage
+    .toLowerCase()
+    .split("_")
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 }

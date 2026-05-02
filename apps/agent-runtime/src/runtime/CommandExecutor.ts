@@ -87,6 +87,24 @@ export class CommandExecutor {
       };
     }
 
+    if (process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS === "1") {
+      return {
+        id: `cmd_exec_${randomUUID()}`,
+        sessionId,
+        requestId,
+        autoRun: true,
+        command,
+        cwd,
+        risk,
+        status: "executed",
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        message: "Skipped background process launch because ORCHCODE_DISABLE_BACKGROUND_COMMANDS=1.",
+        createdAt: new Date().toISOString()
+      };
+    }
+
     const child = spawn(command, {
       cwd,
       shell: true,

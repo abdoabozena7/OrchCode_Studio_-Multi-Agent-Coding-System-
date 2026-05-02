@@ -7,8 +7,11 @@ import type {
   ToolCall
 } from "./models.js";
 import type {
+  AgentWorkStatus,
   DelegationDecision,
   OrchestrationState,
+  RunSummary,
+  RuntimeProgressEvent,
   RuntimeExecutionMode,
   SessionNextAction
 } from "./orchestration.js";
@@ -72,6 +75,9 @@ export type AgentRuntimeSession = {
   commandRequests: CommandRequest[];
   commandExecutions: CommandExecutionRecord[];
   reasoningSummaries: string[];
+  progressEvents: RuntimeProgressEvent[];
+  agentWorkStatuses: AgentWorkStatus[];
+  runSummary?: RunSummary;
   delegationDecision?: DelegationDecision;
   nextAction?: SessionNextAction;
   previewRecommendation?: PreviewRecommendation;

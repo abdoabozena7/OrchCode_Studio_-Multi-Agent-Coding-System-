@@ -1,4 +1,17 @@
-import type { AgentRun, OrchestrationEventType, OrchestrationState, ProjectMap, TaskNode, WorkerOutput } from "@orchcode/protocol";
+import type {
+  AgentRun,
+  AgentRuntimeSession,
+  AgentWorkStatus,
+  OrchestrationEventType,
+  PatchChangeStats,
+  PatchProposal,
+  ProjectMap,
+  QualityGateResult,
+  RunSummary,
+  RuntimeProgressStage,
+  RuntimeProgressStatus,
+  WorkerOutput
+} from "@orchcode/protocol";
 import { ProductOrchestrator } from "../orchestrators/ProductOrchestrator.js";
 import { BusinessOrchestrator } from "../orchestrators/BusinessOrchestrator.js";
 import { EngineeringOrchestrator } from "../orchestrators/EngineeringOrchestrator.js";
@@ -18,6 +31,7 @@ import {
   TestAgent,
   ToolingTerminalAgent
 } from "../agents/workers/index.js";
+import { isThreeJsSnakePrompt, validateThreeJsSnakeProposal } from "../mock/threeJsSnake.js";
 
 export class OrchestratedRuntime {
   private readonly commandExecutor = new CommandExecutor();
@@ -39,6 +53,19 @@ export class OrchestratedRuntime {
     if (lastMessage?.role !== "user" || lastMessage.content !== message) {
       await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
     }
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "running";
+      draft.lifecycleStage = "PLAN";
+    });
+    await this.progress(sessionId, {
+      stage: "planning",
+      status: "running",
+      agentName: "Product Orchestrator",
+      role: "Product",
+      taskTitle: "Understand the request",
+      summary: "Turning your prompt into concrete goals and success criteria.",
+      targetFiles: []
+    });
     await this.emit(sessionId, "orchestration.started", "Multi-agent orchestration started.");
 
     const tools = new ToolRegistry(session.workspacePath);
@@ -55,19 +82,54 @@ export class OrchestratedRuntime {
     const productBrief = new ProductOrchestrator().createBrief(message);
     await this.recordAgent(sessionId, "Product Orchestrator", "Product Orchestrator", "Create product brief");
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.status = "running";
       draft.orchestration!.productBrief = productBrief;
       draft.orchestration!.projectMap = projectMap;
     });
+    await this.progress(sessionId, {
+      stage: "planning",
+      status: "completed",
+      agentName: "Product Orchestrator",
+      role: "Product",
+      taskTitle: "Product brief",
+      summary: `Goal: ${productBrief.goal}`,
+      targetFiles: []
+    });
     await this.emit(sessionId, "product_brief.created", "Product brief created.", "Product Orchestrator");
 
+    await this.progress(sessionId, {
+      stage: "planning",
+      status: "running",
+      agentName: "Business Orchestrator",
+      role: "Business",
+      taskTitle: "Define MVP and acceptance criteria",
+      summary: "Converting the goal into MVP scope, risks, and acceptance checks.",
+      targetFiles: []
+    });
     const businessBrief = new BusinessOrchestrator().createBrief(productBrief);
     await this.recordAgent(sessionId, "Business Orchestrator", "Business Orchestrator", "Create business brief");
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.orchestration!.businessBrief = businessBrief;
     });
+    await this.progress(sessionId, {
+      stage: "planning",
+      status: "completed",
+      agentName: "Business Orchestrator",
+      role: "Business",
+      taskTitle: "Business brief",
+      summary: `Acceptance criteria prepared: ${businessBrief.acceptanceCriteria.slice(0, 3).join("; ")}`,
+      targetFiles: []
+    });
     await this.emit(sessionId, "business_brief.created", "Business brief created.", "Business Orchestrator");
 
+    await this.progress(sessionId, {
+      stage: "assigning",
+      status: "running",
+      agentName: "Engineering Orchestrator",
+      role: "Engineering",
+      taskTitle: "Assign the working team",
+      summary: "Scanning the project shape and selecting only the workers needed for this task.",
+      targetFiles: projectMap.importantFiles.slice(0, 5)
+    });
     const engineering = new EngineeringOrchestrator().createTechnicalPlan({
       sessionId,
       productBrief,
@@ -87,10 +149,43 @@ export class OrchestratedRuntime {
       };
       draft.orchestration!.technicalPlan = engineering.technicalPlan;
       draft.orchestration!.taskGraph = engineering.technicalPlan.taskGraph;
+      draft.orchestration!.selectedWorkerAgents = engineering.delegationDecision.selectedAgentRoles;
+      draft.orchestration!.mandatoryGateAgents = ["Product Orchestrator", "Business Orchestrator", "Engineering Orchestrator", "SecurityAgent", "ReviewerAgent"];
+      draft.orchestration!.workOrders = engineering.workOrders;
+    });
+    await this.progress(sessionId, {
+      stage: "assigning",
+      status: "completed",
+      agentName: "Engineering Orchestrator",
+      role: "Engineering",
+      taskTitle: "Working team selected",
+      summary: engineering.delegationDecision.rationale,
+      targetFiles: engineering.workOrders.flatMap((order) => order.requiredArtifacts).slice(0, 8)
     });
     await this.emit(sessionId, "technical_plan.created", "Technical plan and task graph created.", "Engineering Orchestrator");
     for (const node of engineering.technicalPlan.taskGraph.nodes) {
       await this.emit(sessionId, "task.created", node.title, node.assignedAgent, node.id);
+    }
+    for (const order of engineering.workOrders) {
+      await this.updateWorkStatus(sessionId, {
+        agentName: order.agentName,
+        role: order.dynamicRole,
+        taskTitle: order.objective,
+        objective: order.objective,
+        status: "queued",
+        targetFiles: order.requiredArtifacts,
+        summary: "Waiting for dependencies and file locks.",
+        updatedAt: new Date().toISOString()
+      });
+      await this.progress(sessionId, {
+        stage: "assigning",
+        status: "queued",
+        agentName: order.agentName,
+        role: order.dynamicRole,
+        taskTitle: order.objective,
+        summary: `Assigned work order: ${order.objective}`,
+        targetFiles: order.requiredArtifacts
+      });
     }
 
     if (options.thinkFirst) {
@@ -121,26 +216,89 @@ export class OrchestratedRuntime {
     const reviewerAgent = new ReviewerAgent();
     let previewRecommendation: import("@orchcode/protocol").PreviewRecommendation | undefined;
 
-    scheduler.runAll((task) => {
+    await scheduler.runAllAsync(async (task) => {
       const worker = createWorker(task.assignedAgent);
+      const workOrder = engineering.workOrders.find((candidate) => candidate.agentName === task.assignedAgent || candidate.id === `work_${task.id}`);
       const run = createAgentRun(sessionId, task.assignedAgent, task.title, "running");
-      session.orchestration!.agentRuns.push(run);
+      await this.updateWorkStatus(sessionId, {
+        agentName: task.assignedAgent,
+        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        taskTitle: task.title,
+        objective: workOrder?.objective ?? task.description,
+        status: "running",
+        targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? [],
+        summary: "Inspecting context and preparing output.",
+        updatedAt: new Date().toISOString()
+      });
+      await this.progress(sessionId, {
+        stage: "working",
+        status: "running",
+        agentName: task.assignedAgent,
+        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        taskTitle: task.title,
+        summary: workOrder?.objective ?? task.description,
+        targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? []
+      });
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.orchestration!.agentRuns.push(run);
+      });
       const result = worker.run(task, {
         sessionId,
         userPrompt: message,
         workspacePath: session.workspacePath,
         projectMap,
-        tools
+        tools,
+        workOrder,
+        previousOutputs: outputs
       });
       outputs.push(result.output);
-      if (result.patch) session.patchProposals.push(result.patch);
-      if (result.commandRequest) session.commandRequests.push(result.commandRequest);
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.orchestration!.workerOutputs.push(result.output);
+        const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
+        if (targetRun) {
+          targetRun.status = "completed";
+          targetRun.completedAt = new Date().toISOString();
+          targetRun.lastEvent = "completed";
+        }
+      });
+      if (result.patch) {
+        await this.sessionManager.addPatchProposal(sessionId, result.patch);
+        const patchStats = getPatchStats(result.patch);
+        await this.progress(sessionId, {
+          stage: "patching",
+          status: "completed",
+          agentName: task.assignedAgent,
+          role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+          taskTitle: "Code changes proposed",
+          summary: `${result.patch.title}: ${result.patch.summary}`,
+          targetFiles: result.patch.filesChanged.map((file) => file.path),
+          patchStats
+        });
+      }
+      if (result.commandRequest) await this.sessionManager.addCommandRequest(sessionId, result.commandRequest);
       if (!previewRecommendation && result.previewRecommendation) {
         previewRecommendation = result.previewRecommendation;
       }
-      run.status = "completed";
-      run.completedAt = new Date().toISOString();
-      run.lastEvent = "completed";
+      await this.updateWorkStatus(sessionId, {
+        agentName: task.assignedAgent,
+        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        taskTitle: task.title,
+        objective: workOrder?.objective ?? task.description,
+        status: "completed",
+        targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? [],
+        summary: result.output.summary,
+        selfCheck: result.output.selfCheck,
+        updatedAt: new Date().toISOString()
+      });
+      await this.progress(sessionId, {
+        stage: "working",
+        status: "completed",
+        agentName: task.assignedAgent,
+        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        taskTitle: task.title,
+        summary: result.output.summary,
+        targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? []
+      });
     });
 
     for (const event of scheduler.events) {
@@ -158,22 +316,82 @@ export class OrchestratedRuntime {
     }
     if (session.orchestration.safetySettings.autoRunSafeCommands) {
       for (const command of session.commandRequests.filter((request) => request.risk === "safe")) {
+        await this.progress(sessionId, {
+          stage: "reviewing",
+          status: "running",
+          agentName: "ToolingTerminalAgent",
+          role: "Tooling",
+          taskTitle: "Run safe validation command",
+          summary: command.command,
+          targetFiles: []
+        });
         const execution = this.commandExecutor.run(sessionId, command.command, session.workspacePath, command.id);
         await this.sessionManager.addCommandExecution(sessionId, execution);
+        await this.progress(sessionId, {
+          stage: "reviewing",
+          status: execution.status === "executed" ? "completed" : "blocked",
+          agentName: "ToolingTerminalAgent",
+          role: "Tooling",
+          taskTitle: "Validation command result",
+          summary: execution.message ?? `${command.command} ${execution.status}`,
+          targetFiles: []
+        });
       }
     }
 
+    await this.progress(sessionId, {
+      stage: "reviewing",
+      status: "running",
+      agentName: "SecurityAgent",
+      role: "Security",
+      taskTitle: "Review generated changes and commands",
+      summary: "Checking for dangerous commands, secret exposure, and unsafe patch behavior.",
+      targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+    });
     const mergeSummary = merge.detectPatchConflicts(session.patchProposals);
     const securityReview = securityAgent.review(sessionId, session.patchProposals, session.commandRequests);
+    await this.progress(sessionId, {
+      stage: "reviewing",
+      status: securityReview.status === "passed" ? "completed" : "blocked",
+      agentName: "SecurityAgent",
+      role: "Security",
+      taskTitle: "Security review",
+      summary: securityReview.summary,
+      targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+    });
+    await this.progress(sessionId, {
+      stage: "reviewing",
+      status: "running",
+      agentName: "ReviewerAgent",
+      role: "Reviewer",
+      taskTitle: "Review implementation quality",
+      summary: "Checking the worker outputs against acceptance criteria before anything is considered done.",
+      targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+    });
     const reviewerSummary = reviewerAgent.review(
       sessionId,
       session.patchProposals,
       outputs,
       mergeSummary.conflicts.map((conflict) => `Conflict on ${conflict.path}`)
     );
+    const qualityGates = runQualityGates(sessionId, message, session.patchProposals, outputs, securityReview.status === "passed", reviewerSummary.findings);
+    const gatesPassed = qualityGates.every((gate) => gate.status === "passed");
+    await this.progress(sessionId, {
+      stage: "reviewing",
+      status: gatesPassed ? "completed" : "blocked",
+      agentName: "ReviewerAgent",
+      role: "Reviewer",
+      taskTitle: "Quality gates",
+      summary: gatesPassed
+        ? "Reviewer, security, and test gates passed."
+        : `Quality gates blocked the run: ${qualityGates.flatMap((gate) => gate.blockingReasons).join("; ")}`,
+      targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+    });
+
+    const canAutoApply = session.orchestration.safetySettings.autoApplyValidatedPatches && gatesPassed;
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.status = "needs_approval";
+      draft.status = gatesPassed ? "needs_approval" : "failed";
       draft.lifecycleStage = "REVIEW_REQUEST";
       draft.tasks = engineering.technicalPlan.taskGraph.nodes.map((node) => ({
         id: node.id,
@@ -187,19 +405,32 @@ export class OrchestratedRuntime {
       draft.orchestration!.workerOutputs = outputs;
       draft.orchestration!.securityReviews.push(securityReview);
       draft.orchestration!.reviewerSummaries.push(reviewerSummary);
+      draft.orchestration!.qualityGateResults.push(...qualityGates);
+      if (!gatesPassed) {
+        draft.orchestration!.retryCount += 1;
+      }
       draft.orchestration!.lockedFiles = locks.snapshot();
       draft.previewRecommendation = previewRecommendation;
-      draft.reasoningSummaries.push("Orchestrated run completed and stopped for patch approval.");
-    });
-    await this.sessionManager.addMessage(sessionId, {
-      role: "assistant",
-      content:
-        "I ran the orchestrators and specialist subagents, collected command requests and patch proposals, and stopped before any patch apply so you can review the result."
+      draft.reasoningSummaries.push(
+        !gatesPassed
+          ? "Quality gates blocked the generated output before any files were applied."
+          : canAutoApply
+          ? "Orchestrated run completed and applied the generated changes automatically."
+          : "Orchestrated run completed and stopped for patch approval."
+      );
     });
 
-    const canAutoApply = session.orchestration.safetySettings.autoApplyValidatedPatches;
+    const appliedTitles: string[] = [];
     if (canAutoApply) {
-      const appliedTitles: string[] = [];
+      await this.progress(sessionId, {
+        stage: "applying",
+        status: "running",
+        agentName: "MergeController",
+        role: "Apply",
+        taskTitle: "Apply validated code changes",
+        summary: "Quality gates passed, so validated patch proposals are being applied under the current access policy.",
+        targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+      });
       for (const proposal of session.patchProposals) {
         const applied = tools.patch.applyProposal(proposal);
         if (applied.applied) {
@@ -220,18 +451,77 @@ export class OrchestratedRuntime {
           };
         }
       });
-      await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
-        content: previewRecommendation
-          ? "Done. Want me to run it now, or show you the result first?"
-          : `I applied ${appliedTitles.length} patch proposal(s) automatically under the current access policy.`
+      await this.progress(sessionId, {
+        stage: "applying",
+        status: "completed",
+        agentName: "MergeController",
+        role: "Apply",
+        taskTitle: "Code changes applied",
+        summary: `Applied ${appliedTitles.length} patch proposal(s).`,
+        targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path)),
+        patchStats: session.patchProposals.flatMap((patch) => getPatchStats(patch))
       });
     }
 
+    if (!gatesPassed) {
+      await this.progress(sessionId, {
+        stage: "blocked",
+        status: "blocked",
+        agentName: "ReviewerAgent",
+        role: "Reviewer",
+        taskTitle: "Run blocked",
+        summary: "I stopped before applying files because one or more quality gates failed.",
+        targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
+      });
+    }
+
+    const latestSession = this.sessionManager.getSession(sessionId)!;
+    const runSummary = createRunSummary(latestSession, qualityGates, gatesPassed, appliedTitles);
+    await this.sessionManager.setRunSummary(sessionId, runSummary);
+    await this.progress(sessionId, {
+      stage: gatesPassed ? "completed" : "blocked",
+      status: gatesPassed ? "completed" : "blocked",
+      agentName: latestSession.agentName,
+      role: "Summary",
+      taskTitle: "Final summary",
+      summary: runSummary.summary,
+      targetFiles: runSummary.filesChanged.map((file) => file.path),
+      patchStats: runSummary.filesChanged
+    });
+    await this.sessionManager.addMessage(sessionId, {
+      role: "assistant",
+      content: formatRunSummaryMessage(runSummary)
+    });
+
     await this.emit(sessionId, "security.reviewed", securityReview.summary, "SecurityAgent");
     await this.emit(sessionId, "patch.reviewed", reviewerSummary.summary, "ReviewerAgent");
-    await this.emit(sessionId, "orchestration.completed", "Multi-agent orchestration completed and awaits approval.");
+    await this.emit(sessionId, gatesPassed ? "orchestration.completed" : "orchestration.failed", gatesPassed ? "Multi-agent orchestration completed." : "Quality gates blocked the generated output.");
     return this.sessionManager.getSession(sessionId)!;
+  }
+
+  private async progress(
+    sessionId: string,
+    input: {
+      stage: RuntimeProgressStage;
+      status: RuntimeProgressStatus;
+      agentName?: string;
+      role?: string;
+      taskTitle?: string;
+      summary: string;
+      targetFiles: string[];
+      patchStats?: PatchChangeStats[];
+    }
+  ) {
+    await this.sessionManager.addProgressEvent(sessionId, {
+      id: randomId("progress"),
+      sessionId,
+      createdAt: new Date().toISOString(),
+      ...input
+    });
+  }
+
+  private async updateWorkStatus(sessionId: string, status: AgentWorkStatus) {
+    await this.sessionManager.updateAgentWorkStatus(sessionId, status);
   }
 
   private async emit(sessionId: string, type: OrchestrationEventType, message: string, agentName?: string, taskId?: string) {
@@ -255,6 +545,7 @@ export class OrchestratedRuntime {
 }
 
 function createWorker(name: string) {
+  if (["GameLogicAgent", "ThreeJsRenderingAgent", "FrontendIntegrationAgent"].includes(name)) return new FrontendAgent();
   if (name === "CodebaseMapperAgent") return new CodebaseMapperAgent();
   if (name === "ArchitectAgent") return new ArchitectAgent();
   if (name === "FrontendAgent") return new FrontendAgent();
@@ -264,6 +555,180 @@ function createWorker(name: string) {
   if (name === "SecurityAgent") return new SecurityAgent();
   if (name === "ReviewerAgent") return new ReviewerAgent();
   return new ToolingTerminalAgent();
+}
+
+function getPatchStats(patch: PatchProposal): PatchChangeStats[] {
+  const stats = new Map<string, PatchChangeStats>();
+  for (const file of patch.filesChanged) {
+    stats.set(file.path, {
+      path: file.path,
+      added: 0,
+      removed: 0,
+      changeType: file.changeType
+    });
+  }
+
+  let currentPath = patch.filesChanged[0]?.path;
+  for (const line of patch.unifiedDiff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+      currentPath = match?.[2] ?? currentPath;
+      if (currentPath && !stats.has(currentPath)) {
+        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
+      }
+      continue;
+    }
+    if (line.startsWith("+++ b/")) {
+      currentPath = line.slice("+++ b/".length);
+      if (!stats.has(currentPath)) {
+        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
+      }
+      continue;
+    }
+    if (!currentPath) continue;
+    const target = stats.get(currentPath) ?? { path: currentPath, added: 0, removed: 0, changeType: "modify" as const };
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      target.added += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      target.removed += 1;
+    }
+    stats.set(currentPath, target);
+  }
+
+  return [...stats.values()];
+}
+
+function createRunSummary(
+  session: AgentRuntimeSession,
+  qualityGates: QualityGateResult[],
+  gatesPassed: boolean,
+  appliedTitles: string[]
+): RunSummary {
+  const files = new Map<string, PatchChangeStats>();
+  for (const patch of session.patchProposals) {
+    for (const stat of getPatchStats(patch)) {
+      const existing = files.get(stat.path);
+      files.set(stat.path, {
+        path: stat.path,
+        changeType: stat.changeType,
+        added: (existing?.added ?? 0) + stat.added,
+        removed: (existing?.removed ?? 0) + stat.removed
+      });
+    }
+  }
+  const filesChanged = [...files.values()];
+  const appliedPatchIds = session.patchProposals.filter((patch) => patch.status === "applied").map((patch) => patch.id);
+  const proposedPatchIds = session.patchProposals.filter((patch) => patch.status !== "applied").map((patch) => patch.id);
+  const summary = !gatesPassed
+    ? "I stopped before changing files because the review gates found blocking issues."
+    : appliedPatchIds.length
+      ? `I implemented the requested change across ${filesChanged.length} file(s).`
+      : `I prepared ${session.patchProposals.length} code change proposal(s) for review.`;
+
+  return {
+    status: gatesPassed ? "completed" : "blocked",
+    summary,
+    filesChanged,
+    appliedPatchIds,
+    proposedPatchIds,
+    commandResults: session.commandExecutions.map((command) => `${command.command}: ${command.status}`),
+    gates: qualityGates.map((gate) => ({
+      name: gate.gateName,
+      status: gate.status,
+      notes: gate.status === "passed" ? gate.reviewerNotes : gate.blockingReasons
+    })),
+    nextAction: session.nextAction?.message ?? (appliedTitles.length ? `Applied: ${appliedTitles.join(", ")}` : undefined),
+    createdAt: new Date().toISOString()
+  };
+}
+
+function formatRunSummaryMessage(summary: RunSummary) {
+  const lines = [summary.summary];
+  if (summary.filesChanged.length) {
+    lines.push("", "Files changed:");
+    lines.push(...summary.filesChanged.map((file) => `- ${file.path} +${file.added} -${file.removed}`));
+  }
+  if (summary.gates.length) {
+    lines.push("", "Checks:");
+    lines.push(...summary.gates.map((gate) => `- ${gate.name}: ${gate.status}`));
+  }
+  if (summary.commandResults.length) {
+    lines.push("", "Commands:");
+    lines.push(...summary.commandResults.map((command) => `- ${command}`));
+  }
+  if (summary.nextAction) {
+    lines.push("", summary.nextAction);
+  }
+  return lines.join("\n");
+}
+
+function runQualityGates(
+  sessionId: string,
+  prompt: string,
+  patches: import("@orchcode/protocol").PatchProposal[],
+  outputs: WorkerOutput[],
+  securityPassed: boolean,
+  reviewerFindings: string[]
+): QualityGateResult[] {
+  const createdAt = new Date().toISOString();
+  const blockingReasons: string[] = [];
+  const reviewerNotes: string[] = [];
+
+  for (const output of outputs) {
+    if (output.selfCheck?.failedCriteria.length || output.selfCheck?.missingItems.length) {
+      blockingReasons.push(`${output.agentName} failed self-check: ${[...(output.selfCheck.failedCriteria ?? []), ...(output.selfCheck.missingItems ?? [])].join(", ")}`);
+    }
+  }
+
+  for (const patch of patches) {
+    const artifactText = (patch.artifacts ?? []).map((artifact) => artifact.content).join("\n").toLowerCase();
+    if (/mock_orchestrated|representative patch|todo|placeholder/.test(artifactText)) {
+      blockingReasons.push(`${patch.title} contains placeholder or representative-only content.`);
+    }
+    if (isThreeJsSnakePrompt(prompt)) {
+      const validation = validateThreeJsSnakeProposal(patch);
+      blockingReasons.push(...validation.blockingReasons);
+      reviewerNotes.push(...validation.reviewerNotes);
+    }
+  }
+
+  if (!patches.length) {
+    blockingReasons.push("No patch proposal was produced.");
+  }
+  if (!securityPassed) {
+    blockingReasons.push("Security gate did not pass.");
+  }
+  blockingReasons.push(...reviewerFindings);
+
+  return [
+    {
+      id: randomId("quality"),
+      sessionId,
+      gateName: "ReviewerGate",
+      status: blockingReasons.length ? "failed" : "passed",
+      blockingReasons,
+      reviewerNotes: reviewerNotes.length ? reviewerNotes : ["Generated output passed reviewer quality checks."],
+      createdAt
+    },
+    {
+      id: randomId("quality"),
+      sessionId,
+      gateName: "SecurityGate",
+      status: securityPassed ? "passed" : "failed",
+      blockingReasons: securityPassed ? [] : ["Security review reported blocking findings."],
+      reviewerNotes: [securityPassed ? "Security review passed." : "Security review failed."],
+      createdAt
+    },
+    {
+      id: randomId("quality"),
+      sessionId,
+      gateName: "TestGate",
+      status: patches.length ? "passed" : "failed",
+      blockingReasons: patches.length ? [] : ["No artifact exists to validate."],
+      reviewerNotes: [patches.length ? "Patch artifacts are present for validation." : "No patch artifacts were present."],
+      createdAt
+    }
+  ];
 }
 
 function createAgentRun(

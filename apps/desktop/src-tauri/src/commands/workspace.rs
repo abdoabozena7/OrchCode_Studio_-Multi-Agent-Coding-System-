@@ -1,4 +1,5 @@
 use crate::models::{FileEntry, WorkspaceInfo};
+use crate::services::paths::display_path;
 use crate::AppState;
 use std::sync::Arc;
 use tauri::State;
@@ -15,7 +16,7 @@ pub fn open_workspace(
         .and_then(|value| value.to_str())
         .unwrap_or("Workspace")
         .to_string();
-    let canonical_str = canonical.to_string_lossy().to_string();
+    let canonical_str = display_path(&canonical);
 
     let project_id = {
         let db = state

@@ -90,3 +90,7 @@ export function getModelProviderConfig() {
 export function clearModelProviderConfig() {
   return invoke<void>("clear_model_provider_config");
 }
+
+export function openExternalTarget(target: string) {
+  return invoke<void>("open_external_target", { target });
+}
