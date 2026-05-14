@@ -1,24 +1,24 @@
 import type {
   AgentRuntimeSession,
+  CommandExecutionRecord,
   CreateRuntimeSessionRequest,
   CreateRuntimeSessionResponse,
+  ReportCommandResultRequest,
+  ReportPatchApplyResultRequest,
+  RunSummary,
+  RuntimeSessionStatus,
   RuntimeTurnResponse
 } from "@orchcode/protocol";
-import { accessProfileDefaults } from "@orchcode/protocol";
 import { randomUUID } from "node:crypto";
 import type { RuntimeConfig } from "../config.js";
-import { SeniorCodingAgent } from "../agents/SeniorCodingAgent.js";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
-import { OpenAIProvider } from "../llm/OpenAIProvider.js";
+import { OllamaProvider } from "../llm/OllamaProvider.js";
 import { SessionManager } from "./SessionManager.js";
-import { OrchestratedRuntime } from "./OrchestratedRuntime.js";
-import { CommandExecutor } from "./CommandExecutor.js";
 import { createSimpleDelegationDecision, parsePromptDirective, resolveExecutionMode } from "./delegation.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { RunEngine } from "./RunEngine.js";
 
 export class AgentRuntime {
-  private readonly commandExecutor = new CommandExecutor();
-
   constructor(
     private readonly config: RuntimeConfig,
     private readonly sessionManager: SessionManager
@@ -29,6 +29,10 @@ export class AgentRuntime {
     const session = await this.sessionManager.createSession({
       workspacePath: input.workspacePath,
       mode,
+      trustProfile: input.trustProfile,
+      providerConfig: input.providerConfig,
+      sessionToken: input.sessionToken,
+      sessionTokenExpiresAt: input.sessionTokenExpiresAt,
       executionMode: input.executionMode,
       accessProfile: input.accessProfile,
       thinkFirst: input.thinkFirst,
@@ -46,8 +50,8 @@ export class AgentRuntime {
     }
 
     const provider =
-      session.mode === "real"
-        ? new OpenAIProvider(this.config.openaiApiKey, this.config.openaiBaseUrl)
+      session.mode === "real_provider"
+        ? createRealProvider(session.providerConfig)
         : new MockLlmProvider();
     try {
       const tools = new ToolRegistry(session.workspacePath);
@@ -68,28 +72,11 @@ export class AgentRuntime {
               complexity: createSimpleDelegationDecision({ prompt: message, projectMap }).estimatedComplexity
             };
 
-      const updated =
-        modeResolution.mode === "orchestrated_mode"
-          ? await this.runOrchestrated(sessionId, message, {
-              projectMap,
-              delegationDecision: {
-                resolvedMode: "orchestrated_mode",
-                explicitUserDirective: modeResolution.directive.explicitDirectiveText,
-                requestedAgentCount: modeResolution.directive.requestedAgentCount,
-                selectedAgentCount: 0,
-                selectedAgentRoles: [],
-                agentRoleReasons: [],
-                estimatedComplexity: modeResolution.complexity,
-                rationale:
-                  modeResolution.directive.explicitDirectiveText ??
-                  "I delegated this because the task spans multiple technical concerns."
-              },
-              thinkFirst: session.thinkFirst || modeResolution.directive.thinkFirstRequested
-            })
-          : await new SeniorCodingAgent(provider, this.sessionManager).runTurn(sessionId, message, {
-              thinkFirst: session.thinkFirst || modeResolution.directive.thinkFirstRequested,
-              delegationDecision: createSimpleDelegationDecision({ prompt: message, projectMap })
-            });
+      const updated = await new RunEngine(provider, this.sessionManager).runTurn(sessionId, message, {
+        resolvedMode: modeResolution.mode,
+        projectMap,
+        thinkFirst: session.thinkFirst || modeResolution.directive.thinkFirstRequested
+      });
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.resolvedExecutionMode = modeResolution.mode;
       });
@@ -111,24 +98,19 @@ export class AgentRuntime {
     let session = await this.sessionManager.setPatchStatus(sessionId, patchId, "approved");
     const proposal = session.patchProposals.find((patch) => patch.id === patchId);
     if (!proposal) throw new Error("Patch proposal not found");
-    let applied = false;
-    let message = "Patch approved.";
-    const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
-    if (!safetySettings.requireApprovalForPatches || session.accessProfile === "full_access") {
-      const tools = new ToolRegistry(session.workspacePath);
-      const result = tools.patch.applyProposal(proposal);
-      applied = result.applied;
-      message = result.message;
-      session = await this.sessionManager.updateSession(sessionId, (draft) => {
-        const target = draft.patchProposals.find((patch) => patch.id === patchId);
-        if (target && result.applied) {
-          target.status = "applied";
-        }
-      });
-    }
+    const applied = false;
+    const message = "Patch approved. Apply is handled by the Rust patch authority.";
     await this.sessionManager.updateSession(sessionId, (draft) => {
+      const approvalId = `approval_${randomUUID()}`;
+      draft.status = "needs_approval";
+      draft.lifecycleStage = "APPLY";
+      const patch = draft.patchProposals.find((candidate) => candidate.id === patchId);
+      if (patch) {
+        patch.approvalId = approvalId;
+        patch.lastStatusAt = new Date().toISOString();
+      }
       draft.orchestration?.approvalDecisions.push({
-        id: `approval_${randomUUID()}`,
+        id: approvalId,
         sessionId,
         targetType: "patch",
         targetId: patchId,
@@ -149,8 +131,16 @@ export class AgentRuntime {
     const proposal = session.patchProposals.find((patch) => patch.id === patchId);
     if (!proposal) throw new Error("Patch proposal not found");
     await this.sessionManager.updateSession(sessionId, (draft) => {
+      const approvalId = `approval_${randomUUID()}`;
+      draft.lifecycleStage = "BLOCKED";
+      draft.nextAction = undefined;
+      const patch = draft.patchProposals.find((candidate) => candidate.id === patchId);
+      if (patch) {
+        patch.approvalId = approvalId;
+        patch.lastStatusAt = new Date().toISOString();
+      }
       draft.orchestration?.approvalDecisions.push({
-        id: `approval_${randomUUID()}`,
+        id: approvalId,
         sessionId,
         targetType: "patch",
         targetId: patchId,
@@ -160,6 +150,68 @@ export class AgentRuntime {
       });
     });
     return { proposal, applied: false, message: "Patch rejected. No files were changed." };
+  }
+
+  async reportPatchApplyResult(sessionId: string, patchId: string, result: ReportPatchApplyResultRequest) {
+    const status = result.status === "applied" ? "applied" : "apply_failed";
+    await this.sessionManager.setPatchStatus(sessionId, patchId, status);
+    await this.sessionManager.addArtifact(sessionId, {
+      id: `artifact_${randomUUID()}`,
+      sessionId,
+      type: "summary",
+      title: result.status === "applied" ? "Patch applied" : "Patch apply failed",
+      summary: result.message,
+      payload: {
+        patchId,
+        status: result.status,
+        message: result.message
+      },
+      createdAt: new Date().toISOString()
+    });
+    await this.syncSessionOutcome(sessionId);
+    return this.requireSession(sessionId);
+  }
+
+  async reportCommandResult(sessionId: string, requestId: string, result: ReportCommandResultRequest) {
+    const request = this.requireSession(sessionId).commandRequests.find((candidate) => candidate.id === requestId);
+    const record: CommandExecutionRecord = {
+      id: `exec_${randomUUID()}`,
+      sessionId,
+      requestId,
+      autoRun: result.autoRun ?? false,
+      command: result.command,
+      cwd: result.cwd,
+      risk: result.risk,
+      status: result.status,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      message: result.message,
+      provenance: {
+        source: request?.provenance?.source ?? "agent",
+        trigger: result.autoRun ? "auto_approved" : "manual",
+        requestedBy: request?.provenance?.requestedBy ?? "runtime",
+        approvalId: request?.provenance?.approvalId,
+        toolCallId: request?.provenance?.toolCallId,
+        reason: result.message ?? request?.reason
+      },
+      createdAt: new Date().toISOString()
+    };
+    await this.sessionManager.addCommandExecution(sessionId, record);
+    await this.sessionManager.addArtifact(sessionId, {
+      id: `artifact_${randomUUID()}`,
+      sessionId,
+      type: "command_result",
+      title: result.command,
+      summary: result.message ?? `Command ${result.status}`,
+      payload: {
+        requestId,
+        result: record
+      },
+      createdAt: new Date().toISOString()
+    });
+    await this.syncSessionOutcome(sessionId);
+    return this.requireSession(sessionId);
   }
 
   private requireSession(sessionId: string) {
@@ -191,13 +243,24 @@ export class AgentRuntime {
     if (session.nextAction.kind === "confirm_preview") {
       if (/\b(run|open|yes|launch)\b/.test(normalized)) {
         const preview = session.nextAction.preview;
-        let executionMessage = "Preview is ready.";
+        let executionMessage = "Preview command approval is ready.";
         if (preview.command) {
-          const execution = preview.command.includes("dev") || preview.command.includes("http.server")
-            ? this.commandExecutor.runInBackground(session.id, preview.command, session.workspacePath)
-            : this.commandExecutor.run(session.id, preview.command, session.workspacePath);
-          await this.sessionManager.addCommandExecution(session.id, execution);
-          executionMessage = execution.message ?? executionMessage;
+          await this.sessionManager.addCommandRequest(session.id, {
+            id: `cmd_${randomUUID()}`,
+            sessionId: session.id,
+            command: preview.command,
+            cwd: session.workspacePath,
+            risk: "safe",
+            reason: "User requested preview launch; Rust terminal authority must execute it.",
+            provenance: {
+              source: "user",
+              trigger: "manual",
+              requestedBy: "user",
+              reason: "Preview launch confirmation from the user."
+            },
+            status: "requested",
+            createdAt: new Date().toISOString()
+          });
         }
         await this.sessionManager.updateSession(session.id, (draft) => {
           draft.nextAction = {
@@ -226,31 +289,267 @@ export class AgentRuntime {
     return false;
   }
 
-  private async runOrchestrated(
-    sessionId: string,
-    message: string,
-    options: Parameters<OrchestratedRuntime["run"]>[2]
-  ) {
-    const current = this.requireSession(sessionId);
-    if (!current.orchestration) {
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.orchestration = {
-          agentRuns: [],
-          workerOutputs: [],
-          securityReviews: [],
-          reviewerSummaries: [],
-          orchestrationEvents: [],
-          approvalDecisions: [],
-          safetySettings: accessProfileDefaults(draft.accessProfile),
-          lockedFiles: {},
-          selectedWorkerAgents: [],
-          mandatoryGateAgents: ["Product Orchestrator", "Business Orchestrator", "Engineering Orchestrator", "SecurityAgent", "ReviewerAgent"],
-          workOrders: [],
-          qualityGateResults: [],
-          retryCount: 0
+  private async syncSessionOutcome(sessionId: string) {
+    const before = this.requireSession(sessionId);
+    const verification = buildRuntimeVerification(before);
+    const reviewGate = buildReviewGateSummary(before, verification);
+    await this.sessionManager.setVerificationResult(sessionId, verification);
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.reviewGate = reviewGate;
+      const hasApplyFailure = draft.patchProposals.some((proposal) => proposal.status === "apply_failed");
+      const hasPendingPatchReview = draft.patchProposals.some((proposal) => proposal.status === "proposed");
+      const hasPendingPatchApply = draft.patchProposals.some((proposal) => proposal.status === "approved");
+      const hasAppliedPatch = draft.patchProposals.some((proposal) => proposal.status === "applied");
+      const hasPendingCommands = draft.commandRequests.some(
+        (request) => request.status === "requested" || request.status === "approved" || request.status === "executing"
+      );
+      const hasFailedCommands = draft.commandRequests.some(
+        (request) => request.status === "failed" || request.status === "blocked" || request.status === "rejected"
+      );
+
+      if (hasApplyFailure || hasFailedCommands || verification.status === "failed") {
+        draft.status = "failed";
+        draft.lifecycleStage = "FAILED";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "run_verification", "failed", verification.summary, verification.checks.length);
+        setRunPhaseState(draft, "final_report", "completed", "Run failed after verification or authority errors.");
+        return;
+      }
+
+      if (hasPendingPatchReview) {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "APPROVAL";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "review_final_diff", "active", "Patch review is waiting for operator approval.");
+        return;
+      }
+
+      if (hasPendingPatchApply) {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "APPLY";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "integrate_changes", "completed", "Patch proposal is approved and waiting for Rust apply.");
+        setRunPhaseState(draft, "review_final_diff", "active", "Approved changes are waiting for Rust apply.");
+        return;
+      }
+
+      if (hasAppliedPatch && hasPendingCommands) {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "POST_VERIFY";
+        draft.nextAction = {
+          kind: "approve_commands",
+          message: "Patch applied. Run the requested verification commands through Rust."
         };
-      });
-    }
-    return new OrchestratedRuntime(this.sessionManager).run(sessionId, message, options);
+        setRunPhaseState(draft, "run_verification", "active", "Patch applied. Verification commands are still pending.", verification.checks.length);
+        setRunPhaseState(draft, "review_final_diff", "active", "Verification commands are waiting for operator execution.");
+        return;
+      }
+
+      if (hasAppliedPatch) {
+        draft.status = "completed";
+        draft.lifecycleStage = "DONE";
+        draft.nextAction = draft.previewRecommendation
+          ? {
+              kind: "preview_ready",
+              message: "Verification is complete. The preview can be opened now.",
+              preview: draft.previewRecommendation
+            }
+          : undefined;
+        setRunPhaseState(draft, "run_verification", "completed", verification.summary, verification.checks.length);
+        setRunPhaseState(draft, "review_final_diff", "completed", "Review gate is satisfied.");
+        setRunPhaseState(draft, "final_report", "completed", "Final report is ready.");
+      }
+    });
+
+    const after = this.requireSession(sessionId);
+    const summary = buildRuntimeRunSummary(after, verification);
+    await this.sessionManager.setRunSummary(sessionId, summary);
   }
+
+}
+
+function setRunPhaseState(
+  session: AgentRuntimeSession,
+  phaseId: import("@orchcode/protocol").RunPhase["id"],
+  status: import("@orchcode/protocol").RunPhase["status"],
+  summary: string,
+  evidenceCount?: number
+) {
+  const now = new Date().toISOString();
+  session.runPhases = (session.runPhases ?? []).map((phase) =>
+    phase.id === phaseId
+      ? {
+          ...phase,
+          status,
+          summary,
+          evidenceCount,
+          startedAt: phase.startedAt ?? now,
+          completedAt: status === "completed" || status === "failed" || status === "blocked" ? now : undefined
+        }
+      : phase
+  );
+}
+
+function createRealProvider(config: AgentRuntimeSession["providerConfig"]) {
+  if (!config?.isValid || config.providerType !== "ollama") {
+    throw new Error("real_provider requires a valid Ollama provider configuration.");
+  }
+  return new OllamaProvider(config.baseUrl, config.selectedModel);
+}
+
+function buildRuntimeVerification(session: AgentRuntimeSession) {
+  const patchProposalCount = session.patchProposals.length;
+  const appliedPatchCount = session.patchProposals.filter((proposal) => proposal.status === "applied").length;
+  const applyFailed = session.patchProposals.some((proposal) => proposal.status === "apply_failed");
+  const pendingPatchApply = session.patchProposals.some((proposal) => proposal.status === "approved");
+  const pendingPatchReview = session.patchProposals.some((proposal) => proposal.status === "proposed");
+  const commandStatuses = session.commandRequests.map((request) => ({
+    command: request.command,
+    status: request.status
+  }));
+  const commandFailed = commandStatuses.some((command) => command.status === "failed" || command.status === "blocked");
+  const commandPending = commandStatuses.some(
+    (command) => command.status === "requested" || command.status === "approved" || command.status === "executing"
+  );
+  const commandExecuted = commandStatuses.filter((command) => command.status === "executed");
+
+  return {
+    id: `verification_${randomUUID()}`,
+    sessionId: session.id,
+    status:
+      applyFailed || commandFailed
+        ? "failed"
+        : pendingPatchReview || pendingPatchApply || commandPending
+          ? "pending"
+          : "passed",
+    summary:
+      applyFailed
+        ? "Patch apply failed."
+        : commandFailed
+          ? "At least one requested command failed."
+          : pendingPatchReview
+            ? "Patch review is still pending."
+            : pendingPatchApply
+              ? "Patch was approved and is waiting for Rust apply."
+              : commandPending
+                ? "Patch applied. Verification commands are still pending."
+                : "Patch and command verification are complete.",
+    checks: [
+      {
+        name: "Patch proposal",
+        status: patchProposalCount ? "passed" : "pending",
+        detail: patchProposalCount ? `${patchProposalCount} patch proposal(s) recorded.` : "No patch proposal recorded."
+      },
+      {
+        name: "Rust apply",
+        status: applyFailed ? "failed" : appliedPatchCount ? "passed" : pendingPatchApply || pendingPatchReview ? "pending" : "passed",
+        detail: applyFailed
+          ? "Rust reported a patch apply failure."
+          : appliedPatchCount
+            ? `${appliedPatchCount} patch(es) applied through Rust.`
+            : pendingPatchApply
+              ? "Waiting for Rust to apply the approved patch."
+              : pendingPatchReview
+                ? "Patch is waiting for approval before Rust apply."
+                : "No patch apply was required."
+      },
+      {
+        name: "Post-verify",
+        status: commandFailed ? "failed" : commandPending ? "pending" : "passed",
+        detail: commandFailed
+          ? "At least one verification command failed or was blocked."
+          : commandPending
+            ? "Waiting for verification commands to run."
+            : commandExecuted.length
+              ? `Executed ${commandExecuted.length} verification command(s).`
+              : "No verification command was required."
+      }
+    ],
+    createdAt: new Date().toISOString()
+  } satisfies AgentRuntimeSession["verificationResult"];
+}
+
+function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonNullable<AgentRuntimeSession["verificationResult"]>): RunSummary {
+  const status: RunSummary["status"] =
+    session.status === "failed"
+      ? "failed"
+      : session.status === "completed"
+        ? "completed"
+        : "blocked";
+  return {
+    status,
+    summary: verification.summary,
+    filesChanged: session.patchProposals.flatMap((patch) =>
+      patch.filesChanged.map((file) => ({ path: file.path, added: 0, removed: 0, changeType: file.changeType }))
+    ),
+    appliedPatchIds: session.patchProposals.filter((patch) => patch.status === "applied").map((patch) => patch.id),
+    proposedPatchIds: session.patchProposals.filter((patch) => patch.status !== "applied").map((patch) => patch.id),
+    commandResults: session.commandRequests.map((request) => `${request.command}: ${request.status}`),
+    gates: verification.checks.map((check) => ({
+      name: check.name,
+      status: check.status === "failed" ? "failed" : "passed",
+      notes: [check.detail]
+    })),
+    nextAction:
+      session.status === "needs_approval"
+        ? session.nextAction?.message ?? "Review the pending runtime action."
+        : session.status === "failed"
+          ? "Inspect the recorded patch or command failure."
+          : "Review the applied change and verification result.",
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildReviewGateSummary(
+  session: AgentRuntimeSession,
+  verification: NonNullable<AgentRuntimeSession["verificationResult"]>
+): NonNullable<AgentRuntimeSession["reviewGate"]> {
+  const files = session.patchProposals.flatMap((patch) => patch.filesChanged);
+  const uniqueFiles = [...new Set(files.map((file) => file.path))];
+  const riskyAreas = [
+    ...session.patchProposals.filter((patch) => patch.riskLevel !== "low").map((patch) => `${patch.title} (${patch.riskLevel})`),
+    ...verification.checks.filter((check) => check.status !== "passed").map((check) => check.name)
+  ];
+  const unresolvedBlockers = verification.checks.filter((check) => check.status !== "passed").map((check) => check.detail);
+  const recommendation =
+    verification.status === "failed"
+      ? "do_not_apply"
+      : verification.status === "pending" || session.status === "expired"
+        ? "caution"
+        : "ready";
+
+  const agentName =
+    session.orchestration?.agentRuns[0]?.agentName ??
+    session.agentWorkStatuses[0]?.agentName ??
+    session.agentName;
+
+  const changesByAgent = (session.orchestration?.agentRuns ?? [])
+    .filter((agent) => (agent.changedFiles?.length ?? 0) > 0)
+    .map((agent) => ({
+      agentName: agent.agentName,
+      fileCount: agent.changedFiles?.length ?? 0,
+      additions: agent.diffStats?.additions,
+      deletions: agent.diffStats?.deletions,
+      files: agent.changedFiles ?? []
+    }));
+
+  return {
+    totalFilesChanged: uniqueFiles.length,
+    changesByAgent:
+      changesByAgent.length > 0
+        ? changesByAgent
+        : uniqueFiles.length > 0
+          ? [{ agentName: `${agentName} (attribution not reported yet)`, fileCount: uniqueFiles.length, files: uniqueFiles }]
+          : [],
+    riskyAreas,
+    verificationChecks: verification.checks,
+    unresolvedBlockers,
+    recommendation,
+    summary:
+      recommendation === "do_not_apply"
+        ? "Verification or risk checks failed. Do not apply yet."
+        : recommendation === "caution"
+          ? "The run has useful output, but authority or verification work is still pending."
+          : "Patch, command, and verification state are aligned for review."
+  };
 }

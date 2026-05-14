@@ -1,9 +1,17 @@
 import type {
+  CommandExecutionProvenance,
   CommandExecutionRecord,
   CommandRequest,
+  DecisionRecord,
+  ReviewGateSummary,
+  RunMode,
+  RunPhase,
+  RuntimeLifecycleEventType,
+  Artifact,
   PatchProposal,
   PreviewRecommendation,
   Task,
+  ToolIntent,
   ToolCall
 } from "./models.js";
 import type {
@@ -15,26 +23,82 @@ import type {
   RuntimeExecutionMode,
   SessionNextAction
 } from "./orchestration.js";
-import type { AccessProfile, SafetySettings } from "./approvals.js";
+import type {
+  AccessProfile,
+  AccessProfileInput,
+  DeclaredAccessPolicy,
+  ResolvedAccessPolicy,
+  RunTrustProfile,
+  SafetySettings
+} from "./approvals.js";
+import type { ModelProviderConfig } from "./models.js";
 
-export type AgentRuntimeMode = "mock" | "real";
+export type AgentRuntimeMode = "demo_mock" | "real_provider";
 
 export type AgentLifecycleStage =
   | "INTAKE"
-  | "REPO_SCAN"
+  | "THINK"
   | "PLAN"
-  | "CONTEXT_GATHERING"
-  | "PATCH_PROPOSAL"
-  | "REVIEW_REQUEST"
-  | "OPTIONAL_COMMAND_REQUEST"
-  | "DONE";
+  | "CONTEXT_GATHER"
+  | "EXECUTION_DRAFT"
+  | "SELF_REVIEW"
+  | "CROSS_REVIEW"
+  | "VALIDATION"
+  | "APPROVAL"
+  | "APPLY"
+  | "POST_VERIFY"
+  | "DONE"
+  | "BLOCKED"
+  | "FAILED";
 
 export type RuntimeSessionStatus =
   | "created"
+  | "restored"
   | "running"
   | "completed"
   | "needs_approval"
-  | "failed";
+  | "failed"
+  | "expired";
+
+export type RuntimeTaskPhase =
+  | "created"
+  | "restored"
+  | "planning"
+  | "awaiting_patch_approval"
+  | "awaiting_patch_apply"
+  | "patch_applied"
+  | "patch_apply_failed"
+  | "awaiting_command_execution"
+  | "verification_pending"
+  | "verification_passed"
+  | "verification_failed"
+  | "completed"
+  | "failed"
+  | "expired";
+
+export type RuntimeTaskTransitionType = RuntimeLifecycleEventType;
+
+export type RuntimeTaskTransition = {
+  id: string;
+  phase: RuntimeTaskPhase;
+  type: RuntimeTaskTransitionType;
+  detail: string;
+  createdAt: string;
+};
+
+export type RuntimeTaskState = {
+  version: number;
+  phase: RuntimeTaskPhase;
+  pendingPatchId?: string;
+  activePatchId?: string;
+  pendingCommandIds: string[];
+  completedCommandIds: string[];
+  failedCommandIds: string[];
+  lastCommandProvenance?: CommandExecutionProvenance;
+  lastVerificationStatus?: import("./models.js").VerificationResult["status"];
+  finalStatus?: RuntimeSessionStatus;
+  transitions: RuntimeTaskTransition[];
+};
 
 export type RuntimeMessage = {
   id: string;
@@ -59,18 +123,30 @@ export type AgentRuntimeSession = {
   id: string;
   workspacePath: string;
   mode: AgentRuntimeMode;
+  trustProfile: RunTrustProfile;
+  providerConfig?: SanitizedProviderConfig;
   executionMode: RuntimeExecutionMode;
   resolvedExecutionMode?: Exclude<RuntimeExecutionMode, "auto_mode">;
   accessProfile: AccessProfile;
+  declaredAccess: DeclaredAccessPolicy;
+  resolvedAccess?: ResolvedAccessPolicy;
+  runMode?: RunMode;
+  runPhases: RunPhase[];
+  decisionLedger: DecisionRecord[];
+  reviewGate?: ReviewGateSummary;
   thinkFirst: boolean;
   userPrompt: string;
   agentName: string;
   status: RuntimeSessionStatus;
   lifecycleStage: AgentLifecycleStage;
+  taskState: RuntimeTaskState;
+  validationGateResult?: import("./orchestration.js").ValidationGateResult;
   messages: RuntimeMessage[];
   plan?: AgentPlan;
   tasks: Task[];
   toolCalls: ToolCall[];
+  toolIntents: ToolIntent[];
+  artifacts: Artifact[];
   patchProposals: PatchProposal[];
   commandRequests: CommandRequest[];
   commandExecutions: CommandExecutionRecord[];
@@ -78,6 +154,7 @@ export type AgentRuntimeSession = {
   progressEvents: RuntimeProgressEvent[];
   agentWorkStatuses: AgentWorkStatus[];
   runSummary?: RunSummary;
+  verificationResult?: import("./models.js").VerificationResult;
   delegationDecision?: DelegationDecision;
   nextAction?: SessionNextAction;
   previewRecommendation?: PreviewRecommendation;
@@ -86,11 +163,18 @@ export type AgentRuntimeSession = {
   updatedAt: string;
 };
 
+export type RunLifecycleStage = AgentLifecycleStage;
+export type RunSession = AgentRuntimeSession;
+
 export type CreateRuntimeSessionRequest = {
   workspacePath: string;
   mode: AgentRuntimeMode;
+  trustProfile?: RunTrustProfile;
+  providerConfig?: SanitizedProviderConfig;
+  sessionToken?: string;
+  sessionTokenExpiresAt?: string;
   executionMode?: RuntimeExecutionMode;
-  accessProfile?: AccessProfile;
+  accessProfile?: AccessProfileInput;
   thinkFirst?: boolean;
   userPrompt: string;
   safetySettings?: Partial<SafetySettings>;
@@ -109,3 +193,25 @@ export type RuntimeTurnResponse = {
   sessionId: string;
   status: RuntimeSessionStatus;
 };
+
+export type ReportPatchApplyResultRequest = {
+  status: "applied" | "failed";
+  message: string;
+};
+
+export type ReportCommandResultRequest = {
+  command: string;
+  cwd: string;
+  risk: import("./models.js").CommandRisk;
+  status: import("./models.js").CommandResult["status"];
+  exitCode?: number;
+  stdout: string;
+  stderr: string;
+  message?: string;
+  autoRun?: boolean;
+};
+
+export type SanitizedProviderConfig = Pick<
+  ModelProviderConfig,
+  "providerType" | "providerName" | "baseUrl" | "selectedModel" | "isValid"
+>;

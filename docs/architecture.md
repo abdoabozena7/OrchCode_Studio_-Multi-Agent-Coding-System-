@@ -36,7 +36,7 @@ Module 2 adds a single-agent runtime as a separate TypeScript service under `app
 Runtime modules:
 
 - `AgentRuntime`: public session/turn/approval facade.
-- `SessionManager`: session state and JSON persistence for runtime sessions and patch proposals.
+- `SessionManager`: in-memory session state, token hashing, and event publication. `load()` is currently a no-op, so runtime sessions do not restore after restart.
 - `EventBus`: in-process event publication for SSE clients.
 - `SeniorCodingAgent`: single agent lifecycle implementation.
 - `ToolRegistry`: controlled workspace, git, command-request, and patch tools.
@@ -59,7 +59,7 @@ The expected flow is:
 4. Agent scans the repo, plans, gathers context, proposes a patch, and requests validation commands.
 5. In simple mode, frontend renders lifecycle stage, plan, tool calls, patch proposals, command requests, and git diff state.
 6. In orchestrated mode, frontend also renders product/business/engineering briefs, task graph, agent cards, worker outputs, security review, reviewer summary, and orchestration timeline.
-7. Patch proposals require approval before any future write path.
+7. Patch proposals require approval before any filesystem write path.
 
 ## Event Flow
 
@@ -67,10 +67,10 @@ The shared protocol package defines `AppEvent` for workspace, git, command, sess
 
 ## Patch Proposal Flow
 
-The agent never writes files directly. It creates a `PatchProposal` with changed-file metadata, risk level, summary, and unified diff. The proposal is displayed in the desktop diff panel and can be approved or rejected. Module 2 approval updates runtime state only; actual patch application remains disabled until Rust `PatchService` approval plumbing is completed.
+The agent never writes files directly. It creates a `PatchProposal` with changed-file metadata, risk level, summary, and unified diff. The proposal is displayed in the desktop diff panel and can be approved or rejected. When the operator approves, the desktop app calls the Rust `apply_runtime_patch` Tauri command in `apps/desktop/src-tauri/src/commands/patch.rs`. Rust loads the proposal from SQLite `session_events`, validates paths with `PatchService`, applies the unified diff, and records `apply.completed` back into SQLite. The TypeScript runtime only moves the session to `applied` after the frontend reports that Rust result through `reportRuntimePatchApplyResult`, so patch authority is Rust-owned but runtime state reconciliation is still frontend-mediated.
 
 ## Security Boundaries
 
-The Rust backend owns desktop workspace boundaries, terminal command execution, command policy, provider validation, and SQLite persistence. The Node runtime temporarily performs read-only workspace inspection with its own path guards because it cannot call Tauri internals directly. It blocks secret-like files, ignores build/vendor folders, and does not write files.
+The Rust backend owns desktop workspace boundaries, terminal command execution, command policy, provider validation, patch application, and SQLite persistence. The Node runtime temporarily performs read-only workspace inspection with its own path guards because it cannot call Tauri internals directly. It blocks secret-like files, ignores build/vendor folders, and does not write files.
 
-Command execution from the UI still routes through Tauri/Rust. Runtime `command.request_run` records requested commands and risk; it does not execute them.
+Command execution from the UI still routes through Tauri/Rust. Runtime `command.request_run` records requested commands and risk; it does not execute them. Session durability is not complete yet: the desktop app persists event mirrors into Rust SQLite, but runtime sessions themselves are still in-memory only and do not restore across runtime restarts.

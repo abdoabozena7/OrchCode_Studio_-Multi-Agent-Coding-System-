@@ -1,4 +1,5 @@
 import type { WorkerSelfCheck } from "./orchestration.js";
+import type { AgentLifecycleStage } from "./agent-runtime.js";
 
 export type AgentRole =
   | "Product Orchestrator"
@@ -12,7 +13,8 @@ export type AgentRole =
   | "Test"
   | "Security"
   | "Reviewer"
-  | "Senior Coding Agent";
+  | "Senior Coding Agent"
+  | (string & {});
 
 export type AgentRunStatus = "idle" | "running" | "completed" | "blocked" | "failed";
 
@@ -21,6 +23,23 @@ export type AgentRun = {
   sessionId: string;
   agentName: string;
   role: AgentRole;
+  roleTitle?: string;
+  lifecycleStage?: AgentLifecycleStage;
+  artifactJson?: unknown;
+  objective?: string;
+  ownedPaths?: string[];
+  forbiddenPaths?: string[];
+  currentAction?: string;
+  recentActions?: string[];
+  changedFiles?: string[];
+  commandsRun?: string[];
+  riskLevel?: "low" | "medium" | "high";
+  blockers?: string[];
+  diffStats?: {
+    additions?: number;
+    deletions?: number;
+    fileCount: number;
+  };
   currentTask?: string;
   status: AgentRunStatus;
   lastEvent?: string;

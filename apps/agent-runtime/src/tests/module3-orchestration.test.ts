@@ -65,10 +65,10 @@ test("TechnicalPlan and TaskGraph validators check dependency shape", () => {
   assert.equal(validateTechnicalPlan(plan).valid, true);
 });
 
-test("FileLockManager detects conflicts", () => {
+test("FileLockManager detects conflicts", async () => {
   const locks = new FileLockManager();
-  assert.equal(locks.acquireLocks("task-a", ["src/App.tsx"]).acquired, true);
-  const conflict = locks.acquireLocks("task-b", ["src/App.tsx"]);
+  assert.equal((await locks.acquireLocks("task-a", ["src/App.tsx"])).acquired, true);
+  const conflict = await locks.acquireLocks("task-b", ["src/App.tsx"], { timeoutMs: 1 });
   assert.equal(conflict.acquired, false);
   assert.equal(conflict.conflict?.ownerTaskId, "task-a");
 });
@@ -108,7 +108,7 @@ test("TaskScheduler respects dependencies and file locks", () => {
   assert.deepEqual(scheduler.events.filter((event) => event.type === "task.started").map((event) => event.task.id), ["a", "b"]);
 });
 
-test("Mock orchestrated run creates briefs, events, workers, reviews, and patch proposals", async () => {
+test("Mock orchestrated run creates dynamic tasks, intents, artifacts, and patch proposals", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-module3-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-module3-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "apps/desktop/src/app"), { recursive: true });
@@ -118,7 +118,7 @@ test("Mock orchestrated run creates briefs, events, workers, reviews, and patch 
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     executionMode: "orchestrated_mode",
     userPrompt: "Add a settings page with theme toggle"
   });
@@ -126,13 +126,12 @@ test("Mock orchestrated run creates briefs, events, workers, reviews, and patch 
   const session = runtime.getSession(created.sessionId);
 
   assert.equal(turn.status, "needs_approval");
-  assert.ok(session?.orchestration?.productBrief);
-  assert.ok(session?.orchestration?.businessBrief);
-  assert.ok(session?.orchestration?.technicalPlan);
-  assert.ok((session?.orchestration?.orchestrationEvents.length ?? 0) > 5);
-  assert.ok((session?.orchestration?.agentRuns.length ?? 0) >= 3);
+  assert.ok(session?.plan);
+  assert.ok((session?.tasks.length ?? 0) >= 1);
+  assert.ok((session?.toolIntents.length ?? 0) >= 4);
+  assert.ok((session?.artifacts.length ?? 0) >= 3);
   assert.ok((session?.patchProposals.length ?? 0) >= 1);
-  assert.ok((session?.orchestration?.securityReviews.length ?? 0) >= 1);
+  assert.equal(session?.verificationResult?.status, "pending");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import type {
   AgentLifecycleStage,
   AgentPlan,
+  CommandExecutionRecord,
   PatchProposal,
   PreviewRecommendation,
   RunSummary,
@@ -12,7 +13,6 @@ import type { LlmProvider } from "../llm/LlmProvider.js";
 import { seniorCodingAgentPrompt } from "../prompts/seniorCodingAgentPrompt.js";
 import { agentPlanSchema } from "../schemas/sessionSchemas.js";
 import { patchProposalSchema } from "../schemas/patchSchemas.js";
-import { CommandExecutor } from "../runtime/CommandExecutor.js";
 import { inferProjectLaunch, type LaunchRecommendation } from "../runtime/ProjectLaunchInference.js";
 import { randomId, SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
@@ -26,8 +26,6 @@ type WorkspaceScan = {
 };
 
 export class SeniorCodingAgent {
-  private readonly commandExecutor = new CommandExecutor();
-
   constructor(
     private readonly llmProvider: LlmProvider,
     private readonly sessionManager: SessionManager
@@ -124,7 +122,7 @@ export class SeniorCodingAgent {
   }
 
   private async scanWorkspace(sessionId: string, tools: ToolRegistry): Promise<WorkspaceScan> {
-    await this.updateLifecycle(sessionId, "REPO_SCAN");
+    await this.updateLifecycle(sessionId, "CONTEXT_GATHER");
     await this.trace(sessionId, "planning", "Decision", "Before acting, I need project shape, likely files, and git state.", "completed");
 
     await this.trace(sessionId, "inspecting", "Tool call", "workspace.get_project_summary", "running");
@@ -215,7 +213,7 @@ export class SeniorCodingAgent {
     scan: WorkspaceScan,
     plan: AgentPlan
   ) {
-    await this.updateLifecycle(sessionId, "CONTEXT_GATHERING");
+    await this.updateLifecycle(sessionId, "CONTEXT_GATHER");
     const searchTerm = inferSearchTerm(message);
     await this.trace(sessionId, "inspecting", "Tool call", `workspace.search_code (${searchTerm})`, "running");
     const searchMatches = tools.workspace.searchCode(searchTerm, 25);
@@ -294,7 +292,7 @@ export class SeniorCodingAgent {
     scan: WorkspaceScan,
     plan: AgentPlan
   ) {
-    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    await this.updateLifecycle(sessionId, "APPROVAL");
     await this.trace(sessionId, "working", "Decision", "This is an execution request, so I will infer a launch path instead of proposing a patch.", "completed");
 
     const recommendation = inferProjectLaunch(tools.getWorkspacePath(), tools.workspace);
@@ -350,10 +348,10 @@ export class SeniorCodingAgent {
       "completed"
     );
 
-    const commandResult = await this.executeLaunchRecommendation(sessionId, tools, recommendation);
+    const commandResult: CommandExecutionRecord | null = await this.executeLaunchRecommendation(sessionId, tools, recommendation);
     const currentSession = this.sessionManager.getSession(sessionId)!;
     const previewReady =
-      commandResult?.status === "executed" || (!recommendation.command && currentSession.accessProfile === "full_access");
+      commandResult?.status === "executed" || (!recommendation.command && currentSession.accessProfile === "bounded_autonomy");
     const summaryText = buildRunProjectSummary(scan, plan, recommendation, commandResult);
     const nextAction =
       previewReady
@@ -367,11 +365,11 @@ export class SeniorCodingAgent {
     await this.finish(
       sessionId,
       "DONE",
-      commandResult?.status === "blocked" ? "needs_approval" : "completed",
+      "completed",
       summaryText,
       {
-        status: commandResult?.status === "blocked" ? "blocked" : "completed",
-        summary: commandResult?.status === "executed" ? "Started the project preview flow." : "Prepared the project launch flow.",
+        status: "completed",
+        summary: "Prepared the project launch flow.",
         filesChanged: [],
         appliedPatchIds: [],
         proposedPatchIds: [],
@@ -392,7 +390,11 @@ export class SeniorCodingAgent {
     );
   }
 
-  private async executeLaunchRecommendation(sessionId: string, tools: ToolRegistry, recommendation: LaunchRecommendation) {
+  private async executeLaunchRecommendation(
+    sessionId: string,
+    tools: ToolRegistry,
+    recommendation: LaunchRecommendation
+  ): Promise<CommandExecutionRecord | null> {
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.previewRecommendation = recommendation.preview;
     });
@@ -428,32 +430,14 @@ export class SeniorCodingAgent {
       commandRequest.risk === "dangerous" ? "blocked" : "completed"
     );
 
-    const canAutoRun = session.accessProfile === "full_access" && safetySettings.autoRunSafeCommands && commandRequest.risk === "safe";
-    if (!canAutoRun) {
-      await this.trace(
-        sessionId,
-        "blocked",
-        "Action taken",
-        `I inferred the right launch command but did not run it automatically under ${session.accessProfile}.`,
-        "blocked"
-      );
-      return null;
-    }
-
-    const execution = recommendation.background
-      ? this.commandExecutor.runInBackground(sessionId, recommendation.command, session.workspacePath, commandRequest.id)
-      : this.commandExecutor.run(sessionId, recommendation.command, session.workspacePath, commandRequest.id);
-    await this.sessionManager.addCommandExecution(sessionId, execution);
     await this.trace(
       sessionId,
-      execution.status === "executed" ? "applying" : execution.status === "blocked" ? "blocked" : "working",
+      "blocked",
       "Action taken",
-      execution.status === "executed"
-        ? `Started ${recommendation.command}${recommendation.background ? " in the background" : ""}.`
-        : execution.message ?? `Did not run ${recommendation.command}.`,
-      execution.status === "executed" ? "completed" : execution.status === "blocked" ? "blocked" : "failed"
+      `I inferred the right launch command but left execution to Rust terminal authority under ${session.accessProfile}.`,
+      "blocked"
     );
-    return execution;
+    return null;
   }
 
   private async handleRunCommand(
@@ -463,7 +447,7 @@ export class SeniorCodingAgent {
     scan: WorkspaceScan,
     plan: AgentPlan
   ) {
-    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    await this.updateLifecycle(sessionId, "APPROVAL");
     const command = inferExplicitCommand(message);
     if (!command) {
       await this.finish(
@@ -503,55 +487,35 @@ export class SeniorCodingAgent {
     await this.trace(sessionId, "working", "Observed result", `Command policy classified ${command} as ${request.risk}.`, "completed");
 
     const session = this.sessionManager.getSession(sessionId)!;
-    const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
-    const canAutoRun = session.accessProfile === "full_access" && safetySettings.autoRunSafeCommands && request.risk === "safe";
-    let execution: ReturnType<CommandExecutor["run"]> | null = null;
-    if (canAutoRun) {
-      const background = shouldRunInBackground(command);
-      execution = background
-        ? this.commandExecutor.runInBackground(sessionId, command, session.workspacePath, request.id)
-        : this.commandExecutor.run(sessionId, command, session.workspacePath, request.id);
-      await this.sessionManager.addCommandExecution(sessionId, execution);
-      await this.trace(
-        sessionId,
-        execution.status === "executed" ? "applying" : execution.status === "blocked" ? "blocked" : "working",
-        "Action taken",
-        execution.status === "executed" ? `Executed ${command}${background ? " in the background" : ""}.` : execution.message ?? `Did not execute ${command}.`,
-        execution.status === "executed" ? "completed" : execution.status === "blocked" ? "blocked" : "failed"
-      );
-    } else {
-      await this.trace(
-        sessionId,
-        "blocked",
-        "Action taken",
-        `I validated the command but left it interactive under ${session.accessProfile}.`,
-        "blocked"
-      );
-    }
+    await this.trace(
+      sessionId,
+      "blocked",
+      "Action taken",
+      `I validated the command but left execution to Rust terminal authority under ${session.accessProfile}.`,
+      "blocked"
+    );
 
     const summaryText = [
       `I treated this as a command request, not a code-change request.`,
       `Workspace scan: ${Object.keys(scan.projectSummary.languages).join(", ") || "no primary stack detected"}.`,
       `Plan summary: ${plan.summary}`,
-      execution?.status === "executed"
-        ? `Executed ${command}.`
-        : `Prepared ${command} as the next action without auto-running it.`
+      `Prepared ${command} as the next action without auto-running it.`
     ].join(" ");
 
     await this.finish(
       sessionId,
       "DONE",
-      execution?.status === "blocked" ? "needs_approval" : "completed",
+      "completed",
       summaryText,
       {
-        status: execution?.status === "blocked" ? "blocked" : "completed",
-        summary: execution?.status === "executed" ? "Executed the requested command." : "Prepared the requested command.",
+        status: "completed",
+        summary: "Prepared the requested command.",
         filesChanged: [],
         appliedPatchIds: [],
         proposedPatchIds: [],
-        commandResults: execution ? [summarizeCommandExecution(execution)] : [command],
+        commandResults: [command],
         gates: [],
-        nextAction: execution ? execution.message ?? command : `Run ${command} when you want to continue.`,
+        nextAction: `Run ${command} when you want to continue.`,
         createdAt: new Date().toISOString()
       },
       undefined,
@@ -566,7 +530,7 @@ export class SeniorCodingAgent {
     scan: WorkspaceScan,
     plan: AgentPlan
   ) {
-    await this.updateLifecycle(sessionId, "CONTEXT_GATHERING");
+    await this.updateLifecycle(sessionId, "CONTEXT_GATHER");
     const searchTerm = inferSearchTerm(message);
     await this.trace(sessionId, "working", "Decision", "This request needs a patch proposal, so I am gathering the narrowest relevant context first.", "completed");
 
@@ -601,7 +565,7 @@ export class SeniorCodingAgent {
       await this.trace(sessionId, "inspecting", "Observed result", `Read ${readableTarget} before generating a patch.`, "completed", [readableTarget]);
     }
 
-    await this.updateLifecycle(sessionId, "PATCH_PROPOSAL");
+    await this.updateLifecycle(sessionId, "EXECUTION_DRAFT");
     await this.trace(sessionId, "working", "Next decision", "Generate a reviewable patch proposal instead of writing files directly.", "completed");
     const generatedPatch = await this.llmProvider.generateStructured<Omit<PatchProposal, "id" | "sessionId" | "createdAt">>(
       {
@@ -643,42 +607,17 @@ export class SeniorCodingAgent {
 
     const session = this.sessionManager.getSession(sessionId)!;
     const safetySettings = session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile);
-    let patchSummary = "Stopped before applying the patch because approval is required.";
-    if (validation.valid && safetySettings.autoApplyValidatedPatches) {
-      const applyResult = tools.patch.applyProposal(proposal);
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        const target = draft.patchProposals.find((patch) => patch.id === proposal.id);
-        if (target && applyResult.applied) {
-          target.status = "applied";
-        }
-      });
-      patchSummary = applyResult.applied
-        ? "Applied the validated patch automatically under the current access policy."
-        : `Prepared the patch but did not apply it: ${applyResult.message}`;
-      await this.trace(
-        sessionId,
-        applyResult.applied ? "applying" : "blocked",
-        "Action taken",
-        patchSummary,
-        applyResult.applied ? "completed" : "blocked",
-        proposal.filesChanged.map((file) => file.path)
-      );
-      await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
-        content: patchSummary
-      });
-    } else {
-      await this.trace(
-        sessionId,
-        "blocked",
-        "Action taken",
-        "The patch remains review-only until you approve it.",
-        "blocked",
-        proposal.filesChanged.map((file) => file.path)
-      );
-    }
+    let patchSummary = "Stopped before applying the patch because Rust patch authority must apply approved proposals.";
+    await this.trace(
+      sessionId,
+      "blocked",
+      "Action taken",
+      "The patch remains review-only until Rust applies an approved proposal.",
+      "blocked",
+      proposal.filesChanged.map((file) => file.path)
+    );
 
-    await this.updateLifecycle(sessionId, "OPTIONAL_COMMAND_REQUEST");
+    await this.updateLifecycle(sessionId, "APPROVAL");
     const command = scan.projectSummary.testCommands[0] ?? "git diff --check";
     const commandRequest = tools.command.requestRun(
       sessionId,
@@ -697,21 +636,7 @@ export class SeniorCodingAgent {
     );
     await this.trace(sessionId, "reviewing", "Tool call", `command.request_run (${command})`, "completed");
     if (commandRequest.risk === "safe" && safetySettings.autoRunSafeCommands) {
-      const execution = this.commandExecutor.run(sessionId, commandRequest.command, session.workspacePath, commandRequest.id);
-      await this.sessionManager.addCommandExecution(sessionId, execution);
-      await this.trace(
-        sessionId,
-        execution.status === "executed" ? "reviewing" : "blocked",
-        "Observed result",
-        execution.status === "executed"
-          ? `Executed the safest validation command automatically: ${commandRequest.command}.`
-          : execution.message ?? `Did not execute ${commandRequest.command}.`,
-        execution.status === "executed" ? "completed" : "blocked"
-      );
-      await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
-        content: `I queued the safest validation command automatically: ${commandRequest.command}`
-      });
+      await this.trace(sessionId, "reviewing", "Observed result", `Queued ${commandRequest.command} for Rust execution.`, "completed");
     }
 
     const mockOnlyProposal =
@@ -724,8 +649,8 @@ export class SeniorCodingAgent {
 
     await this.finish(
       sessionId,
-      "REVIEW_REQUEST",
-      safetySettings.autoApplyValidatedPatches && validation.valid ? "completed" : proposal.requiresApproval ? "needs_approval" : "completed",
+      "APPROVAL",
+      proposal.requiresApproval ? "needs_approval" : "completed",
       reviewMessage,
       {
         status: validation.valid ? "completed" : "blocked",
@@ -914,9 +839,7 @@ function nextPlanStep(intent: SimpleIntent) {
   }
 }
 
-function summarizeCommandExecution(
-  execution: ReturnType<CommandExecutor["run"]> | ReturnType<CommandExecutor["runInBackground"]>
-) {
+function summarizeCommandExecution(execution: CommandExecutionRecord) {
   return `${execution.command}: ${execution.status}${execution.message ? ` (${execution.message})` : ""}`;
 }
 
@@ -924,7 +847,7 @@ function buildRunProjectSummary(
   scan: WorkspaceScan,
   plan: AgentPlan,
   recommendation: LaunchRecommendation,
-  execution: ReturnType<CommandExecutor["run"]> | ReturnType<CommandExecutor["runInBackground"]> | null
+  execution: CommandExecutionRecord | null
 ) {
   return [
     `I treated this as a run request, not a code-change request.`,

@@ -41,12 +41,22 @@ Raw API keys are never logged and are never returned to the frontend from backen
 
 Ollama configuration can be persisted because it has no API key. OpenAI-compatible non-secret settings can be saved, but the config is marked invalid after save until secure secret storage is implemented in a future module.
 
-## Future Patch Review
+## Patch Review And Apply
 
-Patch application is disabled in Module 1. Module 2 adds explicit patch proposals and approval/rejection state, but approval still does not write files. The Rust patch service remains the intended future write path.
+Patch application is disabled in Module 1. In the current Module 2 and Module 3 branch, the runtime still only proposes patches, but the desktop can apply an approved patch through Rust.
+
+- The frontend invokes `apply_runtime_patch` in `apps/desktop/src-tauri/src/commands/patch.rs`.
+- Rust loads the latest patch proposal payload from SQLite `session_events`.
+- `PatchService` validates that all patch targets stay inside the active workspace before running `git apply`.
+- Rust appends an `apply.completed` event after a successful apply.
+- The TypeScript runtime then updates its own session state only after the frontend reports that Rust result back to `/sessions/:id/patches/:patchId/result`.
+
+This means filesystem authority is Rust-owned, but completion state is still reconciled across Rust, frontend, and runtime rather than sourced from one durable authority.
 
 ## Module 2 Runtime Boundary
 
 The TypeScript agent runtime performs temporary read-only workspace inspection because it runs as a separate local service and cannot call Tauri internals directly yet. It enforces its own workspace boundary checks, ignores build/vendor folders, and blocks secret-like files. It does not write files and does not execute commands.
 
 Runtime command tools only create command requests with risk labels. Actual command execution in the desktop UI still goes through the Rust terminal service and command policy.
+
+Runtime sessions are not durably restorable yet. `SessionManager.load()` is empty, so session truth is lost if the runtime process restarts even though the desktop has mirrored events in SQLite.

@@ -7,7 +7,21 @@ export function classifyCommandRisk(command: string, workspacePath: string): Com
   if (hasDangerousPattern(normalized) || referencesOutsideWorkspace(command, workspacePath)) {
     return "dangerous";
   }
-  if (startsWithAny(normalized, ["npm install", "npm i", "pnpm add", "pnpm install", "cargo add", "git checkout", "git merge", "git rebase", "git reset"])) {
+  if (
+    startsWithAny(normalized, [
+      "npm install",
+      "npm i",
+      "pnpm add",
+      "pnpm install",
+      "cargo add",
+      "git checkout",
+      "git merge",
+      "git rebase",
+      "git reset"
+    ]) ||
+    looksLikeNetworkCommand(normalized) ||
+    looksLikeBackgroundCommand(normalized)
+  ) {
     return "medium";
   }
   if (
@@ -18,10 +32,6 @@ export function classifyCommandRisk(command: string, workspacePath: string): Com
       "pnpm test",
       "cargo test",
       "pytest",
-      "npm run dev",
-      "pnpm dev",
-      "vite",
-      "python -m http.server",
       "rg",
       "ls",
       "dir"
@@ -45,6 +55,33 @@ function hasDangerousPattern(command: string) {
 
 function startsWithAny(command: string, prefixes: string[]) {
   return prefixes.some((prefix) => command === prefix || command.startsWith(`${prefix} `));
+}
+
+export function looksLikeNetworkCommand(command: string) {
+  return [
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr ",
+    "irm ",
+    "npm install",
+    "pnpm add",
+    "pnpm install",
+    "pip install",
+    "cargo install"
+  ].some((needle) => command.includes(needle));
+}
+
+export function looksLikeBackgroundCommand(command: string) {
+  return [
+    "python -m http.server",
+    "npm run dev",
+    "pnpm dev",
+    "yarn dev",
+    "vite",
+    "next dev",
+    "react-scripts start"
+  ].some((needle) => command.includes(needle));
 }
 
 function referencesOutsideWorkspace(command: string, workspacePath: string) {

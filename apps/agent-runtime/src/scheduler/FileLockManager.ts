@@ -1,10 +1,21 @@
 export class FileLockManager {
   private readonly locks = new Map<string, string>();
 
-  acquireLocks(taskId: string, paths: string[]) {
-    const conflict = this.detectConflict(paths);
-    if (conflict) {
-      return { acquired: false, conflict };
+  async acquireLocks(
+    taskId: string,
+    paths: string[],
+    options: { timeoutMs?: number; onWait?: (conflict: { path: string; ownerTaskId: string }) => void | Promise<void> } = {}
+  ) {
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    const startedAt = Date.now();
+    while (true) {
+      const conflict = this.detectConflict(paths);
+      if (!conflict) break;
+      if (Date.now() - startedAt >= timeoutMs) {
+        return { acquired: false, conflict };
+      }
+      await options.onWait?.(conflict);
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
     for (const filePath of paths) {
       this.locks.set(filePath, taskId);

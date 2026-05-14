@@ -22,19 +22,19 @@ test("run this project uses launch inference instead of patch proposals for stat
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     accessProfile: "full_access",
     userPrompt: "run this project"
   });
   const turn = await runtime.runTurn(created.sessionId, "run this project");
   const session = runtime.getSession(created.sessionId);
 
-  assert.equal(turn.status, "completed");
+  assert.equal(turn.status, "needs_approval");
   assert.equal(session?.patchProposals.length, 0);
   assert.equal(session?.commandRequests[0]?.command.includes("python -m http.server"), true);
-  assert.equal(session?.commandExecutions[0]?.status, "executed");
+  assert.equal(session?.commandExecutions.length, 0);
   assert.equal(session?.previewRecommendation?.type, "url");
-  assert.equal(session?.nextAction?.kind, "preview_ready");
+  assert.equal(session?.nextAction?.kind, "approve_commands");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
@@ -57,7 +57,7 @@ test("run this project prefers package manager dev scripts in package.json works
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     accessProfile: "full_access",
     userPrompt: "run this project"
   });
@@ -84,7 +84,7 @@ test("explain this project stays in simple mode and emits ordered progress witho
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     userPrompt: "explain this project"
   });
   await runtime.runTurn(created.sessionId, "explain this project");
@@ -92,11 +92,10 @@ test("explain this project stays in simple mode and emits ordered progress witho
 
   assert.equal(session?.resolvedExecutionMode, "simple_mode");
   assert.equal(session?.patchProposals.length, 0);
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Goal"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Decision"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Tool call"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Observed result"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Next decision"));
+  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Intake"));
+  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Workspace snapshot"));
+  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Plan"));
+  assert.ok(session?.verificationResult);
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
@@ -112,15 +111,15 @@ test("modify requests still go through patch proposal flow with ordered reasonin
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     userPrompt: "add a settings page"
   });
   await runtime.runTurn(created.sessionId, "add a settings page");
   const session = runtime.getSession(created.sessionId);
 
   assert.equal(session?.patchProposals.length, 1);
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Decision"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Next decision"));
+  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Draft changes"));
+  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Approval"));
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

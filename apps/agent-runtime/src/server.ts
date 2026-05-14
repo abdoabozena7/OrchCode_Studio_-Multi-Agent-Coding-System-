@@ -1,6 +1,11 @@
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
-import type { CreateRuntimeSessionRequest, RuntimeTurnRequest } from "@orchcode/protocol";
+import type {
+  CreateRuntimeSessionRequest,
+  ReportCommandResultRequest,
+  ReportPatchApplyResultRequest,
+  RuntimeTurnRequest
+} from "@orchcode/protocol";
 import { loadConfig, type RuntimeConfig } from "./config.js";
 import { AgentRuntime } from "./runtime/AgentRuntime.js";
 import { EventBus } from "./runtime/EventBus.js";
@@ -21,7 +26,7 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("Access-Control-Allow-Origin", "*");
-    reply.header("Access-Control-Allow-Headers", "content-type");
+    reply.header("Access-Control-Allow-Headers", "content-type,x-orchcode-session-token");
     reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   });
 
@@ -39,6 +44,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.post("/sessions/:id/turn", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
     const body = request.body as RuntimeTurnRequest;
     if (!body?.message) {
       return reply.status(400).send({ error: "message is required" });
@@ -48,6 +56,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.get("/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
     const session = runtime.getSession(id);
     if (!session) return reply.status(404).send({ error: "Session not found" });
     return session;
@@ -55,6 +66,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.get("/sessions/:id/events", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -72,6 +86,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.post("/sessions/:id/patches/:patchId/approve", async (request, reply) => {
     const { id, patchId } = request.params as { id: string; patchId: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
     try {
       return await runtime.approvePatch(id, patchId);
     } catch (error) {
@@ -81,6 +98,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.post("/sessions/:id/patches/:patchId/reject", async (request, reply) => {
     const { id, patchId } = request.params as { id: string; patchId: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
     try {
       return await runtime.rejectPatch(id, patchId);
     } catch (error) {
@@ -88,5 +108,47 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
     }
   });
 
+  app.post("/sessions/:id/patches/:patchId/result", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
+    const body = request.body as ReportPatchApplyResultRequest;
+    if (!body?.status || !body?.message) {
+      return reply.status(400).send({ error: "status and message are required" });
+    }
+    try {
+      return await runtime.reportPatchApplyResult(id, patchId, body);
+    } catch (error) {
+      return reply.status(404).send({ error: String(error) });
+    }
+  });
+
+  app.post("/sessions/:id/commands/:requestId/result", async (request, reply) => {
+    const { id, requestId } = request.params as { id: string; requestId: string };
+    if (!authorizeSessionRequest(sessionManager, id, request)) {
+      return reply.status(401).send({ error: "Missing, invalid, or expired session token" });
+    }
+    const body = request.body as ReportCommandResultRequest;
+    if (!body?.command || !body?.cwd || !body?.risk || !body?.status) {
+      return reply.status(400).send({ error: "command, cwd, risk, and status are required" });
+    }
+    try {
+      return await runtime.reportCommandResult(id, requestId, body);
+    } catch (error) {
+      return reply.status(404).send({ error: String(error) });
+    }
+  });
+
   return { app, runtime, sessionManager };
+}
+
+function authorizeSessionRequest(sessionManager: SessionManager, sessionId: string, request: { headers: Record<string, unknown>; query?: unknown }) {
+  const header = request.headers["x-orchcode-session-token"];
+  const queryToken =
+    typeof request.query === "object" && request.query && "token" in request.query
+      ? String((request.query as { token?: unknown }).token ?? "")
+      : undefined;
+  const token = typeof header === "string" ? header : Array.isArray(header) ? header[0] : queryToken;
+  return sessionManager.validateSessionToken(sessionId, token);
 }

@@ -1,13 +1,16 @@
 import path from "node:path";
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { PatchProposal, PatchValidationResult } from "@orchcode/protocol";
-import { resolveInsideWorkspace } from "./security.js";
+import type { PatchProposal, PatchValidationResult, WorkerCapabilityGrant } from "@orchcode/protocol";
+import { assertGrantAllowsTool, resolveInsideWorkspace } from "./security.js";
 
 export class PatchTools {
-  constructor(private readonly workspacePath: string) {}
+  constructor(private readonly workspacePath: string, private readonly grant?: WorkerCapabilityGrant) {}
 
   propose(proposal: Omit<PatchProposal, "id" | "sessionId" | "createdAt">, sessionId: string): PatchProposal {
+    assertGrantAllowsTool(this.grant, "patch.propose");
+    if (this.grant) {
+      if (!this.grant.canProposePatches) throw new Error("Capability grant does not allow patch proposals");
+    }
     return {
       ...proposal,
       id: `patch_${randomUUID()}`,
@@ -38,45 +41,10 @@ export class PatchTools {
   }
 
   applyProposal(proposal: PatchProposal): { applied: boolean; changedPaths: string[]; message: string } {
-    const validation = this.validate(proposal);
-    if (!validation.valid) {
-      return {
-        applied: false,
-        changedPaths: [],
-        message: validation.errors.join("; ")
-      };
-    }
-
-    const artifacts = new Map(proposal.artifacts?.map((artifact) => [artifact.path, artifact.content]) ?? []);
-    const changedPaths: string[] = [];
-
-    for (const change of proposal.filesChanged) {
-      const resolved = resolveInsideWorkspace(this.workspacePath, change.path);
-      if (change.changeType === "delete") {
-        if (fs.existsSync(resolved)) {
-          fs.rmSync(resolved, { force: true });
-        }
-        changedPaths.push(change.path);
-        continue;
-      }
-
-      const content = artifacts.get(change.path) ?? extractContentFromDiff(proposal.unifiedDiff, change.path);
-      if (content === undefined) {
-        return {
-          applied: false,
-          changedPaths,
-          message: `Patch content is missing for ${change.path}`
-        };
-      }
-      fs.mkdirSync(path.dirname(resolved), { recursive: true });
-      fs.writeFileSync(resolved, content, "utf8");
-      changedPaths.push(change.path);
-    }
-
     return {
-      applied: true,
-      changedPaths,
-      message: changedPaths.length ? `Applied ${changedPaths.length} file change(s).` : "Patch contained no file changes."
+      applied: false,
+      changedPaths: [],
+      message: `Runtime patch apply is disabled for ${proposal.id}; Rust patch authority must apply it.`
     };
   }
 }

@@ -1,5 +1,6 @@
 import type {
   AgentRoleReason,
+  AgentAssignmentPlan,
   BusinessBrief,
   DelegationDecision,
   ProductBrief,
@@ -9,12 +10,14 @@ import type {
   TechnicalPlan,
   WorkOrder
 } from "@orchcode/protocol";
+import { randomUUID } from "node:crypto";
 import { estimateComplexity, parsePromptDirective } from "../runtime/delegation.js";
 
 type OrchestratorResult = {
   technicalPlan: TechnicalPlan;
   delegationDecision: DelegationDecision;
   workOrders: WorkOrder[];
+  assignmentPlan: AgentAssignmentPlan;
 };
 
 export class EngineeringOrchestrator {
@@ -27,6 +30,7 @@ export class EngineeringOrchestrator {
     const workerSelection = selectWorkers(input.productBrief.goal, input.projectMap);
     const nodes = createNodes(input.sessionId, input.productBrief, input.projectMap, workerSelection.roles);
     const workOrders = createWorkOrders(input.sessionId, input.productBrief, input.businessBrief, nodes);
+    const assignmentPlan = createAssignmentPlan(input.sessionId, input.productBrief.goal, workOrders);
     const graph: TaskGraph = {
       sessionId: input.sessionId,
       nodes,
@@ -49,6 +53,7 @@ export class EngineeringOrchestrator {
 
     return {
       delegationDecision,
+      assignmentPlan,
       technicalPlan: {
         summary: `Use dynamic orchestration to satisfy: ${input.productBrief.goal}`,
         architectureImpact:
@@ -67,6 +72,57 @@ export class EngineeringOrchestrator {
       workOrders
     };
   }
+}
+
+function createAssignmentPlan(sessionId: string, goal: string, workOrders: WorkOrder[]): AgentAssignmentPlan {
+  const now = new Date().toISOString();
+  return {
+    id: `assignment_${randomUUID()}`,
+    sessionId,
+    trustProfile: "strict_gated",
+    rationale: `Generated ${workOrders.length} worker spec(s) from the request keywords and project shape.`,
+    createdAt: now,
+    workerSpecs: workOrders.map((order, index) => {
+      const roleTitle = dynamicRoleTitle(goal, order.dynamicRole, index);
+      return {
+        id: `worker_spec_${randomUUID()}`,
+        sessionId,
+        roleTitle,
+        persona: `Runtime-generated ${roleTitle} focused on bounded artifact handoff.`,
+        objective: order.objective,
+        tasks: [order.objective],
+        acceptanceCriteria: order.acceptanceCriteria,
+        requiredArtifacts: order.requiredArtifacts,
+        targetFiles: order.requiredArtifacts,
+        dependsOn: order.dependsOn,
+        capabilityGrant: {
+          id: `grant_${randomUUID()}`,
+          workerId: order.id,
+          sessionId,
+          allowedPaths: order.requiredArtifacts,
+          allowedTools: order.allowedTools,
+          allowedCommandRisks: ["safe"],
+          canProposePatches: order.allowedTools.includes("patch.propose"),
+          canRequestCommands: order.allowedTools.includes("command.request_run"),
+          allowNetwork: false,
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString()
+        }
+      };
+    })
+  };
+}
+
+function dynamicRoleTitle(goal: string, fallback: string, index: number) {
+  const normalized = goal.toLowerCase();
+  const candidates = [
+    normalized.includes("game") ? "Gameplay Systems Worker" : undefined,
+    normalized.includes("3d") || normalized.includes("three") ? "Rendering Worker" : undefined,
+    normalized.includes("ui") || normalized.includes("frontend") || normalized.includes("page") ? "Interface Worker" : undefined,
+    normalized.includes("rust") || normalized.includes("tauri") || normalized.includes("backend") ? "Runtime Boundary Worker" : undefined,
+    normalized.includes("test") || normalized.includes("verify") ? "Validation Worker" : undefined,
+    normalized.includes("security") || normalized.includes("auth") ? "Safety Review Worker" : undefined
+  ].filter(Boolean) as string[];
+  return candidates[index % Math.max(candidates.length, 1)] ?? fallback;
 }
 
 function selectWorkers(goal: string, projectMap: ProjectMap) {

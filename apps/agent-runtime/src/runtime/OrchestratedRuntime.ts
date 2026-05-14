@@ -20,22 +20,14 @@ import { MergeController } from "../scheduler/MergeController.js";
 import { TaskScheduler } from "../scheduler/TaskScheduler.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { SessionManager, randomId } from "./SessionManager.js";
-import { CommandExecutor } from "./CommandExecutor.js";
 import {
-  ArchitectAgent,
-  CodebaseMapperAgent,
-  FrontendAgent,
+  GenericWorkerAgent,
   ReviewerAgent,
-  RustBackendAgent,
   SecurityAgent,
-  TestAgent,
-  ToolingTerminalAgent
 } from "../agents/workers/index.js";
 import { isThreeJsSnakePrompt, validateThreeJsSnakeProposal } from "../mock/threeJsSnake.js";
 
 export class OrchestratedRuntime {
-  private readonly commandExecutor = new CommandExecutor();
-
   constructor(private readonly sessionManager: SessionManager) {}
 
   async run(
@@ -148,6 +140,10 @@ export class OrchestratedRuntime {
         rationale: engineering.delegationDecision.rationale
       };
       draft.orchestration!.technicalPlan = engineering.technicalPlan;
+      draft.orchestration!.assignmentPlan = {
+        ...engineering.assignmentPlan,
+        trustProfile: draft.trustProfile
+      };
       draft.orchestration!.taskGraph = engineering.technicalPlan.taskGraph;
       draft.orchestration!.selectedWorkerAgents = engineering.delegationDecision.selectedAgentRoles;
       draft.orchestration!.mandatoryGateAgents = ["Product Orchestrator", "Business Orchestrator", "Engineering Orchestrator", "SecurityAgent", "ReviewerAgent"];
@@ -211,18 +207,25 @@ export class OrchestratedRuntime {
       session.orchestration.safetySettings.maxParallelAgents
     );
     const outputs: WorkerOutput[] = [];
+    const artifacts: import("@orchcode/protocol").ArtifactHandoff[] = [];
     const merge = new MergeController();
     const securityAgent = new SecurityAgent();
     const reviewerAgent = new ReviewerAgent();
     let previewRecommendation: import("@orchcode/protocol").PreviewRecommendation | undefined;
 
-    await scheduler.runAllAsync(async (task) => {
-      const worker = createWorker(task.assignedAgent);
+    await scheduler.runAllAsync(async (task, runningTaskIds) => {
+      if (runningTaskIds.length >= 2) {
+        await this.emit(sessionId, "parallel_execution.active", runningTaskIds.join(", "), "TaskScheduler");
+      }
       const workOrder = engineering.workOrders.find((candidate) => candidate.agentName === task.assignedAgent || candidate.id === `work_${task.id}`);
+      const spec = engineering.assignmentPlan.workerSpecs.find((candidate) => candidate.objective === workOrder?.objective) ?? engineering.assignmentPlan.workerSpecs[0];
+      if (!spec) throw new Error("No worker spec available for task");
+      const toolsForWorker = new ToolRegistry(session.workspacePath, spec.capabilityGrant);
+      const worker = new GenericWorkerAgent().assign(spec);
       const run = createAgentRun(sessionId, task.assignedAgent, task.title, "running");
       await this.updateWorkStatus(sessionId, {
         agentName: task.assignedAgent,
-        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        role: spec.roleTitle,
         taskTitle: task.title,
         objective: workOrder?.objective ?? task.description,
         status: "running",
@@ -234,7 +237,7 @@ export class OrchestratedRuntime {
         stage: "working",
         status: "running",
         agentName: task.assignedAgent,
-        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        role: spec.roleTitle,
         taskTitle: task.title,
         summary: workOrder?.objective ?? task.description,
         targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? []
@@ -242,21 +245,25 @@ export class OrchestratedRuntime {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.orchestration!.agentRuns.push(run);
       });
-      const result = worker.run(task, {
+      const result = await worker.execute(task, {
         sessionId,
         userPrompt: message,
         workspacePath: session.workspacePath,
         projectMap,
-        tools,
-        workOrder,
-        previousOutputs: outputs
+        tools: toolsForWorker,
+        previousArtifacts: artifacts
       });
       outputs.push(result.output);
+      artifacts.push(result.artifact);
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.orchestration!.workerOutputs.push(result.output);
+        draft.orchestration!.artifactHandoffs ??= [];
+        draft.orchestration!.artifactHandoffs.push(result.artifact);
         const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
         if (targetRun) {
           targetRun.status = "completed";
+          targetRun.lifecycleStage = "DONE";
+          targetRun.artifactJson = result.artifact;
           targetRun.completedAt = new Date().toISOString();
           targetRun.lastEvent = "completed";
         }
@@ -268,7 +275,7 @@ export class OrchestratedRuntime {
           stage: "patching",
           status: "completed",
           agentName: task.assignedAgent,
-          role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+          role: spec.roleTitle,
           taskTitle: "Code changes proposed",
           summary: `${result.patch.title}: ${result.patch.summary}`,
           targetFiles: result.patch.filesChanged.map((file) => file.path),
@@ -281,7 +288,7 @@ export class OrchestratedRuntime {
       }
       await this.updateWorkStatus(sessionId, {
         agentName: task.assignedAgent,
-        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        role: spec.roleTitle,
         taskTitle: task.title,
         objective: workOrder?.objective ?? task.description,
         status: "completed",
@@ -294,7 +301,7 @@ export class OrchestratedRuntime {
         stage: "working",
         status: "completed",
         agentName: task.assignedAgent,
-        role: workOrder?.dynamicRole ?? agentNameToRole(task.assignedAgent),
+        role: spec.roleTitle,
         taskTitle: task.title,
         summary: result.output.summary,
         targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? []
@@ -318,22 +325,11 @@ export class OrchestratedRuntime {
       for (const command of session.commandRequests.filter((request) => request.risk === "safe")) {
         await this.progress(sessionId, {
           stage: "reviewing",
-          status: "running",
-          agentName: "ToolingTerminalAgent",
+          status: "queued",
+          agentName: "Rust Terminal Authority",
           role: "Tooling",
-          taskTitle: "Run safe validation command",
-          summary: command.command,
-          targetFiles: []
-        });
-        const execution = this.commandExecutor.run(sessionId, command.command, session.workspacePath, command.id);
-        await this.sessionManager.addCommandExecution(sessionId, execution);
-        await this.progress(sessionId, {
-          stage: "reviewing",
-          status: execution.status === "executed" ? "completed" : "blocked",
-          agentName: "ToolingTerminalAgent",
-          role: "Tooling",
-          taskTitle: "Validation command result",
-          summary: execution.message ?? `${command.command} ${execution.status}`,
+          taskTitle: "Safe validation command requested",
+          summary: `${command.command} is queued for Rust execution.`,
           targetFiles: []
         });
       }
@@ -388,11 +384,11 @@ export class OrchestratedRuntime {
       targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
     });
 
-    const canAutoApply = session.orchestration.safetySettings.autoApplyValidatedPatches && gatesPassed;
+    const canAutoApply = false;
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = gatesPassed ? "needs_approval" : "failed";
-      draft.lifecycleStage = "REVIEW_REQUEST";
+      draft.lifecycleStage = gatesPassed ? "APPROVAL" : "BLOCKED";
       draft.tasks = engineering.technicalPlan.taskGraph.nodes.map((node) => ({
         id: node.id,
         sessionId,
@@ -414,53 +410,14 @@ export class OrchestratedRuntime {
       draft.reasoningSummaries.push(
         !gatesPassed
           ? "Quality gates blocked the generated output before any files were applied."
-          : canAutoApply
-          ? "Orchestrated run completed and applied the generated changes automatically."
-          : "Orchestrated run completed and stopped for patch approval."
+          : "Orchestrated run completed and stopped for Rust-mediated patch approval."
       );
     });
 
     const appliedTitles: string[] = [];
-    if (canAutoApply) {
-      await this.progress(sessionId, {
-        stage: "applying",
-        status: "running",
-        agentName: "MergeController",
-        role: "Apply",
-        taskTitle: "Apply validated code changes",
-        summary: "Quality gates passed, so validated patch proposals are being applied under the current access policy.",
-        targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path))
-      });
-      for (const proposal of session.patchProposals) {
-        const applied = tools.patch.applyProposal(proposal);
-        if (applied.applied) {
-          appliedTitles.push(proposal.title);
-          await this.sessionManager.updateSession(sessionId, (draft) => {
-            const target = draft.patchProposals.find((candidate) => candidate.id === proposal.id);
-            if (target) target.status = "applied";
-          });
-        }
-      }
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.status = "completed";
-        if (previewRecommendation) {
-          draft.nextAction = {
-            kind: "confirm_preview",
-            message: "Done. Want me to run it now, or show you the result first?",
-            preview: previewRecommendation
-          };
-        }
-      });
-      await this.progress(sessionId, {
-        stage: "applying",
-        status: "completed",
-        agentName: "MergeController",
-        role: "Apply",
-        taskTitle: "Code changes applied",
-        summary: `Applied ${appliedTitles.length} patch proposal(s).`,
-        targetFiles: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => file.path)),
-        patchStats: session.patchProposals.flatMap((patch) => getPatchStats(patch))
-      });
+    if (gatesPassed) {
+      await this.emit(sessionId, "validation.completed", "Validation gates passed; waiting for Rust-mediated approval/apply.");
+      await this.emit(sessionId, "verification.pending", "Post-verify is pending until Rust applies approved changes.");
     }
 
     if (!gatesPassed) {
@@ -494,7 +451,7 @@ export class OrchestratedRuntime {
     });
 
     await this.emit(sessionId, "security.reviewed", securityReview.summary, "SecurityAgent");
-    await this.emit(sessionId, "patch.reviewed", reviewerSummary.summary, "ReviewerAgent");
+    await this.emit(sessionId, "agent.completed", reviewerSummary.summary, "ReviewerAgent");
     await this.emit(sessionId, gatesPassed ? "orchestration.completed" : "orchestration.failed", gatesPassed ? "Multi-agent orchestration completed." : "Quality gates blocked the generated output.");
     return this.sessionManager.getSession(sessionId)!;
   }
@@ -542,19 +499,6 @@ export class OrchestratedRuntime {
     });
     await this.emit(sessionId, "agent.completed", task, agentName);
   }
-}
-
-function createWorker(name: string) {
-  if (["GameLogicAgent", "ThreeJsRenderingAgent", "FrontendIntegrationAgent"].includes(name)) return new FrontendAgent();
-  if (name === "CodebaseMapperAgent") return new CodebaseMapperAgent();
-  if (name === "ArchitectAgent") return new ArchitectAgent();
-  if (name === "FrontendAgent") return new FrontendAgent();
-  if (name === "RustBackendAgent") return new RustBackendAgent();
-  if (name === "ToolingTerminalAgent") return new ToolingTerminalAgent();
-  if (name === "TestAgent") return new TestAgent();
-  if (name === "SecurityAgent") return new SecurityAgent();
-  if (name === "ReviewerAgent") return new ReviewerAgent();
-  return new ToolingTerminalAgent();
 }
 
 function getPatchStats(patch: PatchProposal): PatchChangeStats[] {

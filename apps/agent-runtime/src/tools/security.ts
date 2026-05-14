@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { WorkerCapabilityGrant } from "@orchcode/protocol";
 
 export const ignoredDirectories = new Set(["node_modules", "target", "dist", "build", ".git", ".vite"]);
 
@@ -28,4 +29,14 @@ export function isSecretCandidate(filePath: string) {
 
 export function shouldIgnore(filePath: string) {
   return filePath.split(path.sep).some((part) => ignoredDirectories.has(part));
+}
+
+export function assertGrantAllowsTool(grant: WorkerCapabilityGrant | undefined, toolName: string) {
+  if (!grant) return;
+  if (Date.parse(grant.expiresAt) <= Date.now()) {
+    throw new Error("Capability grant expired");
+  }
+  if (!grant.allowedTools.includes(toolName)) {
+    throw new Error(`Capability grant does not allow tool: ${toolName}`);
+  }
 }

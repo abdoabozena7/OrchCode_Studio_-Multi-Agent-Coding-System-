@@ -80,8 +80,8 @@ The rest of the runtime does not depend on any provider SDK. Future adapters can
 
 ## Limitations
 
-- Patch approval updates runtime state only; patch application remains disabled pending Rust PatchService integration.
-- Runtime persistence is JSON under `.orchcode-agent-runtime`, not SQLite yet.
+- Patch approval still happens in the runtime, but reviewed patch apply now goes through the Rust desktop command path and must be reported back into the runtime to complete lifecycle state.
+- Runtime persistence is not durable yet; orchestration and task state still do not restore after runtime restart.
 - Runtime workspace tools are still temporary Node-side read-only tools with their own guards.
 - Scheduler is deterministic and currently executes synchronously, while still enforcing dependency and lock rules.
 - Worker patch proposals are representative in mock mode, not guaranteed to apply.
@@ -89,9 +89,8 @@ The rest of the runtime does not depend on any provider SDK. Future adapters can
 
 ## Recommended Module 4 Backlog
 
-- Bridge runtime tools to Rust/Tauri commands so Rust is the only filesystem authority.
-- Persist orchestration state in SQLite.
-- Implement reviewed patch application through Rust PatchService.
+- Bridge runtime tools to Rust/Tauri commands so Rust is the only filesystem authority and reconciliation source.
+- Persist orchestration state in SQLite with actual restore/replay.
 - Stream SSE events live into the UI.
 - Add real provider structured-output adapter.
 - Add patch composition and conflict resolution workflow.

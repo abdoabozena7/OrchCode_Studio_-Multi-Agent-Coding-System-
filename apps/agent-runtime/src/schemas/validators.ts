@@ -53,10 +53,163 @@ export function validateReview(value: ReviewResult): ValidationResult {
   return { valid: errors.length === 0, errors };
 }
 
+export function validateStructuredOutput(value: unknown, schema: unknown): ValidationResult {
+  const schemaName = getSchemaName(schema);
+  switch (schemaName) {
+    case "agent-plan":
+      return validateAgentPlanShape(value);
+    case "patch-proposal":
+      return validatePatchProposalShape(value);
+    case "run-plan":
+      return validateRunPlanShape(value);
+    case "run-patch":
+      return validateRunPatchShape(value);
+    case "run-patch-intent":
+      return validateRunPatchIntentShape(value);
+    case "run-verification":
+      return validateRunVerificationShape(value);
+    case "worker-output":
+      return validateWorkerOutput(value as WorkerOutput);
+    case "review":
+      return validateReview(value as ReviewResult);
+    default:
+      return { valid: true, errors: [] };
+  }
+}
+
 function requiredStrings(value: Record<string, unknown>, keys: string[]) {
   return keys.flatMap((key) => (typeof value[key] === "string" && value[key] ? [] : [`${key} is required`]));
 }
 
 function requiredArrays(value: Record<string, unknown>, keys: string[]) {
   return keys.flatMap((key) => (Array.isArray(value[key]) ? [] : [`${key} must be an array`]));
+}
+
+function validateAgentPlanShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["agent-plan must be an object"] };
+  errors.push(...requiredStrings(value, ["summary"]));
+  errors.push(...requiredArrays(value, ["steps", "acceptanceCriteria", "risks"]));
+  if (Array.isArray(value.steps)) {
+    value.steps.forEach((step, index) => {
+      if (!isRecord(step)) {
+        errors.push(`steps[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(step, ["id", "title", "detail", "status"]).map((error) => `steps[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validatePatchProposalShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["patch-proposal must be an object"] };
+  errors.push(...requiredStrings(value, ["title", "summary", "riskLevel", "unifiedDiff", "status"]));
+  errors.push(...requiredArrays(value, ["filesChanged"]));
+  if (Array.isArray(value.filesChanged)) {
+    value.filesChanged.forEach((file, index) => {
+      if (!isRecord(file)) {
+        errors.push(`filesChanged[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(file, ["path", "changeType", "explanation"]).map((error) => `filesChanged[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateRunPlanShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["run-plan must be an object"] };
+  errors.push(...requiredStrings(value, ["summary", "reasoningSummary", "mode"]));
+  errors.push(...requiredArrays(value, ["tasks", "acceptanceCriteria", "risks"]));
+  if (Array.isArray(value.tasks)) {
+    value.tasks.forEach((task, index) => {
+      if (!isRecord(task)) {
+        errors.push(`tasks[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(task, ["title", "objective", "roleTitle"]).map((error) => `tasks[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateRunPatchShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["run-patch must be an object"] };
+  errors.push(...requiredStrings(value, ["title", "summary"]));
+  errors.push(...requiredArrays(value, ["files"]));
+  if (Array.isArray(value.files)) {
+    value.files.forEach((file, index) => {
+      if (!isRecord(file)) {
+        errors.push(`files[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(file, ["path", "changeType", "content", "explanation"]).map((error) => `files[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateRunPatchIntentShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["run-patch-intent must be an object"] };
+  errors.push(...requiredStrings(value, ["title", "summary"]));
+  errors.push(...requiredArrays(value, ["intents"]));
+  if (Array.isArray(value.intents)) {
+    value.intents.forEach((intent, index) => {
+      if (!isRecord(intent)) {
+        errors.push(`intents[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(intent, ["path", "operation", "replacementText", "reason", "risk"]).map((error) => `intents[${index}].${error}`));
+      if (
+        typeof intent.operation === "string" &&
+        !["create_file", "replace_range", "insert_after", "insert_before", "delete_range"].includes(intent.operation)
+      ) {
+        errors.push(`intents[${index}].operation is invalid`);
+      }
+      if (typeof intent.risk === "string" && !["low", "medium", "high"].includes(intent.risk)) {
+        errors.push(`intents[${index}].risk is invalid`);
+      }
+      if (intent.operation !== "create_file") {
+        const hasAnchor = typeof intent.anchorText === "string" && intent.anchorText.length > 0;
+        const hasPreimage = typeof intent.preimageText === "string" && intent.preimageText.length > 0;
+        if (!hasAnchor && !hasPreimage) {
+          errors.push(`intents[${index}] requires anchorText or preimageText for existing-file edits`);
+        }
+      }
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateRunVerificationShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["run-verification must be an object"] };
+  errors.push(...requiredStrings(value, ["summary"]));
+  errors.push(...requiredArrays(value, ["checks"]));
+  if (Array.isArray(value.checks)) {
+    value.checks.forEach((check, index) => {
+      if (!isRecord(check)) {
+        errors.push(`checks[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(check, ["name", "status", "detail"]).map((error) => `checks[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getSchemaName(schema: unknown) {
+  if (typeof schema === "object" && schema && "name" in schema) {
+    return String((schema as { name: string }).name);
+  }
+  return "";
 }

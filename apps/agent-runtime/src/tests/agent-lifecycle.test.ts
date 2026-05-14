@@ -16,7 +16,7 @@ test("agent lifecycle creates plan, tool calls, command request, and patch propo
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "mock",
+    mode: "demo_mock",
     userPrompt: "add a README note"
   });
   const turn = await runtime.runTurn(created.sessionId, "add a README note");
@@ -24,7 +24,8 @@ test("agent lifecycle creates plan, tool calls, command request, and patch propo
 
   assert.equal(turn.status, "needs_approval");
   assert.ok(session?.plan);
-  assert.ok((session?.toolCalls.length ?? 0) >= 5);
+  assert.ok((session?.toolIntents.length ?? 0) >= 4);
+  assert.ok((session?.artifacts.length ?? 0) >= 3);
   assert.equal(session?.patchProposals.length, 1);
   assert.equal(session?.commandRequests.length, 1);
 

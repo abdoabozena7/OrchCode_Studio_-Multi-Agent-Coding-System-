@@ -14,7 +14,7 @@ flowchart TD
   Sec --> R["ReviewerAgent"]
   R --> PP["Patch proposals"]
   PP --> A{"User approval"}
-  A -->|Approve| Rust["Rust PatchService future apply path"]
+  A -->|Approve| Rust["Rust apply_runtime_patch command"]
   A -->|Reject| Stop["No files changed"]
 ```
 
@@ -30,7 +30,8 @@ flowchart TD
 8. MergeController detects patch conflicts.
 9. SecurityAgent reviews commands and patch metadata.
 10. ReviewerAgent performs practical readiness review.
-11. Runtime stops at approval. No patch is applied automatically.
+11. Runtime stops at approval. The desktop may then call the Rust patch command to apply the reviewed diff.
+12. The frontend reports the Rust apply result back to the runtime so lifecycle state can move to post-verify or failed.
 
 ## Events
 

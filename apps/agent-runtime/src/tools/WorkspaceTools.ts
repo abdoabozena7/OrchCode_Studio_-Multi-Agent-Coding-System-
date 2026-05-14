@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isSecretCandidate, resolveInsideWorkspace, shouldIgnore } from "./security.js";
+import type { WorkerCapabilityGrant } from "@orchcode/protocol";
+import { assertGrantAllowsTool, isSecretCandidate, resolveInsideWorkspace, shouldIgnore } from "./security.js";
 
 export type WorkspaceFileEntry = {
   path: string;
@@ -9,16 +10,16 @@ export type WorkspaceFileEntry = {
 };
 
 export class WorkspaceTools {
-  constructor(private readonly workspacePath: string) {}
+  constructor(private readonly workspacePath: string, private readonly grant?: WorkerCapabilityGrant) {}
 
   listFiles(limit = 240): WorkspaceFileEntry[] {
-    const root = resolveInsideWorkspace(this.workspacePath);
-    const results: WorkspaceFileEntry[] = [];
-    this.walk(root, results, limit);
-    return results;
+    assertGrantAllowsTool(this.grant, "workspace.list_files");
+    return this.collectFiles(limit);
   }
 
   readFile(relativePath: string) {
+    assertGrantAllowsTool(this.grant, "workspace.read_file");
+    this.assertPathAllowed(relativePath);
     const filePath = resolveInsideWorkspace(this.workspacePath, relativePath);
     if (isSecretCandidate(filePath)) {
       throw new Error("Secret-like files are blocked");
@@ -30,6 +31,8 @@ export class WorkspaceTools {
   }
 
   readWholeFile(relativePath: string) {
+    assertGrantAllowsTool(this.grant, "workspace.read_file");
+    this.assertPathAllowed(relativePath);
     const filePath = resolveInsideWorkspace(this.workspacePath, relativePath);
     if (isSecretCandidate(filePath)) {
       throw new Error("Secret-like files are blocked");
@@ -53,25 +56,22 @@ export class WorkspaceTools {
   }
 
   writeFile(relativePath: string, content: string) {
-    const filePath = resolveInsideWorkspace(this.workspacePath, relativePath);
-    if (isSecretCandidate(filePath)) {
-      throw new Error("Secret-like files are blocked");
-    }
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, "utf8");
+    void relativePath;
+    void content;
+    throw new Error("Runtime file writes are disabled; propose a patch intent for Rust authority.");
   }
 
   deleteFile(relativePath: string) {
-    const filePath = resolveInsideWorkspace(this.workspacePath, relativePath);
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { force: true });
-    }
+    void relativePath;
+    throw new Error("Runtime file deletes are disabled; propose a patch intent for Rust authority.");
   }
 
   searchCode(query: string, limit = 50) {
+    assertGrantAllowsTool(this.grant, "workspace.search_code");
     const matches: Array<{ path: string; line: number; preview: string }> = [];
     const lowerQuery = query.toLowerCase();
-    for (const file of this.listFiles(500).filter((entry) => !entry.isDir && !entry.isSecretCandidate)) {
+    const files = this.collectFiles(500);
+    for (const file of files.filter((entry) => !entry.isDir && !entry.isSecretCandidate)) {
       if (matches.length >= limit) break;
       if (!isTextLike(file.path)) continue;
       try {
@@ -129,6 +129,24 @@ export class WorkspaceTools {
       });
       if (entry.isDirectory()) this.walk(fullPath, results, limit);
     }
+  }
+
+  private collectFiles(limit: number) {
+    const root = resolveInsideWorkspace(this.workspacePath);
+    const results: WorkspaceFileEntry[] = [];
+    this.walk(root, results, limit);
+    return results;
+  }
+
+  private assertPathAllowed(relativePath: string) {
+    if (!this.grant) return;
+    if (!this.grant.allowedPaths.length) return;
+    const normalized = relativePath.replaceAll("\\", "/");
+    const allowed = this.grant.allowedPaths.some((allowedPath) => {
+      const allowedNormalized = allowedPath.replaceAll("\\", "/");
+      return normalized === allowedNormalized || normalized.startsWith(`${allowedNormalized.replace(/\/$/, "")}/`);
+    });
+    if (!allowed) throw new Error(`Capability grant does not allow path: ${relativePath}`);
   }
 }
 

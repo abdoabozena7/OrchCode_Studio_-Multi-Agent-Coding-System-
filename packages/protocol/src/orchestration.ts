@@ -1,6 +1,15 @@
-import type { CommandRequest, PatchProposal, PreviewRecommendation, WorkspaceInfo } from "./models.js";
+import type {
+  CommandLifecycleEventType,
+  CommandRequest,
+  PatchLifecycleEventType,
+  PatchProposal,
+  PreviewRecommendation,
+  SessionLifecycleEventType,
+  VerificationLifecycleEventType,
+  WorkspaceInfo
+} from "./models.js";
 import type { AgentRun, WorkerOutput } from "./agents.js";
-import type { SafetySettings } from "./approvals.js";
+import type { RunTrustProfile, SafetySettings } from "./approvals.js";
 import type { TaskGraph } from "./task-graph.js";
 
 export type RuntimeExecutionMode = "auto_mode" | "simple_mode" | "orchestrated_mode";
@@ -33,6 +42,64 @@ export type WorkOrder = {
   requiredArtifacts: string[];
   allowedTools: string[];
   dependsOn: string[];
+};
+
+export type WorkerCapabilityGrant = {
+  id: string;
+  workerId: string;
+  sessionId: string;
+  allowedPaths: string[];
+  allowedTools: string[];
+  allowedCommandRisks: Array<"safe" | "medium" | "dangerous">;
+  canProposePatches: boolean;
+  canRequestCommands: boolean;
+  allowNetwork: boolean;
+  expiresAt: string;
+};
+
+export type WorkerSpec = {
+  id: string;
+  sessionId: string;
+  roleTitle: string;
+  persona: string;
+  objective: string;
+  tasks: string[];
+  acceptanceCriteria: string[];
+  requiredArtifacts: string[];
+  dependsOn: string[];
+  targetFiles: string[];
+  capabilityGrant: WorkerCapabilityGrant;
+};
+
+export type ArtifactHandoff = {
+  id: string;
+  sessionId: string;
+  workerId: string;
+  roleTitle: string;
+  summary: string;
+  details: string[];
+  patchProposalIds: string[];
+  commandRequestIds: string[];
+  validationNotes: string[];
+  createdAt: string;
+};
+
+export type ValidationGateResult = {
+  id: string;
+  sessionId: string;
+  status: "passed" | "failed";
+  blockingReasons: string[];
+  notes: string[];
+  createdAt: string;
+};
+
+export type AgentAssignmentPlan = {
+  id: string;
+  sessionId: string;
+  trustProfile: RunTrustProfile;
+  workerSpecs: WorkerSpec[];
+  rationale: string;
+  createdAt: string;
 };
 
 export type WorkerSelfCheck = {
@@ -180,14 +247,19 @@ export type OrchestrationEventType =
   | "task.completed"
   | "task.failed"
   | "file_lock.acquired"
+  | "file_lock.waiting"
+  | "file_lock.conflict"
   | "file_lock.released"
+  | "parallel_execution.active"
+  | "lifecycle.stage.changed"
+  | "validation.completed"
   | "agent.started"
   | "agent.completed"
-  | "patch.proposed"
-  | "patch.reviewed"
+  | PatchLifecycleEventType
   | "security.reviewed"
-  | "command.requested"
-  | "command.completed"
+  | CommandLifecycleEventType
+  | VerificationLifecycleEventType
+  | SessionLifecycleEventType
   | "orchestration.completed"
   | "orchestration.failed";
 
@@ -205,6 +277,7 @@ export type OrchestrationState = {
   productBrief?: ProductBrief;
   businessBrief?: BusinessBrief;
   technicalPlan?: TechnicalPlan;
+  assignmentPlan?: AgentAssignmentPlan;
   taskGraph?: TaskGraph;
   projectMap?: ProjectMap;
   agentRuns: AgentRun[];
@@ -219,6 +292,8 @@ export type OrchestrationState = {
   mandatoryGateAgents: string[];
   workOrders: WorkOrder[];
   qualityGateResults: QualityGateResult[];
+  validationGateResult?: ValidationGateResult;
+  artifactHandoffs?: ArtifactHandoff[];
   retryCount: number;
 };
 
@@ -241,6 +316,10 @@ export type SessionNextAction =
       kind: "confirm_preview";
       message: string;
       preview: PreviewRecommendation;
+    }
+  | {
+      kind: "approve_commands";
+      message: string;
     }
   | {
       kind: "preview_ready";

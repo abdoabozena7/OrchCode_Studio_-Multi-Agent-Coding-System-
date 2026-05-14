@@ -11,6 +11,18 @@ export class MockLlmProvider implements LlmProvider {
     if (schemaName === "patch-proposal") {
       return this.createPatchProposal(input.userPrompt, input.context) as T;
     }
+    if (schemaName === "run-plan") {
+      return this.createRunPlan(input.userPrompt) as T;
+    }
+    if (schemaName === "run-patch") {
+      return this.createRunPatch(input.userPrompt) as T;
+    }
+    if (schemaName === "run-verification") {
+      return {
+        summary: "Mock verification pending Rust apply.",
+        checks: [{ name: "Mock verification", status: "pending", detail: "Waiting for approved apply." }]
+      } as T;
+    }
     return {} as T;
   }
 
@@ -98,6 +110,60 @@ export class MockLlmProvider implements LlmProvider {
       status: "proposed"
     };
   }
+
+  private createRunPlan(userPrompt: string) {
+    const request = extractUserRequest(userPrompt);
+    const mode = /\b(create|new|scaffold|generate|make a new)\b/i.test(request)
+      ? "create_project"
+      : (/\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/i.test(request) ||
+          (/\b(explain|inspect|analyze)\b/i.test(request) && !/\b(change|edit|fix|add|create)\b/i.test(request)))
+        ? "inspect_only"
+        : "edit_project";
+    const requestedCount = Number(request.match(/\buse\s+(\d+)\s+agents?\b/i)?.[1] ?? "1");
+    const count = mode === "inspect_only" ? 1 : Math.min(Math.max(requestedCount || 1, 1), 5);
+    const rolePool = /\b(game|three|3d|snake)\b/i.test(request)
+      ? ["Gameplay Implementer", "3D Rendering Implementer", "Frontend Integration Implementer", "Verification Planner", "UX Polish Implementer"]
+      : ["Implementation Worker", "Workspace Integrator", "Verification Planner", "Documentation Worker", "Review Worker"];
+    return {
+      summary: mode === "create_project" ? "Create a new local project as reviewable files." : "Prepare a gated local coding run.",
+      reasoningSummary: "Mock planning keeps the flow reviewable and Rust-gated.",
+      mode,
+      tasks: Array.from({ length: count }, (_, index) => ({
+        id: `mock_task_${index + 1}`,
+        title: mode === "create_project" && index === 0 ? "Create project scaffold" : `Prepare reviewable change ${index + 1}`,
+        objective: request,
+        roleTitle: mode === "create_project" && index === 0 ? "Project Scaffolder" : rolePool[index] ?? `Dynamic Worker ${index + 1}`,
+        targetFiles: mode === "create_project" ? ["orchcode-project/README.md", "orchcode-project/index.html"] : ["AGENT_PROPOSAL.md"],
+        expectedArtifact: "Reviewable diff",
+        verification: "git diff --check"
+      })),
+      acceptanceCriteria: ["User can review before apply.", "Rust applies changes."],
+      risks: ["Mock mode is not codebase-specific."],
+      suggestedCommands: [{ command: "git diff --check", reason: "Validate the approved diff." }]
+    };
+  }
+
+  private createRunPatch(userPrompt: string) {
+    const request = extractUserRequest(userPrompt);
+    return {
+      title: "Mock gated patch",
+      summary: "Creates a reviewable proposal artifact.",
+      files: [
+        {
+          path: "AGENT_PROPOSAL.md",
+          changeType: "create",
+          explanation: "Reviewable mock artifact.",
+          content: `# Agent Proposal\n\nRequest: ${request}\n\nThis is a gated mock artifact. Use a validated Ollama provider for project-specific code generation.\n`
+        }
+      ],
+      suggestedCommands: [{ command: "git diff --check", reason: "Validate the approved diff." }]
+    };
+  }
+}
+
+function extractUserRequest(prompt: string) {
+  const match = prompt.match(/User request:\s*([\s\S]*?)(?:\n(?:Workspace snapshot|Plan):|$)/i);
+  return (match?.[1] ?? prompt).trim();
 }
 
 function getSchemaName(schema: unknown) {

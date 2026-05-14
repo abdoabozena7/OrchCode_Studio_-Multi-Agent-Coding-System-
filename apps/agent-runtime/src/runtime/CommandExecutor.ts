@@ -1,132 +1,98 @@
 import { randomUUID } from "node:crypto";
-import { spawnSync, spawn } from "node:child_process";
 import type { CommandExecutionRecord } from "@orchcode/protocol";
-import { classifyCommandRisk } from "../tools/CommandPolicy.js";
+import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 
 export class CommandExecutor {
   run(sessionId: string, command: string, cwd: string, requestId?: string): CommandExecutionRecord {
     const risk = classifyCommandRisk(command, cwd);
     if (risk === "dangerous") {
-      return {
-        id: `cmd_exec_${randomUUID()}`,
-        sessionId,
-        requestId,
-        autoRun: true,
-        command,
-        cwd,
-        risk,
-        status: "blocked",
-        exitCode: undefined,
-        stdout: "",
-        stderr: "",
-        message: "Dangerous command blocked by runtime policy",
-        createdAt: new Date().toISOString()
-      };
+      return buildRecord(sessionId, command, cwd, requestId, risk, "blocked", "Dangerous command blocked by runtime policy before execution.");
     }
     if (risk === "medium") {
-      return {
-        id: `cmd_exec_${randomUUID()}`,
+      return buildRecord(
         sessionId,
-        requestId,
-        autoRun: true,
         command,
         cwd,
+        requestId,
         risk,
-        status: "approval_required",
-        exitCode: undefined,
-        stdout: "",
-        stderr: "",
-        message: "Medium-risk commands still require explicit approval.",
-        createdAt: new Date().toISOString()
-      };
+        "approval_required",
+        buildDeferredExecutionMessage(command, "Medium-risk command recorded but not executed.")
+      );
     }
 
-    const result = spawnSync(command, {
-      cwd,
-      shell: true,
-      encoding: "utf8"
-    });
-
-    return {
-      id: `cmd_exec_${randomUUID()}`,
+    return buildRecord(
       sessionId,
-      requestId,
-      autoRun: true,
       command,
       cwd,
+      requestId,
       risk,
-      status: result.status === 0 ? "executed" : "failed",
-      exitCode: result.status ?? undefined,
-      stdout: result.stdout ?? "",
-      stderr: result.stderr ?? "",
-      message: result.error?.message,
-      createdAt: new Date().toISOString()
-    };
+      "approval_required",
+      buildDeferredExecutionMessage(command, "Command recorded but not executed by the Node runtime.")
+    );
   }
 
   runInBackground(sessionId: string, command: string, cwd: string, requestId?: string): CommandExecutionRecord {
     const risk = classifyCommandRisk(command, cwd);
     if (risk !== "safe") {
-      return {
-        id: `cmd_exec_${randomUUID()}`,
+      return buildRecord(
         sessionId,
-        requestId,
-        autoRun: true,
         command,
         cwd,
-        risk,
-        status: risk === "dangerous" ? "blocked" : "approval_required",
-        exitCode: undefined,
-        stdout: "",
-        stderr: "",
-        message:
-          risk === "dangerous"
-            ? "Dangerous command blocked by runtime policy"
-            : "Only safe commands can start in the background automatically.",
-        createdAt: new Date().toISOString()
-      };
-    }
-
-    if (process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS === "1") {
-      return {
-        id: `cmd_exec_${randomUUID()}`,
-        sessionId,
         requestId,
-        autoRun: true,
-        command,
-        cwd,
         risk,
-        status: "executed",
-        exitCode: 0,
-        stdout: "",
-        stderr: "",
-        message: "Skipped background process launch because ORCHCODE_DISABLE_BACKGROUND_COMMANDS=1.",
-        createdAt: new Date().toISOString()
-      };
+        risk === "dangerous" ? "blocked" : "approval_required",
+        risk === "dangerous"
+          ? "Dangerous background command blocked by runtime policy before execution."
+          : buildDeferredExecutionMessage(command, "Background command recorded but not executed.")
+      );
     }
 
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      detached: true,
-      stdio: "ignore"
-    });
-    child.unref();
-
-    return {
-      id: `cmd_exec_${randomUUID()}`,
+    return buildRecord(
       sessionId,
-      requestId,
-      autoRun: true,
       command,
       cwd,
+      requestId,
       risk,
-      status: "executed",
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      message: `Started background process ${child.pid ?? "unknown"}.`,
-      createdAt: new Date().toISOString()
-    };
+      "approval_required",
+      buildDeferredExecutionMessage(command, "Background command recorded but not executed.")
+    );
   }
+}
+
+function buildRecord(
+  sessionId: string,
+  command: string,
+  cwd: string,
+  requestId: string | undefined,
+  risk: CommandExecutionRecord["risk"],
+  status: CommandExecutionRecord["status"],
+  message: string
+): CommandExecutionRecord {
+  return {
+    id: `cmd_exec_${randomUUID()}`,
+    sessionId,
+    requestId,
+    autoRun: false,
+    command,
+    cwd,
+    risk,
+    status,
+    exitCode: undefined,
+    stdout: "",
+    stderr: "",
+    message,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildDeferredExecutionMessage(command: string, summary: string) {
+  const normalized = command.trim().toLowerCase();
+  const notes = ["Rust terminal approval/execution is still required."];
+  if (looksLikeNetworkCommand(normalized)) {
+    notes.push("Network access was detected.");
+  }
+  if (looksLikeBackgroundCommand(normalized)) {
+    notes.push("Background or long-running process behavior was detected.");
+  }
+  return `${summary} ${notes.join(" ")}`.trim();
 }

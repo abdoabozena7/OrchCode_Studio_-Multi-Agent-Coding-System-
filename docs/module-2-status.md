@@ -31,8 +31,8 @@
   - `patch.propose`
   - `patch.validate`
 - Desktop UI integration for mock runtime sessions, lifecycle status, plan, tasks, tool calls, patch proposals, command requests, proposed diff, and actual git diff.
-- Patch approval/rejection state exists. Approval does not write files.
-- Runtime JSON persistence for sessions, tool calls, patch proposals, and command requests under `.orchcode-agent-runtime`.
+- Patch approval/rejection state exists. Approved patches can now be applied by the Rust desktop command path after operator review.
+- Runtime sessions are still in-memory only. The old JSON persistence description is no longer accurate, and `SessionManager.load()` does not restore sessions after restart.
 - Tests for mock LLM, tool registry, command policy integration, patch validation, and agent lifecycle.
 
 ## Mock Mode
@@ -60,15 +60,15 @@ If Rust/Cargo is not installed, the Tauri desktop command will fail before openi
 ## Current Limitations
 
 - Runtime workspace tools are temporary Node-side read-only tools with their own path guards. Module 3 should move these behind a Rust/Tauri sidecar bridge or command API.
-- Patch application is not implemented. Approval updates runtime state only.
+- Patch application is implemented on the Rust desktop side, but runtime state still depends on the frontend reporting the Rust result back to the TypeScript runtime.
 - SSE endpoint exists, but the desktop UI currently refreshes session state after actions instead of maintaining a live stream.
-- Runtime persistence is JSON, not the Module 1 Rust SQLite database.
+- Runtime persistence is not durable yet. The desktop mirrors events into Rust SQLite, but runtime sessions and task state are not restored from that store.
 - Command requests are not executed by the runtime. The UI routes safe command execution through the Rust terminal command.
 - Real LLM mode is a skeleton.
 
 ## Module 3 Prerequisites
 
-- Add a runtime-to-Rust bridge for workspace tools, patch validation/application, and command execution.
-- Replace JSON runtime persistence with the SQLite foundation or a shared storage boundary.
+- Add a runtime-to-Rust bridge for workspace tools and command execution that removes the frontend from the reconciliation path.
+- Replace in-memory runtime state with SQLite-backed restore/replay or another shared durable boundary.
 - Expand runtime events to live UI streaming.
 - Add multi-agent orchestration while reusing the session, tool call, patch proposal, and command request protocol types.

@@ -23,16 +23,22 @@ import {
 } from "lucide-react";
 import type {
   AccessProfile,
+  AgentRun,
   AppEvent,
   AgentRuntimeSession,
   AgentWorkStatus,
+  CommandRequest,
   CommandResult,
+  DecisionRecord,
+  EvidenceRef,
   FileEntry,
   GitStatus,
   ModelInfo,
   ModelProviderConfig,
   ModelProviderType,
   PatchChangeStats,
+  RunMode,
+  RunPhase,
   SafetySettings,
   WorkspaceInfo
 } from "@orchcode/protocol";
@@ -43,11 +49,16 @@ import {
   createRuntimeSession,
   getRuntimeSession,
   rejectRuntimePatch,
+  reportRuntimeCommandResult,
+  reportRuntimePatchApplyResult,
   runRuntimeTurn,
   subscribeRuntimeEvents
 } from "../lib/agentRuntime";
 import {
   clearModelProviderConfig,
+  appendSessionEvent,
+  applyRuntimePatch,
+  createRuntimeRun,
   getGitDiff,
   getGitStatus,
   getModelProviderConfig,
@@ -56,7 +67,10 @@ import {
   openWorkspace,
   openExternalTarget,
   pickWorkspaceDirectory,
+  executeApprovedCommand,
   runWorkspaceCommand,
+  upsertAgentRun,
+  upsertOrchestrationRun,
   saveModelProviderConfig,
   validateModelProvider,
   type ModelProviderConfigInput
@@ -160,9 +174,9 @@ const accessOptions: AccessOption[] = [
     description: "Auto-run safe validation, but still stop before opening previews."
   },
   {
-    value: "full_access",
-    label: "Full access",
-    description: "Auto-apply validated patches, then ask before running or opening the result."
+    value: "bounded_autonomy",
+    label: "Bounded autonomy",
+    description: "Auto-run safe validation, but patch apply and command execution still depend on explicit Rust authority."
   },
   {
     value: "custom_config",
@@ -187,12 +201,13 @@ export function App() {
   const [terminalResult, setTerminalResult] = useState<CommandResult | null>(null);
   const [prompt, setPrompt] = useState("");
   const [runtimeSession, setRuntimeSession] = useState<AgentRuntimeSession | null>(null);
+  const [runtimeSessionToken, setRuntimeSessionToken] = useState("");
   const [thinkFirst, setThinkFirst] = useState(false);
-  const [accessProfile, setAccessProfile] = useState<AccessProfile>("full_access");
+  const [accessProfile, setAccessProfile] = useState<AccessProfile>("default_permissions");
   const [accessMenuOpen, setAccessMenuOpen] = useState(false);
   const [safetySettings, setSafetySettings] = useState<SafetySettings>({
     ...defaultSafetySettings,
-    ...accessProfileDefaults("full_access")
+    ...accessProfileDefaults("default_permissions")
   });
   const [providerConfig, setProviderConfig] = useState<ModelProviderConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -207,6 +222,7 @@ export function App() {
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
   const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
+  const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
 
   useEffect(() => {
     void (async () => {
@@ -313,7 +329,7 @@ export function App() {
   const hasSessionView = Boolean(runtimeSession);
 
   const sessionSummary = runtimeSession
-    ? humanSessionStatus(runtimeSession, agentBusy)
+    ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState)
     : workspace
       ? `Connected to ${workspace.name}`
       : "Open a workspace to begin";
@@ -341,6 +357,7 @@ export function App() {
     runtimeEventUnsubscribeRef.current?.();
     runtimeEventUnsubscribeRef.current = null;
     setRuntimeSession(null);
+    setRuntimeConnectionState("connected");
     const nextWorkspace = await openWorkspace(normalizedPath);
     setWorkspacePath(normalizedPath);
     setWorkspace(nextWorkspace);
@@ -353,10 +370,16 @@ export function App() {
     const workspaceEntry = (options?.recentWorkspaceEntries ?? recentWorkspaces).find((entry) => normalizeWorkspacePath(entry.path) === normalizedPath);
     const recentSessionId = workspaceEntry?.lastSessionId;
     if (!recentSessionId) return;
+    if (!runtimeSessionToken) {
+      if (!options?.silent) {
+        setMessage(`Workspace open: ${nextWorkspace.name}. Previous session history is available, but live restore is unavailable after restart.`);
+      }
+      return;
+    }
     try {
       suppressPreviewOpenRef.current = true;
-      const restoredSession = await getRuntimeSession(recentSessionId);
-      subscribeToRuntimeSession(recentSessionId);
+      const restoredSession = await getRuntimeSession(recentSessionId, runtimeSessionToken || undefined);
+      subscribeToRuntimeSession(recentSessionId, runtimeSessionToken || undefined);
       setRuntimeSession(restoredSession);
     } catch {
       setRecentSessions((current) => {
@@ -401,11 +424,18 @@ export function App() {
     }
   }
 
-  function subscribeToRuntimeSession(sessionId: string) {
+  function subscribeToRuntimeSession(sessionId: string, sessionToken?: string) {
     runtimeEventUnsubscribeRef.current?.();
-    runtimeEventUnsubscribeRef.current = subscribeRuntimeEvents(sessionId, {
-      onSession: setRuntimeSession,
+    setRuntimeConnectionState("connected");
+    runtimeEventUnsubscribeRef.current = subscribeRuntimeEvents(sessionId, sessionToken, {
+      onSession: (session) => {
+        setRuntimeConnectionState("connected");
+        setRuntimeSession(session);
+        void mirrorRuntimeSession(session);
+      },
       onEvent: (event: AppEvent) => {
+        setRuntimeConnectionState("connected");
+        void appendSessionEvent("sessionId" in event ? event.sessionId : sessionId, event.type, event as unknown as Record<string, unknown>);
         if (event.type === "runtime.progress.updated") {
           setMessage(event.progress.summary);
         }
@@ -414,9 +444,27 @@ export function App() {
         }
       },
       onError: () => {
-        setMessage("Live updates disconnected. I will refresh the session when the run finishes.");
+        setRuntimeConnectionState("disconnected");
+        setMessage("Live updates disconnected. Session state may be stale until the next refresh or runtime completion.");
       }
     });
+  }
+
+  async function mirrorRuntimeSession(session: AgentRuntimeSession) {
+    try {
+      await upsertOrchestrationRun(session);
+      for (const run of session.orchestration?.agentRuns ?? []) {
+        await upsertAgentRun(session.id, {
+          agentId: run.id,
+          roleTitle: run.roleTitle ?? run.role ?? run.agentName,
+          lifecycleStage: run.lifecycleStage ?? session.lifecycleStage,
+          artifactJson: run.artifactJson,
+          status: run.status
+        });
+      }
+    } catch {
+      // Runtime remains live even if local mirroring has a transient SQLite failure.
+    }
   }
 
   async function handleSelectRecentWorkspace(entry: RecentWorkspaceEntry) {
@@ -429,11 +477,15 @@ export function App() {
   }
 
   async function handleRestoreRecentSession(entry: RecentSessionEntry) {
+    if (!runtimeSessionToken) {
+      setMessage("This saved session is history only. Live reconnect requires an active runtime token from this app session.");
+      return;
+    }
     try {
       await activateWorkspace(entry.workspacePath, { restoreSession: false });
       suppressPreviewOpenRef.current = true;
-      subscribeToRuntimeSession(entry.id);
-      setRuntimeSession(await getRuntimeSession(entry.id));
+      subscribeToRuntimeSession(entry.id, runtimeSessionToken || undefined);
+      setRuntimeSession(await getRuntimeSession(entry.id, runtimeSessionToken || undefined));
       setSidebarCollapsed(false);
       setMessage(`Restored session: ${entry.title}`);
     } catch (error) {
@@ -469,31 +521,58 @@ export function App() {
         runtimeSession &&
         workspace &&
         runtimeSession.workspacePath === workspace.path;
+      let sessionToken = runtimeSessionToken || undefined;
       const sessionId = canReuseSession
         ? runtimeSession.id
-        : (
-            await createRuntimeSession({
-              workspacePath: workspace.path,
-              mode: "mock",
-              executionMode: "auto_mode",
-              accessProfile,
-              thinkFirst,
-              safetySettings,
-              userPrompt: input
-            })
-          ).sessionId;
-      subscribeToRuntimeSession(sessionId);
-      setRuntimeSession(await getRuntimeSession(sessionId));
+        : await (async () => {
+            const trustProfile = accessProfile === "auto_review" || accessProfile === "bounded_autonomy" ? "trusted_internal" : "strict_gated";
+            const rustRun = await createRuntimeRun(input, trustProfile);
+            sessionToken = rustRun.sessionToken;
+            setRuntimeSessionToken(rustRun.sessionToken);
+            const wantsDemoProvider = /\b(demo|mock)\b/i.test(input);
+            const sanitizedProvider =
+              providerConfig && providerConfig.providerType === "ollama"
+                ? {
+                    providerType: providerConfig.providerType,
+                    providerName: providerConfig.providerName,
+                    baseUrl: providerConfig.baseUrl,
+                    selectedModel: providerConfig.selectedModel,
+                    isValid: providerConfig.isValid
+                  }
+                : undefined;
+            if (!wantsDemoProvider && (!sanitizedProvider?.isValid || sanitizedProvider.providerType !== "ollama")) {
+              throw new Error("Configure a valid local Ollama provider before starting a real coding run. Recommended models: qwen2.5-coder:7b or llama3:8b.");
+            }
+            return (
+              await createRuntimeSession({
+                workspacePath: workspace.path,
+                mode: wantsDemoProvider ? "demo_mock" : "real_provider",
+                trustProfile,
+                providerConfig: sanitizedProvider,
+                sessionToken: rustRun.sessionToken,
+                sessionTokenExpiresAt: rustRun.sessionTokenExpiresAt,
+                executionMode: "auto_mode",
+                accessProfile,
+                thinkFirst,
+                safetySettings,
+                userPrompt: input
+              })
+            ).sessionId;
+          })();
+      subscribeToRuntimeSession(sessionId, sessionToken);
+      setRuntimeSession(await getRuntimeSession(sessionId, sessionToken));
       setPrompt("");
-      await runRuntimeTurn(sessionId, input);
-      const nextSession = await getRuntimeSession(sessionId);
+      await runRuntimeTurn(sessionId, input, sessionToken);
+      const nextSession = await getRuntimeSession(sessionId, sessionToken);
       setRuntimeSession(nextSession);
+      await mirrorRuntimeSession(nextSession);
+      await autoRunTrustedSafeCommands(nextSession, normalizedInput);
       await refreshWorkspaceState();
       setMessage(
         queuedMode === "steer"
           ? "Steer request completed."
           : nextSession.nextAction?.message ??
-            (nextSession.status === "needs_approval" ? "Session is ready for review." : "Session updated.")
+            (nextSession.status === "needs_approval" ? "Session is waiting for operator review." : "Session updated.")
       );
     } catch (error) {
       setMessage(String(error));
@@ -513,7 +592,7 @@ export function App() {
   async function refreshRuntimeSession() {
     if (!runtimeSession) return;
     try {
-      setRuntimeSession(await getRuntimeSession(runtimeSession.id));
+      setRuntimeSession(await getRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined));
     } catch (error) {
       setMessage(String(error));
     }
@@ -522,10 +601,41 @@ export function App() {
   async function handleApprovePatch(patchId: string) {
     if (!runtimeSession) return;
     try {
-      const result = await approveRuntimePatch(runtimeSession.id, patchId);
+      const result = await approveRuntimePatch(runtimeSession.id, patchId, runtimeSessionToken || undefined);
       setMessage(result.message);
       await refreshRuntimeSession();
     } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleApplyPatch(patchId: string) {
+    if (!runtimeSession) return;
+    try {
+      const applied = await applyRuntimePatch(runtimeSession.id, patchId);
+      const updated = await reportRuntimePatchApplyResult(
+        runtimeSession.id,
+        patchId,
+        { status: "applied", message: applied.message },
+        runtimeSessionToken || undefined
+      );
+      setRuntimeSession(updated);
+      setMessage(applied.message);
+      await refreshRuntimeSession();
+      await refreshWorkspaceState();
+    } catch (error) {
+      try {
+        const updated = await reportRuntimePatchApplyResult(
+          runtimeSession.id,
+          patchId,
+          { status: "failed", message: String(error) },
+          runtimeSessionToken || undefined
+        );
+        setRuntimeSession(updated);
+      } catch {
+        // Keep the original apply error visible even if runtime reporting also fails.
+      }
+      await refreshRuntimeSession();
       setMessage(String(error));
     }
   }
@@ -533,7 +643,7 @@ export function App() {
   async function handleRejectPatch(patchId: string) {
     if (!runtimeSession) return;
     try {
-      const result = await rejectRuntimePatch(runtimeSession.id, patchId);
+      const result = await rejectRuntimePatch(runtimeSession.id, patchId, runtimeSessionToken || undefined);
       setMessage(result.message);
       await refreshRuntimeSession();
     } catch (error) {
@@ -541,11 +651,96 @@ export function App() {
     }
   }
 
-  async function handleRunSuggestedCommand(command: string) {
+  async function runCommandRequest(session: AgentRuntimeSession, request: CommandRequest, autoRun = false) {
+    try {
+      const result = await executeApprovedCommand(session.id, request.id, request.command, {
+        blockDangerousCommands: safetySettings.blockDangerousCommands,
+        redactSecrets: safetySettings.redactSecrets,
+        allowNetworkCommands: safetySettings.allowNetworkCommands
+      });
+      const updated = await reportRuntimeCommandResult(
+        session.id,
+        request.id,
+        {
+          command: result.command,
+          cwd: result.cwd,
+          risk: result.risk,
+          status: result.status,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          message: result.message,
+          autoRun
+        },
+        runtimeSessionToken || undefined
+      );
+      setRuntimeSession((current) => current && current.id === session.id ? updated : current);
+      return result;
+    } catch (error) {
+      const updated = await reportRuntimeCommandResult(
+        session.id,
+        request.id,
+        {
+          command: request.command,
+          cwd: request.cwd,
+          risk: request.risk,
+          status: "failed",
+          stdout: "",
+          stderr: String(error),
+          message: String(error),
+          autoRun
+        },
+        runtimeSessionToken || undefined
+      );
+      setRuntimeSession((current) => current && current.id === session.id ? updated : current);
+      throw error;
+    }
+  }
+
+  async function autoRunTrustedSafeCommands(session: AgentRuntimeSession, input: string) {
+    if (session.trustProfile !== "trusted_internal" || !safetySettings.autoRunSafeCommands) return;
+    const runnable = session.commandRequests.filter((request) => request.risk === "safe" && (request.status === "requested" || request.status === "approved"));
+    if (!runnable.length) return;
+    setBottomView("terminal");
+    for (const request of runnable) {
+      setTerminalCommand(request.command);
+      const result = await runCommandRequest(session, request, true);
+      setTerminalResult(result);
+    }
+    if (session.previewRecommendation && /\b(open|launch|run|start|serve)\b/i.test(input)) {
+      await handleOpenPreview(session.previewRecommendation);
+    }
+  }
+
+  async function handleRunPendingCommands() {
+    if (!runtimeSession) return;
+    const runnable = runtimeSession.commandRequests.filter((request) => request.status === "requested" || request.status === "approved");
+    if (!runnable.length) {
+      setMessage("No pending command requests.");
+      return;
+    }
+    setBottomView("terminal");
+    try {
+      for (const request of runnable) {
+        setTerminalCommand(request.command);
+        const result = await runCommandRequest(runtimeSession, request);
+        setTerminalResult(result);
+      }
+      setMessage("Pending commands were sent through Rust.");
+      await refreshWorkspaceState();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleRunSuggestedCommand(command: string, requestId?: string) {
     setTerminalCommand(command);
     setBottomView("terminal");
     try {
-      const result = await runWorkspaceCommand(command);
+      const request = runtimeSession?.commandRequests.find((item) => item.id === requestId);
+      const result = runtimeSession && request
+        ? await runCommandRequest(runtimeSession, request)
+        : await runWorkspaceCommand(command);
       setTerminalResult(result);
       setMessage(result.message ?? `Command ${result.status}.`);
       await refreshWorkspaceState();
@@ -568,6 +763,7 @@ export function App() {
     setQueuedPrompts([]);
     setBottomView("none");
     setTerminalResult(null);
+    setRuntimeConnectionState("connected");
     setMessage("Select a workspace and start from the composer.");
   }
 
@@ -646,7 +842,8 @@ export function App() {
     }
   }
 
-  async function handleOpenPreview(preview = runtimeSession?.previewRecommendation) {
+  async function handleOpenPreview(preview?: AgentRuntimeSession["previewRecommendation"]) {
+    preview ??= runtimeSession?.previewRecommendation;
     if (!preview || !workspace) return;
     const target =
       preview.type === "url"
@@ -714,7 +911,7 @@ export function App() {
               <button className="project-item active-project" onClick={handleProjectClick}>
                 <div>
                   <strong>{workspace.name}</strong>
-                  <span>{runtimeSession ? humanSessionStatus(runtimeSession, agentBusy) : "Workspace ready"}</span>
+                  <span>{runtimeSession ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState) : "Workspace ready"}</span>
                 </div>
                 <small>{gitStatus?.branch ?? "local"}</small>
               </button>
@@ -726,7 +923,7 @@ export function App() {
               <button className="project-item" onClick={() => setActivityOpen(true)}>
                 <div>
                   <strong>{sessionTitle}</strong>
-                  <span>{runtimeSession.lifecycleStage}</span>
+                  <span>{humanizeLifecycleStage(runtimeSession.lifecycleStage)}</span>
                 </div>
                 <small>{runtimeSession.tasks.length}</small>
               </button>
@@ -740,7 +937,11 @@ export function App() {
                   <button key={entry.path} className="project-item" onClick={() => void handleSelectRecentWorkspace(entry)}>
                     <div>
                       <strong>{entry.name}</strong>
-                      <span>{lastSession?.status ?? "Recent workspace"}</span>
+                      <span>
+                        {lastSession
+                          ? `${humanizeRuntimeStatus(lastSession.status)}${!runtimeSessionToken ? " | history only" : ""}`
+                          : "Recent workspace"}
+                      </span>
                     </div>
                     <small>{shortenPath(entry.path)}</small>
                   </button>
@@ -751,10 +952,20 @@ export function App() {
               .filter((entry) => entry.id !== runtimeSession?.id)
               .slice(0, 4)
               .map((entry) => (
-                <button key={entry.id} className="project-item" onClick={() => void handleRestoreRecentSession(entry)}>
+                <button
+                  key={entry.id}
+                  className="project-item"
+                  disabled={!runtimeSessionToken}
+                  onClick={() => void handleRestoreRecentSession(entry)}
+                  title={runtimeSessionToken ? "Try live reconnect" : "History only"}
+                >
                   <div>
                     <strong>{entry.title}</strong>
-                    <span>{entry.status}</span>
+                    <span>
+                      {runtimeSessionToken
+                        ? `${humanizeRuntimeStatus(entry.status)} | reconnect may work in this app session`
+                        : `${humanizeRuntimeStatus(entry.status)} | history only, not reconnectable after restart`}
+                    </span>
                   </div>
                   <small>{entry.workspaceName}</small>
                 </button>
@@ -811,10 +1022,13 @@ export function App() {
             {runtimeSession ? (
               <ThreadFeed
                 session={runtimeSession}
+                connectionState={runtimeConnectionState}
+                canReconnect={Boolean(runtimeSessionToken)}
                 onOpenActivity={() => setActivityOpen(true)}
                 onOpenDiff={() => setBottomView("diff")}
                 onQuickReply={submitPrompt}
-                onOpenPreview={handleOpenPreview}
+                onOpenPreview={() => void handleOpenPreview()}
+                onRunPendingCommands={() => void handleRunPendingCommands()}
               />
             ) : null}
 
@@ -828,7 +1042,7 @@ export function App() {
                   }
                 }}
                 onKeyDown={handlePromptKeyDown}
-                placeholder="Ask the agent to inspect, plan, explain, or prepare a patch..."
+                placeholder="Ask local Codex to create or edit a project with Ollama..."
                 rows={4}
               />
 
@@ -949,7 +1163,7 @@ export function App() {
                     ) : null}
                   </div>
                   <pre>
-                    {terminalResult ? formatTerminalResult(terminalResult) : "Safe commands execute here. Medium commands require approval. Dangerous commands stay blocked."}
+                    {terminalResult ? formatTerminalResult(terminalResult) : "Manual console for safe commands. Medium-risk runtime commands pause for approval. Dangerous commands remain blocked."}
                   </pre>
                 </div>
               ) : (
@@ -989,9 +1203,13 @@ export function App() {
                   <dt>ID</dt>
                   <dd>{runtimeSession.id}</dd>
                   <dt>Status</dt>
-                  <dd>{runtimeSession.status}</dd>
+                  <dd>{humanizeRuntimeStatus(runtimeSession.status)}</dd>
                   <dt>Stage</dt>
-                  <dd>{runtimeSession.lifecycleStage}</dd>
+                  <dd>{humanizeLifecycleStage(runtimeSession.lifecycleStage)}</dd>
+                  <dt>Connection</dt>
+                  <dd>{runtimeConnectionState === "connected" ? "Live updates connected" : "Live updates disconnected; state may be stale"}</dd>
+                  <dt>Restore</dt>
+                  <dd>{runtimeSessionToken ? "This app session can still attempt reconnects." : "History only after restart; no guaranteed live restore path."}</dd>
                 </dl>
               ) : (
                 <p className="muted">No active session.</p>
@@ -1030,11 +1248,14 @@ export function App() {
                 runtimeSession.patchProposals.map((proposal) => (
                   <div className="proposal-card" key={proposal.id}>
                     <strong>{proposal.title}</strong>
-                    <span>{proposal.status} | {proposal.riskLevel} risk</span>
+                    <span>{humanizePatchStatus(proposal.status)} | {proposal.riskLevel} risk</span>
                     <p>{proposal.summary}</p>
                     <div className="proposal-actions">
                       <button onClick={() => handleApprovePatch(proposal.id)} disabled={proposal.status !== "proposed"}>
-                        Approve
+                        Approve patch write
+                      </button>
+                      <button onClick={() => handleApplyPatch(proposal.id)} disabled={proposal.status !== "approved"}>
+                        Apply approved patch
                       </button>
                       <button onClick={() => handleRejectPatch(proposal.id)} disabled={proposal.status !== "proposed"}>
                         Reject
@@ -1052,18 +1273,18 @@ export function App() {
                 runtimeSession.commandRequests.map((request) => (
                   <div className="proposal-card" key={request.id}>
                     <strong>{request.command}</strong>
-                    <span>{request.risk} | {request.status}</span>
+                    <span>{request.risk} | {humanizeCommandRequestStatus(request.status)}</span>
                     <p>{request.reason}</p>
                     {request.status === "executed" ? (
-                      <button disabled>Ran automatically</button>
+                      <button disabled>Executed by Rust</button>
                     ) : request.status === "blocked" ? (
                       <button disabled>Blocked by policy</button>
                     ) : (
                       <button
-                        onClick={() => handleRunSuggestedCommand(request.command)}
+                        onClick={() => handleRunSuggestedCommand(request.command, request.id)}
                         disabled={request.risk !== "safe"}
                       >
-                        Run safe command
+                        Run with Rust
                       </button>
                     )}
                   </div>
@@ -1160,18 +1381,39 @@ function DrawerSection({
 
 function ThreadFeed({
   session,
+  connectionState,
+  canReconnect,
   onOpenActivity,
   onOpenDiff,
   onQuickReply,
-  onOpenPreview
+  onOpenPreview,
+  onRunPendingCommands
 }: {
   session: AgentRuntimeSession;
+  connectionState: "connected" | "disconnected";
+  canReconnect: boolean;
   onOpenActivity: () => void;
   onOpenDiff: () => void;
   onQuickReply: (message: string) => void | Promise<void>;
   onOpenPreview: () => void;
+  onRunPendingCommands: () => void;
 }) {
   const patchStats = getSessionPatchStats(session);
+  const agentContracts = getAgentContracts(session);
+  const [selectedAgentId, setSelectedAgentId] = useState(agentContracts[0]?.id ?? "");
+
+  useEffect(() => {
+    if (!agentContracts.length) {
+      setSelectedAgentId("");
+      return;
+    }
+    if (!agentContracts.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(agentContracts[0]?.id ?? "");
+    }
+  }, [agentContracts, selectedAgentId]);
+
+  const selectedAgent = agentContracts.find((agent) => agent.id === selectedAgentId) ?? agentContracts[0];
+
   return (
     <div className="thread-feed">
       {session.messages.map((message) => (
@@ -1184,15 +1426,25 @@ function ThreadFeed({
         </div>
       ))}
 
+      <RunHeaderCard session={session} patchStats={patchStats} />
+      <ProgressChecklistCard session={session} />
+      <AgentStripCard agents={agentContracts} selectedAgentId={selectedAgentId} onSelectAgent={setSelectedAgentId} />
+      <AgentDetailCard agent={selectedAgent} />
+      <OperatorStateCard session={session} connectionState={connectionState} canReconnect={canReconnect} />
+      <EvidenceLedgerCard records={session.decisionLedger ?? []} />
       <ProgressTimeline session={session} />
+      <ReasoningSummaryCard session={session} />
+      <ToolIntentCard session={session} />
+      <ArtifactCard session={session} onOpenDiff={onOpenDiff} onOpenPreview={onOpenPreview} />
       <WorkingTeamCard session={session} onOpenActivity={onOpenActivity} />
       <CodeChangesCard session={session} patchStats={patchStats} onOpenActivity={onOpenActivity} onOpenDiff={onOpenDiff} />
+      <ReviewGateCard session={session} />
       <RunResultCard session={session} onOpenPreview={onOpenPreview} />
       <RunSummaryCard session={session} />
 
       {session.nextAction?.kind === "confirm_plan" ? (
         <ActionCard
-          title="Plan ready"
+          title="Plan review required"
           message={session.nextAction.message}
           actions={
             <>
@@ -1205,8 +1457,8 @@ function ThreadFeed({
 
       {session.nextAction?.kind === "confirm_preview" ? (
         <ActionCard
-          title="Done"
-          message={session.nextAction.message}
+          title="Preview launch still pending"
+          message={`${session.nextAction.message} Nothing has been launched yet.`}
           actions={
             <>
               <button onClick={() => void onQuickReply("Run it now.")}>Run it now</button>
@@ -1219,13 +1471,29 @@ function ThreadFeed({
 
       {session.nextAction?.kind === "preview_ready" ? (
         <ActionCard
-          title="Preview ready"
-          message={session.nextAction.message}
+          title="Preview can be opened"
+          message={`${session.nextAction.message} Opening it is still a separate operator action.`}
           actions={
-            <button onClick={onOpenPreview}>
+            <button onClick={() => onOpenPreview()}>
               <Globe size={14} />
               Open preview
             </button>
+          }
+        />
+      ) : null}
+
+      {session.nextAction?.kind === "approve_commands" ? (
+        <ActionCard
+          title="Runtime command approval required"
+          message={`${session.nextAction.message} Commands have not run until you approve execution.`}
+          actions={
+            <>
+              <button onClick={() => onRunPendingCommands()}>
+                <Play size={14} />
+                Run pending commands in Rust
+              </button>
+              <button onClick={onOpenActivity}>Details</button>
+            </>
           }
         />
       ) : null}
@@ -1246,6 +1514,196 @@ function CopyMessageButton({ text }: { text: string }) {
     <button className="thread-copy-button" onClick={() => void handleCopy()} title="Copy message">
       <Copy size={14} />
     </button>
+  );
+}
+
+function RunHeaderCard({
+  session,
+  patchStats
+}: {
+  session: AgentRuntimeSession;
+  patchStats: PatchChangeStats[];
+}) {
+  const totals = patchStats.reduce(
+    (acc, file) => ({
+      files: acc.files + 1,
+      additions: acc.additions + file.added,
+      deletions: acc.deletions + file.removed
+    }),
+    { files: 0, additions: 0, deletions: 0 }
+  );
+  return (
+    <section className="run-card run-header-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Run objective</strong>
+          <span>{session.userPrompt}</span>
+        </div>
+      </div>
+      <div className="header-metric-grid">
+        <div><strong>Mode</strong><span>{humanizeRunMode(session.runMode)}</span></div>
+        <div><strong>Lifecycle</strong><span>{humanizeLifecycleStage(session.lifecycleStage)}</span></div>
+        <div><strong>Risk</strong><span>{inferSessionRisk(session)}</span></div>
+        <div><strong>Changed</strong><span>{formatPatchTotalsLabel(totals.files, totals.additions, totals.deletions)}</span></div>
+        <div><strong>Verification</strong><span>{describeVerificationState(session)}</span></div>
+        <div><strong>Review</strong><span>{describeReviewReadiness(session)}</span></div>
+      </div>
+    </section>
+  );
+}
+
+function ProgressChecklistCard({ session }: { session: AgentRuntimeSession }) {
+  const phases = getDisplayRunPhases(session);
+  return (
+    <section className="run-card timeline-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Run checklist</strong>
+          <span>Deep local work is shown as explicit phases instead of hidden turns.</span>
+        </div>
+      </div>
+      <div className="timeline-list">
+        {phases.map((phase) => (
+          <div key={phase.id} className={`timeline-item ${phase.status === "active" ? "running" : phase.status}`}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>{humanizeRunPhase(phase.id)}</strong>
+              <span>{phase.summary}</span>
+              {typeof phase.evidenceCount === "number" ? <small>{phase.evidenceCount} evidence item(s)</small> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AgentStripCard({
+  agents,
+  selectedAgentId,
+  onSelectAgent
+}: {
+  agents: AgentContractView[];
+  selectedAgentId: string;
+  onSelectAgent: (agentId: string) => void;
+}) {
+  if (!agents.length) return null;
+  return (
+    <section className="run-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Agent strip</strong>
+          <span>Each chip reflects a real reported agent or the current local coordinator.</span>
+        </div>
+      </div>
+      <div className="agent-strip">
+        {agents.map((agent) => (
+          <button
+            key={agent.id}
+            className={`agent-chip ${selectedAgentId === agent.id ? "selected" : ""} ${agent.status}`}
+            onClick={() => onSelectAgent(agent.id)}
+          >
+            <strong>{agent.name}</strong>
+            <span>{agent.role}</span>
+            <small>{humanizeAgentStatus(agent.status)} | {agent.currentAction}</small>
+            <small>{agent.diffLabel}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AgentDetailCard({ agent }: { agent?: AgentContractView }) {
+  if (!agent) return null;
+  return (
+    <section className="run-card">
+      <div className="run-card-header">
+        <div>
+          <strong>{agent.name}</strong>
+          <span>{agent.role}</span>
+        </div>
+      </div>
+      <div className="agent-detail-grid">
+        <div><strong>Objective</strong><span>{agent.objective}</span></div>
+        <div><strong>Current action</strong><span>{agent.currentAction}</span></div>
+        <div><strong>Owned paths</strong><span>{agent.ownedPaths.length ? agent.ownedPaths.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Forbidden paths</strong><span>{agent.forbiddenPaths.length ? agent.forbiddenPaths.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Changed files</strong><span>{agent.changedFiles.length ? agent.changedFiles.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Commands</strong><span>{agent.commandsRun.length ? agent.commandsRun.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Risk</strong><span>{agent.riskLevel}</span></div>
+        <div><strong>Blockers</strong><span>{agent.blockers.length ? agent.blockers.join(", ") : "None reported."}</span></div>
+      </div>
+      <div className="timeline-list compact-list">
+        {agent.recentActions.length ? agent.recentActions.map((action, index) => (
+          <div className="timeline-item completed" key={`${agent.id}-${index}`}>
+            <span className="timeline-dot" />
+            <div><span>{action}</span></div>
+          </div>
+        )) : (
+          <div className="timeline-item running">
+            <span className="timeline-dot" />
+            <div><span>Not reported yet.</span></div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EvidenceLedgerCard({ records }: { records: DecisionRecord[] }) {
+  if (!records.length) return null;
+  return (
+    <section className="run-card timeline-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Evidence ledger</strong>
+          <span>Findings, decisions, and uncertainty are visible without exposing hidden chain-of-thought.</span>
+        </div>
+      </div>
+      <div className="timeline-list">
+        {records.slice(-8).map((record) => (
+          <div className="timeline-item completed" key={record.id}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>{humanizeDecisionCategory(record.category)} | {record.createdByAgent}</strong>
+              <span>{record.finding}</span>
+              <small>Decision: {record.decision}</small>
+              <small>Evidence: {describeEvidenceRefs(record.evidenceRefs)} | Files: {record.linkedFiles.length ? record.linkedFiles.join(", ") : "none"}</small>
+              {record.uncertainty ? <small>Uncertainty: {record.uncertainty}</small> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReviewGateCard({ session }: { session: AgentRuntimeSession }) {
+  const gate = session.reviewGate;
+  if (!gate) return null;
+  return (
+    <section className="run-card summary-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Review gate</strong>
+          <span>{gate.summary}</span>
+        </div>
+      </div>
+      <div className="summary-list">
+        <div className="summary-line compact">Total diff: {formatPatchTotalsLabel(gate.totalFilesChanged, gate.totalAdditions, gate.totalDeletions)}</div>
+        <div className="summary-line compact">Recommendation: {humanizeReviewRecommendation(gate.recommendation)}</div>
+        <div className="summary-line compact">Risky areas: {gate.riskyAreas.length ? gate.riskyAreas.join(", ") : "None reported."}</div>
+        <div className="summary-line compact">Unresolved blockers: {gate.unresolvedBlockers.length ? gate.unresolvedBlockers.join(" | ") : "None."}</div>
+        {gate.changesByAgent.length ? gate.changesByAgent.map((entry) => (
+          <div className="summary-line compact" key={entry.agentName}>
+            {entry.agentName}: {formatPatchTotalsLabel(entry.fileCount, entry.additions, entry.deletions)}
+          </div>
+        )) : (
+          <div className="summary-line compact">Agent attribution: Not reported yet.</div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1288,6 +1746,129 @@ function ProgressTimeline({ session }: { session: AgentRuntimeSession }) {
   );
 }
 
+function ReasoningSummaryCard({ session }: { session: AgentRuntimeSession }) {
+  const summaries = [
+    session.plan?.summary ? `Plan: ${session.plan.summary}` : "",
+    ...(session.reasoningSummaries ?? []),
+    session.verificationResult?.summary ? `Verification: ${session.verificationResult.summary}` : ""
+  ].filter(Boolean).slice(-5);
+  if (!summaries.length) return null;
+  return (
+    <section className="run-card timeline-card reasoning-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Reasoning summary</strong>
+          <span>Visible rationale, decisions, and verification notes without hidden chain-of-thought.</span>
+        </div>
+      </div>
+      <div className="timeline-list">
+        {summaries.map((summary, index) => (
+          <div className="timeline-item completed" key={`${index}-${summary}`}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>Step {index + 1}</strong>
+              <span>{summary}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ToolIntentCard({ session }: { session: AgentRuntimeSession }) {
+  const intents = (session.toolIntents ?? []).slice(-8);
+  if (!intents.length) return null;
+  return (
+    <section className="run-card timeline-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Tool intents</strong>
+          <span>Reviewable actions before Rust changes anything.</span>
+        </div>
+      </div>
+      <div className="timeline-list">
+        {intents.map((intent) => (
+          <div className={`timeline-item ${intent.status}`} key={intent.id}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>{intent.title}</strong>
+              <span>{intent.summary}</span>
+              <small>{intent.type} | {intent.status}</small>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OperatorStateCard({
+  session,
+  connectionState,
+  canReconnect
+}: {
+  session: AgentRuntimeSession;
+  connectionState: "connected" | "disconnected";
+  canReconnect: boolean;
+}) {
+  return (
+    <section className="run-card summary-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Operator state</strong>
+          <span>{describeOperatorHeadline(session, connectionState)}</span>
+        </div>
+      </div>
+      <div className="summary-list">
+        <div className="summary-line compact">Connection: {connectionState === "connected" ? "Live updates connected." : "Live updates disconnected; visible state may lag until refresh."}</div>
+        <div className="summary-line compact">Restore: {canReconnect ? "This app session can still try a live reconnect while the runtime token remains valid." : "Saved sessions are history only after restart; no guaranteed live restore path."}</div>
+        <div className="summary-line compact">Write state: {describePatchState(session)}</div>
+        <div className="summary-line compact">Command state: {describeCommandState(session)}</div>
+        <div className="summary-line compact">Verification: {describeVerificationState(session)}</div>
+        <div className="summary-line compact">Audit trail: {describeAuditTrail(session)}</div>
+      </div>
+    </section>
+  );
+}
+
+function ArtifactCard({
+  session,
+  onOpenDiff,
+  onOpenPreview
+}: {
+  session: AgentRuntimeSession;
+  onOpenDiff: () => void;
+  onOpenPreview: () => void;
+}) {
+  const artifacts = (session.artifacts ?? []).slice(-6);
+  if (!artifacts.length) return null;
+  return (
+    <section className="run-card">
+      <div className="run-card-header">
+        <div>
+          <strong>Artifacts</strong>
+          <span>Audit trail of plans, diffs, command results, previews, and verification records.</span>
+        </div>
+      </div>
+      <div className="artifact-grid">
+        {artifacts.map((artifact) => (
+          <div className="artifact-tile" key={artifact.id}>
+            <div className="artifact-title">
+              <FileText size={15} />
+              <strong>{artifact.title}</strong>
+              <span>{artifact.type}</span>
+            </div>
+            <p>{artifact.summary}</p>
+            {artifact.type === "diff" ? <button onClick={onOpenDiff}>Review diff record</button> : null}
+            {artifact.type === "preview" ? <button onClick={() => onOpenPreview()}>Open preview target</button> : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function RunResultCard({
   session,
   onOpenPreview
@@ -1304,7 +1885,7 @@ function RunResultCard({
           <strong>Run result</strong>
           <span>
             {latestExecution
-              ? `${latestExecution.command} | ${latestExecution.status}`
+              ? `${latestExecution.command} | ${humanizeCommandResultStatus(latestExecution.status)}`
               : session.previewRecommendation?.description ?? "Preview prepared"}
           </span>
         </div>
@@ -1314,15 +1895,16 @@ function RunResultCard({
           <>
             <div className="summary-line compact">Command: {latestExecution.command}</div>
             <div className="summary-line compact">Mode: {shouldDescribeBackground(latestExecution.command) ? "Background" : "Foreground"}</div>
-            <div className="summary-line compact">Status: {latestExecution.status}</div>
+            <div className="summary-line compact">Status: {humanizeCommandResultStatus(latestExecution.status)}</div>
             {latestExecution.message ? <div className="summary-line compact">{latestExecution.message}</div> : null}
           </>
         ) : null}
         {session.previewRecommendation ? (
           <>
-            <div className="summary-line compact">Preview: {session.previewRecommendation.target}</div>
+            <div className="summary-line compact">Preview target: {session.previewRecommendation.target}</div>
+            <div className="summary-line compact">Preview state: Prepared for review only. It does not open until you choose to launch it.</div>
             <div className="command-actions">
-              <button onClick={onOpenPreview}>
+              <button onClick={() => onOpenPreview()}>
                 <Globe size={14} />
                 Open preview
               </button>
@@ -1401,7 +1983,7 @@ function CodeChangesCard({
         <div>
           <strong>Code changes</strong>
           <span>
-            {session.patchProposals.length} proposal(s) | {patchStats.length} file(s)
+            {session.patchProposals.length} proposal(s) | {patchStats.length} file(s) touched
           </span>
         </div>
         <div className="command-actions">
@@ -1422,7 +2004,7 @@ function CodeChangesCard({
       <div className="patch-status-line">
         {session.patchProposals.map((proposal) => (
           <span key={proposal.id}>
-            {proposal.title}: {proposal.status}
+            {proposal.title}: {humanizePatchStatus(proposal.status)}
           </span>
         ))}
       </div>
@@ -1516,9 +2098,15 @@ function ActivityCard({
 }
 
 function StatusRow({ label, status, detail }: { label: string; status: string; detail?: string }) {
+  const iconClass =
+    status === "done" || status === "completed"
+      ? "done-icon"
+      : status === "blocked" || status === "failed" || status === "error"
+        ? "blocked-icon"
+        : "pending-icon";
   return (
     <div className="status-row">
-      <Bot size={15} className={status === "done" || status === "completed" ? "done-icon" : "pending-icon"} />
+      <Bot size={15} className={iconClass} />
       <div>
         <strong>{label}</strong>
         <span>
@@ -1585,34 +2173,297 @@ function mergePatchStats(stats: PatchChangeStats[]) {
   return [...merged.values()];
 }
 
+type AgentContractView = {
+  id: string;
+  name: string;
+  role: string;
+  status: "idle" | "running" | "completed" | "blocked" | "failed";
+  objective: string;
+  currentAction: string;
+  ownedPaths: string[];
+  forbiddenPaths: string[];
+  recentActions: string[];
+  changedFiles: string[];
+  commandsRun: string[];
+  riskLevel: "low" | "medium" | "high";
+  blockers: string[];
+  diffLabel: string;
+};
+
+function getDisplayRunPhases(session: AgentRuntimeSession): RunPhase[] {
+  if (session.runPhases?.length) return session.runPhases;
+  const pending = (id: RunPhase["id"], summary: string): RunPhase => ({ id, status: "pending", summary });
+  return [
+    pending("inspect_workspace", "Workspace inspection has not been reported yet."),
+    pending("build_repo_map", "Repo map has not been reported yet."),
+    pending("split_agents", "Agent planning has not been reported yet."),
+    pending("agents_running", "Execution has not been reported yet."),
+    pending("integrate_changes", "No integrated diff has been reported yet."),
+    pending("run_verification", session.verificationResult?.summary ?? "Verification has not been reported yet."),
+    pending("review_final_diff", session.runSummary?.nextAction ?? "Review gate is not ready yet."),
+    pending("final_report", session.runSummary?.summary ?? "Final report is not ready yet.")
+  ];
+}
+
+function getAgentContracts(session: AgentRuntimeSession): AgentContractView[] {
+  const agentRuns = session.orchestration?.agentRuns ?? [];
+  if (agentRuns.length) {
+    return agentRuns.map((agent) => ({
+      id: agent.id,
+      name: agent.agentName,
+      role: agent.roleTitle ?? agent.role,
+      status: agent.status,
+      objective: agent.objective ?? session.userPrompt,
+      currentAction: agent.currentAction ?? agent.currentTask ?? "Not reported yet.",
+      ownedPaths: agent.ownedPaths ?? [],
+      forbiddenPaths: agent.forbiddenPaths ?? [],
+      recentActions: agent.recentActions ?? (agent.lastEvent ? [agent.lastEvent] : []),
+      changedFiles: agent.changedFiles ?? [],
+      commandsRun: agent.commandsRun ?? [],
+      riskLevel: agent.riskLevel ?? "medium",
+      blockers: agent.blockers ?? [],
+      diffLabel: formatPatchTotalsLabel(agent.diffStats?.fileCount, agent.diffStats?.additions, agent.diffStats?.deletions)
+    }));
+  }
+
+  return (session.agentWorkStatuses ?? []).map((status, index) => ({
+    id: `${status.agentName}-${index}`,
+    name: status.agentName,
+    role: status.role,
+    status: mapProgressStatusToAgentStatus(status.status),
+    objective: status.objective,
+    currentAction: status.summary ?? status.taskTitle,
+    ownedPaths: [],
+    forbiddenPaths: [],
+    recentActions: [status.taskTitle],
+    changedFiles: status.targetFiles,
+    commandsRun: [],
+    riskLevel: "medium",
+    blockers: [],
+    diffLabel: formatPatchTotalsLabel(status.targetFiles.length)
+  }));
+}
+
 function prettyAgentName(name: string) {
   return name.replace(/Agent$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function mapProgressStatusToAgentStatus(status: AgentWorkStatus["status"]): AgentContractView["status"] {
+  if (status === "failed") return "failed";
+  if (status === "blocked") return "blocked";
+  if (status === "completed") return "completed";
+  if (status === "running") return "running";
+  return "idle";
+}
+
+function humanizeRunMode(mode: RunMode | undefined) {
+  switch (mode) {
+    case "quick_fix":
+      return "Quick fix";
+    case "normal_run":
+      return "Normal run";
+    case "deep_audit":
+      return "Deep local run";
+    case "soak_mode":
+      return "Soak mode";
+    case "paranoid_mode":
+      return "Paranoid mode";
+    default:
+      return "Local run";
+  }
+}
+
+function humanizeRunPhase(phase: RunPhase["id"]) {
+  return phase
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function inferSessionRisk(session: AgentRuntimeSession) {
+  if (session.reviewGate?.recommendation === "do_not_apply") return "High";
+  if (session.patchProposals.some((proposal) => proposal.riskLevel === "high")) return "High";
+  if (session.patchProposals.some((proposal) => proposal.riskLevel === "medium")) return "Medium";
+  return "Low";
+}
+
+function describeReviewReadiness(session: AgentRuntimeSession) {
+  if (session.reviewGate) return humanizeReviewRecommendation(session.reviewGate.recommendation);
+  if (session.status === "needs_approval") return "Review required";
+  if (session.status === "completed") return "Ready";
+  return "Not ready";
+}
+
+function humanizeReviewRecommendation(recommendation: NonNullable<AgentRuntimeSession["reviewGate"]>["recommendation"]) {
+  switch (recommendation) {
+    case "ready":
+      return "Ready for apply review";
+    case "caution":
+      return "Caution";
+    case "do_not_apply":
+      return "Do not apply";
+  }
+}
+
+function humanizeDecisionCategory(category: DecisionRecord["category"]) {
+  return category.replace("_", " ");
+}
+
+function humanizeAgentStatus(status: AgentContractView["status"]) {
+  switch (status) {
+    case "idle":
+      return "Idle";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Done";
+    case "blocked":
+      return "Blocked";
+    case "failed":
+      return "Failed";
+  }
+}
+
+function describeEvidenceRefs(evidenceRefs: EvidenceRef[]) {
+  if (!evidenceRefs.length) return "None recorded";
+  const hasLineOrSymbolRef = evidenceRefs.some((ref) => ref.type === "file" && (ref.lineHint || ref.symbol));
+  const hasNonFileRef = evidenceRefs.some((ref) => ref.type !== "file");
+  const notes = [hasLineOrSymbolRef ? "line or symbol refs included" : "line or symbol refs not reported yet"];
+  if (hasNonFileRef) notes.push("command, test, or artifact refs included");
+  return `${evidenceRefs.length} item(s); ${notes.join("; ")}`;
+}
+
+function formatPatchTotalsLabel(fileCount?: number, additions?: number, deletions?: number) {
+  const filesLabel = typeof fileCount === "number" ? `${fileCount} file(s)` : "File count not reported yet.";
+  if (typeof additions === "number" && typeof deletions === "number") {
+    return `${filesLabel}, +${additions} -${deletions}`;
+  }
+  return `${filesLabel}, line diff not reported yet.`;
 }
 
 function accessProfileLabel(profile: AccessProfile) {
   return accessOptions.find((option) => option.value === profile)?.label ?? "Default permissions";
 }
 
-function humanSessionStatus(session: AgentRuntimeSession | null, agentBusy = false) {
+function humanSessionStatus(
+  session: AgentRuntimeSession | null,
+  agentBusy = false,
+  connectionState: "connected" | "disconnected" = "connected"
+) {
   if (!session) return "Open a workspace to begin";
+  if (connectionState === "disconnected" && session.status === "running") return "Live updates disconnected";
   if (agentBusy) return "Working on your request";
 
   switch (session.nextAction?.kind) {
     case "confirm_plan":
-      return "Plan ready";
+      return "Plan review required";
     case "confirm_preview":
-      return "Done. Ready to run";
+      return "Preview launch pending";
     case "preview_ready":
-      return "Preview ready";
+      return "Preview available";
+    case "approve_commands":
+      return "Waiting on command approval";
     default:
       break;
   }
 
-  if (session.status === "needs_approval") return "Ready for review";
+  if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
   if (session.status === "failed") return "Run failed";
   return "Session active";
+}
+
+function describeOperatorHeadline(session: AgentRuntimeSession, connectionState: "connected" | "disconnected") {
+  if (connectionState === "disconnected" && session.status === "running") {
+    return "The run may still be active, but the live event stream is disconnected.";
+  }
+  if (session.nextAction?.kind === "approve_commands") {
+    return "Runtime commands are queued and waiting for operator execution.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
+    return "A reviewed patch is waiting for explicit apply.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "proposed")) {
+    return "Code changes are proposed but not written yet.";
+  }
+  if (session.verificationResult?.status === "pending") {
+    return "Writes may be complete, but verification is still pending.";
+  }
+  return "This card summarizes what has happened, what is still pending, and what the UI can safely promise.";
+}
+
+function describePatchState(session: AgentRuntimeSession) {
+  if (session.patchProposals.some((proposal) => proposal.status === "proposed")) {
+    return "Patch review required before any write occurs.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
+    return "Patch approved, but Rust apply has not happened yet.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "apply_failed")) {
+    return "A patch apply attempt failed; inspect the summary artifacts before retrying.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "applied")) {
+    return "At least one patch was applied through Rust.";
+  }
+  return "No patch write is pending.";
+}
+
+function describeCommandState(session: AgentRuntimeSession) {
+  if (session.commandRequests.some((request) => request.status === "requested" || request.status === "approved")) {
+    return "One or more runtime commands are waiting for approval or execution.";
+  }
+  const latestExecution = session.commandExecutions.at(-1);
+  if (latestExecution) {
+    return `Latest runtime command is recorded as ${humanizeCommandResultStatus(latestExecution.status)}.`;
+  }
+  return "No runtime command is pending.";
+}
+
+function describeVerificationState(session: AgentRuntimeSession) {
+  if (!session.verificationResult) return "No verification record yet.";
+  if (session.verificationResult.status === "pending") return "Verification is still pending.";
+  if (session.verificationResult.status === "failed") return "Verification failed; inspect the checks before trusting the output.";
+  return "Verification passed for the recorded checks.";
+}
+
+function describeAuditTrail(session: AgentRuntimeSession) {
+  const previewArtifacts = session.artifacts.filter((artifact) => artifact.type === "preview").length;
+  const verificationArtifacts = session.artifacts.filter((artifact) => artifact.type === "verification").length;
+  const commandArtifacts = session.artifacts.filter((artifact) => artifact.type === "command_result").length;
+  return `${session.artifacts.length} artifact record(s), ${commandArtifacts} command result(s), ${verificationArtifacts} verification record(s), ${previewArtifacts} preview record(s).`;
+}
+
+function humanizeRuntimeStatus(status: string) {
+  switch (status) {
+    case "needs_approval":
+      return "waiting for review";
+    case "completed":
+      return "completed";
+    case "running":
+      return "running";
+    case "failed":
+      return "failed";
+    case "created":
+      return "created";
+    default:
+      return status.replaceAll("_", " ");
+  }
+}
+
+function humanizeLifecycleStage(stage: string) {
+  return stage.toLowerCase().replaceAll("_", " ");
+}
+
+function humanizePatchStatus(status: string) {
+  return status.replaceAll("_", " ");
+}
+
+function humanizeCommandRequestStatus(status: string) {
+  return status === "requested" ? "requested, not executed" : status.replaceAll("_", " ");
+}
+
+function humanizeCommandResultStatus(status: string) {
+  return status === "approval_required" ? "approval required" : status.replaceAll("_", " ");
 }
 
 function summarizeLatestQueueEntry(entry: QueuedPrompt | undefined) {
@@ -1816,7 +2667,7 @@ function SettingsDialog({
         <div className="modal-title">
           <div>
             <h2>Model Provider Settings</h2>
-            <p>Validate a provider before real LLM sessions. Mock mode runs locally without API keys.</p>
+            <p>Use local Ollama for real coding runs. Recommended models: qwen2.5-coder:7b, llama3:8b, or your saved custom Ollama model.</p>
           </div>
           <button className="frame-icon-button" title="Close" onClick={onClose}>
             <X size={18} />
@@ -1893,7 +2744,7 @@ function SettingsDialog({
               <input
                 value={form.selectedModel}
                 onChange={(event) => setForm((current) => ({ ...current, selectedModel: event.target.value }))}
-                placeholder={isOllama ? "Refresh Ollama models" : "model id"}
+                placeholder={isOllama ? "qwen2.5-coder:7b or llama3:8b" : "OpenAI-compatible execution is blocked for now"}
               />
             )}
           </label>

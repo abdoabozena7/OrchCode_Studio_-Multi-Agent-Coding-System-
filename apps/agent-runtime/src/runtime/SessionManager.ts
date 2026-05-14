@@ -1,10 +1,12 @@
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
   AgentWorkStatus,
   AgentRuntimeSession,
+  RuntimeTaskState,
   AgentRuntimeMode,
+  Artifact,
   CommandExecutionRecord,
   CommandRequest,
   OrchestrationEvent,
@@ -14,22 +16,60 @@ import type {
   RuntimeProgressEvent,
   SafetySettings,
   Task,
+  ToolIntent,
   ToolCall
 } from "@orchcode/protocol";
 import { accessProfileDefaults } from "@orchcode/protocol";
-import type { AccessProfile } from "@orchcode/protocol";
+import type { AccessProfile, AccessProfileInput, DeclaredAccessPolicy, ResolvedAccessPolicy } from "@orchcode/protocol";
 import { EventBus } from "./EventBus.js";
+
+type SessionTokenRecord = {
+  tokenHash: string;
+  expiresAt: string;
+};
 
 type PersistedState = {
   sessions: AgentRuntimeSession[];
+  sessionTokens: Array<{
+    sessionId: string;
+    tokenHash: string;
+    expiresAt: string;
+  }>;
+};
+
+type ManagedTaskState = RuntimeTaskState & {
+  restoreStatus: "fresh" | "restored" | "expired";
+  restoreReason?: string;
+  restoredAt?: string;
+  expiredAt?: string;
+  reconciliationStatus: "not_required" | "pending" | "reconciling" | "reconciled";
+  reconciliationReason?: string;
+  reconciledAt?: string;
+  patchState: {
+    patchId?: string;
+    status?: PatchProposal["status"];
+    proposedAt?: string;
+    approvedAt?: string;
+    completedAt?: string;
+    authority?: "runtime" | "user" | "rust";
+  };
+  commandState: {
+    requestedIds: string[];
+    completedIds: string[];
+    failedIds: string[];
+    lastRequestId?: string;
+    lastCompletedAt?: string;
+    authority?: "runtime" | "rust";
+  };
 };
 
 export class SessionManager {
   private readonly sessions = new Map<string, AgentRuntimeSession>();
+  private readonly sessionTokens = new Map<string, SessionTokenRecord>();
   private readonly statePath: string;
 
   constructor(
-    storageDir: string,
+    private readonly storageDir: string,
     private readonly eventBus: EventBus
   ) {
     this.statePath = path.join(storageDir, "sessions.json");
@@ -40,9 +80,15 @@ export class SessionManager {
       const raw = await readFile(this.statePath, "utf8");
       const parsed = JSON.parse(raw) as PersistedState;
       for (const session of parsed.sessions ?? []) {
-        session.progressEvents ??= [];
-        session.agentWorkStatuses ??= [];
-        this.sessions.set(session.id, session);
+        const hydrated = hydrateSession(session);
+        this.sessions.set(hydrated.id, hydrated);
+        this.eventBus.publish({ type: "runtime.session.restored", sessionId: hydrated.id, session: hydrated });
+      }
+      for (const token of parsed.sessionTokens ?? []) {
+        this.sessionTokens.set(token.sessionId, {
+          tokenHash: token.tokenHash,
+          expiresAt: token.expiresAt
+        });
       }
     } catch {
       await mkdir(path.dirname(this.statePath), { recursive: true });
@@ -54,14 +100,20 @@ export class SessionManager {
     workspacePath: string;
     mode: AgentRuntimeMode;
     executionMode?: AgentRuntimeSession["executionMode"];
-    accessProfile?: AccessProfile;
+    accessProfile?: AccessProfileInput;
+    trustProfile?: import("@orchcode/protocol").RunTrustProfile;
+    providerConfig?: import("@orchcode/protocol").SanitizedProviderConfig;
+    sessionToken?: string;
+    sessionTokenExpiresAt?: string;
     thinkFirst?: boolean;
     userPrompt: string;
     safetySettings?: Partial<SafetySettings>;
   }): Promise<AgentRuntimeSession> {
     const now = new Date().toISOString();
     const executionMode = input.executionMode ?? "auto_mode";
-    const accessProfile = input.accessProfile ?? "default_permissions";
+    const accessProfile = normalizeAccessProfile(input.accessProfile);
+    const trustProfile = input.trustProfile ?? inferTrustProfile(accessProfile);
+    const declaredAccess = buildDeclaredAccessPolicy(accessProfile, trustProfile);
     const safetySettings = {
       ...accessProfileDefaults(accessProfile),
       ...(input.safetySettings ?? {})
@@ -70,13 +122,23 @@ export class SessionManager {
       id: randomId("session"),
       workspacePath: input.workspacePath,
       mode: input.mode,
+      trustProfile,
+      providerConfig: input.providerConfig,
       executionMode,
       accessProfile,
+      declaredAccess: {
+        ...declaredAccess,
+        trustProfile
+      },
+      resolvedAccess: buildResolvedAccessPolicy(declaredAccess, now),
+      runPhases: [],
+      decisionLedger: [],
       thinkFirst: input.thinkFirst ?? false,
       userPrompt: input.userPrompt,
       agentName: "OrchCode",
       status: "created",
       lifecycleStage: "INTAKE",
+      taskState: createInitialTaskState(now),
       messages: [
         {
           id: randomId("msg"),
@@ -87,6 +149,8 @@ export class SessionManager {
       ],
       tasks: [],
       toolCalls: [],
+      toolIntents: [],
+      artifacts: [],
       patchProposals: [],
       commandRequests: [],
       commandExecutions: [],
@@ -115,8 +179,26 @@ export class SessionManager {
       updatedAt: now
     };
     this.sessions.set(session.id, session);
+    if (input.sessionToken) {
+      this.sessionTokens.set(session.id, {
+        tokenHash: hashToken(input.sessionToken),
+        expiresAt: input.sessionTokenExpiresAt ?? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+      });
+    }
     await this.saveAndPublish(session);
+    this.eventBus.publish({ type: "runtime.session.created", sessionId: session.id, session });
     return session;
+  }
+
+  validateSessionToken(sessionId: string, token: string | undefined) {
+    const record = this.sessionTokens.get(sessionId);
+    if (!record) return true;
+    if (!token || hashToken(token) !== record.tokenHash) return false;
+    const isValid = Date.parse(record.expiresAt) > Date.now();
+    if (!isValid) {
+      void this.markSessionExpired(sessionId, "Session token expired.");
+    }
+    return isValid;
   }
 
   getSession(sessionId: string) {
@@ -155,16 +237,60 @@ export class SessionManager {
     this.eventBus.publish({ type: "runtime.tool_call.updated", sessionId, toolCall });
   }
 
+  async addToolIntent(sessionId: string, intent: ToolIntent) {
+    await this.updateSession(sessionId, (session) => {
+      const index = session.toolIntents.findIndex((candidate) => candidate.id === intent.id);
+      if (index >= 0) {
+        session.toolIntents[index] = intent;
+      } else {
+        session.toolIntents.push(intent);
+      }
+    });
+    this.eventBus.publish({ type: "runtime.tool_intent.updated", sessionId, intent });
+  }
+
+  async addArtifact(sessionId: string, artifact: Artifact) {
+    await this.updateSession(sessionId, (session) => {
+      session.artifacts.push(artifact);
+    });
+    this.eventBus.publish({ type: "runtime.artifact.created", sessionId, artifact });
+  }
+
   async addPatchProposal(sessionId: string, proposal: PatchProposal) {
     await this.updateSession(sessionId, (session) => {
-      session.patchProposals.push(proposal);
+      upsertById(session.patchProposals, proposal);
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.pendingPatchId = proposal.id;
+      taskState.activePatchId = proposal.id;
+      taskState.phase = "awaiting_patch_approval";
+      taskState.reconciliationStatus = "pending";
+      taskState.reconciliationReason = "Patch proposal is waiting for explicit review and downstream authority actions.";
+      taskState.patchState = {
+        patchId: proposal.id,
+        status: proposal.status,
+        proposedAt: proposal.createdAt,
+        authority: "runtime"
+      };
+      pushTaskTransition(taskState, "patch.proposed", `Patch proposed: ${proposal.title}`);
     });
     this.eventBus.publish({ type: "runtime.patch.proposed", sessionId, proposal });
   }
 
   async addCommandRequest(sessionId: string, commandRequest: CommandRequest) {
     await this.updateSession(sessionId, (session) => {
-      session.commandRequests.push(commandRequest);
+      upsertById(session.commandRequests, commandRequest);
+      const taskState = asManagedTaskState(session.taskState);
+      if (!taskState.pendingCommandIds.includes(commandRequest.id)) {
+        taskState.pendingCommandIds.push(commandRequest.id);
+      }
+      if (!taskState.commandState.requestedIds.includes(commandRequest.id)) {
+        taskState.commandState.requestedIds.push(commandRequest.id);
+      }
+      taskState.commandState.lastRequestId = commandRequest.id;
+      taskState.commandState.authority = "runtime";
+      taskState.reconciliationStatus = "pending";
+      taskState.reconciliationReason = "Waiting for command execution authority to report a terminal result.";
+      pushTaskTransition(taskState, "command.requested", `Command requested: ${commandRequest.command}`);
     });
     this.eventBus.publish({
       type: "runtime.command.requested",
@@ -175,47 +301,156 @@ export class SessionManager {
 
   async addCommandExecution(sessionId: string, commandExecution: CommandExecutionRecord) {
     await this.updateSession(sessionId, (session) => {
-      session.commandExecutions.push(commandExecution);
+      const existingIndex = session.commandExecutions.findIndex(
+        (candidate) =>
+          candidate.id === commandExecution.id ||
+          (candidate.requestId && candidate.requestId === commandExecution.requestId)
+      );
+      if (existingIndex >= 0) {
+        session.commandExecutions[existingIndex] = commandExecution;
+      } else {
+        session.commandExecutions.push(commandExecution);
+      }
       const request = session.commandRequests.find((candidate) => candidate.id === commandExecution.requestId);
       if (request) {
         request.status =
-          commandExecution.status === "executed"
-            ? "executed"
-            : commandExecution.status === "blocked"
-              ? "blocked"
-              : request.status;
+          commandExecution.status === "executing"
+            ? "executing"
+            : commandExecution.status === "executed"
+              ? "executed"
+              : commandExecution.status === "blocked"
+                ? "blocked"
+                : commandExecution.status === "failed"
+                  ? "failed"
+                  : commandExecution.status === "approval_required"
+                    ? "approved"
+                  : request.status;
       }
+      const taskState = asManagedTaskState(session.taskState);
+      if (commandExecution.requestId) {
+        if (commandExecution.status !== "executing" && commandExecution.status !== "approval_required") {
+          taskState.pendingCommandIds = taskState.pendingCommandIds.filter((id) => id !== commandExecution.requestId);
+        }
+        if (commandExecution.status === "executed") {
+          if (!taskState.completedCommandIds.includes(commandExecution.requestId)) {
+            taskState.completedCommandIds.push(commandExecution.requestId);
+          }
+          if (!taskState.commandState.completedIds.includes(commandExecution.requestId)) {
+            taskState.commandState.completedIds.push(commandExecution.requestId);
+          }
+        } else if (commandExecution.status === "failed" || commandExecution.status === "blocked") {
+          if (!taskState.failedCommandIds.includes(commandExecution.requestId)) {
+            taskState.failedCommandIds.push(commandExecution.requestId);
+          }
+          if (!taskState.commandState.failedIds.includes(commandExecution.requestId)) {
+            taskState.commandState.failedIds.push(commandExecution.requestId);
+          }
+        }
+      }
+      taskState.commandState.lastCompletedAt = commandExecution.createdAt;
+      taskState.commandState.authority = "rust";
+      taskState.lastCommandProvenance = commandExecution.provenance;
+      taskState.reconciliationStatus =
+        taskState.pendingCommandIds.length === 0 && taskState.pendingPatchId === undefined ? "reconciled" : "pending";
+      taskState.reconciliationReason =
+        taskState.reconciliationStatus === "reconciled"
+          ? "Runtime state has a terminal command result for every pending authority action."
+          : "Runtime is still waiting for additional authority-backed actions to complete.";
+      taskState.reconciledAt = taskState.reconciliationStatus === "reconciled" ? commandExecution.createdAt : taskState.reconciledAt;
+      pushTaskTransition(
+        taskState,
+        "command.completed",
+        `Command ${commandExecution.status}: ${commandExecution.command}`
+      );
     });
     this.eventBus.publish({
-      type: "runtime.command.requested",
+      type:
+        commandExecution.status === "executing"
+          ? "runtime.command.started"
+          : commandExecution.status === "failed"
+          ? "runtime.command.failed"
+          : commandExecution.status === "blocked"
+            ? "runtime.command.blocked"
+            : "runtime.command.completed",
       sessionId,
-      commandRequest: {
-        id: commandExecution.requestId ?? commandExecution.id,
-        sessionId,
-        command: commandExecution.command,
-        cwd: commandExecution.cwd,
-        risk: commandExecution.risk,
-        reason: commandExecution.message ?? "Command execution recorded",
-        status: commandExecution.status === "executed" ? "executed" : commandExecution.status === "blocked" ? "blocked" : "requested",
-        createdAt: commandExecution.createdAt
-      }
+      execution: commandExecution
     });
   }
 
   async replaceTasks(sessionId: string, tasks: Task[]) {
     await this.updateSession(sessionId, (session) => {
       session.tasks = tasks;
+      if (tasks.length) {
+        session.taskState.phase = "planning";
+        pushTaskTransition(session.taskState, "plan.updated", `Plan updated with ${tasks.length} task(s)`);
+      }
     });
   }
 
   async setPatchStatus(sessionId: string, patchId: string, status: PatchProposal["status"]) {
-    return this.updateSession(sessionId, (session) => {
+    const session = await this.updateSession(sessionId, (session) => {
       const proposal = session.patchProposals.find((candidate) => candidate.id === patchId);
       if (!proposal) {
         throw new Error("Patch proposal not found");
       }
       proposal.status = status;
+      proposal.lastStatusAt = new Date().toISOString();
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.activePatchId = patchId;
+      taskState.patchState.patchId = patchId;
+      taskState.patchState.status = status;
+      if (status === "approved") {
+        taskState.pendingPatchId = undefined;
+        taskState.phase = "awaiting_patch_apply";
+        taskState.patchState.approvedAt = new Date().toISOString();
+        taskState.patchState.authority = "user";
+        taskState.reconciliationStatus = "pending";
+        taskState.reconciliationReason = "Waiting for Rust patch apply authority to report a result.";
+        pushTaskTransition(taskState, "patch.approved", `Patch approved: ${proposal.title}`);
+      } else if (status === "rejected") {
+        taskState.pendingPatchId = undefined;
+        taskState.reconciliationStatus = "reconciled";
+        taskState.reconciliationReason = "Patch review ended with rejection and no downstream authority action.";
+        taskState.reconciledAt = new Date().toISOString();
+        pushTaskTransition(taskState, "patch.rejected", `Patch rejected: ${proposal.title}`);
+      } else if (status === "applied") {
+        taskState.pendingPatchId = undefined;
+        taskState.phase = taskState.pendingCommandIds.length ? "awaiting_command_execution" : "patch_applied";
+        proposal.appliedAt = new Date().toISOString();
+        taskState.patchState.completedAt = new Date().toISOString();
+        taskState.patchState.authority = "rust";
+        taskState.reconciliationStatus = taskState.pendingCommandIds.length ? "pending" : "reconciled";
+        taskState.reconciliationReason = taskState.pendingCommandIds.length
+          ? "Patch apply was reported; command verification is still pending."
+          : "Patch apply was reported and no further authority actions remain.";
+        taskState.reconciledAt = taskState.pendingCommandIds.length ? taskState.reconciledAt : new Date().toISOString();
+        pushTaskTransition(taskState, "patch.applied", `Patch applied: ${proposal.title}`);
+      } else if (status === "apply_failed") {
+        taskState.phase = "patch_apply_failed";
+        taskState.patchState.completedAt = new Date().toISOString();
+        taskState.patchState.authority = "rust";
+        taskState.reconciliationStatus = "reconciled";
+        taskState.reconciliationReason = "Rust patch authority reported a terminal apply failure.";
+        taskState.reconciledAt = new Date().toISOString();
+        pushTaskTransition(taskState, "patch.apply_failed", `Patch apply failed: ${proposal.title}`);
+      }
     });
+    const proposal = session.patchProposals.find((candidate) => candidate.id === patchId);
+    if (proposal) {
+      this.eventBus.publish({
+        type:
+          status === "approved"
+            ? "runtime.patch.approved"
+            : status === "rejected"
+              ? "runtime.patch.rejected"
+              : status === "applied"
+                ? "runtime.patch.applied"
+                : "runtime.patch.apply_failed",
+        sessionId,
+        proposal
+      });
+    }
+    return session;
   }
 
   async addOrchestrationEvent(sessionId: string, event: OrchestrationEvent) {
@@ -251,8 +486,81 @@ export class SessionManager {
   async setRunSummary(sessionId: string, summary: RunSummary) {
     await this.updateSession(sessionId, (session) => {
       session.runSummary = summary;
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.finalStatus =
+        summary.status === "blocked" ? "needs_approval" : summary.status;
+      if (summary.status === "completed") {
+        taskState.phase = "completed";
+        pushTaskTransition(taskState, "session.completed", summary.summary);
+      } else if (summary.status === "failed") {
+        taskState.phase = "failed";
+        pushTaskTransition(taskState, "session.failed", summary.summary);
+      }
     });
     this.eventBus.publish({ type: "runtime.run.completed", sessionId, summary });
+    const session = this.requireSession(sessionId);
+    if (summary.status === "completed") {
+      this.eventBus.publish({ type: "runtime.session.completed", sessionId, session });
+    } else if (summary.status === "failed") {
+      this.eventBus.publish({ type: "runtime.session.failed", sessionId, session });
+    }
+  }
+
+  async setVerificationResult(sessionId: string, verification: import("@orchcode/protocol").VerificationResult) {
+    await this.updateSession(sessionId, (session) => {
+      session.verificationResult = verification;
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.lastVerificationStatus = verification.status;
+      taskState.phase =
+        verification.status === "failed"
+          ? "verification_failed"
+          : verification.status === "passed"
+            ? "verification_passed"
+            : "verification_pending";
+      pushTaskTransition(taskState, `verification.${verification.status}`, verification.summary);
+    });
+    this.eventBus.publish({ type: `runtime.verification.${verification.status}`, sessionId, verification });
+  }
+
+  async markSessionRestored(sessionId: string, detail = "Session state was restored into runtime memory.") {
+    await this.updateSession(sessionId, (session) => {
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.restoreStatus = "restored";
+      taskState.restoredAt = new Date().toISOString();
+      taskState.restoreReason = detail;
+      taskState.phase = "restored";
+      session.status = "restored";
+      pushTaskTransition(taskState, "session.restored", detail);
+    });
+    const session = this.requireSession(sessionId);
+    this.eventBus.publish({ type: "runtime.session.restored", sessionId, session });
+  }
+
+  async markSessionExpired(sessionId: string, detail = "Session expired.") {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const taskState = asManagedTaskState(session.taskState);
+    if (taskState.restoreStatus === "expired") return;
+    taskState.restoreStatus = "expired";
+    taskState.expiredAt = new Date().toISOString();
+    taskState.restoreReason = detail;
+    taskState.phase = "expired";
+    taskState.reconciliationStatus = taskState.reconciliationStatus === "reconciled" ? "reconciled" : "pending";
+    session.lifecycleStage = "BLOCKED";
+    session.status = "expired";
+    session.updatedAt = new Date().toISOString();
+    pushTaskTransition(taskState, "session.expired", detail);
+    await this.saveAndPublish(session);
+    this.eventBus.publish({ type: "runtime.session.expired", sessionId, session });
+  }
+
+  async markSessionReconciled(sessionId: string, detail: string) {
+    await this.updateSession(sessionId, (session) => {
+      const taskState = asManagedTaskState(session.taskState);
+      taskState.reconciliationStatus = "reconciled";
+      taskState.reconciliationReason = detail;
+      taskState.reconciledAt = new Date().toISOString();
+    });
   }
 
   private requireSession(sessionId: string) {
@@ -270,11 +578,233 @@ export class SessionManager {
 
   private async persist() {
     await mkdir(path.dirname(this.statePath), { recursive: true });
-    const state: PersistedState = { sessions: this.listSessions() };
+    const state: PersistedState = {
+      sessions: this.listSessions(),
+      sessionTokens: [...this.sessionTokens.entries()].map(([sessionId, record]) => ({
+        sessionId,
+        tokenHash: record.tokenHash,
+        expiresAt: record.expiresAt
+      }))
+    };
     await writeFile(this.statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   }
 }
 
 export function randomId(prefix: string) {
   return `${prefix}_${randomUUID()}`;
+}
+
+function createInitialTaskState(now: string): RuntimeTaskState {
+  const taskState: ManagedTaskState = {
+    version: 1,
+    phase: "created",
+    pendingCommandIds: [],
+    completedCommandIds: [],
+    failedCommandIds: [],
+    restoreStatus: "fresh",
+    reconciliationStatus: "not_required",
+    patchState: {},
+    commandState: {
+      requestedIds: [],
+      completedIds: [],
+      failedIds: []
+    },
+    transitions: [
+      {
+        id: randomId("transition"),
+        phase: "created",
+        type: "session.created",
+        detail: "Session created",
+        createdAt: now
+      }
+    ]
+  };
+  return taskState;
+}
+
+function pushTaskTransition(
+  taskState: RuntimeTaskState,
+  type: import("@orchcode/protocol").RuntimeTaskTransitionType,
+  detail: string
+) {
+  taskState.version += 1;
+  taskState.transitions.push({
+    id: randomId("transition"),
+    phase: taskState.phase,
+    type,
+    detail,
+    createdAt: new Date().toISOString()
+  });
+}
+
+function hashToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function asManagedTaskState(taskState: RuntimeTaskState): ManagedTaskState {
+  const managed = taskState as ManagedTaskState;
+  managed.restoreStatus ??= "fresh";
+  managed.reconciliationStatus ??= "not_required";
+  managed.patchState ??= {};
+  managed.commandState ??= {
+    requestedIds: [],
+    completedIds: [],
+    failedIds: []
+  };
+  return managed;
+}
+
+function hydrateSession(session: AgentRuntimeSession) {
+  session.progressEvents ??= [];
+  session.agentWorkStatuses ??= [];
+  session.toolIntents ??= [];
+  session.artifacts ??= [];
+  session.runPhases ??= [];
+  session.decisionLedger ??= [];
+  session.declaredAccess ??= buildDeclaredAccessPolicy(session.accessProfile, session.trustProfile);
+  session.resolvedAccess ??= buildResolvedAccessPolicy(session.declaredAccess, new Date().toISOString());
+  const taskState = asManagedTaskState(session.taskState ?? createInitialTaskState(new Date().toISOString()));
+  session.taskState = taskState;
+  taskState.restoreStatus = "restored";
+  taskState.restoredAt ??= new Date().toISOString();
+  if (session.status === "created") {
+    session.status = "restored";
+  }
+  if (taskState.phase === "created") {
+    taskState.phase = "restored";
+  }
+  pushTaskTransition(taskState, "session.restored", "Session restored from durable runtime snapshot");
+  return session;
+}
+
+function upsertById<T extends { id: string }>(collection: T[], value: T) {
+  const index = collection.findIndex((candidate) => candidate.id === value.id);
+  if (index >= 0) {
+    collection[index] = value;
+    return;
+  }
+  collection.push(value);
+}
+
+function normalizeAccessProfile(profile: AccessProfileInput | undefined): AccessProfile {
+  if (!profile || profile === "default_permissions" || profile === "auto_review" || profile === "bounded_autonomy" || profile === "custom_config") {
+    return profile ?? "default_permissions";
+  }
+  return "bounded_autonomy";
+}
+
+function inferTrustProfile(accessProfile: AccessProfile): import("@orchcode/protocol").RunTrustProfile {
+  return accessProfile === "auto_review" || accessProfile === "bounded_autonomy" ? "trusted_internal" : "strict_gated";
+}
+
+function buildDeclaredAccessPolicy(
+  accessProfile: AccessProfile,
+  trustProfile: import("@orchcode/protocol").RunTrustProfile
+): DeclaredAccessPolicy {
+  if (accessProfile === "bounded_autonomy") {
+    return {
+      accessProfile,
+      trustProfile,
+      requestedAuthority: "bounded_autonomy",
+      requestedCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command"
+      ],
+      note: "Declared bounded autonomy still depends on Rust-side apply and command authority."
+    };
+  }
+
+  if (accessProfile === "auto_review") {
+    return {
+      accessProfile,
+      trustProfile,
+      requestedAuthority: "review_required",
+      requestedCapabilities: [
+        "read_workspace",
+        "propose_patch",
+        "request_command",
+        "execute_safe_command"
+      ]
+    };
+  }
+
+  if (accessProfile === "custom_config") {
+    return {
+      accessProfile,
+      trustProfile,
+      requestedAuthority: "human_gated",
+      requestedCapabilities: ["read_workspace", "propose_patch", "request_command"],
+      note: "Custom policy remains reserved until backend enforcement is implemented."
+    };
+  }
+
+  return {
+    accessProfile,
+    trustProfile,
+    requestedAuthority: "human_gated",
+    requestedCapabilities: ["read_workspace", "propose_patch", "request_command"]
+  };
+}
+
+function buildResolvedAccessPolicy(declared: DeclaredAccessPolicy, resolvedAt: string): ResolvedAccessPolicy {
+  const baseRestrictions = [
+    "Patch application is performed by Rust authority after explicit review.",
+    "Session restore requires a valid session token and persisted runtime snapshot.",
+    "Dangerous commands remain blocked by backend policy."
+  ];
+
+  if (declared.accessProfile === "bounded_autonomy") {
+    return {
+      declared,
+      enforcedAuthority: "review_required",
+      effectiveCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command",
+        "restore_session"
+      ],
+      blockedCapabilities: ["execute_dangerous_command", "use_network"],
+      requiresApprovalFor: ["patch_apply", "command_execution", "dangerous_command"],
+      backendRestrictions: baseRestrictions,
+      resolvedBy: "runtime",
+      resolvedAt
+    };
+  }
+
+  if (declared.accessProfile === "auto_review") {
+    return {
+      declared,
+      enforcedAuthority: "review_required",
+      effectiveCapabilities: [
+        "read_workspace",
+        "propose_patch",
+        "request_command",
+        "execute_safe_command",
+        "restore_session"
+      ],
+      blockedCapabilities: ["write_workspace", "apply_patch", "execute_dangerous_command", "use_network"],
+      requiresApprovalFor: ["patch_proposal", "patch_apply", "command_execution", "dangerous_command"],
+      backendRestrictions: baseRestrictions,
+      resolvedBy: "runtime",
+      resolvedAt
+    };
+  }
+
+  return {
+    declared,
+    enforcedAuthority: "human_gated",
+    effectiveCapabilities: ["read_workspace", "propose_patch", "request_command", "restore_session"],
+    blockedCapabilities: ["write_workspace", "apply_patch", "execute_safe_command", "execute_dangerous_command", "use_network"],
+    requiresApprovalFor: ["patch_proposal", "patch_apply", "command_execution", "dangerous_command", "session_restore"],
+    backendRestrictions: baseRestrictions,
+    resolvedBy: "runtime",
+    resolvedAt
+  };
 }

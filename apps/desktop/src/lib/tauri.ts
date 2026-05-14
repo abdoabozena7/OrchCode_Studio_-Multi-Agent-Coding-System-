@@ -12,6 +12,7 @@ import type {
   Task,
   WorkspaceInfo
 } from "@orchcode/protocol";
+import type { AgentRuntimeSession, AppEvent, SafetySettings } from "@orchcode/protocol";
 
 export type ModelProviderConfigInput = {
   id: string;
@@ -57,6 +58,56 @@ export function getGitDiff() {
 
 export function runWorkspaceCommand(command: string) {
   return invoke<CommandResult>("run_workspace_command", { command });
+}
+
+export function runApprovedWorkspaceCommand(command: string, safetySettings: Pick<SafetySettings, "blockDangerousCommands" | "redactSecrets" | "allowNetworkCommands">) {
+  return invoke<CommandResult>("run_workspace_command", { command, safetySettings });
+}
+
+export function executeApprovedCommand(
+  sessionId: string,
+  requestId: string,
+  command: string,
+  safetySettings: Pick<SafetySettings, "blockDangerousCommands" | "redactSecrets" | "allowNetworkCommands">
+) {
+  return invoke<CommandResult>("execute_approved_command", { sessionId, requestId, command, safetySettings });
+}
+
+export function createRuntimeRun(userPrompt: string, trustProfile: string) {
+  return invoke<{ sessionId: string; sessionToken: string; sessionTokenExpiresAt: string }>("create_runtime_run", { userPrompt, trustProfile });
+}
+
+export function appendSessionEvent(sessionId: string, eventType: string, payload: AppEvent | Record<string, unknown>) {
+  return invoke<void>("append_session_event", { sessionId, eventType, payload });
+}
+
+export function upsertOrchestrationRun(session: AgentRuntimeSession) {
+  return invoke<void>("upsert_orchestration_run", {
+    sessionId: session.id,
+    status: session.status,
+    productBrief: session.orchestration?.productBrief,
+    businessBrief: session.orchestration?.businessBrief,
+    technicalPlan: session.orchestration?.technicalPlan,
+    assignmentPlan: session.orchestration?.assignmentPlan
+  });
+}
+
+export function upsertAgentRun(sessionId: string, input: {
+  agentId: string;
+  roleTitle: string;
+  lifecycleStage: string;
+  artifactJson?: unknown;
+  status: string;
+}) {
+  return invoke<void>("upsert_agent_run", { sessionId, ...input });
+}
+
+export function applyRuntimePatch(sessionId: string, patchId: string) {
+  return invoke<{ patchId: string; status: string; message: string }>("apply_runtime_patch", { sessionId, patchId });
+}
+
+export function rejectRuntimePatchViaRust(sessionId: string, patchId: string) {
+  return invoke<{ patchId: string; status: string; message: string }>("reject_runtime_patch", { sessionId, patchId });
 }
 
 export function createMockSession(userPrompt: string) {

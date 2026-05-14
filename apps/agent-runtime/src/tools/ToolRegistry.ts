@@ -1,4 +1,4 @@
-import type { ToolCall } from "@orchcode/protocol";
+import type { ToolCall, WorkerCapabilityGrant } from "@orchcode/protocol";
 import { randomUUID } from "node:crypto";
 import { GitTools } from "./GitTools.js";
 import { WorkspaceTools } from "./WorkspaceTools.js";
@@ -11,11 +11,11 @@ export class ToolRegistry {
   readonly command: CommandTools;
   readonly patch: PatchTools;
 
-  constructor(private readonly workspacePath: string) {
-    this.workspace = new WorkspaceTools(workspacePath);
+  constructor(private readonly workspacePath: string, private readonly grant?: WorkerCapabilityGrant) {
+    this.workspace = new WorkspaceTools(workspacePath, grant);
     this.git = new GitTools(workspacePath);
-    this.command = new CommandTools(workspacePath);
-    this.patch = new PatchTools(workspacePath);
+    this.command = new CommandTools(workspacePath, grant);
+    this.patch = new PatchTools(workspacePath, grant);
   }
 
   createToolCall(input: {

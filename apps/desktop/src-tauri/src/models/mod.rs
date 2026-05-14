@@ -94,6 +94,31 @@ pub struct CreateSessionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRuntimeRunResponse {
+    pub session_id: String,
+    pub session_token: String,
+    pub session_token_expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SafetySettingsInput {
+    pub block_dangerous_commands: bool,
+    pub redact_secrets: bool,
+    pub allow_network_commands: bool,
+    pub approval_granted: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchApplyResult {
+    pub patch_id: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelProviderType {
     Ollama,
