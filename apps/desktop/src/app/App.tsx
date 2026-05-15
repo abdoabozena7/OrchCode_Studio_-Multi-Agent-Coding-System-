@@ -2510,6 +2510,7 @@ function humanSessionStatus(
   if (restoreDisposition === "non_restorable") return "Restore unavailable";
   if (restoreDisposition === "reconciliation_required") return "Manual inspection required";
   if (restoreDisposition === "expired") return "Expired";
+  if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") return "Run blocked";
   if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
@@ -2523,6 +2524,9 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   }
   if (session.nextAction?.kind === "approve_commands") {
     return "Runtime commands are queued and waiting for operator execution.";
+  }
+  if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
+    return session.runToGreen?.blockerReason ?? "The run was blocked before execution.";
   }
   if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
     return "A reviewed patch is waiting for explicit apply.";
@@ -2578,6 +2582,9 @@ function describePatchState(session: AgentRuntimeSession) {
 }
 
 function describeCommandState(session: AgentRuntimeSession) {
+  if (session.runToGreen?.status === "blocked" && !session.commandExecutions.length) {
+    return "Rust command execution was not started because no grounded command was selected.";
+  }
   if (session.commandRequests.some((request) => request.status === "requested" || request.status === "approved" || request.status === "executing" || request.status === "running")) {
     return "One or more runtime commands are waiting for approval or execution.";
   }
@@ -2590,6 +2597,11 @@ function describeCommandState(session: AgentRuntimeSession) {
 
 function describeVerificationState(session: AgentRuntimeSession) {
   if (!session.verificationResult) return "No verification record yet.";
+  if (session.runToGreen?.status === "blocked" && (session.verificationResult.status === "unavailable" || session.verificationResult.status === "skipped")) {
+    return session.runToGreen.blockerReason
+      ? `Verification was not started because the run blocked early: ${session.runToGreen.blockerReason}`
+      : "Verification was not started because the run blocked before command execution.";
+  }
   if (session.verificationResult.status === "pending" || session.verificationResult.status === "running") return "Verification is still pending.";
   if (session.verificationResult.status === "failed") return "Verification failed; inspect the checks before trusting the output.";
   if (session.verificationResult.status === "unavailable") return "Verification evidence is unavailable; manual inspection is still required.";
@@ -2606,6 +2618,8 @@ function describeAuditTrail(session: AgentRuntimeSession) {
 
 function humanizeRuntimeStatus(status: string) {
   switch (status) {
+    case "blocked":
+      return "blocked";
     case "needs_approval":
       return "waiting for review";
     case "completed":

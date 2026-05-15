@@ -49,7 +49,7 @@ export type PatchProposalStatus = "proposed" | "approved" | "rejected" | "applie
 export type VerificationStatus = "pending" | "passed" | "failed";
 export type VerificationCheckStatus = "not_run" | "running" | "passed" | "failed" | "skipped" | "unavailable" | "pending";
 
-export type RunMode = "quick_fix" | "normal_run" | "deep_audit" | "soak_mode" | "paranoid_mode";
+export type RunMode = "quick_fix" | "normal_run" | "deep_audit" | "soak_mode" | "paranoid_mode" | "run_to_green";
 
 export type RunPhaseId =
   | "inspect_workspace"
@@ -359,6 +359,15 @@ export type ReviewGateSummary = {
   unattributedFiles?: FileDiffAttribution[];
   unknownFiles?: FileDiffAttribution[];
   remainingUnknowns?: string[];
+  runToGreen?: {
+    status: RunToGreenStatus;
+    currentAttempt: number;
+    maxAttempts: number;
+    lastCommand?: string;
+    lastDiagnosis?: RunToGreenDiagnosis;
+    blockerReason?: string;
+    finalStatus: RunToGreenFinalStatus;
+  };
   unresolvedBlockers: string[];
   recommendation: ReviewRecommendation;
   summary: string;
@@ -462,6 +471,106 @@ export type ProjectContextPack = {
 
 export type ProjectRunIntent = "run_once" | "run_to_green" | "inspect_only" | "implement_module" | "unknown";
 
+export type RunToGreenStatus =
+  | "not_started"
+  | "running"
+  | "passed"
+  | "failed"
+  | "blocked"
+  | "max_attempts_reached"
+  | "cancelled";
+
+export type RunToGreenIntent = "run_to_green";
+
+export type RunToGreenFinalStatus = "green" | "not_green" | "blocked" | "unknown";
+
+export type RunToGreenCommandSource =
+  | "explicit_user_command"
+  | "module_verification_command"
+  | "project_intake_command"
+  | "context_pack_command"
+  | "package_script_detection"
+  | "launch_inference";
+
+export type RunToGreenSelectedCommand = {
+  command: string;
+  cwd: string;
+  source: RunToGreenCommandSource;
+  reason: string;
+};
+
+export type RunToGreenDiagnosisCategory =
+  | "dependency_missing"
+  | "script_missing"
+  | "type_error"
+  | "lint_error"
+  | "test_failure"
+  | "import_error"
+  | "config_error"
+  | "runtime_exception"
+  | "build_error"
+  | "port_in_use"
+  | "environment_error"
+  | "permission_error"
+  | "command_not_found"
+  | "unknown";
+
+export type RunToGreenDiagnosisConfidence = "high" | "medium" | "low" | "unknown";
+
+export type RunToGreenDiagnosis = {
+  category: RunToGreenDiagnosisCategory;
+  confidence: RunToGreenDiagnosisConfidence;
+  evidence: {
+    command: string;
+    exitCode?: number;
+    stdoutSummary?: string;
+    stderrSummary?: string;
+    filePath?: string;
+  };
+  safeFixAvailable: boolean;
+  requiresApproval: boolean;
+  reason: string;
+};
+
+export type RunToGreenAttemptStatus = "running" | "passed" | "failed" | "skipped";
+
+export type RunToGreenAttempt = {
+  attemptNumber: number;
+  command: string;
+  cwd: string;
+  startedAt: string;
+  completedAt?: string;
+  exitCode?: number;
+  status: RunToGreenAttemptStatus;
+  stdoutSummary?: string;
+  stderrSummary?: string;
+  diagnosis?: RunToGreenDiagnosis;
+  proposedFixSummary?: string;
+  changedFiles: string[];
+  scopeVerdict?: ScopeValidationVerdict;
+  rerunReason?: string;
+  stopReason?: string;
+};
+
+export type RunToGreenState = {
+  id: string;
+  sessionId: string;
+  status: RunToGreenStatus;
+  intent: RunToGreenIntent;
+  objective: string;
+  selectedCommands: RunToGreenSelectedCommand[];
+  currentAttempt: number;
+  maxAttempts: number;
+  attempts: RunToGreenAttempt[];
+  finalStatus: RunToGreenFinalStatus;
+  blockerReason?: string;
+  pendingRepairPatchId?: string;
+  pendingRerunCommand?: string;
+  pendingRerunReason?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ModulePlanSource =
   | "user_requested"
   | "inferred_from_intake"
@@ -543,6 +652,8 @@ export type ModuleExecutionSummary = {
   remainingRisks: string[];
   nextRecommendedAction?: string;
   scopeVerdict?: ScopeValidationVerdict;
+  runToGreenStatus?: RunToGreenStatus;
+  runToGreenAttempts?: number;
   summary: string;
   createdAt: string;
   updatedAt: string;
@@ -715,6 +826,7 @@ export type ArtifactType =
   | "context_pack"
   | "module_plan"
   | "module_execution_summary"
+  | "run_to_green"
   | "preview"
   | "readme"
   | "verification"

@@ -15,6 +15,7 @@ This branch is a release-candidate stabilization snapshot for the current OrchCo
 - Missing or partial data is shown honestly as unknown, unavailable, shared, unattributed, or manual-review-required.
 - Existing non-empty workspaces now trigger automatic project intake, conservative continuation detection, and compact context-pack generation before implementation planning proceeds.
 - Existing-project continuation now creates a scoped module execution plan, carries guardrails into worker contracts, and validates proposed changes against owned/caution/forbidden paths before review/apply.
+- `run_to_green` now uses a bounded repair loop: select a grounded command, diagnose failures conservatively, attempt only small scoped fixes, rerun, and stop on blockers, repeated failures, or max attempts.
 
 ## Known limitations
 
@@ -28,8 +29,9 @@ This branch is a release-candidate stabilization snapshot for the current OrchCo
 - Command safety still depends on heuristic policy classification and should not be treated as sandbox-grade containment.
 - Command provenance is now recorded more explicitly, but heuristic classification still does not equal sandboxing.
 - Background command tracking is more durable than before, but it is still not a full process supervisor and incomplete background jobs may restore as `orphaned` or `reconciliation_required`.
-- Run intent now models `run_to_green`, but the automated repair loop itself is still deferred to a later prompt.
-- Module-scope validation is a planning and review guardrail, not a perfect sandbox, and broader automated repair remains deferred to the next prompt.
+- `run_to_green` is now implemented as a bounded loop, but it still limits itself to grounded commands, small scoped fixes, and conservative stop conditions.
+- Module-scope validation is a planning and review guardrail, not a perfect sandbox, and broader autonomous repair remains intentionally limited.
+- Command policy remains heuristic rather than sandbox-grade, destructive fixes still require approval, and `run_to_green` is intentionally not an unlimited autonomous rewrite system.
 
 ## Manual QA checklist
 

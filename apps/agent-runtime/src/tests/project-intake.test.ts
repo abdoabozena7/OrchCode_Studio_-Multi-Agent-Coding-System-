@@ -34,6 +34,30 @@ test("empty workspace intake stays empty or unknown without fake certainty", asy
   }
 });
 
+test("zero visible files fail closed as unknown instead of fake empty project", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-intake-zero-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  try {
+    const intake = buildProjectIntake({
+      workspacePath: workspace,
+      message: "run this project",
+      projectMap: {
+        stack: [],
+        packageManagers: [],
+        testCommands: [],
+        entryPoints: [],
+        importantFiles: []
+      },
+      tools: new ToolRegistry(workspace)
+    });
+
+    assert.equal(intake.projectKind, "unknown");
+    assert.equal(intake.runIntent, "run_to_green");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("source plus config plus docs produces high-confidence existing project intake", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-intake-existing-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });

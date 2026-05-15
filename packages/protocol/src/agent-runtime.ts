@@ -39,7 +39,8 @@ import type {
   ProjectRunIntent,
   ModuleExecutionPlan,
   ModuleExecutionSummary,
-  ModuleScopeValidation
+  ModuleScopeValidation,
+  RunToGreenState
 } from "./models.js";
 
 export type AgentRuntimeMode = "demo_mock" | "real_provider";
@@ -66,6 +67,7 @@ export type RuntimeSessionStatus =
   | "running"
   | "completed"
   | "needs_approval"
+  | "blocked"
   | "failed"
   | "expired";
 
@@ -167,6 +169,7 @@ export type AgentRuntimeSession = {
   projectIntake?: ProjectIntake;
   contextPack?: ProjectContextPack;
   runIntent?: ProjectRunIntent;
+  runToGreen?: RunToGreenState;
   moduleExecutionPlan?: ModuleExecutionPlan;
   moduleExecutionSummaries?: ModuleExecutionSummary[];
   latestScopeValidation?: ModuleScopeValidation;

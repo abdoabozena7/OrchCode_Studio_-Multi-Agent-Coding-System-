@@ -536,7 +536,7 @@ function deriveRestoreDisposition(
   ) {
     return "reconciliation_required";
   }
-  if (session.status === "completed" || (hasAppliedPatch && reconciliation?.status === "matched" && verificationPassed)) {
+  if (session.status === "completed" || session.status === "blocked" || (hasAppliedPatch && reconciliation?.status === "matched" && verificationPassed)) {
     return "terminal";
   }
   return "resumable";
@@ -603,7 +603,7 @@ function synchronizeSessionForDisposition(session: AgentRuntimeSession, disposit
     }
     return;
   }
-  if (disposition === "terminal" && session.status !== "failed" && session.status !== "completed") {
+  if (disposition === "terminal" && session.status !== "failed" && session.status !== "completed" && session.status !== "blocked") {
     session.status = session.verificationResult?.status === "failed" ? "failed" : "completed";
     session.lifecycleStage = session.status === "failed" ? "FAILED" : "DONE";
     session.taskState.phase = session.status === "failed" ? "failed" : "completed";

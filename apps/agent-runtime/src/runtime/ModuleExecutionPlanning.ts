@@ -248,6 +248,8 @@ export function summarizeModuleExecution(
     ]).slice(0, 8),
     nextRecommendedAction: session.runSummary?.nextAction ?? session.projectIntake?.nextActionRecommendation,
     scopeVerdict: session.reviewGate?.scopeValidation?.verdict,
+    runToGreenStatus: session.runToGreen?.status,
+    runToGreenAttempts: session.runToGreen?.attempts.length,
     summary:
       status === "complete"
         ? "Scoped module execution completed with verification."

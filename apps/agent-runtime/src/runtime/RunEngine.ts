@@ -36,6 +36,7 @@ import {
 } from "./AgentTelemetry.js";
 import {
   buildProjectIntake,
+  classifyRunIntent,
   createProjectIntakeEvidenceRefs,
   createProjectIntakeWarnings,
   createProjectMapFromIntake,
@@ -46,6 +47,7 @@ import {
   summarizeModuleExecution,
   validatePatchAgainstModulePlan
 } from "./ModuleExecutionPlanning.js";
+import { initializeRunToGreenState } from "./RunToGreen.js";
 
 type RunPlanTask = {
   id?: string;
@@ -65,6 +67,7 @@ type RunPlanModel = {
   acceptanceCriteria: string[];
   risks: string[];
   suggestedCommands?: Array<{ command: string; reason: string }>;
+  fallbackWarning?: string;
 };
 
 type PatchIntentOperation = "create_file" | "replace_range" | "insert_after" | "insert_before" | "delete_range";
@@ -107,7 +110,8 @@ export class RunEngine {
     }
   ): Promise<AgentRuntimeSession> {
     const session = this.requireSession(sessionId);
-    const runMode = inferLocalRunMode(message, options.resolvedMode);
+    const requestedRunIntent = classifyRunIntent(message);
+    const runMode = inferLocalRunMode(message, options.resolvedMode, requestedRunIntent);
     const lastMessage = session.messages.at(-1);
     if (lastMessage?.role !== "user" || lastMessage.content !== message) {
       await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
@@ -238,6 +242,157 @@ export class RunEngine {
       importantFiles: snapshot.importantFiles
     }, "executed");
 
+    if (snapshot.runIntent === "run_to_green") {
+      const runToGreenPlan = createDeterministicFallbackPlan(message, snapshot, "run_to_green");
+      const modulePlan = shouldTreatProjectAsExisting(intake.projectKind)
+        ? buildModuleExecutionPlan({
+            sessionId,
+            workspaceRoot: session.workspacePath,
+            objective: message,
+            createdAt: new Date().toISOString(),
+            intake,
+            contextPack: intake.contextPack,
+            targetFiles: runToGreenPlan.tasks.flatMap((task) => task.targetFiles ?? []),
+            suggestedCommands: []
+          })
+        : undefined;
+      await this.applyPlanState(sessionId, runToGreenPlan, modulePlan);
+      await this.addArtifact(sessionId, "plan", "Run plan", runToGreenPlan.summary, {
+        plan: runToGreenPlan,
+        preset: options.resolvedMode
+      });
+      if (modulePlan) {
+        await this.addIntent(sessionId, "module.plan.requested", modulePlan.title, modulePlan.rationale, {
+          modulePlanId: modulePlan.id,
+          ownedPaths: modulePlan.ownedPaths,
+          cautionPaths: modulePlan.cautionPaths,
+          forbiddenPaths: modulePlan.forbiddenPaths
+        }, "executed");
+        await this.addArtifact(sessionId, "module_plan", modulePlan.title, modulePlan.rationale, { modulePlan });
+      }
+      await this.addDecisionRecord(sessionId, {
+        category: "decision",
+        finding: "Run-to-green request bypassed brittle provider task planning.",
+        decision: "Use deterministic run-to-green startup tasks so command selection stays on the critical path.",
+        rationaleSummary: runToGreenPlan.reasoningSummary,
+        evidenceRefs: createProjectIntakeEvidenceRefs(intake),
+        linkedFiles: intake.importantFiles.slice(0, 6),
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+      await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", runToGreenPlan.reasoningSummary || runToGreenPlan.summary);
+      await this.updateRunPhase(sessionId, "split_agents", "completed", `Prepared ${runToGreenPlan.tasks.length} deterministic run-to-green task(s).`, runToGreenPlan.tasks.length);
+
+      const recommendation = inferProjectLaunch(session.workspacePath, tools.workspace);
+      const runToGreen = initializeRunToGreenState({
+        sessionId,
+        workspacePath: session.workspacePath,
+        message,
+        modulePlan,
+        intake,
+        contextPack: intake.contextPack,
+        launchRecommendation: recommendation,
+        now: new Date().toISOString()
+      });
+      const commandRequests = runToGreen.selectedCommands.length
+        ? createCommandRequests(sessionId, session.workspacePath, [{
+            command: runToGreen.selectedCommands[0]!.command,
+            reason: runToGreen.selectedCommands[0]!.reason
+          }], [])
+        : [];
+      for (const request of commandRequests) {
+        await this.addIntent(sessionId, "command.requested", request.command, request.reason, { commandRequestId: request.id, risk: request.risk }, request.status === "blocked" ? "blocked" : "proposed");
+        await this.sessionManager.addCommandRequest(sessionId, request);
+      }
+      const verification = await this.createVerification(sessionId, commandRequests.length
+        ? "Run-to-green verification is pending until Rust runs the selected command."
+        : (runToGreen.blockerReason ?? "Run-to-green was blocked before command execution."), [
+        { name: "Run-to-green intent", status: "passed", detail: "Bounded repair loop was initialized." },
+        {
+          name: "Command selection",
+          status: commandRequests.length ? "passed" : "unavailable",
+          detail: commandRequests[0]?.command ?? (runToGreen.blockerReason ?? "No grounded command could be selected.")
+        },
+        {
+          name: "Rust command execution",
+          status: commandRequests.length ? "pending" : "not_run",
+          detail: commandRequests[0]?.command ?? "No grounded command was selected, so Rust command execution was not started."
+        }
+      ]);
+      await this.addIntent(sessionId, "validation.requested", "Run-to-green verification", verification.summary, { verificationId: verification.id }, commandRequests.length ? "proposed" : "blocked");
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.runToGreen = runToGreen;
+        draft.status = commandRequests.length ? "needs_approval" : "blocked";
+        draft.lifecycleStage = commandRequests.length ? "APPROVAL" : "BLOCKED";
+        draft.reasoningSummaries.push(runToGreenPlan.reasoningSummary);
+        draft.previewRecommendation = recommendation?.preview;
+        draft.nextAction = commandRequests.length
+          ? { kind: "approve_commands", message: "Approve the selected run-to-green command to start the bounded repair loop through Rust." }
+          : undefined;
+        draft.reviewGate = createRunToGreenReviewGate(draft, verification, commandRequests);
+        updateAgentRunRecord(draft, "agent_local_codex", (agent) => {
+          agent.status = commandRequests.length ? "blocked" : "blocked";
+          agent.lifecycleStage = commandRequests.length ? "APPROVAL" : "BLOCKED";
+          agent.currentAction = commandRequests.length
+            ? "Waiting for operator review before Rust starts the selected run-to-green command."
+            : (runToGreen.blockerReason ?? "Run-to-green stopped before command execution.");
+          agent.lastEvent = commandRequests.length ? "awaiting:command-approval" : "blocked:no-grounded-command";
+          if (!commandRequests.length) {
+            agent.completedAt = new Date().toISOString();
+          }
+        });
+      });
+      await this.addArtifact(sessionId, "run_to_green", "Run-to-green state", commandRequests.length ? "Bounded repair loop initialized." : "Run-to-green blocked before the first attempt.", { runToGreen });
+      await this.addDecisionRecord(sessionId, {
+        category: commandRequests.length ? "decision" : "risk",
+        finding: commandRequests.length
+          ? "Run-to-green intent selected a grounded project command."
+          : "Run-to-green intent could not find a grounded project command.",
+        decision: commandRequests.length
+          ? `Start the bounded repair loop with ${commandRequests[0]?.command}.`
+          : "Block the repair loop instead of inventing a command.",
+        rationaleSummary: commandRequests.length
+          ? runToGreen.selectedCommands[0]?.reason ?? "Selected from grounded workspace signals."
+          : runToGreen.blockerReason ?? "No grounded command was available.",
+        evidenceRefs: createProjectIntakeEvidenceRefs(intake),
+        linkedFiles: intake.importantFiles.slice(0, 4),
+        uncertainty: !commandRequests.length ? runToGreen.blockerReason : undefined,
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+      await this.updateRunPhase(sessionId, "agents_running", "completed", "Inspection completed and run-to-green command selection finished.");
+      await this.updateRunPhase(sessionId, "run_verification", commandRequests.length ? "active" : "blocked", verification.summary, verification.checks.length);
+      await this.updateRunPhase(sessionId, "review_final_diff", commandRequests.length ? "active" : "blocked", commandRequests.length ? "Run-to-green is waiting for command approval or a repair result." : "No grounded run command was found.");
+      await this.updateRunPhase(sessionId, "final_report", commandRequests.length ? "active" : "blocked", commandRequests.length ? "Run-to-green is blocked on the first command approval." : "Run-to-green was blocked before execution.");
+      await this.sessionManager.setRunSummary(sessionId, {
+        status: "blocked",
+        summary: commandRequests.length
+          ? `Prepared run-to-green command: ${commandRequests[0]?.command}`
+          : runToGreen.blockerReason ?? "No launch, build, start, or test command could be inferred safely.",
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: commandRequests.map((request) => `${request.command}: ${request.status}`),
+        gates: verification.checks.map((check) => ({
+          name: check.name,
+          status: check.status === "failed" ? "failed" : check.status === "passed" ? "passed" : "blocked",
+          notes: [check.detail]
+        })),
+        nextAction: commandRequests.length ? "Approve the command, then inspect the command result artifact." : "Open the static workspace manually or configure a run script.",
+        createdAt: new Date().toISOString()
+      });
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: commandRequests.length
+          ? `I selected a run-to-green command and prepared it for approval.\n\nCommand: \`${commandRequests[0]?.command}\`\n\nReasoning summary: ${runToGreen.selectedCommands[0]?.reason ?? "Selected from grounded workspace signals."}`
+          : `I inspected the workspace, but I could not infer a grounded run command.\n\n${runToGreen.blockerReason ?? "No grounded command was available."}`
+      });
+      await this.updateStage(sessionId, commandRequests.length ? "APPROVAL" : "BLOCKED", "reviewing", commandRequests.length ? "completed" : "blocked", "Run-to-green command", runToGreen.selectedCommands[0]?.reason ?? runToGreen.blockerReason ?? "No run-to-green command inferred.");
+      return this.requireSession(sessionId);
+    }
+
     const plan = await this.createPlan(session, message, snapshot, options.resolvedMode);
     const modulePlan =
       shouldTreatProjectAsExisting(intake.projectKind)
@@ -252,38 +407,28 @@ export class RunEngine {
             suggestedCommands: plan.suggestedCommands?.map((item) => item.command) ?? []
           })
         : undefined;
-    const agentPlan = toAgentPlan(plan);
-    await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.plan = agentPlan;
-      if (modulePlan) {
-        draft.moduleExecutionPlan = modulePlan;
-      }
-      draft.tasks = plan.tasks.map((task, index) => ({
-        id: task.id ?? `task_${index + 1}`,
-        sessionId,
-        title: task.title,
-        status: "todo",
-        agentRole: task.roleTitle,
-        createdAt: new Date().toISOString()
-      }));
-      const plannedAgents = buildPlannedAgentContracts(sessionId, plan, draft.createdAt, modulePlan);
-      for (const plannedAgent of plannedAgents) {
-        upsertAgentRunRecord(draft, plannedAgent);
-      }
-      draft.taskState.phase = "planning";
-      draft.taskState.version += 1;
-      draft.taskState.transitions.push({
-        id: randomId("transition"),
-        phase: "planning",
-        type: "plan.updated",
-        detail: `Plan updated with ${plan.tasks.length} task(s)`,
-        createdAt: new Date().toISOString()
-      });
-    });
+    await this.applyPlanState(sessionId, plan, modulePlan);
     await this.addArtifact(sessionId, "plan", "Run plan", plan.summary, {
       plan,
       preset: options.resolvedMode
     });
+    if (plan.fallbackWarning) {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.reasoningSummaries.push(plan.fallbackWarning!);
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "risk",
+        finding: "Model returned malformed structured output.",
+        decision: "Use the deterministic fallback plan instead of failing the run.",
+        rationaleSummary: plan.fallbackWarning,
+        evidenceRefs: [],
+        linkedFiles: snapshot.importantFiles.slice(0, 4),
+        uncertainty: plan.fallbackWarning,
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+    }
     if (modulePlan) {
       await this.addIntent(sessionId, "module.plan.requested", modulePlan.title, modulePlan.rationale, {
         modulePlanId: modulePlan.id,
@@ -370,58 +515,6 @@ export class RunEngine {
         content: `I prepared the run plan and stopped before action.\n\n${plan.summary}`
       });
       await this.updateRunPhase(sessionId, "review_final_diff", "active", "Plan is waiting for operator confirmation before implementation.");
-      return this.requireSession(sessionId);
-    }
-
-    if (isLaunchRequest(message)) {
-      const recommendation = inferProjectLaunch(session.workspacePath, tools.workspace);
-      const commandRequests = recommendation?.command
-        ? createCommandRequests(sessionId, session.workspacePath, [{ command: recommendation.command, reason: recommendation.reason }], [])
-        : [];
-      for (const request of commandRequests) {
-        await this.addIntent(sessionId, "command.requested", request.command, request.reason, { commandRequestId: request.id, risk: request.risk }, request.status === "blocked" ? "blocked" : "proposed");
-        await this.sessionManager.addCommandRequest(sessionId, request);
-      }
-      const verification = await this.createVerification(sessionId, "Launch verification is pending until Rust runs the approved command.", [
-        { name: "Launch path inferred", status: recommendation ? "passed" : "failed", detail: recommendation?.reason ?? "No launch path was found." },
-        { name: "Rust command execution", status: commandRequests.length ? "pending" : "failed", detail: commandRequests[0]?.command ?? "No command to execute." }
-      ]);
-      await this.addIntent(sessionId, "validation.requested", "Launch verification", verification.summary, { verificationId: verification.id }, commandRequests.length ? "proposed" : "blocked");
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.status = commandRequests.length ? "needs_approval" : "failed";
-        draft.lifecycleStage = commandRequests.length ? "APPROVAL" : "FAILED";
-        draft.reasoningSummaries.push(
-          snapshot.runIntent === "run_to_green"
-            ? "Run-to-green intent was recorded, but this prompt only prepares the first Rust-mediated run and does not implement the repair loop yet."
-            : "I inferred a launch command but left execution to Rust command authority."
-        );
-        draft.previewRecommendation = recommendation?.preview;
-        draft.nextAction = commandRequests.length
-          ? { kind: "approve_commands", message: "Approve the launch command to run it through Rust." }
-          : undefined;
-      });
-      await this.updateRunPhase(sessionId, "agents_running", "completed", "Inspection completed and launch path prepared.");
-      await this.updateRunPhase(sessionId, "run_verification", commandRequests.length ? "active" : "failed", verification.summary, verification.checks.length);
-      await this.updateRunPhase(sessionId, "review_final_diff", commandRequests.length ? "active" : "blocked", commandRequests.length ? "Command review is waiting for operator approval." : "No safe launch command was found.");
-      await this.updateRunPhase(sessionId, "final_report", commandRequests.length ? "active" : "completed", commandRequests.length ? "Run is blocked on command approval." : "Launch inference failed.");
-      await this.sessionManager.setRunSummary(sessionId, {
-        status: commandRequests.length ? "blocked" : "failed",
-        summary: recommendation ? `Prepared launch command: ${recommendation.command}` : "No launch command could be inferred.",
-        filesChanged: [],
-        appliedPatchIds: [],
-        proposedPatchIds: [],
-        commandResults: commandRequests.map((request) => `${request.command}: ${request.status}`),
-        gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
-        nextAction: commandRequests.length ? "Approve the command, then inspect the command result artifact." : "Add a package script or tell me the launch command.",
-        createdAt: new Date().toISOString()
-      });
-      await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
-        content: recommendation
-          ? `I found a launch path and prepared it for approval.\n\nCommand: \`${recommendation.command}\`\n\nReasoning summary: ${recommendation.reason}${snapshot.runIntent === "run_to_green" ? "\n\nRun-to-green intent was recorded, but automated repair is not implemented in this prompt yet." : ""}`
-          : "I inspected the workspace, but I could not infer a launch command."
-      });
-      await this.updateStage(sessionId, commandRequests.length ? "APPROVAL" : "FAILED", "reviewing", commandRequests.length ? "completed" : "failed", "Launch command", recommendation?.reason ?? "No launch command inferred.");
       return this.requireSession(sessionId);
     }
 
@@ -655,11 +748,50 @@ export class RunEngine {
       `Project intake: ${JSON.stringify(snapshot.intake)}`,
       `Context pack: ${JSON.stringify(snapshot.contextPack)}`
     ].join("\n");
-    const generated = await this.provider.generateStructured<Partial<RunPlanModel>>(
-      { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent.", userPrompt: prompt },
-      runPlanSchema
-    );
-    return normalizePlan(generated, message, snapshot);
+    try {
+      const generated = await this.provider.generateStructured<Partial<RunPlanModel>>(
+        { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent.", userPrompt: prompt },
+        runPlanSchema
+      );
+      const validation = validateStructuredOutput(generated, runPlanSchema);
+      if (!validation.valid) {
+        return createDeterministicFallbackPlan(message, snapshot, inferFallbackPlanKind(snapshot), `Model returned malformed structured output; deterministic fallback plan was used.`);
+      }
+      return normalizePlan(generated, message, snapshot);
+    } catch {
+      return createDeterministicFallbackPlan(message, snapshot, inferFallbackPlanKind(snapshot), `Model returned malformed structured output; deterministic fallback plan was used.`);
+    }
+  }
+
+  private async applyPlanState(sessionId: string, plan: RunPlanModel, modulePlan?: ReturnType<typeof buildModuleExecutionPlan>) {
+    const agentPlan = toAgentPlan(plan);
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.plan = agentPlan;
+      if (modulePlan) {
+        draft.moduleExecutionPlan = modulePlan;
+      }
+      draft.tasks = plan.tasks.map((task, index) => ({
+        id: task.id ?? `task_${index + 1}`,
+        sessionId,
+        title: task.title,
+        status: "todo",
+        agentRole: task.roleTitle,
+        createdAt: new Date().toISOString()
+      }));
+      const plannedAgents = buildPlannedAgentContracts(sessionId, plan, draft.createdAt, modulePlan);
+      for (const plannedAgent of plannedAgents) {
+        upsertAgentRunRecord(draft, plannedAgent);
+      }
+      draft.taskState.phase = "planning";
+      draft.taskState.version += 1;
+      draft.taskState.transitions.push({
+        id: randomId("transition"),
+        phase: "planning",
+        type: "plan.updated",
+        detail: `Plan updated with ${plan.tasks.length} task(s)`,
+        createdAt: new Date().toISOString()
+      });
+    });
   }
 
   private async createPatchIntent(session: AgentRuntimeSession, message: string, snapshot: RepoSnapshot, plan: RunPlanModel): Promise<RunPatchIntentModel> {
@@ -693,10 +825,22 @@ export class RunEngine {
   }
 
   private async createVerification(sessionId: string, summary: string, checks: VerificationResult["checks"]) {
+    const status =
+      checks.some((check) => check.status === "failed")
+        ? "failed"
+        : checks.some((check) => check.status === "running" || check.status === "pending")
+          ? "pending"
+          : checks.some((check) => check.status === "unavailable")
+            ? "unavailable"
+            : checks.every((check) => check.status === "skipped" || check.status === "not_run")
+              ? "skipped"
+              : checks.some((check) => check.status === "skipped" || check.status === "not_run")
+                ? "skipped"
+                : "passed";
     const verification: VerificationResult = {
       id: randomId("verification"),
       sessionId,
-      status: checks.some((check) => check.status === "failed") ? "failed" : checks.some((check) => check.status === "pending") ? "pending" : "passed",
+      status,
       summary,
       checks,
       createdAt: new Date().toISOString()
@@ -1330,13 +1474,110 @@ function updateRunPhaseRecord(
   });
 }
 
-function inferLocalRunMode(message: string, resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">): RunMode {
+function inferLocalRunMode(
+  message: string,
+  resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">,
+  runIntent: ReturnType<typeof classifyRunIntent>
+): RunMode {
   const normalized = message.toLowerCase();
+  if (runIntent === "run_to_green") return "run_to_green" as RunMode;
   if (/\b(paranoid|double check|double-check|review twice)\b/.test(normalized)) return "paranoid_mode";
   if (/\b(soak|stability|burn in|burn-in|retry a lot)\b/.test(normalized)) return "soak_mode";
   if (/\b(audit|deep|inspect thoroughly|thorough|analyze deeply)\b/.test(normalized)) return "deep_audit";
   if (resolvedMode === "simple_mode" && /\b(tiny|small|quick|minor)\b/.test(normalized)) return "quick_fix";
   return "normal_run";
+}
+
+function inferFallbackPlanKind(snapshot: RepoSnapshot) {
+  return snapshot.runIntent === "run_to_green"
+    ? "run_to_green"
+    : snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
+      ? "existing_project_continuation"
+      : "generic";
+}
+
+function createDeterministicFallbackPlan(
+  message: string,
+  snapshot: RepoSnapshot,
+  kind: "run_to_green" | "existing_project_continuation" | "generic",
+  warning?: string
+): RunPlanModel {
+  if (kind === "run_to_green") {
+    return {
+      summary: "Use a deterministic run-to-green startup plan.",
+      reasoningSummary: "Skip brittle provider planning and move directly from intake to grounded command selection for the bounded repair loop.",
+      mode: "inspect_only",
+      tasks: [
+        {
+          title: "Inspect runnable workspace",
+          objective: "Verify visible project files and identify runnable commands.",
+          roleTitle: "Workspace Inspector",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        },
+        {
+          title: "Select grounded run command",
+          objective: "Choose a run/build/test command from project metadata or block if none is available.",
+          roleTitle: "Run Planner",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        },
+        {
+          title: "Execute bounded run-to-green",
+          objective: "Run the selected command and attempt only small scoped repairs.",
+          roleTitle: "Verification Runner",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        }
+      ],
+      acceptanceCriteria: ["A grounded command is selected or the run blocks safely.", "The bounded repair loop stays scoped and reviewable."],
+      risks: uniqueStrings([warning ?? "", ...(snapshot.intake?.warnings ?? []), ...(snapshot.intake?.unknowns ?? [])]).filter(Boolean),
+      fallbackWarning: warning
+    };
+  }
+  if (kind === "existing_project_continuation") {
+    return {
+      summary: "Use a deterministic continuation plan for the existing project.",
+      reasoningSummary: "Structured planner output was unavailable, so continuation falls back to a compact scoped workflow.",
+      mode: "inspect_only",
+      tasks: [
+        {
+          title: "Build context pack",
+          objective: "Summarize the existing project and relevant files for scoped implementation.",
+          roleTitle: "Project Mapper",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        },
+        {
+          title: "Create scoped module plan",
+          objective: "Define allowed paths, forbidden paths, acceptance criteria, and verification commands.",
+          roleTitle: "Module Planner",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        },
+        {
+          title: "Validate changes before apply",
+          objective: "Ensure proposed changes stay within the module plan before review.",
+          roleTitle: "Scope Guard",
+          targetFiles: snapshot.importantFiles.slice(0, 4)
+        }
+      ],
+      acceptanceCriteria: snapshot.contextPack?.acceptanceCriteriaDraft?.length ? snapshot.contextPack.acceptanceCriteriaDraft : ["Keep changes scoped to the existing project.", "Validate changes before apply."],
+      risks: uniqueStrings([warning ?? "", ...(snapshot.intake?.warnings ?? []), ...(snapshot.intake?.unknowns ?? [])]).filter(Boolean),
+      fallbackWarning: warning
+    };
+  }
+  return {
+    summary: "Use a deterministic fallback plan.",
+    reasoningSummary: "Structured planner output was unavailable, so the run fell back to a minimal deterministic plan.",
+    mode: inferRunMode(message, snapshot),
+    tasks: [
+      {
+        title: "Inspect workspace",
+        objective: "Inspect visible files and identify the safest next step.",
+        roleTitle: "Workspace Inspector",
+        targetFiles: snapshot.importantFiles.slice(0, 4)
+      }
+    ],
+    acceptanceCriteria: ["The next step is grounded in visible workspace evidence."],
+    risks: warning ? [warning] : [],
+    fallbackWarning: warning
+  };
 }
 
 function createSnapshotEvidenceRefs(snapshot: RepoSnapshot): EvidenceRef[] {
@@ -1584,6 +1825,36 @@ function createPendingReviewGate(
         : scopeValidation?.verdict === "needs_review"
           ? "Reviewable diff is ready, but scope-sensitive changes require careful review before apply."
           : "Reviewable diff is ready, but Rust apply and verification have not completed yet."
+  };
+}
+
+function createRunToGreenReviewGate(
+  session: AgentRuntimeSession,
+  verification: VerificationResult,
+  commandRequests: CommandRequest[]
+): ReviewGateSummary {
+  const gate = buildAttributedReviewGate(session, verification);
+  const unresolvedBlockers = commandRequests.length
+    ? ["Rust command execution is pending approval or result reporting."]
+    : [session.runToGreen?.blockerReason ?? "No grounded run command was found."];
+  return {
+    ...gate,
+    runToGreen: session.runToGreen
+      ? {
+          status: session.runToGreen.status,
+          currentAttempt: session.runToGreen.currentAttempt,
+          maxAttempts: session.runToGreen.maxAttempts,
+          lastCommand: session.runToGreen.attempts.at(-1)?.command,
+          lastDiagnosis: session.runToGreen.attempts.at(-1)?.diagnosis,
+          blockerReason: session.runToGreen.blockerReason,
+          finalStatus: session.runToGreen.finalStatus
+        }
+      : undefined,
+    unresolvedBlockers,
+    recommendation: commandRequests.length ? "caution" : "do_not_apply",
+    summary: commandRequests.length
+      ? "Run-to-green is initialized and waiting for command execution results."
+      : session.runToGreen?.blockerReason ?? "Run-to-green was blocked before command execution."
   };
 }
 

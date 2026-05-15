@@ -122,6 +122,7 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
     tests: testFiles.length
   });
   const projectKind = inferProjectKind({
+    message,
     sourceFiles: sourceFiles.length,
     configFiles: configFiles.length,
     docs: docFiles.length,
@@ -323,6 +324,7 @@ function inferConfidence(input: {
 }
 
 function inferProjectKind(input: {
+  message: string;
   sourceFiles: number;
   configFiles: number;
   docs: number;
@@ -333,7 +335,7 @@ function inferProjectKind(input: {
 }): ProjectKind {
   const meaningfulSignals = Number(input.sourceFiles > 0) + Number(input.configFiles > 0) + Number(input.docs > 0) + Number(input.entryPoints > 0);
   if (meaningfulSignals === 0) {
-    return input.tests > 0 ? "unknown" : "empty_project";
+    return /\b(create|new|scaffold|generate|make a new)\b/i.test(input.message) ? "empty_project" : "unknown";
   }
   if (input.gitChanges > 0 || input.todos > 0) {
     return "mid_progress_project";

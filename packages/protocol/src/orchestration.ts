@@ -175,7 +175,7 @@ export type RunSummary = {
   commandResults: string[];
   gates: Array<{
     name: string;
-    status: "passed" | "failed";
+    status: "passed" | "failed" | "blocked";
     notes: string[];
   }>;
   nextAction?: string;

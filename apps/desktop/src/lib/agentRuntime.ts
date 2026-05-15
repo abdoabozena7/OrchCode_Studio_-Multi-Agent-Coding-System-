@@ -112,6 +112,8 @@ export function subscribeRuntimeEvents(
     "runtime.verification.pending",
     "runtime.verification.passed",
     "runtime.verification.failed",
+    "runtime.verification.unavailable",
+    "runtime.verification.skipped",
     "runtime.patch.stats.updated",
     "runtime.run.completed",
     "runtime.orchestration.event",

@@ -527,14 +527,15 @@ export class SessionManager {
     await this.updateSession(sessionId, (session) => {
       session.runSummary = summary;
       const taskState = asManagedTaskState(session.taskState);
-      taskState.finalStatus =
-        summary.status === "blocked" ? "needs_approval" : summary.status;
+      taskState.finalStatus = summary.status === "blocked" ? "blocked" : summary.status;
       if (summary.status === "completed") {
         taskState.phase = "completed";
         pushTaskTransition(taskState, "session.completed", summary.summary);
       } else if (summary.status === "failed") {
         taskState.phase = "failed";
         pushTaskTransition(taskState, "session.failed", summary.summary);
+      } else if (summary.status === "blocked") {
+        taskState.phase = "verification_pending";
       }
     });
     this.eventBus.publish({ type: "runtime.run.completed", sessionId, summary });
@@ -769,7 +770,7 @@ function hydrateSession(
   taskState.restoreState = {
     source: "snapshot_restored",
     disposition:
-      session.status === "completed" || session.status === "failed"
+      session.status === "completed" || session.status === "failed" || session.status === "blocked"
         ? "terminal"
         : session.status === "expired"
           ? "expired"
@@ -789,6 +790,25 @@ function hydrateSession(
   if (taskState.phase === "created") {
     taskState.phase = "restored";
   }
+  if (session.runToGreen?.status === "running") {
+    session.runToGreen.status = "blocked";
+    session.runToGreen.finalStatus = "blocked";
+    session.runToGreen.blockerReason = "Run-to-green restored during an in-flight attempt; manual inspection is required before treating it as green.";
+    session.runToGreen.updatedAt = new Date().toISOString();
+    const activeAttempt = session.runToGreen.attempts.find((attempt) => attempt.attemptNumber === session.runToGreen?.currentAttempt);
+    if (activeAttempt && !activeAttempt.completedAt) {
+      activeAttempt.stopReason = session.runToGreen.blockerReason;
+    }
+    taskState.restoreState = {
+      ...taskState.restoreState,
+      disposition: "reconciliation_required",
+      warnings: uniqueStrings([
+        ...taskState.restoreState.warnings,
+        "Run-to-green was in progress during restore, so the session requires manual reconciliation."
+      ]),
+      reason: session.runToGreen.blockerReason
+    };
+  }
   pushTaskTransition(taskState, "session.restored", "Session restored from durable runtime snapshot");
   return session;
 }
@@ -800,6 +820,10 @@ function upsertById<T extends { id: string }>(collection: T[], value: T) {
     return;
   }
   collection.push(value);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function normalizeAccessProfile(profile: AccessProfileInput | undefined): AccessProfile {

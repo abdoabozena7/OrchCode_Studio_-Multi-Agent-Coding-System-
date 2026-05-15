@@ -6,7 +6,7 @@ import test from "node:test";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
-test("run this project uses launch inference instead of patch proposals for static module workspaces", async () => {
+test("run this project blocks with a grounded reason for static module workspaces without scripts", async () => {
   process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS = "1";
   const workspace = path.join(os.tmpdir(), `orchcode-run-static-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-run-static-storage-${Date.now()}`);
@@ -29,12 +29,20 @@ test("run this project uses launch inference instead of patch proposals for stat
   const turn = await runtime.runTurn(created.sessionId, "run this project");
   const session = runtime.getSession(created.sessionId);
 
-  assert.equal(turn.status, "needs_approval");
+  assert.equal(turn.status, "blocked");
+  assert.equal(session?.status, "blocked");
+  assert.equal(session?.lifecycleStage, "BLOCKED");
+  assert.equal(session?.runMode, "run_to_green");
   assert.equal(session?.patchProposals.length, 0);
-  assert.equal(session?.commandRequests[0]?.command.includes("python -m http.server"), true);
+  assert.equal(session?.commandRequests.length, 0);
   assert.equal(session?.commandExecutions.length, 0);
   assert.equal(session?.previewRecommendation?.type, "url");
-  assert.equal(session?.nextAction?.kind, "approve_commands");
+  assert.match(session?.runToGreen?.blockerReason ?? "", /No grounded run command/i);
+  assert.equal(session?.verificationResult?.status, "unavailable");
+  assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
+  assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+  assert.equal(session?.runSummary?.status, "blocked");
+  assert.equal(session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "blocked");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
@@ -64,6 +72,7 @@ test("run this project prefers package manager dev scripts in package.json works
   await runtime.runTurn(created.sessionId, "run this project");
   const session = runtime.getSession(created.sessionId);
 
+  assert.equal(session?.runMode, "run_to_green");
   assert.equal(session?.patchProposals.length, 0);
   assert.equal(session?.commandRequests[0]?.command, "npm run dev");
   assert.equal(session?.previewRecommendation?.target, "http://127.0.0.1:4409");
