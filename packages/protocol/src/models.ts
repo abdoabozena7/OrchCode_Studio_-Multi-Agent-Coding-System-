@@ -47,6 +47,7 @@ export type PatchRiskLevel = "low" | "medium" | "high";
 export type PatchProposalStatus = "proposed" | "approved" | "rejected" | "applied" | "apply_failed";
 
 export type VerificationStatus = "pending" | "passed" | "failed";
+export type VerificationCheckStatus = "not_run" | "running" | "passed" | "failed" | "skipped" | "unavailable" | "pending";
 
 export type RunMode = "quick_fix" | "normal_run" | "deep_audit" | "soak_mode" | "paranoid_mode";
 
@@ -103,8 +104,12 @@ export type CommandLifecycleEventType =
 
 export type VerificationLifecycleEventType =
   | "verification.pending"
+  | "verification.running"
   | "verification.passed"
-  | "verification.failed";
+  | "verification.failed"
+  | "verification.not_run"
+  | "verification.skipped"
+  | "verification.unavailable";
 
 export type RuntimeLifecycleEventType =
   | SessionLifecycleEventType
@@ -113,29 +118,156 @@ export type RuntimeLifecycleEventType =
   | VerificationLifecycleEventType
   | "plan.updated";
 
+type EvidenceRefBase = {
+  id?: string;
+  category?: string;
+  reason?: string;
+  note?: string;
+  linkedDecisionId?: string;
+  linkedAgentId?: string;
+};
+
+export type AgentWorkJournalKind =
+  | "planning"
+  | "inspected_file"
+  | "edited_file"
+  | "proposed_patch"
+  | "command_requested"
+  | "command_completed"
+  | "test_run"
+  | "decision"
+  | "evidence_added"
+  | "risk_identified"
+  | "blocked"
+  | "completed";
+
+export type AgentWorkJournalStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "blocked"
+  | "failed";
+
+export type DiffAttributionConfidence =
+  | "exact"
+  | "reported"
+  | "owned"
+  | "inferred"
+  | "shared"
+  | "unattributed"
+  | "unknown";
+
+export type AgentWorkJournalEntry = {
+  id: string;
+  agentId: string;
+  timestamp: string;
+  kind: AgentWorkJournalKind;
+  title: string;
+  summary: string;
+  filePath?: string;
+  command?: string;
+  linkedDecisionId?: string;
+  linkedEvidenceRefId?: string;
+  severity?: "low" | "medium" | "high";
+  status?: AgentWorkJournalStatus;
+};
+
 export type EvidenceRef =
-  | {
+  | (EvidenceRefBase & {
       type: "file";
       path: string;
       lineHint?: string;
+      lineStart?: number;
+      lineEnd?: number;
       symbol?: string;
-      note?: string;
-    }
-  | {
+      componentName?: string;
+    })
+  | (EvidenceRefBase & {
       type: "command";
       commandId: string;
-      note?: string;
-    }
-  | {
+    })
+  | (EvidenceRefBase & {
       type: "artifact";
       artifactId: string;
-      note?: string;
-    }
-  | {
+    })
+  | (EvidenceRefBase & {
       type: "test";
       testName: string;
-      note?: string;
-    };
+    });
+
+export type AgentRiskRef = {
+  id: string;
+  agentId?: string;
+  filePath?: string;
+  lifecycleArea?: string;
+  severity: "low" | "medium" | "high";
+  reason: string;
+  mitigation?: string;
+  status?: "open" | "mitigated" | "accepted";
+  linkedDecisionId?: string;
+  linkedEvidenceRefs?: EvidenceRef[];
+};
+
+export type DiffFileStat = {
+  path: string;
+  changeType: "create" | "modify" | "delete";
+  additions?: number;
+  deletions?: number;
+};
+
+export type FileDiffAttribution = DiffFileStat & {
+  confidence: DiffAttributionConfidence;
+  agentIds?: string[];
+  agentNames?: string[];
+  reason?: string;
+};
+
+export type GlobalDiffSummary = {
+  source: "patch_unified_diff" | "run_summary" | "unknown";
+  changedFiles: number;
+  additions?: number;
+  deletions?: number;
+  files: DiffFileStat[];
+};
+
+export type ReconciliationStatus = "not_run" | "pending" | "matched" | "diverged" | "unavailable" | "failed";
+export type ReconciliationConfidence = "exact" | "high" | "partial" | "unknown";
+
+export type WorkspaceDiffSnapshot = {
+  available: boolean;
+  isGitRepo?: boolean;
+  changedFiles?: string[];
+  diffText?: string;
+  dirty?: boolean;
+  checkedAt?: string;
+};
+
+export type ReconciliationReport = {
+  status: ReconciliationStatus;
+  patchId?: string;
+  sourceDiffId?: string;
+  checkedAt?: string;
+  checkedBy: "runtime" | "rust" | "git" | "system";
+  confidence: ReconciliationConfidence;
+  reason: string;
+  retryable: boolean;
+  proposed?: GlobalDiffSummary;
+  actual?: GlobalDiffSummary;
+  matchedFiles: string[];
+  missingFiles: string[];
+  extraFiles: string[];
+  changedFilesWithDifferentStats: Array<{
+    path: string;
+    proposedAdditions?: number;
+    proposedDeletions?: number;
+    actualAdditions?: number;
+    actualDeletions?: number;
+  }>;
+  sharedOrAmbiguousFiles: FileDiffAttribution[];
+  dirtyBeforeApply?: boolean;
+  dirtyAfterApply?: boolean;
+  unknowns: string[];
+};
 
 export type DecisionRecord = {
   id: string;
@@ -148,6 +280,8 @@ export type DecisionRecord = {
   linkedFiles: string[];
   uncertainty?: string;
   createdByAgent: string;
+  createdByAgentId?: string;
+  linkedAgentIds?: string[];
   createdAt: string;
 };
 
@@ -166,19 +300,47 @@ export type ReviewGateSummary = {
   totalFilesChanged: number;
   totalAdditions?: number;
   totalDeletions?: number;
+  globalDiff?: GlobalDiffSummary;
+  actualDiff?: GlobalDiffSummary;
+  reconciliation?: ReconciliationReport;
   changesByAgent: Array<{
+    agentId?: string;
     agentName: string;
+    confidence?: DiffAttributionConfidence;
     fileCount: number;
     additions?: number;
     deletions?: number;
     files: string[];
+    lineTotalsKnown?: boolean;
   }>;
   riskyAreas: string[];
   verificationChecks: Array<{
+    id?: string;
+    label?: string;
+    command?: string;
     name: string;
-    status: VerificationStatus;
+    status: VerificationCheckStatus;
     detail: string;
+    agentId?: string;
+    agentName?: string;
+    scope?: "agent" | "global";
   }>;
+  risksByAgent?: Array<{
+    agentId?: string;
+    agentName: string;
+    count: number;
+    risks: AgentRiskRef[];
+  }>;
+  decisionsByAgent?: Array<{
+    agentId?: string;
+    agentName: string;
+    count: number;
+    decisionIds: string[];
+  }>;
+  sharedFiles?: FileDiffAttribution[];
+  unattributedFiles?: FileDiffAttribution[];
+  unknownFiles?: FileDiffAttribution[];
+  remainingUnknowns?: string[];
   unresolvedBlockers: string[];
   recommendation: ReviewRecommendation;
   summary: string;
@@ -332,11 +494,20 @@ export type Artifact = {
 export type VerificationResult = {
   id: string;
   sessionId: string;
-  status: VerificationStatus;
+  status: VerificationCheckStatus;
   checks: Array<{
+    id?: string;
+    label?: string;
+    command?: string;
     name: string;
-    status: VerificationStatus;
+    status: VerificationCheckStatus;
     detail: string;
+    startedAt?: string;
+    completedAt?: string;
+    exitCode?: number;
+    summary?: string;
+    linkedAgentId?: string;
+    linkedPatchId?: string;
   }>;
   summary: string;
   createdAt: string;

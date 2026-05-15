@@ -17,6 +17,12 @@ import { SessionManager } from "./SessionManager.js";
 import { createSimpleDelegationDecision, parsePromptDirective, resolveExecutionMode } from "./delegation.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { RunEngine } from "./RunEngine.js";
+import {
+  appendAgentJournalEntry,
+  buildAttributedReviewGate,
+  buildDiffAwareRunSummary
+  ,buildReconciliationReport
+} from "./AgentTelemetry.js";
 
 export class AgentRuntime {
   constructor(
@@ -168,6 +174,72 @@ export class AgentRuntime {
       },
       createdAt: new Date().toISOString()
     });
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      if (result.status === "applied") {
+        draft.reconciliationReport = result.reconciliationSnapshot
+          ? buildReconciliationReport(draft, patchId, result.reconciliationSnapshot)
+          : {
+              status: "pending",
+              patchId,
+              sourceDiffId: patchId,
+              checkedAt: new Date().toISOString(),
+              checkedBy: "runtime",
+              confidence: "unknown",
+              reason: "Patch apply succeeded, but post-apply reconciliation has not been reported yet.",
+              retryable: true,
+              matchedFiles: [],
+              missingFiles: [],
+              extraFiles: [],
+              changedFilesWithDifferentStats: [],
+              sharedOrAmbiguousFiles: draft.reviewGate?.sharedFiles ?? [],
+              unknowns: ["Post-apply reconciliation snapshot was not provided."]
+            };
+      } else {
+        draft.reconciliationReport = {
+          status: "failed",
+          patchId,
+          sourceDiffId: patchId,
+          checkedAt: new Date().toISOString(),
+          checkedBy: "runtime",
+          confidence: "unknown",
+          reason: result.message,
+          retryable: false,
+          matchedFiles: [],
+          missingFiles: [],
+          extraFiles: [],
+          changedFilesWithDifferentStats: [],
+          sharedOrAmbiguousFiles: draft.reviewGate?.sharedFiles ?? [],
+          unknowns: ["Patch apply failed, so reconciliation did not run."]
+        };
+      }
+      for (const agent of draft.orchestration?.agentRuns ?? []) {
+        if (!(agent.changedFiles ?? []).length) continue;
+        agent.currentAction = result.status === "applied"
+          ? "Rust applied the reviewable changes owned by this contract."
+          : "Rust reported that applying the reviewable changes failed.";
+        agent.recentActions = appendRuntimeAction(agent.recentActions, result.message);
+        if (result.status === "applied") {
+          agent.status = agent.status === "failed" ? "failed" : "blocked";
+          appendAgentJournalEntry(agent, {
+            kind: "completed",
+            title: "Patch apply acknowledged",
+            summary: result.message,
+            filePath: agent.changedFiles?.[0],
+            status: "completed"
+          });
+        } else {
+          agent.status = "failed";
+          agent.completedAt = new Date().toISOString();
+          appendAgentJournalEntry(agent, {
+            kind: "blocked",
+            title: "Patch apply failed",
+            summary: result.message,
+            filePath: agent.changedFiles?.[0],
+            status: "failed"
+          });
+        }
+      }
+    });
     await this.syncSessionOutcome(sessionId);
     return this.requireSession(sessionId);
   }
@@ -209,6 +281,36 @@ export class AgentRuntime {
         result: record
       },
       createdAt: new Date().toISOString()
+    });
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      for (const agent of draft.orchestration?.agentRuns ?? []) {
+        if (!(agent.commandsRun ?? []).includes(result.command)) continue;
+        agent.commandsRun = uniqueRuntimeStrings([...(agent.commandsRun ?? []), result.command]);
+        if (looksLikeTestCommand(result.command)) {
+          agent.testsRun = uniqueRuntimeStrings([...(agent.testsRun ?? []), result.command]);
+        }
+        agent.currentAction = result.message ?? `Command recorded as ${result.status}.`;
+        agent.recentActions = appendRuntimeAction(agent.recentActions, `Command result: ${result.command} (${result.status})`);
+        agent.evidenceRefs = mergeRuntimeEvidenceRefs(agent.evidenceRefs, [{
+          type: "command",
+          commandId: requestId,
+          category: "command-result",
+          reason: result.message ?? `Command finished with status ${result.status}.`,
+          linkedAgentId: agent.id
+        }]);
+        appendAgentJournalEntry(agent, {
+          kind: looksLikeTestCommand(result.command) ? "test_run" : "command_completed",
+          title: result.command,
+          summary: result.message ?? `Command recorded as ${result.status}.`,
+          command: result.command,
+          status:
+            result.status === "failed"
+              ? "failed"
+              : result.status === "blocked"
+                ? "blocked"
+                : "completed"
+        });
+      }
     });
     await this.syncSessionOutcome(sessionId);
     return this.requireSession(sessionId);
@@ -306,6 +408,7 @@ export class AgentRuntime {
       const hasFailedCommands = draft.commandRequests.some(
         (request) => request.status === "failed" || request.status === "blocked" || request.status === "rejected"
       );
+      const reconciliationStatus = draft.reconciliationReport?.status;
 
       if (hasApplyFailure || hasFailedCommands || verification.status === "failed") {
         draft.status = "failed";
@@ -342,6 +445,34 @@ export class AgentRuntime {
         };
         setRunPhaseState(draft, "run_verification", "active", "Patch applied. Verification commands are still pending.", verification.checks.length);
         setRunPhaseState(draft, "review_final_diff", "active", "Verification commands are waiting for operator execution.");
+        return;
+      }
+
+      if (hasAppliedPatch && (reconciliationStatus === "pending" || reconciliationStatus === "not_run")) {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "POST_VERIFY";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "run_verification", "active", "Patch applied. Reconciliation is still pending.", verification.checks.length);
+        setRunPhaseState(draft, "review_final_diff", "active", "Post-apply reconciliation is still pending.");
+        return;
+      }
+
+      if (hasAppliedPatch && (reconciliationStatus === "diverged" || reconciliationStatus === "failed")) {
+        draft.status = "failed";
+        draft.lifecycleStage = "FAILED";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "run_verification", "failed", verification.summary, verification.checks.length);
+        setRunPhaseState(draft, "review_final_diff", "blocked", "Post-apply reconciliation diverged from the proposed patch.");
+        setRunPhaseState(draft, "final_report", "completed", "Manual inspection is required because post-apply reconciliation diverged.");
+        return;
+      }
+
+      if (hasAppliedPatch && reconciliationStatus === "unavailable") {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "POST_VERIFY";
+        draft.nextAction = undefined;
+        setRunPhaseState(draft, "run_verification", "blocked", "Patch applied, but reconciliation data is unavailable.", verification.checks.length);
+        setRunPhaseState(draft, "review_final_diff", "active", "Manual inspection is required because reconciliation data is unavailable.");
         return;
       }
 
@@ -403,6 +534,7 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
   const applyFailed = session.patchProposals.some((proposal) => proposal.status === "apply_failed");
   const pendingPatchApply = session.patchProposals.some((proposal) => proposal.status === "approved");
   const pendingPatchReview = session.patchProposals.some((proposal) => proposal.status === "proposed");
+  const reconciliation = session.reconciliationReport;
   const commandStatuses = session.commandRequests.map((request) => ({
     command: request.command,
     status: request.status
@@ -417,30 +549,47 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
     id: `verification_${randomUUID()}`,
     sessionId: session.id,
     status:
-      applyFailed || commandFailed
+      applyFailed || commandFailed || reconciliation?.status === "diverged" || reconciliation?.status === "failed"
         ? "failed"
-        : pendingPatchReview || pendingPatchApply || commandPending
+        : pendingPatchReview || pendingPatchApply || commandPending || reconciliation?.status === "pending"
           ? "pending"
+          : reconciliation?.status === "unavailable"
+            ? "unavailable"
           : "passed",
     summary:
       applyFailed
         ? "Patch apply failed."
         : commandFailed
           ? "At least one requested command failed."
+          : reconciliation?.status === "diverged"
+            ? "Post-apply reconciliation diverged from the proposed patch."
+            : reconciliation?.status === "failed"
+              ? "Post-apply reconciliation failed."
           : pendingPatchReview
             ? "Patch review is still pending."
             : pendingPatchApply
               ? "Patch was approved and is waiting for Rust apply."
+              : reconciliation?.status === "pending"
+                ? "Patch applied. Reconciliation is still pending."
+                : reconciliation?.status === "unavailable"
+                  ? "Patch applied, but reconciliation data is unavailable."
               : commandPending
                 ? "Patch applied. Verification commands are still pending."
                 : "Patch and command verification are complete.",
     checks: [
       {
+        id: "patch_proposal",
+        label: "Patch proposal",
         name: "Patch proposal",
         status: patchProposalCount ? "passed" : "pending",
-        detail: patchProposalCount ? `${patchProposalCount} patch proposal(s) recorded.` : "No patch proposal recorded."
+        detail: patchProposalCount ? `${patchProposalCount} patch proposal(s) recorded.` : "No patch proposal recorded.",
+        startedAt: session.createdAt,
+        completedAt: patchProposalCount ? session.updatedAt : undefined,
+        summary: patchProposalCount ? "Patch proposal captured." : "Patch proposal is missing."
       },
       {
+        id: "rust_apply",
+        label: "Rust apply",
         name: "Rust apply",
         status: applyFailed ? "failed" : appliedPatchCount ? "passed" : pendingPatchApply || pendingPatchReview ? "pending" : "passed",
         detail: applyFailed
@@ -451,9 +600,36 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
               ? "Waiting for Rust to apply the approved patch."
               : pendingPatchReview
                 ? "Patch is waiting for approval before Rust apply."
-                : "No patch apply was required."
+                : "No patch apply was required.",
+        linkedPatchId: session.patchProposals.at(-1)?.id,
+        startedAt: session.patchProposals.at(-1)?.createdAt,
+        completedAt: appliedPatchCount || applyFailed ? session.updatedAt : undefined
       },
       {
+        id: "reconciliation",
+        label: "Reconciliation",
+        name: "Reconciliation",
+        status:
+          reconciliation?.status === "matched"
+            ? "passed"
+            : reconciliation?.status === "diverged" || reconciliation?.status === "failed"
+              ? "failed"
+              : reconciliation?.status === "pending"
+                ? "running"
+                : reconciliation?.status === "unavailable"
+                  ? "unavailable"
+                  : appliedPatchCount
+                    ? "not_run"
+                    : "skipped",
+        detail: reconciliation?.reason ?? (appliedPatchCount ? "Patch applied, but reconciliation has not been recorded yet." : "Reconciliation is skipped until a patch is applied."),
+        linkedPatchId: reconciliation?.patchId ?? session.patchProposals.at(-1)?.id,
+        startedAt: reconciliation?.checkedAt,
+        completedAt: reconciliation && reconciliation.status !== "pending" ? reconciliation.checkedAt : undefined,
+        summary: reconciliation?.reason
+      },
+      {
+        id: "post_verify",
+        label: "Post-verify",
         name: "Post-verify",
         status: commandFailed ? "failed" : commandPending ? "pending" : "passed",
         detail: commandFailed
@@ -462,7 +638,12 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
             ? "Waiting for verification commands to run."
             : commandExecuted.length
               ? `Executed ${commandExecuted.length} verification command(s).`
-              : "No verification command was required."
+              : "No verification command was required.",
+        command: commandExecuted[0]?.command,
+        startedAt: commandPending || commandExecuted.length ? session.updatedAt : undefined,
+        completedAt: commandExecuted.length || commandFailed ? session.updatedAt : undefined,
+        exitCode: session.commandExecutions.at(-1)?.exitCode,
+        summary: commandExecuted.length ? "Verification commands completed." : "Verification commands are pending or not required."
       }
     ],
     createdAt: new Date().toISOString()
@@ -476,80 +657,47 @@ function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonN
       : session.status === "completed"
         ? "completed"
         : "blocked";
-  return {
+  return buildDiffAwareRunSummary(
+    session,
+    verification,
     status,
-    summary: verification.summary,
-    filesChanged: session.patchProposals.flatMap((patch) =>
-      patch.filesChanged.map((file) => ({ path: file.path, added: 0, removed: 0, changeType: file.changeType }))
-    ),
-    appliedPatchIds: session.patchProposals.filter((patch) => patch.status === "applied").map((patch) => patch.id),
-    proposedPatchIds: session.patchProposals.filter((patch) => patch.status !== "applied").map((patch) => patch.id),
-    commandResults: session.commandRequests.map((request) => `${request.command}: ${request.status}`),
-    gates: verification.checks.map((check) => ({
-      name: check.name,
-      status: check.status === "failed" ? "failed" : "passed",
-      notes: [check.detail]
-    })),
-    nextAction:
-      session.status === "needs_approval"
-        ? session.nextAction?.message ?? "Review the pending runtime action."
-        : session.status === "failed"
-          ? "Inspect the recorded patch or command failure."
-          : "Review the applied change and verification result.",
-    createdAt: new Date().toISOString()
-  };
+    session.status === "needs_approval"
+      ? session.nextAction?.message ?? "Review the pending runtime action."
+      : session.status === "failed"
+        ? "Inspect the recorded patch or command failure."
+        : "Review the applied change and verification result."
+  );
 }
 
 function buildReviewGateSummary(
   session: AgentRuntimeSession,
   verification: NonNullable<AgentRuntimeSession["verificationResult"]>
 ): NonNullable<AgentRuntimeSession["reviewGate"]> {
-  const files = session.patchProposals.flatMap((patch) => patch.filesChanged);
-  const uniqueFiles = [...new Set(files.map((file) => file.path))];
-  const riskyAreas = [
-    ...session.patchProposals.filter((patch) => patch.riskLevel !== "low").map((patch) => `${patch.title} (${patch.riskLevel})`),
-    ...verification.checks.filter((check) => check.status !== "passed").map((check) => check.name)
-  ];
-  const unresolvedBlockers = verification.checks.filter((check) => check.status !== "passed").map((check) => check.detail);
-  const recommendation =
-    verification.status === "failed"
-      ? "do_not_apply"
-      : verification.status === "pending" || session.status === "expired"
-        ? "caution"
-        : "ready";
+  return buildAttributedReviewGate(session, verification);
+}
 
-  const agentName =
-    session.orchestration?.agentRuns[0]?.agentName ??
-    session.agentWorkStatuses[0]?.agentName ??
-    session.agentName;
+function appendRuntimeAction(actions: string[] | undefined, next: string) {
+  return [...(actions ?? []), next].slice(-8);
+}
 
-  const changesByAgent = (session.orchestration?.agentRuns ?? [])
-    .filter((agent) => (agent.changedFiles?.length ?? 0) > 0)
-    .map((agent) => ({
-      agentName: agent.agentName,
-      fileCount: agent.changedFiles?.length ?? 0,
-      additions: agent.diffStats?.additions,
-      deletions: agent.diffStats?.deletions,
-      files: agent.changedFiles ?? []
-    }));
+function uniqueRuntimeStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
 
-  return {
-    totalFilesChanged: uniqueFiles.length,
-    changesByAgent:
-      changesByAgent.length > 0
-        ? changesByAgent
-        : uniqueFiles.length > 0
-          ? [{ agentName: `${agentName} (attribution not reported yet)`, fileCount: uniqueFiles.length, files: uniqueFiles }]
-          : [],
-    riskyAreas,
-    verificationChecks: verification.checks,
-    unresolvedBlockers,
-    recommendation,
-    summary:
-      recommendation === "do_not_apply"
-        ? "Verification or risk checks failed. Do not apply yet."
-        : recommendation === "caution"
-          ? "The run has useful output, but authority or verification work is still pending."
-          : "Patch, command, and verification state are aligned for review."
-  };
+function looksLikeTestCommand(command: string) {
+  return /\b(test|vitest|jest|cargo test|npm test|pnpm test|yarn test|diff --check|tsc)\b/i.test(command);
+}
+
+function mergeRuntimeEvidenceRefs(
+  existing: NonNullable<NonNullable<AgentRuntimeSession["orchestration"]>["agentRuns"]>[number]["evidenceRefs"] | undefined,
+  next: import("@orchcode/protocol").EvidenceRef[]
+) {
+  const merged = [...(existing ?? [])];
+  for (const ref of next) {
+    const fingerprint = JSON.stringify(ref);
+    if (!merged.some((candidate) => JSON.stringify(candidate) === fingerprint)) {
+      merged.push(ref);
+    }
+  }
+  return merged.slice(-12);
 }

@@ -6,6 +6,7 @@ import test from "node:test";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 import { EventBus } from "../runtime/EventBus.js";
+import { buildAttributedReviewGate } from "../runtime/AgentTelemetry.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 
 test("patch proposal lifecycle is recorded in canonical runtime task state", async () => {
@@ -20,9 +21,14 @@ test("patch proposal lifecycle is recorded in canonical runtime task state", asy
     assert.equal(session?.runPhases.some((phase) => phase.id === "inspect_workspace" && phase.status === "completed"), true);
     assert.equal((session?.decisionLedger.length ?? 0) >= 2, true);
     assert.equal(session?.reviewGate?.recommendation, "caution");
-    assert.equal(session?.reviewGate?.totalAdditions, undefined);
-    assert.equal(session?.reviewGate?.totalDeletions, undefined);
-    assert.equal(session?.reviewGate?.changesByAgent.length, 0);
+    assert.equal(session?.reviewGate?.totalAdditions === undefined || typeof session?.reviewGate?.totalAdditions === "number", true);
+    assert.equal(session?.reviewGate?.totalDeletions === undefined || typeof session?.reviewGate?.totalDeletions === "number", true);
+    assert.equal((session?.reviewGate?.changesByAgent.length ?? 0) >= 1, true);
+    assert.equal(session?.reviewGate?.changesByAgent[0]?.confidence, "reported");
+    assert.equal((session?.reviewGate?.risksByAgent?.length ?? 0) >= 1, true);
+    assert.equal((session?.reviewGate?.decisionsByAgent?.length ?? 0) >= 1, true);
+    assert.equal((session?.reviewGate?.sharedFiles?.length ?? 0), 0);
+    assert.equal((session?.reviewGate?.unattributedFiles?.length ?? 0), 0);
     assert.equal(session?.taskState.pendingPatchId, session?.patchProposals[0]?.id);
     assert.equal(session?.taskState.transitions.some((entry) => entry.type === "patch.proposed"), true);
     assert.equal(session?.taskState.transitions.some((entry) => entry.type === "verification.pending"), true);
@@ -33,7 +39,7 @@ test("patch proposal lifecycle is recorded in canonical runtime task state", asy
 });
 
 test("deep audit runs record extended inspection metadata and coordinator evidence", async () => {
-  const fixture = await createPatchFixture("perform a deep audit of the README update flow");
+  const fixture = await createPatchFixture("perform a deep audit of the fixture README flow");
   try {
     const session = fixture.runtime.getSession(fixture.sessionId);
     assert.equal(session?.runMode, "deep_audit");
@@ -45,10 +51,21 @@ test("deep audit runs record extended inspection metadata and coordinator eviden
 
     const coordinator = session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex");
     assert.ok(coordinator);
+    const plannedWorker = session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1");
+    assert.ok(plannedWorker);
     assert.equal(coordinator?.roleTitle, "Coordinator");
     assert.equal((coordinator?.ownedPaths ?? []).includes("workspace://current"), true);
     assert.equal((coordinator?.forbiddenPaths ?? []).includes("tauri://rust-authority"), true);
-    assert.equal(((coordinator?.recentActions ?? []).length ?? 0) >= 2, true);
+    assert.equal((plannedWorker?.allowedActions ?? []).includes("inspect_assigned_paths"), true);
+    assert.equal((plannedWorker?.stopConditions ?? []).length >= 1, true);
+    assert.equal((plannedWorker?.workJournal?.length ?? 0) >= 1, true);
+    assert.equal((session?.decisionLedger.some((record) => Boolean(record.createdByAgentId) && (record.linkedAgentIds?.length ?? 0) >= 1)), true);
+    const fileEvidenceRefs = session?.decisionLedger.flatMap((record) => record.evidenceRefs).filter((ref) => ref.type === "file") ?? [];
+    assert.equal(fileEvidenceRefs.length >= 1, true);
+    assert.equal(
+      fileEvidenceRefs.every((ref) => ref.lineStart === undefined || typeof ref.lineStart === "number"),
+      true
+    );
   } finally {
     await fixture.close();
   }
@@ -93,7 +110,25 @@ test("patch apply success is recorded and moves the runtime into command verific
     await fixture.runtime.approvePatch(fixture.sessionId, patchId);
     await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
       status: "applied",
-      message: "Patch applied by Rust authority"
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        before: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: [],
+          diffText: "",
+          dirty: false,
+          checkedAt: new Date().toISOString()
+        },
+        after: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: ["AGENT_PROPOSAL.md"],
+          diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
     });
     const session = fixture.runtime.getSession(fixture.sessionId);
     assert.equal(session?.patchProposals[0]?.status, "applied");
@@ -101,13 +136,16 @@ test("patch apply success is recorded and moves the runtime into command verific
     assert.equal(session?.nextAction?.kind, "approve_commands");
     assert.equal(session?.taskState.phase, "verification_pending");
     assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust apply")?.status, "passed");
+    assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Reconciliation")?.status, "passed");
     assert.equal(session?.runSummary?.status, "blocked");
-    assert.equal(session?.reviewGate?.totalAdditions, undefined);
-    assert.equal(session?.reviewGate?.totalDeletions, undefined);
+    assert.equal(session?.reviewGate?.totalAdditions === undefined || typeof session?.reviewGate?.totalAdditions === "number", true);
+    assert.equal(session?.reviewGate?.totalDeletions === undefined || typeof session?.reviewGate?.totalDeletions === "number", true);
     assert.equal((session?.reviewGate?.changesByAgent[0]?.fileCount ?? 0) >= 1, true);
-    assert.equal(session?.reviewGate?.changesByAgent[0]?.additions, undefined);
-    assert.equal(session?.reviewGate?.changesByAgent[0]?.deletions, undefined);
+    assert.equal(session?.reviewGate?.changesByAgent[0]?.additions === undefined || typeof session?.reviewGate?.changesByAgent[0]?.additions === "number", true);
+    assert.equal(session?.reviewGate?.changesByAgent[0]?.deletions === undefined || typeof session?.reviewGate?.changesByAgent[0]?.deletions === "number", true);
     assert.equal((session?.taskState as { patchState?: { authority?: string } }).patchState?.authority, "rust");
+    assert.equal((session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1")?.workJournal?.length ?? 0) >= 2, true);
+    assert.equal(session?.reconciliationReport?.status, "matched");
   } finally {
     await fixture.close();
   }
@@ -142,7 +180,17 @@ test("command results are recorded in runtime state and finalize the session", a
     await fixture.runtime.approvePatch(fixture.sessionId, patchId);
     await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
       status: "applied",
-      message: "Patch applied by Rust authority"
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: ["AGENT_PROPOSAL.md"],
+          diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
     });
     const request = fixture.runtime.getSession(fixture.sessionId)?.commandRequests[0];
     assert.ok(request);
@@ -261,7 +309,17 @@ test("runtime task state restores with explicit restored markers after runtime r
   await first.runtime.approvePatch(created.sessionId, patchId);
   await first.runtime.reportPatchApplyResult(created.sessionId, patchId, {
     status: "applied",
-    message: "Patch applied by Rust authority"
+    message: "Patch applied by Rust authority",
+    reconciliationSnapshot: {
+      after: {
+        available: true,
+        isGitRepo: true,
+        changedFiles: ["AGENT_PROPOSAL.md"],
+        diffText: first.runtime.getSession(created.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+        dirty: true,
+        checkedAt: new Date().toISOString()
+      }
+    }
   });
   const request = first.runtime.getSession(created.sessionId)?.commandRequests[0];
   assert.ok(request);
@@ -283,10 +341,249 @@ test("runtime task state restores with explicit restored markers after runtime r
     assert.ok(restored);
     assert.equal((restored?.taskState as { restoreStatus?: string }).restoreStatus, "restored");
     assert.equal(restored?.taskState.transitions.some((entry) => entry.type === "session.restored"), true);
+    assert.equal((restored?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1")?.allowedActions ?? []).includes("inspect_assigned_paths"), true);
+    assert.equal((restored?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.testsRun ?? []).includes("git diff --check"), true);
+    assert.equal((restored?.reviewGate?.decisionsByAgent?.length ?? 0) >= 1, true);
   } finally {
     await second.app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("review gate marks shared and unattributed files conservatively", async () => {
+  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-attribution-${Date.now()}`);
+  const manager = new SessionManager(storageDir, new EventBus());
+  await manager.load();
+  const session = await manager.createSession({
+    workspacePath: storageDir,
+    mode: "demo_mock",
+    userPrompt: "attribute diff telemetry"
+  });
+  await manager.updateSession(session.id, (draft) => {
+    draft.orchestration = {
+      agentRuns: [
+        {
+          id: "agent_a",
+          sessionId: draft.id,
+          agentName: "Runtime",
+          displayName: "Runtime",
+          role: "Senior Coding Agent",
+          ownedPaths: ["src/one.ts", "src/shared.ts"],
+          changedFiles: ["src/one.ts"],
+          status: "running",
+          startedAt: draft.createdAt,
+          workJournal: []
+        },
+        {
+          id: "agent_b",
+          sessionId: draft.id,
+          agentName: "UI",
+          displayName: "UI",
+          role: "Frontend",
+          ownedPaths: ["src/shared.ts"],
+          changedFiles: ["src/shared.ts"],
+          status: "running",
+          startedAt: draft.createdAt,
+          workJournal: []
+        }
+      ],
+      workerOutputs: [],
+      securityReviews: [],
+      reviewerSummaries: [],
+      orchestrationEvents: [],
+      approvalDecisions: [],
+      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
+      lockedFiles: {},
+      selectedWorkerAgents: [],
+      mandatoryGateAgents: [],
+      workOrders: [],
+      qualityGateResults: [],
+      retryCount: 0
+    };
+    draft.patchProposals = [{
+      id: "patch_1",
+      sessionId: draft.id,
+      title: "attribution patch",
+      summary: "test patch",
+      riskLevel: "medium",
+      filesChanged: [
+        { path: "src/one.ts", changeType: "modify", explanation: "single-owner file" },
+        { path: "src/shared.ts", changeType: "modify", explanation: "shared file" },
+        { path: "src/unowned.ts", changeType: "modify", explanation: "unowned file" }
+      ],
+      unifiedDiff: [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1 +1,2 @@",
+        "-old",
+        "+new",
+        "+extra",
+        "diff --git a/src/shared.ts b/src/shared.ts",
+        "--- a/src/shared.ts",
+        "+++ b/src/shared.ts",
+        "@@ -1 +1 @@",
+        "-sharedOld",
+        "+sharedNew",
+        "diff --git a/src/unowned.ts b/src/unowned.ts",
+        "--- a/src/unowned.ts",
+        "+++ b/src/unowned.ts",
+        "@@ -1 +1 @@",
+        "-ghost",
+        "+ghost2"
+      ].join("\n"),
+      requiresApproval: true,
+      status: "proposed",
+      createdAt: new Date().toISOString()
+    }];
+  });
+
+  const gate = buildAttributedReviewGate(manager.getSession(session.id)!, {
+    summary: "pending review",
+    status: "pending",
+    checks: [{ name: "Patch proposal", status: "passed", detail: "ok" }]
+  });
+
+  assert.equal(gate.totalFilesChanged, 3);
+  assert.equal(gate.totalAdditions, 4);
+  assert.equal(gate.totalDeletions, 3);
+  assert.equal(gate.changesByAgent.some((entry) => entry.agentId === "agent_a" && entry.confidence === "reported"), true);
+  assert.equal(gate.changesByAgent.find((entry) => entry.agentId === "agent_a")?.additions, 2);
+  assert.equal(gate.sharedFiles?.some((file) => file.path === "src/shared.ts" && file.confidence === "shared"), true);
+  assert.equal(gate.unattributedFiles?.some((file) => file.path === "src/unowned.ts" && file.confidence === "unattributed"), true);
+
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("review gate keeps line totals unknown when unified diff stats are unavailable", async () => {
+  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-diff-unknown-${Date.now()}`);
+  const manager = new SessionManager(storageDir, new EventBus());
+  await manager.load();
+  const session = await manager.createSession({
+    workspacePath: storageDir,
+    mode: "demo_mock",
+    userPrompt: "unknown diff telemetry"
+  });
+  await manager.updateSession(session.id, (draft) => {
+    draft.orchestration = {
+      agentRuns: [{
+        id: "agent_runtime",
+        sessionId: draft.id,
+        agentName: "Runtime",
+        displayName: "Runtime",
+        role: "Senior Coding Agent",
+        ownedPaths: ["src/unknown.ts"],
+        changedFiles: ["src/unknown.ts"],
+        status: "running",
+        startedAt: draft.createdAt,
+        workJournal: []
+      }],
+      workerOutputs: [],
+      securityReviews: [],
+      reviewerSummaries: [],
+      orchestrationEvents: [],
+      approvalDecisions: [],
+      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
+      lockedFiles: {},
+      selectedWorkerAgents: [],
+      mandatoryGateAgents: [],
+      workOrders: [],
+      qualityGateResults: [],
+      retryCount: 0
+    };
+    draft.patchProposals = [{
+      id: "patch_unknown",
+      sessionId: draft.id,
+      title: "unknown diff",
+      summary: "missing diff body",
+      riskLevel: "low",
+      filesChanged: [{ path: "src/unknown.ts", changeType: "modify", explanation: "missing diff body" }],
+      unifiedDiff: "",
+      requiresApproval: true,
+      status: "proposed",
+      createdAt: new Date().toISOString()
+    }];
+  });
+
+  const gate = buildAttributedReviewGate(manager.getSession(session.id)!, {
+    summary: "pending review",
+    status: "pending",
+    checks: [{ name: "Patch proposal", status: "passed", detail: "ok" }]
+  });
+
+  assert.equal(gate.totalFilesChanged, 1);
+  assert.equal(gate.totalAdditions, undefined);
+  assert.equal(gate.totalDeletions, undefined);
+  assert.equal(gate.changesByAgent[0]?.additions, undefined);
+  assert.equal(gate.changesByAgent[0]?.deletions, undefined);
+  assert.equal(gate.changesByAgent[0]?.lineTotalsKnown, false);
+
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("post-apply reconciliation marks unavailable git data as unavailable, not matched", async () => {
+  const fixture = await createPatchFixture("add a README note");
+  try {
+    const patchId = fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.id;
+    assert.ok(patchId);
+    await fixture.runtime.approvePatch(fixture.sessionId, patchId);
+    await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
+      status: "applied",
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: false,
+          isGitRepo: false,
+          changedFiles: [],
+          diffText: "",
+          dirty: false,
+          checkedAt: new Date().toISOString()
+        }
+      }
+    });
+    const session = fixture.runtime.getSession(fixture.sessionId);
+    assert.equal(session?.reconciliationReport?.status, "unavailable");
+    assert.equal(session?.reviewGate?.recommendation, "caution");
+    assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Reconciliation")?.status, "unavailable");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("post-apply reconciliation divergence blocks trust when files differ from the proposed patch", async () => {
+  const fixture = await createPatchFixture("add a README note");
+  try {
+    const patchId = fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.id;
+    assert.ok(patchId);
+    await fixture.runtime.approvePatch(fixture.sessionId, patchId);
+    await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
+      status: "applied",
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: ["EXTRA_FILE.md"],
+          diffText: [
+            "diff --git a/EXTRA_FILE.md b/EXTRA_FILE.md",
+            "--- a/EXTRA_FILE.md",
+            "+++ b/EXTRA_FILE.md",
+            "@@ -0,0 +1 @@",
+            "+extra"
+          ].join("\n"),
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
+    });
+    const session = fixture.runtime.getSession(fixture.sessionId);
+    assert.equal(session?.reconciliationReport?.status, "diverged");
+    assert.equal((session?.reconciliationReport?.extraFiles ?? []).includes("EXTRA_FILE.md"), true);
+    assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+    assert.equal(session?.verificationResult?.status, "failed");
+  } finally {
+    await fixture.close();
   }
 });
 

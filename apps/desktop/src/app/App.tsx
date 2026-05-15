@@ -23,8 +23,10 @@ import {
 } from "lucide-react";
 import type {
   AccessProfile,
+  AgentRiskRef,
   AgentRun,
   AppEvent,
+  AgentWorkJournalEntry,
   AgentRuntimeSession,
   AgentWorkStatus,
   CommandRequest,
@@ -612,11 +614,22 @@ export function App() {
   async function handleApplyPatch(patchId: string) {
     if (!runtimeSession) return;
     try {
+      const beforeStatus = await getGitStatus();
+      const beforeDiff = await getGitDiff();
       const applied = await applyRuntimePatch(runtimeSession.id, patchId);
+      const afterStatus = await getGitStatus();
+      const afterDiff = await getGitDiff();
       const updated = await reportRuntimePatchApplyResult(
         runtimeSession.id,
         patchId,
-        { status: "applied", message: applied.message },
+        {
+          status: "applied",
+          message: applied.message,
+          reconciliationSnapshot: {
+            before: createWorkspaceDiffSnapshot(beforeStatus, beforeDiff),
+            after: createWorkspaceDiffSnapshot(afterStatus, afterDiff)
+          }
+        },
         runtimeSessionToken || undefined
       );
       setRuntimeSession(updated);
@@ -1527,8 +1540,8 @@ function RunHeaderCard({
   const totals = patchStats.reduce(
     (acc, file) => ({
       files: acc.files + 1,
-      additions: acc.additions + file.added,
-      deletions: acc.deletions + file.removed
+      additions: acc.additions + (file.added ?? 0),
+      deletions: acc.deletions + (file.removed ?? 0)
     }),
     { files: 0, additions: 0, deletions: 0 }
   );
@@ -1629,16 +1642,27 @@ function AgentDetailCard({ agent }: { agent?: AgentContractView }) {
         <div><strong>Current action</strong><span>{agent.currentAction}</span></div>
         <div><strong>Owned paths</strong><span>{agent.ownedPaths.length ? agent.ownedPaths.join(", ") : "Not reported yet."}</span></div>
         <div><strong>Forbidden paths</strong><span>{agent.forbiddenPaths.length ? agent.forbiddenPaths.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Allowed actions</strong><span>{agent.allowedActions.length ? agent.allowedActions.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Stop conditions</strong><span>{agent.stopConditions.length ? agent.stopConditions.join(" | ") : "Not reported yet."}</span></div>
+        <div><strong>Integration notes</strong><span>{agent.integrationNotes.length ? agent.integrationNotes.join(" | ") : "Not reported yet."}</span></div>
         <div><strong>Changed files</strong><span>{agent.changedFiles.length ? agent.changedFiles.join(", ") : "Not reported yet."}</span></div>
         <div><strong>Commands</strong><span>{agent.commandsRun.length ? agent.commandsRun.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Tests run</strong><span>{agent.testsRun.length ? agent.testsRun.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Decision refs</strong><span>{agent.decisionsMade.length ? agent.decisionsMade.join(", ") : "Not reported yet."}</span></div>
+        <div><strong>Evidence refs</strong><span>{agent.evidenceRefs.length ? describeEvidenceRefs(agent.evidenceRefs) : "Not reported yet."}</span></div>
+        <div><strong>Risk refs</strong><span>{agent.riskRefs.length ? describeRiskRefs(agent.riskRefs) : "Not reported yet."}</span></div>
         <div><strong>Risk</strong><span>{agent.riskLevel}</span></div>
         <div><strong>Blockers</strong><span>{agent.blockers.length ? agent.blockers.join(", ") : "None reported."}</span></div>
       </div>
       <div className="timeline-list compact-list">
-        {agent.recentActions.length ? agent.recentActions.map((action, index) => (
-          <div className="timeline-item completed" key={`${agent.id}-${index}`}>
+        {agent.workJournal.length ? agent.workJournal.slice(-8).map((entry) => (
+          <div className={`timeline-item ${mapJournalStatus(entry.status)}`} key={entry.id}>
             <span className="timeline-dot" />
-            <div><span>{action}</span></div>
+            <div>
+              <strong>{entry.title}</strong>
+              <span>{entry.summary}</span>
+              <small>{humanizeJournalKind(entry.kind)}{entry.filePath ? ` | ${entry.filePath}` : entry.command ? ` | ${entry.command}` : ""}</small>
+            </div>
           </div>
         )) : (
           <div className="timeline-item running">
@@ -1669,6 +1693,7 @@ function EvidenceLedgerCard({ records }: { records: DecisionRecord[] }) {
               <strong>{humanizeDecisionCategory(record.category)} | {record.createdByAgent}</strong>
               <span>{record.finding}</span>
               <small>Decision: {record.decision}</small>
+              {record.createdByAgentId || record.linkedAgentIds?.length ? <small>Agent links: {[record.createdByAgentId, ...(record.linkedAgentIds ?? [])].filter(Boolean).join(", ")}</small> : null}
               <small>Evidence: {describeEvidenceRefs(record.evidenceRefs)} | Files: {record.linkedFiles.length ? record.linkedFiles.join(", ") : "none"}</small>
               {record.uncertainty ? <small>Uncertainty: {record.uncertainty}</small> : null}
             </div>
@@ -1692,16 +1717,39 @@ function ReviewGateCard({ session }: { session: AgentRuntimeSession }) {
       </div>
       <div className="summary-list">
         <div className="summary-line compact">Total diff: {formatPatchTotalsLabel(gate.totalFilesChanged, gate.totalAdditions, gate.totalDeletions)}</div>
+        <div className="summary-line compact">Diff source: {humanizeDiffSource(gate.globalDiff?.source)}</div>
+        <div className="summary-line compact">Reconciliation: {describeReconciliation(gate.reconciliation)}</div>
         <div className="summary-line compact">Recommendation: {humanizeReviewRecommendation(gate.recommendation)}</div>
         <div className="summary-line compact">Risky areas: {gate.riskyAreas.length ? gate.riskyAreas.join(", ") : "None reported."}</div>
         <div className="summary-line compact">Unresolved blockers: {gate.unresolvedBlockers.length ? gate.unresolvedBlockers.join(" | ") : "None."}</div>
         {gate.changesByAgent.length ? gate.changesByAgent.map((entry) => (
           <div className="summary-line compact" key={entry.agentName}>
-            {entry.agentName}: {formatPatchTotalsLabel(entry.fileCount, entry.additions, entry.deletions)}
+            {entry.agentName}: {formatPatchTotalsLabel(entry.fileCount, entry.additions, entry.deletions)} | confidence: {humanizeAttributionConfidence(entry.confidence)}
           </div>
         )) : (
           <div className="summary-line compact">Agent attribution: Not reported yet.</div>
         )}
+        {gate.sharedFiles?.length ? <div className="summary-line compact">Shared files: {gate.sharedFiles.map((file) => file.path).join(", ")}</div> : null}
+        {gate.unattributedFiles?.length ? <div className="summary-line compact">Unattributed files: {gate.unattributedFiles.map((file) => file.path).join(", ")}</div> : null}
+        {gate.reconciliation?.missingFiles.length ? <div className="summary-line compact">Missing after apply: {gate.reconciliation.missingFiles.join(", ")}</div> : null}
+        {gate.reconciliation?.extraFiles.length ? <div className="summary-line compact">Extra after apply: {gate.reconciliation.extraFiles.join(", ")}</div> : null}
+        {gate.reconciliation?.changedFilesWithDifferentStats.length ? <div className="summary-line compact">Different stats: {gate.reconciliation.changedFilesWithDifferentStats.map((file) => file.path).join(", ")}</div> : null}
+        {gate.remainingUnknowns?.length ? <div className="summary-line compact">Unknowns: {gate.remainingUnknowns.join(" | ")}</div> : null}
+        {gate.verificationChecks.length ? gate.verificationChecks.map((check) => (
+          <div className="summary-line compact" key={`verification-${check.name}`}>
+            {check.label ?? check.name}: {humanizeVerificationCheckStatus(check.status)}{check.command ? ` | ${check.command}` : ""}
+          </div>
+        )) : null}
+        {gate.risksByAgent?.length ? gate.risksByAgent.map((entry) => (
+          <div className="summary-line compact" key={`risk-${entry.agentName}`}>
+            Risks for {entry.agentName}: {entry.count} item(s)
+          </div>
+        )) : null}
+        {gate.decisionsByAgent?.length ? gate.decisionsByAgent.map((entry) => (
+          <div className="summary-line compact" key={`decision-${entry.agentName}`}>
+            Decisions for {entry.agentName}: {entry.count} linked record(s)
+          </div>
+        )) : null}
       </div>
     </section>
   );
@@ -2152,8 +2200,8 @@ function computePatchStats(
     }
     if (!currentPath) continue;
     const target = stats.get(currentPath) ?? { path: currentPath, added: 0, removed: 0, changeType: "modify" as const };
-    if (line.startsWith("+") && !line.startsWith("+++")) target.added += 1;
-    if (line.startsWith("-") && !line.startsWith("---")) target.removed += 1;
+    if (line.startsWith("+") && !line.startsWith("+++")) target.added = (target.added ?? 0) + 1;
+    if (line.startsWith("-") && !line.startsWith("---")) target.removed = (target.removed ?? 0) + 1;
     stats.set(currentPath, target);
   }
   return [...stats.values()];
@@ -2166,8 +2214,8 @@ function mergePatchStats(stats: PatchChangeStats[]) {
     merged.set(stat.path, {
       path: stat.path,
       changeType: stat.changeType,
-      added: (current?.added ?? 0) + stat.added,
-      removed: (current?.removed ?? 0) + stat.removed
+      added: typeof stat.added === "number" || typeof current?.added === "number" ? (current?.added ?? 0) + (stat.added ?? 0) : undefined,
+      removed: typeof stat.removed === "number" || typeof current?.removed === "number" ? (current?.removed ?? 0) + (stat.removed ?? 0) : undefined
     });
   }
   return [...merged.values()];
@@ -2182,9 +2230,17 @@ type AgentContractView = {
   currentAction: string;
   ownedPaths: string[];
   forbiddenPaths: string[];
+  allowedActions: string[];
+  stopConditions: string[];
+  integrationNotes: string[];
   recentActions: string[];
   changedFiles: string[];
   commandsRun: string[];
+  testsRun: string[];
+  decisionsMade: string[];
+  evidenceRefs: EvidenceRef[];
+  riskRefs: AgentRiskRef[];
+  workJournal: AgentWorkJournalEntry[];
   riskLevel: "low" | "medium" | "high";
   blockers: string[];
   diffLabel: string;
@@ -2210,16 +2266,24 @@ function getAgentContracts(session: AgentRuntimeSession): AgentContractView[] {
   if (agentRuns.length) {
     return agentRuns.map((agent) => ({
       id: agent.id,
-      name: agent.agentName,
+      name: agent.displayName ?? agent.agentName,
       role: agent.roleTitle ?? agent.role,
       status: agent.status,
       objective: agent.objective ?? session.userPrompt,
       currentAction: agent.currentAction ?? agent.currentTask ?? "Not reported yet.",
       ownedPaths: agent.ownedPaths ?? [],
       forbiddenPaths: agent.forbiddenPaths ?? [],
+      allowedActions: agent.allowedActions ?? [],
+      stopConditions: agent.stopConditions ?? [],
+      integrationNotes: agent.integrationNotes ?? [],
       recentActions: agent.recentActions ?? (agent.lastEvent ? [agent.lastEvent] : []),
       changedFiles: agent.changedFiles ?? [],
       commandsRun: agent.commandsRun ?? [],
+      testsRun: agent.testsRun ?? [],
+      decisionsMade: agent.decisionsMade ?? [],
+      evidenceRefs: agent.evidenceRefs ?? [],
+      riskRefs: agent.riskRefs ?? [],
+      workJournal: agent.workJournal ?? [],
       riskLevel: agent.riskLevel ?? "medium",
       blockers: agent.blockers ?? [],
       diffLabel: formatPatchTotalsLabel(agent.diffStats?.fileCount, agent.diffStats?.additions, agent.diffStats?.deletions)
@@ -2235,9 +2299,17 @@ function getAgentContracts(session: AgentRuntimeSession): AgentContractView[] {
     currentAction: status.summary ?? status.taskTitle,
     ownedPaths: [],
     forbiddenPaths: [],
+    allowedActions: [],
+    stopConditions: [],
+    integrationNotes: [],
     recentActions: [status.taskTitle],
     changedFiles: status.targetFiles,
     commandsRun: [],
+    testsRun: [],
+    decisionsMade: [],
+    evidenceRefs: [],
+    riskRefs: [],
+    workJournal: [],
     riskLevel: "medium",
     blockers: [],
     diffLabel: formatPatchTotalsLabel(status.targetFiles.length)
@@ -2325,11 +2397,53 @@ function humanizeAgentStatus(status: AgentContractView["status"]) {
 
 function describeEvidenceRefs(evidenceRefs: EvidenceRef[]) {
   if (!evidenceRefs.length) return "None recorded";
-  const hasLineOrSymbolRef = evidenceRefs.some((ref) => ref.type === "file" && (ref.lineHint || ref.symbol));
+  const hasLineOrSymbolRef = evidenceRefs.some((ref) => ref.type === "file" && (ref.lineHint || ref.lineStart || ref.lineEnd || ref.symbol || ref.componentName));
   const hasNonFileRef = evidenceRefs.some((ref) => ref.type !== "file");
   const notes = [hasLineOrSymbolRef ? "line or symbol refs included" : "line or symbol refs not reported yet"];
   if (hasNonFileRef) notes.push("command, test, or artifact refs included");
   return `${evidenceRefs.length} item(s); ${notes.join("; ")}`;
+}
+
+function describeRiskRefs(riskRefs: AgentRiskRef[]) {
+  if (!riskRefs.length) return "None recorded";
+  const severities = uniqueLabels(riskRefs.map((risk) => risk.severity));
+  const lifecycleAreas = uniqueLabels(riskRefs.map((risk) => risk.lifecycleArea ?? ""));
+  return `${riskRefs.length} item(s); severities: ${severities.join(", ")}${lifecycleAreas.length ? `; areas: ${lifecycleAreas.join(", ")}` : ""}`;
+}
+
+function humanizeAttributionConfidence(confidence: NonNullable<AgentRuntimeSession["reviewGate"]>["changesByAgent"][number]["confidence"] | undefined) {
+  return confidence ? confidence.replaceAll("_", " ") : "Not reported yet.";
+}
+
+function humanizeDiffSource(source: "patch_unified_diff" | "run_summary" | "unknown" | undefined) {
+  if (!source) return "Not reported yet.";
+  if (source === "patch_unified_diff") return "Patch unified diff";
+  if (source === "run_summary") return "Run summary";
+  return "Unknown";
+}
+
+function humanizeJournalKind(kind: AgentWorkJournalEntry["kind"]) {
+  return kind.replaceAll("_", " ");
+}
+
+function humanizeVerificationCheckStatus(status: AgentRuntimeSession["verificationResult"] extends infer T ? T extends { checks: Array<infer C> } ? C extends { status: infer S } ? S : never : never : never) {
+  return String(status).replaceAll("_", " ");
+}
+
+function describeReconciliation(report: AgentRuntimeSession["reconciliationReport"]) {
+  if (!report) return "Not run yet.";
+  return `${report.status.replaceAll("_", " ")} | ${report.confidence} confidence`;
+}
+
+function mapJournalStatus(status: AgentWorkJournalEntry["status"] | undefined) {
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "completed") return "completed";
+  return "running";
+}
+
+function uniqueLabels(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function formatPatchTotalsLabel(fileCount?: number, additions?: number, deletions?: number) {
@@ -2338,6 +2452,17 @@ function formatPatchTotalsLabel(fileCount?: number, additions?: number, deletion
     return `${filesLabel}, +${additions} -${deletions}`;
   }
   return `${filesLabel}, line diff not reported yet.`;
+}
+
+function createWorkspaceDiffSnapshot(status: GitStatus, diffText: string) {
+  return {
+    available: status.isRepo,
+    isGitRepo: status.isRepo,
+    changedFiles: status.changedFiles,
+    diffText,
+    dirty: status.changedFiles.length > 0,
+    checkedAt: new Date().toISOString()
+  };
 }
 
 function accessProfileLabel(profile: AccessProfile) {
@@ -2386,8 +2511,14 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   if (session.patchProposals.some((proposal) => proposal.status === "proposed")) {
     return "Code changes are proposed but not written yet.";
   }
-  if (session.verificationResult?.status === "pending") {
+  if (session.verificationResult?.status === "pending" || session.verificationResult?.status === "running") {
     return "Writes may be complete, but verification is still pending.";
+  }
+  if (session.reconciliationReport?.status === "diverged") {
+    return "The patch was applied, but post-apply reconciliation diverged from the reviewed patch.";
+  }
+  if (session.reconciliationReport?.status === "unavailable") {
+    return "The patch was applied, but reconciliation evidence is unavailable and needs manual inspection.";
   }
   return "This card summarizes what has happened, what is still pending, and what the UI can safely promise.";
 }
@@ -2421,8 +2552,10 @@ function describeCommandState(session: AgentRuntimeSession) {
 
 function describeVerificationState(session: AgentRuntimeSession) {
   if (!session.verificationResult) return "No verification record yet.";
-  if (session.verificationResult.status === "pending") return "Verification is still pending.";
+  if (session.verificationResult.status === "pending" || session.verificationResult.status === "running") return "Verification is still pending.";
   if (session.verificationResult.status === "failed") return "Verification failed; inspect the checks before trusting the output.";
+  if (session.verificationResult.status === "unavailable") return "Verification evidence is unavailable; manual inspection is still required.";
+  if (session.verificationResult.status === "skipped") return "Verification was skipped; review the reconciliation and diff before trusting the output.";
   return "Verification passed for the recorded checks.";
 }
 

@@ -1,5 +1,6 @@
 import type { WorkerSelfCheck } from "./orchestration.js";
 import type { AgentLifecycleStage } from "./agent-runtime.js";
+import type { AgentRiskRef, AgentWorkJournalEntry, EvidenceRef } from "./models.js";
 
 export type AgentRole =
   | "Product Orchestrator"
@@ -22,6 +23,7 @@ export type AgentRun = {
   id: string;
   sessionId: string;
   agentName: string;
+  displayName?: string;
   role: AgentRole;
   roleTitle?: string;
   lifecycleStage?: AgentLifecycleStage;
@@ -29,10 +31,18 @@ export type AgentRun = {
   objective?: string;
   ownedPaths?: string[];
   forbiddenPaths?: string[];
+  allowedActions?: string[];
+  stopConditions?: string[];
+  integrationNotes?: string[];
   currentAction?: string;
   recentActions?: string[];
   changedFiles?: string[];
   commandsRun?: string[];
+  testsRun?: string[];
+  decisionsMade?: string[];
+  evidenceRefs?: EvidenceRef[];
+  riskRefs?: AgentRiskRef[];
+  workJournal?: AgentWorkJournalEntry[];
   riskLevel?: "low" | "medium" | "high";
   blockers?: string[];
   diffStats?: {

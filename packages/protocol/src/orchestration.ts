@@ -122,8 +122,8 @@ export type QualityGateResult = {
 
 export type PatchChangeStats = {
   path: string;
-  added: number;
-  removed: number;
+  added?: number;
+  removed?: number;
   changeType: "create" | "modify" | "delete";
 };
 

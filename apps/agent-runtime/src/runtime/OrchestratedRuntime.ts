@@ -20,6 +20,7 @@ import { MergeController } from "../scheduler/MergeController.js";
 import { TaskScheduler } from "../scheduler/TaskScheduler.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { SessionManager, randomId } from "./SessionManager.js";
+import { appendAgentJournalEntry, getPatchStatsFromPatch } from "./AgentTelemetry.js";
 import {
   GenericWorkerAgent,
   ReviewerAgent,
@@ -266,11 +267,38 @@ export class OrchestratedRuntime {
           targetRun.artifactJson = result.artifact;
           targetRun.completedAt = new Date().toISOString();
           targetRun.lastEvent = "completed";
+          appendAgentJournalEntry(targetRun, {
+            kind: "completed",
+            title: task.title,
+            summary: result.output.summary,
+            status: "completed"
+          });
         }
       });
       if (result.patch) {
+        const patch = result.patch;
         await this.sessionManager.addPatchProposal(sessionId, result.patch);
-        const patchStats = getPatchStats(result.patch);
+        const patchStats = getPatchStatsFromPatch(patch).map((stat) => ({
+          path: stat.path,
+          added: stat.additions,
+          removed: stat.deletions,
+          changeType: stat.changeType
+        }));
+        await this.sessionManager.updateSession(sessionId, (draft) => {
+          const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
+          if (!targetRun) return;
+          targetRun.changedFiles = [...new Set([...(targetRun.changedFiles ?? []), ...patch.filesChanged.map((file) => file.path)])];
+          for (const file of patch.filesChanged) {
+            appendAgentJournalEntry(targetRun, {
+              kind: "proposed_patch",
+              title: patch.title,
+              summary: file.explanation,
+              filePath: file.path,
+              severity: patch.riskLevel,
+              status: "completed"
+            });
+          }
+        });
         await this.progress(sessionId, {
           stage: "patching",
           status: "completed",
@@ -282,7 +310,21 @@ export class OrchestratedRuntime {
           patchStats
         });
       }
-      if (result.commandRequest) await this.sessionManager.addCommandRequest(sessionId, result.commandRequest);
+      if (result.commandRequest) {
+        await this.sessionManager.addCommandRequest(sessionId, result.commandRequest);
+        await this.sessionManager.updateSession(sessionId, (draft) => {
+          const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
+          if (!targetRun) return;
+          targetRun.commandsRun = [...new Set([...(targetRun.commandsRun ?? []), result.commandRequest!.command])];
+          appendAgentJournalEntry(targetRun, {
+            kind: "command_requested",
+            title: result.commandRequest!.command,
+            summary: result.commandRequest!.reason,
+            command: result.commandRequest!.command,
+            status: result.commandRequest!.status === "blocked" ? "blocked" : "queued"
+          });
+        });
+      }
       if (!previewRecommendation && result.previewRecommendation) {
         previewRecommendation = result.previewRecommendation;
       }
@@ -502,44 +544,12 @@ export class OrchestratedRuntime {
 }
 
 function getPatchStats(patch: PatchProposal): PatchChangeStats[] {
-  const stats = new Map<string, PatchChangeStats>();
-  for (const file of patch.filesChanged) {
-    stats.set(file.path, {
-      path: file.path,
-      added: 0,
-      removed: 0,
-      changeType: file.changeType
-    });
-  }
-
-  let currentPath = patch.filesChanged[0]?.path;
-  for (const line of patch.unifiedDiff.split("\n")) {
-    if (line.startsWith("diff --git ")) {
-      const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-      currentPath = match?.[2] ?? currentPath;
-      if (currentPath && !stats.has(currentPath)) {
-        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
-      }
-      continue;
-    }
-    if (line.startsWith("+++ b/")) {
-      currentPath = line.slice("+++ b/".length);
-      if (!stats.has(currentPath)) {
-        stats.set(currentPath, { path: currentPath, added: 0, removed: 0, changeType: "modify" });
-      }
-      continue;
-    }
-    if (!currentPath) continue;
-    const target = stats.get(currentPath) ?? { path: currentPath, added: 0, removed: 0, changeType: "modify" as const };
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      target.added += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      target.removed += 1;
-    }
-    stats.set(currentPath, target);
-  }
-
-  return [...stats.values()];
+  return getPatchStatsFromPatch(patch).map((stat) => ({
+    path: stat.path,
+    added: stat.additions,
+    removed: stat.deletions,
+    changeType: stat.changeType
+  }));
 }
 
 function createRunSummary(
@@ -555,8 +565,8 @@ function createRunSummary(
       files.set(stat.path, {
         path: stat.path,
         changeType: stat.changeType,
-        added: (existing?.added ?? 0) + stat.added,
-        removed: (existing?.removed ?? 0) + stat.removed
+        added: typeof stat.added === "number" || typeof existing?.added === "number" ? (existing?.added ?? 0) + (stat.added ?? 0) : undefined,
+        removed: typeof stat.removed === "number" || typeof existing?.removed === "number" ? (existing?.removed ?? 0) + (stat.removed ?? 0) : undefined
       });
     }
   }
@@ -682,15 +692,26 @@ function createAgentRun(
   status: AgentRun["status"],
   role: AgentRun["role"] = agentNameToRole(agentName)
 ): AgentRun {
+  const id = randomId("agent");
+  const startedAt = new Date().toISOString();
   return {
-    id: randomId("agent"),
+    id,
     sessionId,
     agentName,
     role,
     currentTask,
     status,
     lastEvent: status,
-    startedAt: new Date().toISOString(),
+    workJournal: [{
+      id: randomId("journal"),
+      agentId: id,
+      timestamp: startedAt,
+      kind: "planning",
+      title: currentTask,
+      summary: "Worker run created and waiting to execute.",
+      status: status === "completed" ? "completed" : "running"
+    }],
+    startedAt,
     completedAt: status === "completed" ? new Date().toISOString() : undefined
   };
 }

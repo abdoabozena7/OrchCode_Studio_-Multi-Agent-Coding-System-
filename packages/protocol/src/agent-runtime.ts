@@ -134,6 +134,7 @@ export type AgentRuntimeSession = {
   runPhases: RunPhase[];
   decisionLedger: DecisionRecord[];
   reviewGate?: ReviewGateSummary;
+  reconciliationReport?: import("./models.js").ReconciliationReport;
   thinkFirst: boolean;
   userPrompt: string;
   agentName: string;
@@ -197,6 +198,10 @@ export type RuntimeTurnResponse = {
 export type ReportPatchApplyResultRequest = {
   status: "applied" | "failed";
   message: string;
+  reconciliationSnapshot?: {
+    before?: import("./models.js").WorkspaceDiffSnapshot;
+    after?: import("./models.js").WorkspaceDiffSnapshot;
+  };
 };
 
 export type ReportCommandResultRequest = {

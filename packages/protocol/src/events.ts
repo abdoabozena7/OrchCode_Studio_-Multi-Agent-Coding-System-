@@ -44,8 +44,12 @@ export type AppEvent =
   | { type: "runtime.command.failed"; sessionId: string; execution: CommandExecutionRecord }
   | { type: "runtime.command.blocked"; sessionId: string; execution: CommandExecutionRecord }
   | { type: "runtime.verification.pending"; sessionId: string; verification: VerificationResult }
+  | { type: "runtime.verification.running"; sessionId: string; verification: VerificationResult }
   | { type: "runtime.verification.passed"; sessionId: string; verification: VerificationResult }
   | { type: "runtime.verification.failed"; sessionId: string; verification: VerificationResult }
+  | { type: "runtime.verification.not_run"; sessionId: string; verification: VerificationResult }
+  | { type: "runtime.verification.skipped"; sessionId: string; verification: VerificationResult }
+  | { type: "runtime.verification.unavailable"; sessionId: string; verification: VerificationResult }
   | { type: "runtime.session.created"; sessionId: string; session: AgentRuntimeSession }
   | { type: "runtime.session.restored"; sessionId: string; session: AgentRuntimeSession }
   | { type: "runtime.session.expired"; sessionId: string; session: AgentRuntimeSession }

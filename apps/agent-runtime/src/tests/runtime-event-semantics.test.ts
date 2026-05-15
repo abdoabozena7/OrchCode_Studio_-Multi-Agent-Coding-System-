@@ -23,7 +23,17 @@ test("patch apply reports verification handoff events after Rust apply is acknow
 
     await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
       status: "applied",
-      message: "Patch applied by Rust authority"
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: ["AGENT_PROPOSAL.md"],
+          diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
     });
 
     assert.equal(events.some((event) => event.type === "runtime.artifact.created"), true);
@@ -55,7 +65,17 @@ test("command execution emits explicit completion events for projection consumer
     await fixture.runtime.approvePatch(fixture.sessionId, patchId);
     await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
       status: "applied",
-      message: "Patch applied by Rust authority"
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: true,
+          isGitRepo: true,
+          changedFiles: ["AGENT_PROPOSAL.md"],
+          diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
     });
 
     const request = fixture.runtime.getSession(fixture.sessionId)?.commandRequests[0];

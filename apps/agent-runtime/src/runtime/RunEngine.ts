@@ -1,10 +1,12 @@
 import type {
+  AgentRiskRef,
   AgentRun,
   AgentPlan,
   AgentRuntimeSession,
   Artifact,
   CommandRequest,
   DecisionRecord,
+  EvidenceRef,
   PatchFileChange,
   PatchProposal,
   ProjectMap,
@@ -27,6 +29,11 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { classifyCommandRisk } from "../tools/CommandPolicy.js";
 import { randomId, SessionManager } from "./SessionManager.js";
 import { inferProjectLaunch } from "./ProjectLaunchInference.js";
+import {
+  appendAgentJournalEntry,
+  buildAttributedReviewGate,
+  buildDiffAwareRunSummary
+} from "./AgentTelemetry.js";
 
 type RunPlanTask = {
   id?: string;
@@ -107,16 +114,25 @@ export class RunEngine {
         id: "agent_local_codex",
         sessionId,
         agentName: "Local Codex Run",
+        displayName: "Coordinator",
         role: "Senior Coding Agent",
         roleTitle: "Coordinator",
         lifecycleStage: "INTAKE",
         objective: message,
         ownedPaths: ["workspace://current"],
         forbiddenPaths: ["tauri://rust-authority", "workspace://outside-current"],
+        allowedActions: ["inspect_workspace", "prepare_plan", "propose_patch", "request_commands", "record_decisions"],
+        stopConditions: ["Stop before writes until Rust approval/apply happens.", "Stop if work leaves the current workspace boundary."],
+        integrationNotes: ["Rust remains the apply authority.", "Use runtime-owned evidence and decision records as the review source of truth."],
         currentAction: "Clarifying the request and preparing a local run.",
         recentActions: ["Session created", "Run initialized"],
         changedFiles: [],
         commandsRun: [],
+        testsRun: [],
+        decisionsMade: [],
+        evidenceRefs: [],
+        riskRefs: [],
+        workJournal: [],
         riskLevel: "medium",
         blockers: [],
         diffStats: { fileCount: 0 },
@@ -125,6 +141,15 @@ export class RunEngine {
         lastEvent: "Run initialized",
         startedAt: draft.createdAt
       });
+      const coordinator = draft.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex");
+      if (coordinator) {
+        appendAgentJournalEntry(coordinator, {
+          kind: "planning",
+          title: "Run initialized",
+          summary: "Coordinator created a bounded local run contract.",
+          status: "running"
+        });
+      }
     });
     await this.updateRunPhase(sessionId, "inspect_workspace", "active", "Inspecting workspace structure and task intent.");
 
@@ -138,9 +163,11 @@ export class RunEngine {
       finding: "Workspace inspection completed before any write proposal.",
       decision: "Use the repo snapshot as the source of truth for planning.",
       rationaleSummary: snapshot.summary,
-      evidenceRefs: snapshot.importantFiles.slice(0, 3).map((file) => ({ type: "file" as const, path: file, note: "Important workspace file" })),
+      evidenceRefs: createSnapshotEvidenceRefs(snapshot),
       linkedFiles: snapshot.importantFiles.slice(0, 6),
-      createdByAgent: "Local Codex Run"
+      createdByAgent: "Local Codex Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: ["agent_local_codex"]
     });
     await this.updateStage(sessionId, "CONTEXT_GATHER", "inspecting", "completed", "Workspace snapshot", snapshot.summary);
     await this.updateRunPhase(sessionId, "inspect_workspace", "completed", snapshot.summary, snapshot.fileSamples.length);
@@ -163,6 +190,10 @@ export class RunEngine {
         agentRole: task.roleTitle,
         createdAt: new Date().toISOString()
       }));
+      const plannedAgents = buildPlannedAgentContracts(sessionId, plan, draft.createdAt);
+      for (const plannedAgent of plannedAgents) {
+        upsertAgentRunRecord(draft, plannedAgent);
+      }
       draft.taskState.phase = "planning";
       draft.taskState.version += 1;
       draft.taskState.transitions.push({
@@ -182,11 +213,45 @@ export class RunEngine {
       finding: "The request has enough local evidence to move into planning.",
       decision: `Selected ${runMode} as the local run mode and created a bounded implementation plan.`,
       rationaleSummary: plan.reasoningSummary || plan.summary,
-      evidenceRefs: [],
+      evidenceRefs: plan.tasks.flatMap((task, index) =>
+        (task.targetFiles ?? []).slice(0, 2).map((file) => ({
+          type: "file" as const,
+          path: file,
+          category: "ownership-contract",
+          reason: `${task.roleTitle} owns this planned path during the run.`,
+          linkedAgentId: `agent_task_${index + 1}`
+        }))
+      ),
       linkedFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []).slice(0, 8),
       uncertainty: plan.risks[0],
-      createdByAgent: "Local Codex Run"
+      createdByAgent: "Local Codex Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
     });
+    for (const [index, risk] of plan.risks.entries()) {
+      await this.recordAgentRisk(sessionId, "agent_local_codex", {
+        id: randomId("risk"),
+        agentId: "agent_local_codex",
+        lifecycleArea: "planning",
+        severity: "medium",
+        reason: risk,
+        mitigation: "Keep the run gated and verify before apply.",
+        status: "open"
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "risk",
+        finding: "A planning risk was recorded before implementation.",
+        decision: "Keep the run bounded and surface the risk in the operator console.",
+        rationaleSummary: risk,
+        evidenceRefs: [],
+        linkedFiles: [],
+        uncertainty: risk,
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+      if (index >= 1) break;
+    }
     await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", plan.reasoningSummary || plan.summary);
     await this.updateRunPhase(sessionId, "split_agents", "completed", `Prepared ${plan.tasks.length} work item(s) for the local run.`, plan.tasks.length);
 
@@ -305,10 +370,18 @@ export class RunEngine {
       finding: "A reviewable patch proposal is available.",
       decision: "Stop before writing files and route the change through Rust approval/apply authority.",
       rationaleSummary: patch.summary,
-      evidenceRefs: patch.filesChanged.map((file) => ({ type: "file" as const, path: file.path, note: file.explanation })).slice(0, 8),
+      evidenceRefs: patch.filesChanged.map((file) => ({
+        type: "file" as const,
+        path: file.path,
+        category: "patch-file",
+        reason: file.explanation,
+        linkedAgentId: findOwningAgentId(this.requireSession(sessionId), file.path)
+      })).slice(0, 8),
       linkedFiles: patch.filesChanged.map((file) => file.path),
       uncertainty: patch.riskLevel === "high" ? "High-risk patch proposal; verify carefully before apply." : undefined,
-      createdByAgent: "Local Codex Run"
+      createdByAgent: "Local Codex Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: uniqueStrings(["agent_local_codex", ...patch.filesChanged.map((file) => findOwningAgentId(this.requireSession(sessionId), file.path)).filter(Boolean) as string[]])
     });
     await this.updateRunPhase(sessionId, "integrate_changes", "completed", `Prepared ${patch.filesChanged.length} file change(s) for review.`, patch.filesChanged.length);
 
@@ -329,7 +402,6 @@ export class RunEngine {
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "needs_approval";
       draft.lifecycleStage = "APPROVAL";
-      draft.reviewGate = createPendingReviewGate(draft, verification, patch, commandRequests);
       draft.reasoningSummaries.push(plan.reasoningSummary);
       draft.orchestration ??= createEmptyOrchestration(draft);
       draft.orchestration.validationGateResult = {
@@ -344,12 +416,37 @@ export class RunEngine {
         agent.lifecycleStage = "APPROVAL";
         agent.currentAction = "Waiting for operator review before Rust applies files and runs commands.";
         agent.currentTask = patch.title;
-        agent.changedFiles = patch.filesChanged.map((file) => file.path);
         agent.commandsRun = commandRequests.map((request) => request.command);
-        agent.diffStats = summarizePatchStats(patch.filesChanged);
-        agent.recentActions = appendRecentAction(agent.recentActions, `Prepared patch: ${patch.title}`);
-        agent.recentActions = appendRecentAction(agent.recentActions, `Queued ${commandRequests.length} verification command(s)`);
+        agent.evidenceRefs = mergeEvidenceRefs(agent.evidenceRefs, patch.filesChanged.map((file) => ({
+          type: "file",
+          path: file.path,
+          category: "patch-file",
+          reason: file.explanation,
+          linkedAgentId: "agent_local_codex"
+        })));
+        appendAgentJournalEntry(agent, {
+          kind: "proposed_patch",
+          title: patch.title,
+          summary: `Prepared ${patch.filesChanged.length} reviewable file change(s).`,
+          filePath: patch.filesChanged[0]?.path,
+          severity: patch.riskLevel,
+          status: "completed"
+        });
+        for (const request of commandRequests) {
+          appendAgentJournalEntry(agent, {
+            kind: "command_requested",
+            title: request.command,
+            summary: `Queued verification command: ${request.command}`,
+            command: request.command,
+            status: request.status === "blocked" ? "blocked" : "queued"
+          });
+        }
       });
+      distributePatchTelemetry(draft, patch, commandRequests);
+      if (patch.riskLevel !== "low") {
+        attachPatchRiskToOwningAgents(draft, patch);
+      }
+      draft.reviewGate = createPendingReviewGate(draft, verification, patch, commandRequests);
     });
 
     const summary = createRunSummary(this.requireSession(sessionId), verification);
@@ -458,12 +555,63 @@ export class RunEngine {
     sessionId: string,
     input: Omit<DecisionRecord, "id" | "sessionId" | "createdAt">
   ) {
+    const decisionId = randomId("decision");
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.decisionLedger.push({
-        id: randomId("decision"),
+      const record = {
+        id: decisionId,
         sessionId,
         createdAt: new Date().toISOString(),
         ...input
+      };
+      draft.decisionLedger.push(record);
+      if (input.createdByAgentId) {
+        updateAgentRunRecord(draft, input.createdByAgentId, (agent) => {
+          agent.decisionsMade = appendUnique(agent.decisionsMade, decisionId);
+          agent.evidenceRefs = mergeEvidenceRefs(agent.evidenceRefs, input.evidenceRefs.map((evidence) => ({
+            ...evidence,
+            linkedDecisionId: evidence.linkedDecisionId ?? decisionId,
+            linkedAgentId: evidence.linkedAgentId ?? input.createdByAgentId
+          })));
+          appendAgentJournalEntry(agent, {
+            kind: "decision",
+            title: input.decision,
+            summary: input.finding,
+            linkedDecisionId: decisionId,
+            status: "completed"
+          });
+          if (input.evidenceRefs.length) {
+            appendAgentJournalEntry(agent, {
+              kind: "evidence_added",
+              title: "Evidence linked",
+              summary: `Linked ${input.evidenceRefs.length} evidence reference(s) to a runtime decision.`,
+              linkedDecisionId: decisionId,
+              linkedEvidenceRefId: input.evidenceRefs[0]?.id,
+              status: "completed"
+            });
+          }
+        });
+      }
+      for (const linkedAgentId of input.linkedAgentIds ?? []) {
+        updateAgentRunRecord(draft, linkedAgentId, (agent) => {
+          agent.decisionsMade = appendUnique(agent.decisionsMade, decisionId);
+        });
+      }
+    });
+    return decisionId;
+  }
+
+  private async recordAgentRisk(sessionId: string, agentId: string, risk: AgentRiskRef) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      updateAgentRunRecord(draft, agentId, (agent) => {
+        agent.riskRefs = mergeRiskRefs(agent.riskRefs, [risk]);
+        appendAgentJournalEntry(agent, {
+          kind: "risk_identified",
+          title: risk.reason,
+          summary: risk.mitigation ?? "A runtime risk was recorded for this agent contract.",
+          filePath: risk.filePath,
+          severity: risk.severity,
+          status: risk.status === "mitigated" ? "completed" : "blocked"
+        });
       });
     });
   }
@@ -887,22 +1035,16 @@ function toAgentPlan(plan: RunPlanModel): AgentPlan {
 }
 
 function createRunSummary(session: AgentRuntimeSession, verification: VerificationResult): RunSummary {
-  return {
-    status:
-      verification.status === "failed"
-        ? "failed"
-        : verification.status === "pending"
-          ? "blocked"
-          : "completed",
-    summary: verification.summary,
-    filesChanged: session.patchProposals.flatMap((patch) => patch.filesChanged.map((file) => ({ path: file.path, added: 0, removed: 0, changeType: file.changeType }))),
-    appliedPatchIds: session.patchProposals.filter((patch) => patch.status === "applied").map((patch) => patch.id),
-    proposedPatchIds: session.patchProposals.filter((patch) => patch.status !== "applied").map((patch) => patch.id),
-    commandResults: session.commandRequests.map((request) => `${request.command}: ${request.status}`),
-    gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
-    nextAction: "Review changes, then apply and run verification through Rust.",
-    createdAt: new Date().toISOString()
-  };
+  return buildDiffAwareRunSummary(
+    session,
+    verification,
+    verification.status === "failed"
+      ? "failed"
+      : verification.status === "pending"
+        ? "blocked"
+        : "completed",
+    "Review changes, then apply and run verification through Rust."
+  );
 }
 
 function createInitialRunPhases(runMode: RunMode): RunPhase[] {
@@ -948,6 +1090,79 @@ function inferLocalRunMode(message: string, resolvedMode: Exclude<RuntimeExecuti
   return "normal_run";
 }
 
+function createSnapshotEvidenceRefs(snapshot: RepoSnapshot): EvidenceRef[] {
+  const searchEvidence = snapshot.searchResults.slice(0, 3).map((match) => ({
+    type: "file" as const,
+    path: match.path,
+    lineStart: match.line,
+    lineEnd: match.line,
+    category: "search-hit",
+    reason: match.preview.trim() || "Matched the request search query."
+  }));
+  if (searchEvidence.length) {
+    return searchEvidence;
+  }
+  return snapshot.importantFiles.slice(0, 3).map((file) => ({
+    type: "file" as const,
+    path: file,
+    category: "important-file",
+    reason: "Important workspace file"
+  }));
+}
+
+function buildPlannedAgentContracts(sessionId: string, plan: RunPlanModel, startedAt: string): AgentRun[] {
+  return plan.tasks.map((task, index) => ({
+    id: `agent_task_${index + 1}`,
+    sessionId,
+    agentName: task.roleTitle,
+    displayName: `${task.roleTitle} ${index + 1}`,
+    role: task.roleTitle,
+    roleTitle: task.roleTitle,
+    lifecycleStage: "PLAN",
+    objective: task.objective,
+    ownedPaths: task.targetFiles ?? [],
+    forbiddenPaths: ["tauri://rust-authority", "workspace://outside-current"],
+    allowedActions: ["inspect_assigned_paths", "prepare_reviewable_changes", "record_evidence", "request_verification"],
+    stopConditions: [
+      "Stop if the change requires files outside the owned paths.",
+      task.verification ? `Stop when the work is ready for ${task.verification}.` : "Stop when the work is ready for review."
+    ],
+    integrationNotes: [
+      task.expectedArtifact ? `Expected artifact: ${task.expectedArtifact}` : "Expected artifact not reported yet.",
+      "Coordinator keeps the final review gate and Rust remains the apply authority."
+    ],
+    currentAction: "Planned by coordinator; execution telemetry not reported yet.",
+    recentActions: ["Contract prepared by coordinator."],
+    changedFiles: [],
+    commandsRun: [],
+    testsRun: [],
+    decisionsMade: [],
+    evidenceRefs: (task.targetFiles ?? []).slice(0, 3).map((file) => ({
+      type: "file" as const,
+      path: file,
+      category: "owned-path",
+      reason: "Planner assigned this path to the agent contract."
+    })),
+    riskRefs: [],
+    workJournal: [{
+      id: randomId("journal"),
+      agentId: `agent_task_${index + 1}`,
+      timestamp: startedAt,
+      kind: "planning",
+      title: "Contract prepared",
+      summary: "Coordinator assigned a bounded ownership contract to this agent.",
+      status: "completed"
+    }],
+    riskLevel: "medium",
+    blockers: [],
+    diffStats: undefined,
+    currentTask: task.title,
+    status: "idle",
+    lastEvent: "planned",
+    startedAt
+  }));
+}
+
 function upsertAgentRunRecord(session: AgentRuntimeSession, input: AgentRun) {
   const existingIndex = session.orchestration?.agentRuns.findIndex((agent) => agent.id === input.id) ?? -1;
   if (!session.orchestration) return;
@@ -972,6 +1187,105 @@ function appendRecentAction(actions: string[] | undefined, next: string) {
   return merged.slice(-6);
 }
 
+function appendUnique(values: string[] | undefined, next: string) {
+  return uniqueStrings([...(values ?? []), next]);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function mergeEvidenceRefs(existing: EvidenceRef[] | undefined, next: EvidenceRef[]) {
+  const merged = [...(existing ?? [])];
+  for (const ref of next) {
+    const fingerprint = JSON.stringify(ref);
+    if (!merged.some((candidate) => JSON.stringify(candidate) === fingerprint)) {
+      merged.push(ref);
+    }
+  }
+  return merged.slice(-12);
+}
+
+function mergeRiskRefs(existing: AgentRiskRef[] | undefined, next: AgentRiskRef[]) {
+  const merged = [...(existing ?? [])];
+  for (const ref of next) {
+    if (!merged.some((candidate) => candidate.id === ref.id || (candidate.agentId === ref.agentId && candidate.reason === ref.reason && candidate.filePath === ref.filePath))) {
+      merged.push(ref);
+    }
+  }
+  return merged.slice(-12);
+}
+
+function findOwningAgentId(session: AgentRuntimeSession, filePath: string) {
+  return session.orchestration?.agentRuns.find((agent) =>
+    (agent.ownedPaths ?? []).some((ownedPath) => ownedPath === filePath)
+  )?.id;
+}
+
+function distributePatchTelemetry(
+  session: AgentRuntimeSession,
+  patch: PatchProposal,
+  commandRequests: CommandRequest[]
+) {
+  for (const agent of session.orchestration?.agentRuns ?? []) {
+    const owned = new Set(agent.ownedPaths ?? []);
+    const changedFiles = patch.filesChanged.filter((file) => owned.has(file.path));
+    if (!changedFiles.length) continue;
+    agent.changedFiles = uniqueStrings([...(agent.changedFiles ?? []), ...changedFiles.map((file) => file.path)]);
+    agent.commandsRun = uniqueStrings([...(agent.commandsRun ?? []), ...commandRequests.map((request) => request.command)]);
+    agent.evidenceRefs = mergeEvidenceRefs(agent.evidenceRefs, changedFiles.map((file) => ({
+      type: "file",
+      path: file.path,
+      category: "owned-change",
+      reason: file.explanation,
+      linkedAgentId: agent.id
+    })));
+    agent.status = "running";
+    agent.currentAction = "Reviewable changes were attributed from the runtime patch proposal.";
+    for (const file of changedFiles) {
+      appendAgentJournalEntry(agent, {
+        kind: "edited_file",
+        title: file.path,
+        summary: `Runtime attributed this changed file to the agent contract.`,
+        filePath: file.path,
+        status: "completed"
+      });
+    }
+    for (const request of commandRequests) {
+      appendAgentJournalEntry(agent, {
+        kind: "command_requested",
+        title: request.command,
+        summary: `Verification command was attributed to this agent contract.`,
+        command: request.command,
+        status: request.status === "blocked" ? "blocked" : "queued"
+      });
+    }
+  }
+}
+
+function attachPatchRiskToOwningAgents(session: AgentRuntimeSession, patch: PatchProposal) {
+  const fallbackAgentIds = ["agent_local_codex"];
+  const owningAgentIds = uniqueStrings(
+    patch.filesChanged
+      .map((file) => findOwningAgentId(session, file.path))
+      .filter(Boolean) as string[]
+  );
+  for (const agentId of owningAgentIds.length ? owningAgentIds : fallbackAgentIds) {
+    updateAgentRunRecord(session, agentId, (agent) => {
+      agent.riskRefs = mergeRiskRefs(agent.riskRefs, [{
+        id: randomId("risk"),
+        agentId,
+        filePath: patch.filesChanged[0]?.path,
+        lifecycleArea: "integrate_changes",
+        severity: patch.riskLevel,
+        reason: `${patch.title} is marked ${patch.riskLevel} risk.`,
+        mitigation: "Keep the change gated until Rust apply and verification complete.",
+        status: "open"
+      }]);
+    });
+  }
+}
+
 function summarizePatchStats(files: PatchProposal["filesChanged"]) {
   return {
     fileCount: files.length
@@ -984,11 +1298,10 @@ function createPendingReviewGate(
   patch: PatchProposal,
   commandRequests: CommandRequest[]
 ): ReviewGateSummary {
+  const gate = buildAttributedReviewGate(session, verification);
   return {
-    totalFilesChanged: patch.filesChanged.length,
-    changesByAgent: [],
-    riskyAreas: patch.riskLevel === "low" ? [] : [`${patch.title} (${patch.riskLevel})`],
-    verificationChecks: verification.checks,
+    ...gate,
+    riskyAreas: patch.riskLevel === "low" ? gate.riskyAreas : [...new Set([...gate.riskyAreas, `${patch.title} (${patch.riskLevel})`])],
     unresolvedBlockers: [
       "Rust patch apply is still pending.",
       ...(commandRequests.length ? ["Verification commands are queued but have not run yet."] : [])
@@ -996,6 +1309,31 @@ function createPendingReviewGate(
     recommendation: "caution",
     summary: "Reviewable diff is ready, but Rust apply and verification have not completed yet."
   };
+}
+
+function createDecisionSummaryByAgent(session: AgentRuntimeSession) {
+  const summaries = new Map<string, { agentId?: string; agentName: string; decisionIds: string[] }>();
+  for (const record of session.decisionLedger ?? []) {
+    const linkedAgentIds = uniqueStrings([
+      record.createdByAgentId ?? "",
+      ...(record.linkedAgentIds ?? [])
+    ]);
+    for (const agentId of linkedAgentIds) {
+      const agent = session.orchestration?.agentRuns.find((candidate) => candidate.id === agentId);
+      const key = agentId || record.createdByAgent;
+      const current = summaries.get(key) ?? {
+        agentId: agentId || undefined,
+        agentName: agent?.displayName ?? agent?.agentName ?? record.createdByAgent,
+        decisionIds: []
+      };
+      current.decisionIds = uniqueStrings([...current.decisionIds, record.id]);
+      summaries.set(key, current);
+    }
+  }
+  return [...summaries.values()].map((entry) => ({
+    ...entry,
+    count: entry.decisionIds.length
+  }));
 }
 
 function formatAssistantSummary(plan: RunPlanModel, patch: PatchProposal, commands: CommandRequest[]) {
