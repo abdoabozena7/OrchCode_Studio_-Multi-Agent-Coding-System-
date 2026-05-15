@@ -224,6 +224,9 @@ export type ProjectMap = {
   testCommands: string[];
   entryPoints: string[];
   importantFiles: string[];
+  projectKind?: import("./models.js").ProjectKind;
+  intakeConfidence?: import("./models.js").ProjectIntakeConfidence;
+  currentStateSummary?: string;
 };
 
 export type ReviewResult = {

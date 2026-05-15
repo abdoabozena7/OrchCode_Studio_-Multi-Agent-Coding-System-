@@ -13,6 +13,8 @@ This branch is a release-candidate stabilization snapshot for the current OrchCo
 - The branch now includes a durable SQLite runtime-event foundation, and replay-based restore can rebuild sessions conservatively when durable event history is sufficient.
 - Snapshot restore remains distinct from durable event replay, and the UI should treat snapshot-based restore as a fallback rather than replay-authoritative truth.
 - Missing or partial data is shown honestly as unknown, unavailable, shared, unattributed, or manual-review-required.
+- Existing non-empty workspaces now trigger automatic project intake, conservative continuation detection, and compact context-pack generation before implementation planning proceeds.
+- Existing-project continuation now creates a scoped module execution plan, carries guardrails into worker contracts, and validates proposed changes against owned/caution/forbidden paths before review/apply.
 
 ## Known limitations
 
@@ -26,6 +28,8 @@ This branch is a release-candidate stabilization snapshot for the current OrchCo
 - Command safety still depends on heuristic policy classification and should not be treated as sandbox-grade containment.
 - Command provenance is now recorded more explicitly, but heuristic classification still does not equal sandboxing.
 - Background command tracking is more durable than before, but it is still not a full process supervisor and incomplete background jobs may restore as `orphaned` or `reconciliation_required`.
+- Run intent now models `run_to_green`, but the automated repair loop itself is still deferred to a later prompt.
+- Module-scope validation is a planning and review guardrail, not a perfect sandbox, and broader automated repair remains deferred to the next prompt.
 
 ## Manual QA checklist
 

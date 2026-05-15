@@ -166,6 +166,7 @@ export class SessionManager {
       commandRequests: [],
       commandExecutions: [],
       backgroundJobs: [],
+      moduleExecutionSummaries: [],
       reasoningSummaries: [],
       progressEvents: [],
       agentWorkStatuses: [],
@@ -756,6 +757,7 @@ function hydrateSession(
   session.toolIntents ??= [];
   session.artifacts ??= [];
   session.backgroundJobs ??= [];
+  session.moduleExecutionSummaries ??= [];
   session.runPhases ??= [];
   session.decisionLedger ??= [];
   session.declaredAccess ??= buildDeclaredAccessPolicy(session.accessProfile, session.trustProfile);

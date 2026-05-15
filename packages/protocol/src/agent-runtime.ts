@@ -32,7 +32,15 @@ import type {
   RunTrustProfile,
   SafetySettings
 } from "./approvals.js";
-import type { ModelProviderConfig } from "./models.js";
+import type {
+  ModelProviderConfig,
+  ProjectContextPack,
+  ProjectIntake,
+  ProjectRunIntent,
+  ModuleExecutionPlan,
+  ModuleExecutionSummary,
+  ModuleScopeValidation
+} from "./models.js";
 
 export type AgentRuntimeMode = "demo_mock" | "real_provider";
 
@@ -156,6 +164,12 @@ export type AgentRuntimeSession = {
   runMode?: RunMode;
   runPhases: RunPhase[];
   decisionLedger: DecisionRecord[];
+  projectIntake?: ProjectIntake;
+  contextPack?: ProjectContextPack;
+  runIntent?: ProjectRunIntent;
+  moduleExecutionPlan?: ModuleExecutionPlan;
+  moduleExecutionSummaries?: ModuleExecutionSummary[];
+  latestScopeValidation?: ModuleScopeValidation;
   reviewGate?: ReviewGateSummary;
   reconciliationReport?: import("./models.js").ReconciliationReport;
   thinkFirst: boolean;

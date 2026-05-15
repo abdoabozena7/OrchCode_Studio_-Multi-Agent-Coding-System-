@@ -320,6 +320,7 @@ export type ReviewGateSummary = {
   globalDiff?: GlobalDiffSummary;
   actualDiff?: GlobalDiffSummary;
   reconciliation?: ReconciliationReport;
+  scopeValidation?: ModuleScopeValidation;
   changesByAgent: Array<{
     agentId?: string;
     agentName: string;
@@ -400,6 +401,178 @@ export type WorkspaceInfo = {
   languages: Record<string, number>;
   packageManagers: string[];
   testCommands: string[];
+};
+
+export type ProjectIntakeStatus = "not_started" | "running" | "completed" | "failed" | "partial";
+
+export type ProjectKind = "empty_project" | "existing_project" | "mid_progress_project" | "unknown";
+
+export type ProjectIntakeConfidence = "high" | "medium" | "low" | "unknown";
+
+export type ProjectSignalType =
+  | "git_repository"
+  | "package_config"
+  | "source_directories"
+  | "tests"
+  | "docs"
+  | "previous_orchcode_state"
+  | "existing_todos"
+  | "existing_build_scripts"
+  | "current_git_changes";
+
+export type ProjectSignal = {
+  type: ProjectSignalType;
+  detail?: string;
+  paths?: string[];
+};
+
+export type ProjectProgressReconstruction = {
+  inferred: true;
+  summary: string;
+  implementedAreas: string[];
+  partialAreas: string[];
+  missingAreas: string[];
+  brokenAreas: string[];
+  previousPlanEvidence: string[];
+  nextSafeAction: string;
+  warnings: string[];
+};
+
+export type ProjectEditGuardrails = {
+  summary: string;
+  rules: string[];
+};
+
+export type ProjectContextPack = {
+  projectSummary: string;
+  currentTaskObjective?: string;
+  relevantFiles: string[];
+  relatedTests: string[];
+  conventionsDiscovered: string[];
+  apisLikelyToPreserve: string[];
+  safeToEdit: string[];
+  cautionPaths: string[];
+  doNotTouchCandidates: string[];
+  acceptanceCriteriaDraft: string[];
+  verificationCommands: string[];
+  knownRisks: string[];
+  unknowns: string[];
+  guardrails: ProjectEditGuardrails;
+};
+
+export type ProjectRunIntent = "run_once" | "run_to_green" | "inspect_only" | "implement_module" | "unknown";
+
+export type ModulePlanSource =
+  | "user_requested"
+  | "inferred_from_intake"
+  | "inferred_from_progress"
+  | "resumed_from_project_state"
+  | "unknown";
+
+export type ModuleExecutionPlanStatus =
+  | "draft"
+  | "ready"
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ModuleExecutionPlan = {
+  id: string;
+  sessionId: string;
+  projectId?: string;
+  workspaceRoot: string;
+  source: ModulePlanSource;
+  status: ModuleExecutionPlanStatus;
+  title: string;
+  objective: string;
+  rationale: string;
+  linkedIntakeId?: string;
+  linkedContextPackId?: string;
+  targetModuleName?: string;
+  relevantFiles: string[];
+  ownedPaths: string[];
+  allowedPaths: string[];
+  cautionPaths: string[];
+  forbiddenPaths: string[];
+  expectedNewFiles: string[];
+  disallowedNewFiles: string[];
+  requiredExistingPatterns: string[];
+  publicContractsToPreserve: string[];
+  acceptanceCriteria: string[];
+  verificationCommands: string[];
+  risks: string[];
+  unknowns: string[];
+  stopConditions: string[];
+  approvalRequiredReasons: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScopeValidationVerdict = "in_scope" | "needs_review" | "blocked";
+
+export type ModuleScopeValidation = {
+  allowedChanges: string[];
+  cautionChanges: string[];
+  forbiddenChanges: string[];
+  unexpectedNewFiles: string[];
+  deletionOrRenameConcerns: string[];
+  dependencyConcerns: string[];
+  publicContractConcerns: string[];
+  verdict: ScopeValidationVerdict;
+  reasons: string[];
+};
+
+export type ModuleExecutionSummaryStatus = "complete" | "partial" | "blocked" | "failed" | "needs_follow_up";
+
+export type ModuleExecutionSummary = {
+  id: string;
+  sessionId: string;
+  modulePlanId: string;
+  title: string;
+  status: ModuleExecutionSummaryStatus;
+  completedAcceptanceCriteria: string[];
+  failedAcceptanceCriteria: string[];
+  changedFiles: string[];
+  verificationResults: Array<{
+    name: string;
+    status: VerificationCheckStatus;
+    detail: string;
+  }>;
+  remainingRisks: string[];
+  nextRecommendedAction?: string;
+  scopeVerdict?: ScopeValidationVerdict;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectIntake = {
+  projectId?: string;
+  workspaceRoot: string;
+  detectedProjectName?: string;
+  intakeStatus: ProjectIntakeStatus;
+  projectKind: ProjectKind;
+  confidence: ProjectIntakeConfidence;
+  detectedSignals: ProjectSignal[];
+  architectureSummary?: string;
+  moduleSummary: string[];
+  knownEntryPoints: string[];
+  knownCommands: string[];
+  testCommands: string[];
+  buildCommands: string[];
+  importantFiles: string[];
+  riskyFiles: string[];
+  doNotTouchCandidates: string[];
+  currentStateSummary?: string;
+  nextActionRecommendation?: string;
+  unknowns: string[];
+  warnings: string[];
+  progressReconstruction?: ProjectProgressReconstruction;
+  contextPack?: ProjectContextPack;
+  runIntent?: ProjectRunIntent;
+  guardrails: ProjectEditGuardrails;
 };
 
 export type FileEntry = {
@@ -514,8 +687,11 @@ export type PreviewRecommendation = {
 export type ToolIntentType =
   | "workspace.snapshot.requested"
   | "workspace.search.requested"
+  | "project.intake.requested"
+  | "module.plan.requested"
   | "file.read.requested"
   | "patch.proposed"
+  | "scope.validation.requested"
   | "command.requested"
   | "validation.requested";
 
@@ -535,6 +711,10 @@ export type ArtifactType =
   | "diff"
   | "command_result"
   | "file_tree"
+  | "project_intake"
+  | "context_pack"
+  | "module_plan"
+  | "module_execution_summary"
   | "preview"
   | "readme"
   | "verification"

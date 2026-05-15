@@ -23,6 +23,7 @@ import {
   buildDiffAwareRunSummary
   ,buildReconciliationReport
 } from "./AgentTelemetry.js";
+import { summarizeModuleExecution } from "./ModuleExecutionPlanning.js";
 
 export class AgentRuntime {
   constructor(
@@ -101,6 +102,10 @@ export class AgentRuntime {
   }
 
   async approvePatch(sessionId: string, patchId: string) {
+    const currentSession = this.requireSession(sessionId);
+    if (currentSession.mode !== "demo_mock" && currentSession.latestScopeValidation?.verdict === "blocked") {
+      throw new Error("Patch approval is blocked because the proposed changes exceed the scoped module plan.");
+    }
     let session = await this.sessionManager.setPatchStatus(sessionId, patchId, "approved");
     const proposal = session.patchProposals.find((patch) => patch.id === patchId);
     if (!proposal) throw new Error("Patch proposal not found");
@@ -429,6 +434,9 @@ export class AgentRuntime {
     await this.sessionManager.setVerificationResult(sessionId, verification);
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.reviewGate = reviewGate;
+      if (draft.moduleExecutionPlan) {
+        draft.moduleExecutionPlan.updatedAt = new Date().toISOString();
+      }
       const hasApplyFailure = draft.patchProposals.some((proposal) => proposal.status === "apply_failed");
       const hasPendingPatchReview = draft.patchProposals.some((proposal) => proposal.status === "proposed");
       const hasPendingPatchApply = draft.patchProposals.some((proposal) => proposal.status === "approved");
@@ -440,11 +448,27 @@ export class AgentRuntime {
         (request) => request.status === "failed" || request.status === "blocked" || request.status === "rejected" || request.status === "denied" || request.status === "orphaned" || request.status === "terminated"
       );
       const reconciliationStatus = draft.reconciliationReport?.status;
+      const scopeVerdict = draft.latestScopeValidation?.verdict;
+
+      if (scopeVerdict === "blocked" && draft.mode !== "demo_mock") {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "BLOCKED";
+        draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "blocked";
+        }
+        setRunPhaseState(draft, "review_final_diff", "blocked", "Module scope validation blocked the proposed change set.", 0);
+        setRunPhaseState(draft, "final_report", "blocked", "Run is blocked until the patch returns inside the scoped module boundary.");
+        return;
+      }
 
       if (hasApplyFailure || hasFailedCommands || verification.status === "failed") {
         draft.status = "failed";
         draft.lifecycleStage = "FAILED";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "failed";
+        }
         setRunPhaseState(draft, "run_verification", "failed", verification.summary, verification.checks.length);
         setRunPhaseState(draft, "final_report", "completed", "Run failed after verification or authority errors.");
         return;
@@ -454,6 +478,9 @@ export class AgentRuntime {
         draft.status = "needs_approval";
         draft.lifecycleStage = "APPROVAL";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = draft.latestScopeValidation?.verdict === "needs_review" ? "blocked" : "running";
+        }
         setRunPhaseState(draft, "review_final_diff", "active", "Patch review is waiting for operator approval.");
         return;
       }
@@ -462,6 +489,9 @@ export class AgentRuntime {
         draft.status = "needs_approval";
         draft.lifecycleStage = "APPLY";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "running";
+        }
         setRunPhaseState(draft, "integrate_changes", "completed", "Patch proposal is approved and waiting for Rust apply.");
         setRunPhaseState(draft, "review_final_diff", "active", "Approved changes are waiting for Rust apply.");
         return;
@@ -470,6 +500,9 @@ export class AgentRuntime {
       if (hasAppliedPatch && hasPendingCommands) {
         draft.status = "needs_approval";
         draft.lifecycleStage = "POST_VERIFY";
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "running";
+        }
         draft.nextAction = {
           kind: "approve_commands",
           message: "Patch applied. Run the requested verification commands through Rust."
@@ -483,6 +516,9 @@ export class AgentRuntime {
         draft.status = "needs_approval";
         draft.lifecycleStage = "POST_VERIFY";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "running";
+        }
         setRunPhaseState(draft, "run_verification", "active", "Patch applied. Reconciliation is still pending.", verification.checks.length);
         setRunPhaseState(draft, "review_final_diff", "active", "Post-apply reconciliation is still pending.");
         return;
@@ -492,6 +528,9 @@ export class AgentRuntime {
         draft.status = "failed";
         draft.lifecycleStage = "FAILED";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "failed";
+        }
         setRunPhaseState(draft, "run_verification", "failed", verification.summary, verification.checks.length);
         setRunPhaseState(draft, "review_final_diff", "blocked", "Post-apply reconciliation diverged from the proposed patch.");
         setRunPhaseState(draft, "final_report", "completed", "Manual inspection is required because post-apply reconciliation diverged.");
@@ -502,6 +541,9 @@ export class AgentRuntime {
         draft.status = "needs_approval";
         draft.lifecycleStage = "POST_VERIFY";
         draft.nextAction = undefined;
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "blocked";
+        }
         setRunPhaseState(draft, "run_verification", "blocked", "Patch applied, but reconciliation data is unavailable.", verification.checks.length);
         setRunPhaseState(draft, "review_final_diff", "active", "Manual inspection is required because reconciliation data is unavailable.");
         return;
@@ -510,6 +552,9 @@ export class AgentRuntime {
       if (hasAppliedPatch) {
         draft.status = "completed";
         draft.lifecycleStage = "DONE";
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "completed";
+        }
         draft.nextAction = draft.previewRecommendation
           ? {
               kind: "preview_ready",
@@ -524,6 +569,30 @@ export class AgentRuntime {
     });
 
     const after = this.requireSession(sessionId);
+    const moduleSummary = summarizeModuleExecution(after, verification);
+    if (moduleSummary) {
+      const previous = after.moduleExecutionSummaries?.find((entry) => entry.id === moduleSummary.id);
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        const existingIndex = draft.moduleExecutionSummaries?.findIndex((entry) => entry.id === moduleSummary.id) ?? -1;
+        draft.moduleExecutionSummaries ??= [];
+        if (existingIndex >= 0) {
+          draft.moduleExecutionSummaries[existingIndex] = moduleSummary;
+        } else {
+          draft.moduleExecutionSummaries.push(moduleSummary);
+        }
+      });
+      if (!previous || previous.status !== moduleSummary.status || previous.updatedAt !== moduleSummary.updatedAt) {
+        await this.sessionManager.addArtifact(sessionId, {
+          id: `artifact_${randomUUID()}`,
+          sessionId,
+          type: "module_execution_summary",
+          title: moduleSummary.title,
+          summary: moduleSummary.summary,
+          payload: { moduleSummary },
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
     const summary = buildRuntimeRunSummary(after, verification);
     await this.sessionManager.setRunSummary(sessionId, summary);
   }
@@ -709,7 +778,31 @@ function buildReviewGateSummary(
   session: AgentRuntimeSession,
   verification: NonNullable<AgentRuntimeSession["verificationResult"]>
 ): NonNullable<AgentRuntimeSession["reviewGate"]> {
-  return buildAttributedReviewGate(session, verification);
+  const gate = buildAttributedReviewGate(session, verification);
+  const scopeValidation = session.latestScopeValidation;
+  if (!scopeValidation) {
+    return gate;
+  }
+  return {
+    ...gate,
+    scopeValidation,
+    recommendation:
+      scopeValidation.verdict === "blocked"
+        ? "do_not_apply"
+        : scopeValidation.verdict === "needs_review"
+          ? "caution"
+          : gate.recommendation,
+    unresolvedBlockers: uniqueRuntimeStrings([
+      ...gate.unresolvedBlockers,
+      ...(scopeValidation.verdict === "blocked" ? ["Module scope validation blocked apply until the patch is narrowed."] : [])
+    ]),
+    summary:
+      scopeValidation.verdict === "blocked"
+        ? "Patch review is blocked because proposed changes exceed the scoped module plan."
+        : scopeValidation.verdict === "needs_review"
+          ? "Patch review needs extra attention because it touches cautionary or approval-sensitive scope."
+          : gate.summary
+  };
 }
 
 function appendRuntimeAction(actions: string[] | undefined, next: string) {

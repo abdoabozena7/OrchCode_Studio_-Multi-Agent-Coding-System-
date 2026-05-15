@@ -34,6 +34,18 @@ import {
   buildAttributedReviewGate,
   buildDiffAwareRunSummary
 } from "./AgentTelemetry.js";
+import {
+  buildProjectIntake,
+  createProjectIntakeEvidenceRefs,
+  createProjectIntakeWarnings,
+  createProjectMapFromIntake,
+  shouldTreatProjectAsExisting
+} from "./ProjectIntake.js";
+import {
+  buildModuleExecutionPlan,
+  summarizeModuleExecution,
+  validatePatchAgainstModulePlan
+} from "./ModuleExecutionPlanning.js";
 
 type RunPlanTask = {
   id?: string;
@@ -157,7 +169,33 @@ export class RunEngine {
     await this.addIntent(sessionId, "workspace.snapshot.requested", "Workspace snapshot", "Inspect project shape without changing files.", {
       workspacePath: session.workspacePath
     }, "executed");
-    const snapshot = createSnapshot(tools, options.projectMap, message);
+    const intake = buildProjectIntake({
+      workspacePath: session.workspacePath,
+      message,
+      projectMap: options.projectMap,
+      tools
+    });
+    const enrichedProjectMap = createProjectMapFromIntake(options.projectMap, intake);
+    const snapshot = createSnapshot(tools, enrichedProjectMap, message, intake);
+    await this.addIntent(sessionId, "project.intake.requested", "Project intake", "Detect project continuation signals before planning edits.", {
+      workspacePath: session.workspacePath,
+      projectKind: intake.projectKind,
+      confidence: intake.confidence,
+      runIntent: intake.runIntent
+    }, "executed");
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.projectIntake = intake;
+      draft.contextPack = intake.contextPack;
+      draft.runIntent = intake.runIntent;
+    });
+    await this.addArtifact(sessionId, "project_intake", "Project intake", intake.currentStateSummary ?? "Project intake completed.", {
+      intake
+    });
+    if (intake.contextPack) {
+      await this.addArtifact(sessionId, "context_pack", "Context pack", intake.contextPack.projectSummary, {
+        contextPack: intake.contextPack
+      });
+    }
     await this.addDecisionRecord(sessionId, {
       category: "finding",
       finding: "Workspace inspection completed before any write proposal.",
@@ -169,9 +207,31 @@ export class RunEngine {
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: ["agent_local_codex"]
     });
+    await this.addDecisionRecord(sessionId, {
+      category: "decision",
+      finding: `Detected ${intake.projectKind.replaceAll("_", " ")} with ${intake.confidence} confidence.`,
+      decision: shouldTreatProjectAsExisting(intake.projectKind)
+        ? "Treat this workspace as existing work: intake and context-pack first, then narrow edits."
+        : intake.projectKind === "empty_project"
+          ? "Workspace appears close to empty, so blank-project planning can proceed."
+          : "Workspace classification is uncertain; keep the next step read-only and conservative.",
+      rationaleSummary: intake.currentStateSummary ?? snapshot.summary,
+      evidenceRefs: createProjectIntakeEvidenceRefs(intake),
+      linkedFiles: intake.importantFiles.slice(0, 8),
+      uncertainty: createProjectIntakeWarnings(intake)[0],
+      createdByAgent: "Local Codex Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: ["agent_local_codex"]
+    });
     await this.updateStage(sessionId, "CONTEXT_GATHER", "inspecting", "completed", "Workspace snapshot", snapshot.summary);
     await this.updateRunPhase(sessionId, "inspect_workspace", "completed", snapshot.summary, snapshot.fileSamples.length);
-    await this.updateRunPhase(sessionId, "build_repo_map", "completed", `Mapped ${snapshot.importantFiles.length} important file(s) and ${snapshot.searchResults.length} search hit(s).`, snapshot.searchResults.length);
+    await this.updateRunPhase(
+      sessionId,
+      "build_repo_map",
+      "completed",
+      `Intake classified the workspace as ${intake.projectKind.replaceAll("_", " ")} (${intake.confidence}) and mapped ${snapshot.importantFiles.length} important file(s).`,
+      snapshot.searchResults.length
+    );
 
     await this.addIntent(sessionId, "workspace.search.requested", "Search request", "Identify likely files and project entry points.", {
       query: inferSearchQuery(message),
@@ -179,9 +239,25 @@ export class RunEngine {
     }, "executed");
 
     const plan = await this.createPlan(session, message, snapshot, options.resolvedMode);
+    const modulePlan =
+      shouldTreatProjectAsExisting(intake.projectKind)
+        ? buildModuleExecutionPlan({
+            sessionId,
+            workspaceRoot: session.workspacePath,
+            objective: message,
+            createdAt: new Date().toISOString(),
+            intake,
+            contextPack: intake.contextPack,
+            targetFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []),
+            suggestedCommands: plan.suggestedCommands?.map((item) => item.command) ?? []
+          })
+        : undefined;
     const agentPlan = toAgentPlan(plan);
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.plan = agentPlan;
+      if (modulePlan) {
+        draft.moduleExecutionPlan = modulePlan;
+      }
       draft.tasks = plan.tasks.map((task, index) => ({
         id: task.id ?? `task_${index + 1}`,
         sessionId,
@@ -190,7 +266,7 @@ export class RunEngine {
         agentRole: task.roleTitle,
         createdAt: new Date().toISOString()
       }));
-      const plannedAgents = buildPlannedAgentContracts(sessionId, plan, draft.createdAt);
+      const plannedAgents = buildPlannedAgentContracts(sessionId, plan, draft.createdAt, modulePlan);
       for (const plannedAgent of plannedAgents) {
         upsertAgentRunRecord(draft, plannedAgent);
       }
@@ -208,6 +284,34 @@ export class RunEngine {
       plan,
       preset: options.resolvedMode
     });
+    if (modulePlan) {
+      await this.addIntent(sessionId, "module.plan.requested", modulePlan.title, modulePlan.rationale, {
+        modulePlanId: modulePlan.id,
+        ownedPaths: modulePlan.ownedPaths,
+        cautionPaths: modulePlan.cautionPaths,
+        forbiddenPaths: modulePlan.forbiddenPaths
+      }, "executed");
+      await this.addArtifact(sessionId, "module_plan", modulePlan.title, modulePlan.rationale, {
+        modulePlan
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "decision",
+        finding: "Existing-project continuation was narrowed to a scoped module execution plan.",
+        decision: `Use the module plan "${modulePlan.title}" as the edit boundary before proposing changes.`,
+        rationaleSummary: modulePlan.rationale,
+        evidenceRefs: modulePlan.relevantFiles.slice(0, 4).map((file) => ({
+          type: "file" as const,
+          path: file,
+          category: "module-plan",
+          reason: "Scoped file selected for module continuation."
+        })),
+        linkedFiles: modulePlan.relevantFiles,
+        uncertainty: modulePlan.unknowns[0],
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
+      });
+    }
     await this.addDecisionRecord(sessionId, {
       category: "decision",
       finding: "The request has enough local evidence to move into planning.",
@@ -286,7 +390,11 @@ export class RunEngine {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = commandRequests.length ? "needs_approval" : "failed";
         draft.lifecycleStage = commandRequests.length ? "APPROVAL" : "FAILED";
-        draft.reasoningSummaries.push("I inferred a launch command but left execution to Rust command authority.");
+        draft.reasoningSummaries.push(
+          snapshot.runIntent === "run_to_green"
+            ? "Run-to-green intent was recorded, but this prompt only prepares the first Rust-mediated run and does not implement the repair loop yet."
+            : "I inferred a launch command but left execution to Rust command authority."
+        );
         draft.previewRecommendation = recommendation?.preview;
         draft.nextAction = commandRequests.length
           ? { kind: "approve_commands", message: "Approve the launch command to run it through Rust." }
@@ -310,7 +418,7 @@ export class RunEngine {
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
         content: recommendation
-          ? `I found a launch path and prepared it for approval.\n\nCommand: \`${recommendation.command}\`\n\nReasoning summary: ${recommendation.reason}`
+          ? `I found a launch path and prepared it for approval.\n\nCommand: \`${recommendation.command}\`\n\nReasoning summary: ${recommendation.reason}${snapshot.runIntent === "run_to_green" ? "\n\nRun-to-green intent was recorded, but automated repair is not implemented in this prompt yet." : ""}`
           : "I inspected the workspace, but I could not infer a launch command."
       });
       await this.updateStage(sessionId, commandRequests.length ? "APPROVAL" : "FAILED", "reviewing", commandRequests.length ? "completed" : "failed", "Launch command", recommendation?.reason ?? "No launch command inferred.");
@@ -341,6 +449,12 @@ export class RunEngine {
 
     await this.updateStage(sessionId, "EXECUTION_DRAFT", "working", "running", "Draft changes", "Preparing reviewable patch and command intents.");
     await this.updateRunPhase(sessionId, "agents_running", "active", "Preparing bounded edits, evidence, and verification intents.");
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      if (draft.moduleExecutionPlan) {
+        draft.moduleExecutionPlan.status = "running";
+        draft.moduleExecutionPlan.updatedAt = new Date().toISOString();
+      }
+    });
     const patchIntentModel = await this.createPatchIntent(session, message, snapshot, plan);
     const patchInput = compilePatchProposalInput(session.workspacePath, tools, patchIntentModel);
     const patch = tools.patch.propose(patchInput, sessionId);
@@ -365,6 +479,17 @@ export class RunEngine {
     await this.addIntent(sessionId, "patch.proposed", patch.title, patch.summary, { patchId: patch.id, files: patch.filesChanged }, "proposed");
     await this.sessionManager.addPatchProposal(sessionId, patch);
     await this.addArtifact(sessionId, "diff", patch.title, patch.summary, { patchId: patch.id, unifiedDiff: patch.unifiedDiff, filesChanged: patch.filesChanged });
+    const currentModulePlan = this.requireSession(sessionId).moduleExecutionPlan;
+    const scopeValidation = currentModulePlan
+      ? validatePatchAgainstModulePlan(currentModulePlan, patch, tools.workspace)
+      : undefined;
+    if (scopeValidation) {
+      await this.addIntent(sessionId, "scope.validation.requested", "Module scope validation", `Validated ${patch.filesChanged.length} changed file(s) against the module plan.`, {
+        patchId: patch.id,
+        verdict: scopeValidation.verdict,
+        reasons: scopeValidation.reasons
+      }, scopeValidation.verdict === "blocked" ? "blocked" : "executed");
+    }
     await this.addDecisionRecord(sessionId, {
       category: "decision",
       finding: "A reviewable patch proposal is available.",
@@ -383,6 +508,30 @@ export class RunEngine {
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: uniqueStrings(["agent_local_codex", ...patch.filesChanged.map((file) => findOwningAgentId(this.requireSession(sessionId), file.path)).filter(Boolean) as string[]])
     });
+    if (scopeValidation) {
+      await this.addDecisionRecord(sessionId, {
+        category: scopeValidation.verdict === "blocked" ? "risk" : "decision",
+        finding: `Patch scope validation returned ${scopeValidation.verdict}.`,
+        decision:
+          scopeValidation.verdict === "blocked"
+            ? "Do not allow apply approval until the patch is brought back inside the module scope."
+            : scopeValidation.verdict === "needs_review"
+              ? "Keep the patch review-gated because it touches cautionary or approval-sensitive areas."
+              : "Patch changes are inside the scoped module boundary.",
+        rationaleSummary: scopeValidation.reasons[0] ?? "Module scope validation completed without extra concerns.",
+        evidenceRefs: patch.filesChanged.slice(0, 4).map((file) => ({
+          type: "file" as const,
+          path: file.path,
+          category: "scope-validation",
+          reason: "Validated against module execution scope."
+        })),
+        linkedFiles: patch.filesChanged.map((file) => file.path),
+        uncertainty: scopeValidation.reasons[1],
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+    }
     await this.updateRunPhase(sessionId, "integrate_changes", "completed", `Prepared ${patch.filesChanged.length} file change(s) for review.`, patch.filesChanged.length);
 
     const commandRequests = createCommandRequests(sessionId, session.workspacePath, patchIntentModel.suggestedCommands ?? plan.suggestedCommands ?? [], snapshot.testCommands);
@@ -446,16 +595,50 @@ export class RunEngine {
       if (patch.riskLevel !== "low") {
         attachPatchRiskToOwningAgents(draft, patch);
       }
-      draft.reviewGate = createPendingReviewGate(draft, verification, patch, commandRequests);
+      draft.latestScopeValidation = scopeValidation;
+      if (draft.moduleExecutionPlan) {
+        draft.moduleExecutionPlan.status = scopeValidation?.verdict === "blocked" ? "blocked" : "running";
+        draft.moduleExecutionPlan.updatedAt = new Date().toISOString();
+      }
+      draft.reviewGate = createPendingReviewGate(draft, verification, patch, commandRequests, scopeValidation);
     });
 
     const summary = createRunSummary(this.requireSession(sessionId), verification);
-    await this.updateRunPhase(sessionId, "review_final_diff", "active", "Review the proposed diff and queued verification before apply.");
-    await this.updateRunPhase(sessionId, "final_report", "active", "Run is waiting for review and Rust authority actions.");
+    await this.updateRunPhase(
+      sessionId,
+      "review_final_diff",
+      scopeValidation?.verdict === "blocked" ? "blocked" : "active",
+      scopeValidation?.verdict === "blocked"
+        ? "Review gate blocked apply because the patch left the scoped module boundary."
+        : "Review the proposed diff and queued verification before apply."
+    );
+    await this.updateRunPhase(
+      sessionId,
+      "final_report",
+      scopeValidation?.verdict === "blocked" ? "blocked" : "active",
+      scopeValidation?.verdict === "blocked"
+        ? "Run is blocked on scope review before Rust authority actions."
+        : "Run is waiting for review and Rust authority actions."
+    );
     await this.sessionManager.setRunSummary(sessionId, summary);
+    const moduleSummary = summarizeModuleExecution(this.requireSession(sessionId), verification);
+    if (moduleSummary) {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.moduleExecutionSummaries ??= [];
+        const existingIndex = draft.moduleExecutionSummaries.findIndex((entry) => entry.id === moduleSummary.id);
+        if (existingIndex >= 0) {
+          draft.moduleExecutionSummaries[existingIndex] = moduleSummary;
+        } else {
+          draft.moduleExecutionSummaries.push(moduleSummary);
+        }
+      });
+      await this.addArtifact(sessionId, "module_execution_summary", moduleSummary.title, moduleSummary.summary, {
+        moduleSummary
+      });
+    }
     await this.sessionManager.addMessage(sessionId, {
       role: "assistant",
-      content: formatAssistantSummary(plan, patch, commandRequests)
+      content: formatAssistantSummary(plan, patch, commandRequests, scopeValidation)
     });
     await this.updateStage(sessionId, "APPROVAL", "reviewing", "completed", "Approval", "Review changes, then apply through Rust.");
     return this.requireSession(sessionId);
@@ -468,7 +651,9 @@ export class RunEngine {
       "Return JSON with: summary, reasoningSummary, mode(create_project|edit_project|inspect_only), tasks, acceptanceCriteria, risks, suggestedCommands.",
       `Runtime preset: ${resolvedMode}`,
       `User request: ${message}`,
-      `Workspace snapshot: ${JSON.stringify(snapshot)}`
+      `Workspace snapshot: ${JSON.stringify(snapshot)}`,
+      `Project intake: ${JSON.stringify(snapshot.intake)}`,
+      `Context pack: ${JSON.stringify(snapshot.contextPack)}`
     ].join("\n");
     const generated = await this.provider.generateStructured<Partial<RunPlanModel>>(
       { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent.", userPrompt: prompt },
@@ -489,9 +674,11 @@ export class RunEngine {
       "Allowed operations: create_file, replace_range, insert_after, insert_before, delete_range.",
       "For this runtime version, prefer create_file for new files and replace_range for existing files.",
       "When using replace_range, choose a preimageText snippet that appears exactly once in the current file excerpt.",
+      "Respect the scoped module plan. Do not introduce broad edits, duplicate systems, or out-of-scope files.",
       `User request: ${message}`,
       `Plan: ${JSON.stringify(plan)}`,
       `Workspace snapshot: ${JSON.stringify(snapshot)}`,
+      `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`,
       `Relevant file excerpts: ${JSON.stringify(relevantFiles)}`
     ].join("\n");
     const generated = await this.provider.generateStructured<Partial<RunPatchIntentModel>>(
@@ -693,9 +880,17 @@ type RepoSnapshot = {
   candidateFiles: string[];
   searchResults: Array<{ path: string; line: number; preview: string }>;
   fileSamples: Array<{ path: string; reason: string; excerpt: string }>;
+  intake?: AgentRuntimeSession["projectIntake"];
+  contextPack?: AgentRuntimeSession["contextPack"];
+  runIntent?: AgentRuntimeSession["runIntent"];
 };
 
-function createSnapshot(tools: ToolRegistry, projectMap: ProjectMap, message: string): RepoSnapshot {
+function createSnapshot(
+  tools: ToolRegistry,
+  projectMap: ProjectMap,
+  message: string,
+  intake?: AgentRuntimeSession["projectIntake"]
+): RepoSnapshot {
   const files = tools.workspace.listFiles(260);
   const candidateFiles = files
     .filter((file) => !file.isDir && !file.isSecretCandidate)
@@ -705,7 +900,15 @@ function createSnapshot(tools: ToolRegistry, projectMap: ProjectMap, message: st
   const searchResults = tools.workspace.searchCode(inferSearchQuery(message), 12);
   const normalizedMessage = message.toLowerCase();
   const matchedFiles = candidateFiles.filter((file) => normalizedMessage.includes(file.toLowerCase()) || normalizedMessage.includes(file.split("/").pop()?.toLowerCase() ?? ""));
-  const samplePaths = [...new Set([...matchedFiles, ...searchResults.map((match) => match.path), ...projectMap.importantFiles, ...candidateFiles.slice(0, 3)])].slice(0, 6);
+  const samplePaths = [
+    ...new Set([
+      ...(intake?.contextPack?.relevantFiles ?? []),
+      ...matchedFiles,
+      ...searchResults.map((match) => match.path),
+      ...projectMap.importantFiles,
+      ...candidateFiles.slice(0, 3)
+    ])
+  ].slice(0, 8);
   const fileSamples = samplePaths.flatMap((filePath) => {
     try {
       const excerpt = tools.workspace.readFile(filePath).slice(0, 1_200);
@@ -716,20 +919,33 @@ function createSnapshot(tools: ToolRegistry, projectMap: ProjectMap, message: st
   });
   const stack = projectMap.stack.length ? projectMap.stack : ["Unknown"];
   return {
-    summary: `${stack.join(", ")} workspace with ${candidateFiles.length} candidate source/config file(s), ${searchResults.length} search hit(s), and ${fileSamples.length} file sample(s).`,
+    summary: `${stack.join(", ")} workspace with ${candidateFiles.length} candidate source/config file(s), ${searchResults.length} search hit(s), and ${fileSamples.length} file sample(s).${intake ? ` Intake classified it as ${intake.projectKind.replaceAll("_", " ")}.` : ""}`,
     stack,
     packageManagers: projectMap.packageManagers,
     testCommands: projectMap.testCommands,
     importantFiles: projectMap.importantFiles,
     candidateFiles,
     searchResults,
-    fileSamples
+    fileSamples,
+    intake,
+    contextPack: intake?.contextPack,
+    runIntent: intake?.runIntent
   };
 }
 
 function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: RepoSnapshot): RunPlanModel {
-  const mode = input.mode ?? inferRunMode(message);
+  const inferredMode = inferRunMode(message, snapshot);
+  const mode =
+    shouldForceInferredInspectOnly(message, snapshot)
+      ? "inspect_only"
+      : input.mode === "create_project" && snapshot.intake?.projectKind && snapshot.intake.projectKind !== "empty_project"
+        ? inferredMode
+        : input.mode ?? inferredMode;
   const targetFiles = inferTargetFiles(message, snapshot, mode);
+  const defaultRisks = [
+    ...(snapshot.intake?.warnings ?? []),
+    ...(snapshot.intake?.unknowns ?? [])
+  ].slice(0, 3);
   const tasks = input.tasks?.length
     ? input.tasks
     : [
@@ -743,18 +959,41 @@ function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: 
         }
       ];
   return {
-    summary: input.summary || (mode === "create_project" ? "Create a new local project as reviewable files." : "Prepare a reviewable local code change."),
-    reasoningSummary: input.reasoningSummary || "I will keep the run gated: inspect first, propose artifacts, then wait for Rust-mediated approval.",
+    summary:
+      input.summary ||
+      (mode === "create_project"
+        ? "Create a new local project as reviewable files."
+        : snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
+          ? `Prepare a narrow reviewable change inside the existing project. Recommended next action: ${snapshot.intake.nextActionRecommendation ?? "inspect the nearest relevant module first."}`
+          : "Prepare a reviewable local code change."),
+    reasoningSummary:
+      input.reasoningSummary ||
+      (snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
+        ? "I treated this as existing work: read wide first, build a compact context pack, and keep edits narrow before Rust-mediated approval."
+        : "I will keep the run gated: inspect first, propose artifacts, then wait for Rust-mediated approval."),
     mode,
     tasks: tasks.map((task, index) => ({
       ...task,
       id: task.id ?? `task_${index + 1}`,
       targetFiles: task.targetFiles?.length ? task.targetFiles : targetFiles
     })),
-    acceptanceCriteria: input.acceptanceCriteria?.length ? input.acceptanceCriteria : ["Changes are reviewable before apply.", "Post-verify is explicit."],
-    risks: input.risks ?? [],
+    acceptanceCriteria:
+      input.acceptanceCriteria?.length
+        ? input.acceptanceCriteria
+        : snapshot.contextPack?.acceptanceCriteriaDraft?.length
+          ? snapshot.contextPack.acceptanceCriteriaDraft
+          : ["Changes are reviewable before apply.", "Post-verify is explicit."],
+    risks: input.risks?.length ? input.risks : defaultRisks,
     suggestedCommands: input.suggestedCommands
   };
+}
+
+function shouldForceInferredInspectOnly(message: string, snapshot: RepoSnapshot) {
+  return (
+    inferRunMode(message, snapshot) === "inspect_only" &&
+    /\b(continue|resume|inspect|explain|analyze|summarize|map|understand)\b/i.test(message) &&
+    !/\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|create)\b/i.test(message)
+  );
 }
 
 function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
@@ -1120,7 +1359,12 @@ function createSnapshotEvidenceRefs(snapshot: RepoSnapshot): EvidenceRef[] {
   }));
 }
 
-function buildPlannedAgentContracts(sessionId: string, plan: RunPlanModel, startedAt: string): AgentRun[] {
+function buildPlannedAgentContracts(
+  sessionId: string,
+  plan: RunPlanModel,
+  startedAt: string,
+  modulePlan?: AgentRuntimeSession["moduleExecutionPlan"]
+): AgentRun[] {
   return plan.tasks.map((task, index) => ({
     id: `agent_task_${index + 1}`,
     sessionId,
@@ -1130,16 +1374,19 @@ function buildPlannedAgentContracts(sessionId: string, plan: RunPlanModel, start
     roleTitle: task.roleTitle,
     lifecycleStage: "PLAN",
     objective: task.objective,
-    ownedPaths: task.targetFiles ?? [],
-    forbiddenPaths: ["tauri://rust-authority", "workspace://outside-current"],
+    ownedPaths: modulePlan?.ownedPaths.length ? modulePlan.ownedPaths : task.targetFiles ?? [],
+    forbiddenPaths: uniqueStrings([...(modulePlan?.forbiddenPaths ?? []), "tauri://rust-authority", "workspace://outside-current"]),
     allowedActions: ["inspect_assigned_paths", "prepare_reviewable_changes", "record_evidence", "request_verification"],
     stopConditions: [
+      ...(modulePlan?.stopConditions ?? []),
       "Stop if the change requires files outside the owned paths.",
       task.verification ? `Stop when the work is ready for ${task.verification}.` : "Stop when the work is ready for review."
     ],
     integrationNotes: [
       task.expectedArtifact ? `Expected artifact: ${task.expectedArtifact}` : "Expected artifact not reported yet.",
-      "Coordinator keeps the final review gate and Rust remains the apply authority."
+      "Coordinator keeps the final review gate and Rust remains the apply authority.",
+      ...(modulePlan?.publicContractsToPreserve.length ? [`Preserve public contracts: ${modulePlan.publicContractsToPreserve.slice(0, 3).join(", ")}`] : []),
+      ...(modulePlan?.verificationCommands.length ? [`Verification commands: ${modulePlan.verificationCommands.join(" | ")}`] : [])
     ],
     currentAction: "Planned by coordinator; execution telemetry not reported yet.",
     recentActions: ["Contract prepared by coordinator."],
@@ -1147,7 +1394,7 @@ function buildPlannedAgentContracts(sessionId: string, plan: RunPlanModel, start
     commandsRun: [],
     testsRun: [],
     decisionsMade: [],
-    evidenceRefs: (task.targetFiles ?? []).slice(0, 3).map((file) => ({
+    evidenceRefs: (modulePlan?.relevantFiles ?? task.targetFiles ?? []).slice(0, 3).map((file) => ({
       type: "file" as const,
       path: file,
       category: "owned-path",
@@ -1160,7 +1407,9 @@ function buildPlannedAgentContracts(sessionId: string, plan: RunPlanModel, start
       timestamp: startedAt,
       kind: "planning",
       title: "Contract prepared",
-      summary: "Coordinator assigned a bounded ownership contract to this agent.",
+      summary: modulePlan
+        ? `Coordinator assigned a scoped module contract with owned paths: ${modulePlan.ownedPaths.slice(0, 3).join(", ")}.`
+        : "Coordinator assigned a bounded ownership contract to this agent.",
       status: "completed"
     }],
     riskLevel: "medium",
@@ -1228,7 +1477,7 @@ function mergeRiskRefs(existing: AgentRiskRef[] | undefined, next: AgentRiskRef[
 
 function findOwningAgentId(session: AgentRuntimeSession, filePath: string) {
   return session.orchestration?.agentRuns.find((agent) =>
-    (agent.ownedPaths ?? []).some((ownedPath) => ownedPath === filePath)
+    (agent.ownedPaths ?? []).some((ownedPath) => filePath === ownedPath || filePath.startsWith(`${ownedPath.replace(/\/$/, "")}/`))
   )?.id;
 }
 
@@ -1239,7 +1488,9 @@ function distributePatchTelemetry(
 ) {
   for (const agent of session.orchestration?.agentRuns ?? []) {
     const owned = new Set(agent.ownedPaths ?? []);
-    const changedFiles = patch.filesChanged.filter((file) => owned.has(file.path));
+    const changedFiles = patch.filesChanged.filter((file) =>
+      [...owned].some((ownedPath) => file.path === ownedPath || file.path.startsWith(`${ownedPath.replace(/\/$/, "")}/`))
+    );
     if (!changedFiles.length) continue;
     agent.changedFiles = uniqueStrings([...(agent.changedFiles ?? []), ...changedFiles.map((file) => file.path)]);
     agent.commandsRun = uniqueStrings([...(agent.commandsRun ?? []), ...commandRequests.map((request) => request.command)]);
@@ -1306,18 +1557,33 @@ function createPendingReviewGate(
   session: AgentRuntimeSession,
   verification: VerificationResult,
   patch: PatchProposal,
-  commandRequests: CommandRequest[]
+  commandRequests: CommandRequest[],
+  scopeValidation?: AgentRuntimeSession["latestScopeValidation"]
 ): ReviewGateSummary {
   const gate = buildAttributedReviewGate(session, verification);
+  const unresolvedBlockers = [
+    "Rust patch apply is still pending.",
+    ...(commandRequests.length ? ["Verification commands are queued but have not run yet."] : []),
+    ...(scopeValidation?.verdict === "blocked" ? ["Patch is blocked because it leaves the scoped module boundary."] : [])
+  ];
+  const recommendation =
+    scopeValidation?.verdict === "blocked"
+      ? "do_not_apply"
+      : scopeValidation?.verdict === "needs_review"
+        ? "caution"
+        : "caution";
   return {
     ...gate,
+    scopeValidation,
     riskyAreas: patch.riskLevel === "low" ? gate.riskyAreas : [...new Set([...gate.riskyAreas, `${patch.title} (${patch.riskLevel})`])],
-    unresolvedBlockers: [
-      "Rust patch apply is still pending.",
-      ...(commandRequests.length ? ["Verification commands are queued but have not run yet."] : [])
-    ],
-    recommendation: "caution",
-    summary: "Reviewable diff is ready, but Rust apply and verification have not completed yet."
+    unresolvedBlockers,
+    recommendation,
+    summary:
+      scopeValidation?.verdict === "blocked"
+        ? "Reviewable diff is blocked because it exceeds the scoped module plan."
+        : scopeValidation?.verdict === "needs_review"
+          ? "Reviewable diff is ready, but scope-sensitive changes require careful review before apply."
+          : "Reviewable diff is ready, but Rust apply and verification have not completed yet."
   };
 }
 
@@ -1346,24 +1612,45 @@ function createDecisionSummaryByAgent(session: AgentRuntimeSession) {
   }));
 }
 
-function formatAssistantSummary(plan: RunPlanModel, patch: PatchProposal, commands: CommandRequest[]) {
+function formatAssistantSummary(
+  plan: RunPlanModel,
+  patch: PatchProposal,
+  commands: CommandRequest[],
+  scopeValidation?: AgentRuntimeSession["latestScopeValidation"]
+) {
   const lines = [
     plan.summary,
     "",
     "Prepared artifacts:",
     `- Patch: ${patch.title} (${patch.filesChanged.length} file(s))`,
     ...commands.map((command) => `- Command: ${command.command} (${command.risk})`),
+    ...(scopeValidation ? [`- Scope verdict: ${scopeValidation.verdict}`, ...scopeValidation.reasons.slice(0, 3).map((reason) => `- Scope note: ${reason}`)] : []),
     "",
-    "Review the diff before applying. Rust owns the actual file write and command execution."
+    scopeValidation?.verdict === "blocked"
+      ? "Patch scope is blocked. Bring the change back inside the module plan before apply."
+      : "Review the diff before applying. Rust owns the actual file write and command execution."
   ];
   return lines.join("\n");
 }
 
-function inferRunMode(message: string): RunPlanModel["mode"] {
+function inferRunMode(message: string, snapshot: RepoSnapshot): RunPlanModel["mode"] {
   const normalized = message.toLowerCase();
-  if (/\b(create|new|scaffold|generate|build me|make a new)\b/.test(normalized)) return "create_project";
+  const explicitEditPattern =
+    /\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|modify)\b/;
+  if (
+    /\b(create|new|scaffold|generate|build me|make a new)\b/.test(normalized) &&
+    snapshot.intake?.projectKind === "empty_project"
+  ) {
+    return "create_project";
+  }
+  if (
+    snapshot.intake?.projectKind === "unknown" &&
+    !explicitEditPattern.test(normalized)
+  ) {
+    return "inspect_only";
+  }
   if (isLaunchRequest(message)) return "inspect_only";
-  if (/\b(explain|inspect|analyze|summarize)\b/.test(normalized) && !/\b(change|edit|fix|add|create)\b/.test(normalized)) return "inspect_only";
+  if (/\b(explain|inspect|analyze|summarize)\b/.test(normalized) && !/\b(change|changing|edit|fix|add|create|implement|update|build|make|write|replace|modify)\b/.test(normalized)) return "inspect_only";
   return "edit_project";
 }
 
@@ -1378,7 +1665,8 @@ function inferTargetFiles(message: string, snapshot: RepoSnapshot, mode: RunPlan
   }
   const normalized = message.toLowerCase();
   const matches = snapshot.candidateFiles.filter((file) => normalized.includes(file.toLowerCase()) || normalized.includes(file.split("/").pop()?.toLowerCase() ?? ""));
-  return (matches.length ? matches : snapshot.candidateFiles.slice(0, 3)).slice(0, 6);
+  const curated = snapshot.contextPack?.relevantFiles ?? [];
+  return (matches.length ? matches : curated.length ? curated : snapshot.candidateFiles.slice(0, 3)).slice(0, 6);
 }
 
 function inferSearchQuery(message: string) {
