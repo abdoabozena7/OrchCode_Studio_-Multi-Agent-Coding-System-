@@ -10,6 +10,7 @@ import type {
   ModelProviderConfig,
   ModelProviderType,
   Task,
+  WorkspaceDiffSnapshot,
   WorkspaceInfo
 } from "@orchcode/protocol";
 import type { AgentRuntimeSession, AppEvent, SafetySettings } from "@orchcode/protocol";
@@ -68,9 +69,10 @@ export function executeApprovedCommand(
   sessionId: string,
   requestId: string,
   command: string,
+  autoRun: boolean,
   safetySettings: Pick<SafetySettings, "blockDangerousCommands" | "redactSecrets" | "allowNetworkCommands">
 ) {
-  return invoke<CommandResult>("execute_approved_command", { sessionId, requestId, command, safetySettings });
+  return invoke<CommandResult>("execute_approved_command", { sessionId, requestId, command, autoRun, safetySettings });
 }
 
 export function createRuntimeRun(userPrompt: string, trustProfile: string) {
@@ -103,7 +105,16 @@ export function upsertAgentRun(sessionId: string, input: {
 }
 
 export function applyRuntimePatch(sessionId: string, patchId: string) {
-  return invoke<{ patchId: string; status: string; message: string }>("apply_runtime_patch", { sessionId, patchId });
+  return invoke<{
+    patchId: string;
+    status: string;
+    message: string;
+    authority: string;
+    reconciliationSource: string;
+    beforeSnapshot?: WorkspaceDiffSnapshot;
+    afterSnapshot?: WorkspaceDiffSnapshot;
+    durableEventIds: string[];
+  }>("apply_runtime_patch", { sessionId, patchId });
 }
 
 export function rejectRuntimePatchViaRust(sessionId: string, patchId: string) {

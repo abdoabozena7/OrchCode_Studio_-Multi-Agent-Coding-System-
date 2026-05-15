@@ -32,6 +32,8 @@ test("runtime session state is restored from durable snapshots across restarts",
   assert.ok(original);
   assert.ok(restored);
   assert.equal((restored?.taskState as { restoreStatus?: string }).restoreStatus, "restored");
+  assert.equal(restored?.taskState.restoreState?.source, "snapshot_restored");
+  assert.equal(restored?.taskState.restoreState?.disposition, "terminal");
   assert.equal(restored?.taskState.transitions.some((entry) => entry.type === "session.restored"), true);
 
   await second.app.close();

@@ -1,4 +1,5 @@
 import type {
+  BackgroundJobRecord,
   CommandExecutionProvenance,
   CommandExecutionRecord,
   CommandRequest,
@@ -76,6 +77,27 @@ export type RuntimeTaskPhase =
   | "failed"
   | "expired";
 
+export type RuntimeRestoreSource = "fresh" | "snapshot_restored" | "event_replayed";
+
+export type RuntimeRestoreDisposition =
+  | "resumable"
+  | "terminal"
+  | "expired"
+  | "corrupt"
+  | "orphaned"
+  | "reconciliation_required"
+  | "non_restorable";
+
+export type RuntimeRestoreState = {
+  source: RuntimeRestoreSource;
+  disposition: RuntimeRestoreDisposition;
+  warnings: string[];
+  reason?: string;
+  restoredAt?: string;
+  lastEventSequence?: number;
+  eventCount?: number;
+};
+
 export type RuntimeTaskTransitionType = RuntimeLifecycleEventType;
 
 export type RuntimeTaskTransition = {
@@ -89,6 +111,7 @@ export type RuntimeTaskTransition = {
 export type RuntimeTaskState = {
   version: number;
   phase: RuntimeTaskPhase;
+  restoreState?: RuntimeRestoreState;
   pendingPatchId?: string;
   activePatchId?: string;
   pendingCommandIds: string[];
@@ -151,6 +174,7 @@ export type AgentRuntimeSession = {
   patchProposals: PatchProposal[];
   commandRequests: CommandRequest[];
   commandExecutions: CommandExecutionRecord[];
+  backgroundJobs: BackgroundJobRecord[];
   reasoningSummaries: string[];
   progressEvents: RuntimeProgressEvent[];
   agentWorkStatuses: AgentWorkStatus[];
@@ -214,6 +238,8 @@ export type ReportCommandResultRequest = {
   stderr: string;
   message?: string;
   autoRun?: boolean;
+  provenance?: import("./models.js").CommandExecutionProvenance;
+  backgroundJob?: import("./models.js").BackgroundJobRecord;
 };
 
 export type SanitizedProviderConfig = Pick<

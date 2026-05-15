@@ -26,7 +26,7 @@ import type { LlmProvider } from "../llm/LlmProvider.js";
 import { runPatchIntentSchema, runPlanSchema, runVerificationSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
-import { classifyCommandRisk } from "../tools/CommandPolicy.js";
+import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { randomId, SessionManager } from "./SessionManager.js";
 import { inferProjectLaunch } from "./ProjectLaunchInference.js";
 import {
@@ -1011,7 +1011,17 @@ function createCommandRequests(sessionId: string, workspacePath: string, suggest
       provenance: {
         source: "agent",
         trigger: "manual",
-        requestedBy: "RunEngine",
+        requestedBy: "agent",
+        agentId: "agent_local_codex",
+        approvalSource: risk === "dangerous" ? "denied" : "none",
+        policyDecision: risk === "dangerous" ? "deny" : risk === "safe" ? "allow" : "require_approval",
+        policyReason: item.reason,
+        background: looksLikeBackgroundCommand(item.command.toLowerCase()),
+        networkDetected: looksLikeNetworkCommand(item.command.toLowerCase()),
+        backgroundDetected: looksLikeBackgroundCommand(item.command.toLowerCase()),
+        detectionSource: "heuristic",
+        networkDetectionSource: "heuristic",
+        backgroundDetectionSource: "heuristic",
         reason: item.reason
       },
       status: risk === "dangerous" ? "blocked" : "requested",

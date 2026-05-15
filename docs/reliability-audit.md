@@ -2,7 +2,18 @@
 
 Date: 2026-05-14
 
-Overall verdict: `Demo-safe only`
+Overall verdict at audit time: `Demo-safe only`
+
+Status note for the current operator-console RC branch:
+
+- `SessionManager.load()` is now implemented and runtime sessions can restore from the current `sessions.json` snapshot.
+- Runtime session state is no longer purely in-memory, and the current branch now also includes a durable `runtime_events` foundation plus conservative replay-based restore where event history is sufficient.
+- The branch now includes the operator console, agent telemetry, work journals, diff attribution, post-apply reconciliation, and a verification-aware review gate.
+- There is still no single fully authoritative replay path across runtime, frontend, and Rust persistence for every lifecycle.
+- Reconciliation evidence now prefers Rust/Tauri-owned Git snapshots around patch apply, but the runtime still computes the final reconciliation report and some transport still crosses the desktop bridge.
+- `localStorage` recent sessions are convenience history only, not authoritative runtime truth.
+- Command safety still depends on heuristic classification and should not be read as sandbox-grade containment.
+- Background jobs now have limited lifecycle tracking and provenance, but they are not backed by a full process supervisor.
 
 This audit answers one question: what currently prevents OrchCode Studio from being trusted as a coding agent for large or business-critical work, and what concrete changes would close those gaps.
 
@@ -16,8 +27,8 @@ Method used:
 | --- | --- | --- |
 | Safety and policy enforcement | `Internal alpha` | The repo has real workspace/path guards and patch-path validation, but command and network policy still depend on heuristics and UI language over-promises what backend authority actually guarantees. |
 | Patch proposal, approval, apply, and verification lifecycle | `Internal alpha` | The lifecycle exists, but responsibility is split across TypeScript runtime, frontend mirroring, Rust apply, and SQLite projections in a way that is fragile under restart or partial failure. |
-| Command classification and execution safety | `Demo-safe only` | Commands are classified and blocked at a baseline level, but execution still relies on string heuristics, no durable job model, no structured sandboxing, and weak provenance for background work. |
-| Session persistence and replayability | `Not shippable` | Runtime sessions are explicitly in-memory only, `SessionManager.load()` is empty, and tests prove state does not restore after restart. |
+| Command classification and execution safety | `Demo-safe only` | Commands now carry clearer provenance and limited background-job tracking, but execution still relies on heuristics and not on a real sandbox or process supervisor. |
+| Session persistence and replayability | `Strong demo / internal-alpha candidate` | The current branch has snapshot restore, durable runtime events, and conservative replay for key flows, but still lacks a fully authoritative replay path for every lifecycle. |
 | Event consistency between runtime, SSE, SQLite projections, and UI state | `Not shippable` | Event naming and projection rules are inconsistent enough that state reconstruction cannot be trusted as a source of truth. |
 | Multi-agent scheduling, file locking, merge/conflict handling, and backpressure | `Demo-safe only` | There is real scheduling code, but important concurrency behavior is still optimistic, placeholder-heavy, and not backed by durable orchestration state or recovery logic. |
 | Observability, logs, audit trail, and forensic traceability | `Demo-safe only` | There are logs and SQLite tables, but no authoritative end-to-end run journal that can replay who approved what, what executed, and what final filesystem state resulted. |
@@ -247,8 +258,8 @@ Why this matters:
 - The runtime has good local tests, but the user ultimately trusts the whole system, not isolated logic.
 
 Evidence:
-- `npm test` passes 39 runtime-focused tests.
-- `cargo test` passes 4 Rust tests focused mainly on command policy and workspace guards.
+- `npm test` now passes a substantially larger runtime-focused suite, including replay restore, reconciliation, and command/background lifecycle coverage.
+- `cargo test` now covers command policy, terminal provenance, patch/reconciliation helpers, runtime-event projection, and background command projection paths.
 - No meaningful desktop frontend test suite is present under `apps/desktop`.
 - No end-to-end flow validates the real path: runtime propose -> frontend mirror -> Rust apply -> runtime update -> UI reconciliation.
 
@@ -336,8 +347,8 @@ Priority and dependency order:
 - Add soak tests for large repositories, long sessions, and partial failures.
 
 ## Validation Notes
-- `npm test` passed on 2026-05-14 with 39 runtime tests.
-- `npm run typecheck` passed on 2026-05-14.
-- `cargo test` passed on 2026-05-14 with 4 Rust tests.
+- `npm test` now passes on the current branch with replay/reconciliation/command durability coverage.
+- `npm run typecheck` now passes on the current branch.
+- `cargo test` now passes on the current branch with stronger terminal/projection coverage than the original audit snapshot.
 
 These passing checks are useful, but they do not materially change the P0 verdicts because the main trust gaps are architectural seams, durability, and operator-facing truthfulness rather than local type safety.

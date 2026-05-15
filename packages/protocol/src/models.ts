@@ -66,17 +66,27 @@ export type RunPhaseStatus = "pending" | "active" | "completed" | "blocked" | "f
 export type CommandRequestStatus =
   | "requested"
   | "approved"
+  | "denied"
   | "rejected"
   | "executing"
+  | "running"
   | "executed"
+  | "terminated"
+  | "orphaned"
+  | "unknown"
   | "blocked"
   | "failed";
 
 export type CommandExecutionStatus =
   | "executing"
+  | "running"
   | "executed"
+  | "completed"
   | "approval_required"
   | "blocked"
+  | "terminated"
+  | "orphaned"
+  | "unknown"
   | "failed";
 
 export type SessionLifecycleEventType =
@@ -232,14 +242,20 @@ export type GlobalDiffSummary = {
 
 export type ReconciliationStatus = "not_run" | "pending" | "matched" | "diverged" | "unavailable" | "failed";
 export type ReconciliationConfidence = "exact" | "high" | "partial" | "unknown";
+export type WorkspaceSnapshotSource = "rust_git_snapshot" | "desktop_git_snapshot_bridge" | "unknown";
+export type ReconciliationEvidenceSource = WorkspaceSnapshotSource | "unavailable";
 
 export type WorkspaceDiffSnapshot = {
   available: boolean;
+  source?: WorkspaceSnapshotSource;
   isGitRepo?: boolean;
   changedFiles?: string[];
   diffText?: string;
+  fileStats?: DiffFileStat[];
+  statusEntries?: string[];
   dirty?: boolean;
   checkedAt?: string;
+  unavailableReason?: string;
 };
 
 export type ReconciliationReport = {
@@ -248,6 +264,7 @@ export type ReconciliationReport = {
   sourceDiffId?: string;
   checkedAt?: string;
   checkedBy: "runtime" | "rust" | "git" | "system";
+  evidenceSource?: ReconciliationEvidenceSource;
   confidence: ReconciliationConfidence;
   reason: string;
   retryable: boolean;
@@ -401,6 +418,28 @@ export type GitStatus = {
 
 export type CommandRisk = "safe" | "medium" | "dangerous";
 
+export type CommandRequestedBy = "agent" | "user" | "system" | "unknown";
+export type CommandApprovalSource = "manual" | "policy" | "auto" | "denied" | "none" | "unknown";
+export type CommandPolicyDecision = "allow" | "require_approval" | "deny" | "unavailable";
+export type CommandDetectionSource = "heuristic" | "policy" | "user" | "system" | "unknown";
+export type BackgroundJobStatus = "running" | "completed" | "failed" | "terminated" | "orphaned" | "unknown";
+
+export type BackgroundJobRecord = {
+  jobId: string;
+  requestId?: string;
+  sessionId: string;
+  command: string;
+  cwd: string;
+  processId?: number;
+  startedAt: string;
+  completedAt?: string;
+  status: BackgroundJobStatus;
+  lastKnownAt: string;
+  exitCode?: number;
+  outputSummary?: string;
+  detectionSource: CommandDetectionSource;
+};
+
 export type CommandResult = {
   command: string;
   cwd: string;
@@ -411,17 +450,35 @@ export type CommandResult = {
   stderr: string;
   message?: string;
   provenance?: CommandExecutionProvenance;
+  backgroundJob?: BackgroundJobRecord;
 };
 
 export type CommandExecutionProvenance = {
   source: "agent" | "user" | "session_restore" | "replay";
   trigger: "manual" | "auto_approved" | "restored" | "replayed";
-  requestedBy?: string;
   approvalId?: string;
   toolCallId?: string;
   replayOfExecutionId?: string;
   restoredFromSessionId?: string;
   reason?: string;
+  sessionId?: string;
+  requestId?: string;
+  agentId?: string;
+  requestedBy?: CommandRequestedBy;
+  approvalSource?: CommandApprovalSource;
+  policyDecision?: CommandPolicyDecision;
+  policyReason?: string;
+  executionAuthority?: "runtime" | "rust" | "system" | "unknown";
+  background?: boolean;
+  processId?: number;
+  networkDetected?: boolean;
+  backgroundDetected?: boolean;
+  detectionSource?: CommandDetectionSource;
+  networkDetectionSource?: CommandDetectionSource;
+  backgroundDetectionSource?: CommandDetectionSource;
+  outputSummary?: string;
+  backgroundTrackingLimited?: boolean;
+  jobId?: string;
 };
 
 export type CommandRequest = {
@@ -433,6 +490,7 @@ export type CommandRequest = {
   reason: string;
   status: CommandRequestStatus;
   provenance?: CommandExecutionProvenance;
+  backgroundJob?: BackgroundJobRecord;
   createdAt: string;
 };
 
@@ -442,6 +500,7 @@ export type CommandExecutionRecord = CommandResult & {
   requestId?: string;
   autoRun: boolean;
   provenance?: CommandExecutionProvenance;
+  backgroundJob?: BackgroundJobRecord;
   createdAt: string;
 };
 

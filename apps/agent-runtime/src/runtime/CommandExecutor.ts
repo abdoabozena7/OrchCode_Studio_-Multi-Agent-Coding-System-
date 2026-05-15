@@ -81,6 +81,29 @@ function buildRecord(
     stdout: "",
     stderr: "",
     message,
+    provenance: {
+      source: "agent",
+      trigger: "manual",
+      sessionId,
+      requestId,
+      requestedBy: "agent",
+      approvalSource: status === "blocked" ? "denied" : "none",
+      policyDecision:
+        status === "blocked"
+          ? "deny"
+          : status === "approval_required"
+            ? "require_approval"
+            : "allow",
+      policyReason: message,
+      executionAuthority: "runtime",
+      background: looksLikeBackgroundCommand(command),
+      networkDetected: looksLikeNetworkCommand(command),
+      backgroundDetected: looksLikeBackgroundCommand(command),
+      detectionSource: "heuristic",
+      networkDetectionSource: "heuristic",
+      backgroundDetectionSource: "heuristic",
+      backgroundTrackingLimited: looksLikeBackgroundCommand(command)
+    },
     createdAt: new Date().toISOString()
   };
 }

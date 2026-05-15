@@ -168,17 +168,17 @@ const accessOptions: AccessOption[] = [
   {
     value: "default_permissions",
     label: "Default permissions",
-    description: "Review patches and run safe commands manually."
+    description: "Review patches and manually run commands that current policy heuristics classify as safe."
   },
   {
     value: "auto_review",
     label: "Auto-review",
-    description: "Auto-run safe validation, but still stop before opening previews."
+    description: "Auto-run validation commands only when current policy heuristics classify them as safe, but still stop before previews."
   },
   {
     value: "bounded_autonomy",
     label: "Bounded autonomy",
-    description: "Auto-run safe validation, but patch apply and command execution still depend on explicit Rust authority."
+    description: "Auto-run policy-classified validation when allowed, but patch apply and command execution still depend on explicit Rust authority."
   },
   {
     value: "custom_config",
@@ -614,21 +614,20 @@ export function App() {
   async function handleApplyPatch(patchId: string) {
     if (!runtimeSession) return;
     try {
-      const beforeStatus = await getGitStatus();
-      const beforeDiff = await getGitDiff();
       const applied = await applyRuntimePatch(runtimeSession.id, patchId);
-      const afterStatus = await getGitStatus();
-      const afterDiff = await getGitDiff();
       const updated = await reportRuntimePatchApplyResult(
         runtimeSession.id,
         patchId,
         {
           status: "applied",
           message: applied.message,
-          reconciliationSnapshot: {
-            before: createWorkspaceDiffSnapshot(beforeStatus, beforeDiff),
-            after: createWorkspaceDiffSnapshot(afterStatus, afterDiff)
-          }
+          reconciliationSnapshot:
+            applied.beforeSnapshot || applied.afterSnapshot
+              ? {
+                  before: applied.beforeSnapshot,
+                  after: applied.afterSnapshot
+                }
+              : undefined
         },
         runtimeSessionToken || undefined
       );
@@ -666,7 +665,7 @@ export function App() {
 
   async function runCommandRequest(session: AgentRuntimeSession, request: CommandRequest, autoRun = false) {
     try {
-      const result = await executeApprovedCommand(session.id, request.id, request.command, {
+      const result = await executeApprovedCommand(session.id, request.id, request.command, autoRun, {
         blockDangerousCommands: safetySettings.blockDangerousCommands,
         redactSecrets: safetySettings.redactSecrets,
         allowNetworkCommands: safetySettings.allowNetworkCommands
@@ -683,7 +682,9 @@ export function App() {
           stdout: result.stdout,
           stderr: result.stderr,
           message: result.message,
-          autoRun
+          autoRun,
+          provenance: result.provenance,
+          backgroundJob: result.backgroundJob
         },
         runtimeSessionToken || undefined
       );
@@ -701,7 +702,16 @@ export function App() {
           stdout: "",
           stderr: String(error),
           message: String(error),
-          autoRun
+          autoRun,
+          provenance: {
+            source: "agent",
+            trigger: autoRun ? "auto_approved" : "manual",
+            requestedBy: "agent",
+            approvalSource: autoRun ? "auto" : "manual",
+            policyDecision: "unavailable",
+            policyReason: "Rust command execution failed before a terminal result could be recorded.",
+            executionAuthority: "rust"
+          }
         },
         runtimeSessionToken || undefined
       );
@@ -1152,7 +1162,7 @@ export function App() {
               <div className="drawer-header">
                 <div>
                   <strong>{bottomView === "terminal" ? "Terminal" : "Code review"}</strong>
-                  <span>{bottomView === "terminal" ? "Run safe commands when you need them." : "Compare generated changes with the live git diff."}</span>
+                  <span>{bottomView === "terminal" ? "Run policy-classified commands when you need them." : "Compare generated changes with the live git diff."}</span>
                 </div>
                 <button className="frame-icon-button" onClick={() => setBottomView("none")} title="Close drawer">
                   <X size={16} />
@@ -1163,7 +1173,7 @@ export function App() {
                 <div className="terminal-drawer">
                   <div className="terminal-controls">
                     <input value={terminalCommand} onChange={(event) => setTerminalCommand(event.target.value)} />
-                    <button onClick={handleRunCommand}>Run safe command</button>
+                    <button onClick={handleRunCommand}>Run classified command</button>
                     {terminalResult ? (
                       <button
                         onClick={() =>
@@ -1176,7 +1186,7 @@ export function App() {
                     ) : null}
                   </div>
                   <pre>
-                    {terminalResult ? formatTerminalResult(terminalResult) : "Manual console for safe commands. Medium-risk runtime commands pause for approval. Dangerous commands remain blocked."}
+                    {terminalResult ? formatTerminalResult(terminalResult) : "Manual console for commands that current policy heuristics may allow. Medium-risk runtime commands pause for approval. Dangerous commands remain blocked."}
                   </pre>
                 </div>
               ) : (
@@ -1288,10 +1298,15 @@ export function App() {
                     <strong>{request.command}</strong>
                     <span>{request.risk} | {humanizeCommandRequestStatus(request.status)}</span>
                     <p>{request.reason}</p>
+                    <p className="muted">{describeCommandRequestProvenance(runtimeSession, request)}</p>
                     {request.status === "executed" ? (
                       <button disabled>Executed by Rust</button>
+                    ) : request.status === "executing" || request.status === "running" ? (
+                      <button disabled>Background tracking limited</button>
                     ) : request.status === "blocked" ? (
                       <button disabled>Blocked by policy</button>
+                    ) : request.status === "denied" || request.status === "rejected" ? (
+                      <button disabled>Denied</button>
                     ) : (
                       <button
                         onClick={() => handleRunSuggestedCommand(request.command, request.id)}
@@ -1351,7 +1366,7 @@ export function App() {
                 </div>
                 <div>
                   <strong>Patch approval</strong>
-                  <span>{safetySettings.requireApprovalForPatches ? "Required" : "Automatic when validated"}</span>
+                  <span>{safetySettings.requireApprovalForPatches ? "Required" : "Runtime review can proceed, but Rust still gates file writes"}</span>
                 </div>
               </div>
             </DrawerSection>
@@ -1870,7 +1885,7 @@ function OperatorStateCard({
       </div>
       <div className="summary-list">
         <div className="summary-line compact">Connection: {connectionState === "connected" ? "Live updates connected." : "Live updates disconnected; visible state may lag until refresh."}</div>
-        <div className="summary-line compact">Restore: {canReconnect ? "This app session can still try a live reconnect while the runtime token remains valid." : "Saved sessions are history only after restart; no guaranteed live restore path."}</div>
+        <div className="summary-line compact">Restore: {describeRestoreTruth(session, canReconnect)}</div>
         <div className="summary-line compact">Write state: {describePatchState(session)}</div>
         <div className="summary-line compact">Command state: {describeCommandState(session)}</div>
         <div className="summary-line compact">Verification: {describeVerificationState(session)}</div>
@@ -1942,8 +1957,10 @@ function RunResultCard({
         {latestExecution ? (
           <>
             <div className="summary-line compact">Command: {latestExecution.command}</div>
-            <div className="summary-line compact">Mode: {shouldDescribeBackground(latestExecution.command) ? "Background" : "Foreground"}</div>
+            <div className="summary-line compact">Mode: {latestExecution.provenance?.background || latestExecution.backgroundJob ? "Background" : shouldDescribeBackground(latestExecution.command) ? "Background" : "Foreground"}</div>
             <div className="summary-line compact">Status: {humanizeCommandResultStatus(latestExecution.status)}</div>
+            <div className="summary-line compact">{describeCommandExecutionProvenance(latestExecution)}</div>
+            {latestExecution.backgroundJob ? <div className="summary-line compact">Background tracking limited: {latestExecution.backgroundJob.status}</div> : null}
             {latestExecution.message ? <div className="summary-line compact">{latestExecution.message}</div> : null}
           </>
         ) : null}
@@ -2432,7 +2449,15 @@ function humanizeVerificationCheckStatus(status: AgentRuntimeSession["verificati
 
 function describeReconciliation(report: AgentRuntimeSession["reconciliationReport"]) {
   if (!report) return "Not run yet.";
-  return `${report.status.replaceAll("_", " ")} | ${report.confidence} confidence`;
+  const source =
+    report.evidenceSource === "rust_git_snapshot"
+      ? "rust git snapshot"
+      : report.evidenceSource === "desktop_git_snapshot_bridge"
+        ? "desktop git snapshot bridge"
+        : report.evidenceSource === "unavailable"
+          ? "git evidence unavailable"
+          : "reconciliation source unknown";
+  return `${report.status.replaceAll("_", " ")} | ${report.confidence} confidence | ${source}`;
 }
 
 function mapJournalStatus(status: AgentWorkJournalEntry["status"] | undefined) {
@@ -2452,17 +2477,6 @@ function formatPatchTotalsLabel(fileCount?: number, additions?: number, deletion
     return `${filesLabel}, +${additions} -${deletions}`;
   }
   return `${filesLabel}, line diff not reported yet.`;
-}
-
-function createWorkspaceDiffSnapshot(status: GitStatus, diffText: string) {
-  return {
-    available: status.isRepo,
-    isGitRepo: status.isRepo,
-    changedFiles: status.changedFiles,
-    diffText,
-    dirty: status.changedFiles.length > 0,
-    checkedAt: new Date().toISOString()
-  };
 }
 
 function accessProfileLabel(profile: AccessProfile) {
@@ -2491,6 +2505,11 @@ function humanSessionStatus(
       break;
   }
 
+  const restoreDisposition = session.taskState.restoreState?.disposition;
+  if (restoreDisposition === "corrupt") return "Restore history is corrupt";
+  if (restoreDisposition === "non_restorable") return "Restore unavailable";
+  if (restoreDisposition === "reconciliation_required") return "Manual inspection required";
+  if (restoreDisposition === "expired") return "Expired";
   if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
@@ -2523,6 +2542,25 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   return "This card summarizes what has happened, what is still pending, and what the UI can safely promise.";
 }
 
+function describeRestoreTruth(session: AgentRuntimeSession, canReconnect: boolean) {
+  const restoreState = session.taskState.restoreState;
+  if (restoreState?.source === "event_replayed") {
+    if (restoreState.disposition === "reconciliation_required") {
+      return "Restored from durable events, but manual inspection is still required before trusting the run.";
+    }
+    if (restoreState.disposition === "corrupt" || restoreState.disposition === "non_restorable") {
+      return "Durable event replay found this session, but it is not safely restorable as an active run.";
+    }
+    return "Restored from durable runtime events.";
+  }
+  if (restoreState?.source === "snapshot_restored") {
+    return "Restored from sessions.json snapshot fallback; not event-replay authoritative yet.";
+  }
+  return canReconnect
+    ? "This app session can still try a live reconnect while the runtime token remains valid."
+    : "Saved sessions are history only after restart; no guaranteed live restore path.";
+}
+
 function describePatchState(session: AgentRuntimeSession) {
   if (session.patchProposals.some((proposal) => proposal.status === "proposed")) {
     return "Patch review required before any write occurs.";
@@ -2540,7 +2578,7 @@ function describePatchState(session: AgentRuntimeSession) {
 }
 
 function describeCommandState(session: AgentRuntimeSession) {
-  if (session.commandRequests.some((request) => request.status === "requested" || request.status === "approved")) {
+  if (session.commandRequests.some((request) => request.status === "requested" || request.status === "approved" || request.status === "executing" || request.status === "running")) {
     return "One or more runtime commands are waiting for approval or execution.";
   }
   const latestExecution = session.commandExecutions.at(-1);
@@ -2592,11 +2630,28 @@ function humanizePatchStatus(status: string) {
 }
 
 function humanizeCommandRequestStatus(status: string) {
-  return status === "requested" ? "requested, not executed" : status.replaceAll("_", " ");
+  if (status === "requested") return "requested, not executed";
+  if (status === "executing") return "running";
+  return status.replaceAll("_", " ");
 }
 
 function humanizeCommandResultStatus(status: string) {
   return status === "approval_required" ? "approval required" : status.replaceAll("_", " ");
+}
+
+function describeCommandRequestProvenance(session: AgentRuntimeSession, request: CommandRequest) {
+  const latestExecution = session.commandExecutions.find((candidate) => candidate.requestId === request.id);
+  const approval = latestExecution?.provenance?.approvalSource ?? request.provenance?.approvalSource ?? "unknown";
+  const policy = latestExecution?.provenance?.policyDecision ?? request.provenance?.policyDecision ?? "unknown";
+  const background = latestExecution?.provenance?.background ?? request.provenance?.background;
+  return `approval: ${approval.replaceAll("_", " ")} | policy: ${policy.replaceAll("_", " ")}${background ? " | background tracking limited" : ""}`;
+}
+
+function describeCommandExecutionProvenance(execution: AgentRuntimeSession["commandExecutions"][number]) {
+  const approval = execution.provenance?.approvalSource ?? "unknown";
+  const policy = execution.provenance?.policyDecision ?? "unknown";
+  const detection = execution.provenance?.detectionSource ?? "unknown";
+  return `approval: ${approval.replaceAll("_", " ")} | policy: ${policy.replaceAll("_", " ")} | detection: ${detection.replaceAll("_", " ")}`;
 }
 
 function summarizeLatestQueueEntry(entry: QueuedPrompt | undefined) {
@@ -2609,6 +2664,10 @@ function formatTerminalResult(result: CommandResult) {
   return [
     `$ ${result.command}`,
     `risk: ${result.risk} status: ${result.status}`,
+    result.provenance
+      ? `approval: ${(result.provenance.approvalSource ?? "unknown").replaceAll("_", " ")} | policy: ${(result.provenance.policyDecision ?? "unknown").replaceAll("_", " ")} | detection: ${(result.provenance.detectionSource ?? "unknown").replaceAll("_", " ")}`
+      : "",
+    result.backgroundJob ? `background job: ${result.backgroundJob.status}${result.backgroundJob.processId ? ` pid=${result.backgroundJob.processId}` : ""}` : "",
     normalizeTerminalText(result.message ?? ""),
     normalizeTerminalText(result.stdout),
     normalizeTerminalText(result.stderr)

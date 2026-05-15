@@ -19,9 +19,15 @@ pub fn run_workspace_command(
         let cwd = workspace.ensure_command_cwd(None)?;
         (workspace_path, cwd)
     };
-    Ok(state
+    let mut result = state
         .terminal
-        .run_command(&command, &cwd, &workspace_path, safety_settings))
+        .run_command(&command, &cwd, &workspace_path, safety_settings);
+    if let Some(provenance) = result.provenance.as_mut() {
+        provenance.source = "user".to_string();
+        provenance.trigger = "manual".to_string();
+        provenance.requested_by = Some("user".to_string());
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -29,9 +35,11 @@ pub fn execute_approved_command(
     session_id: String,
     request_id: String,
     command: String,
+    auto_run: Option<bool>,
     safety_settings: Option<SafetySettingsInput>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<CommandResult, String> {
+    let auto_run = auto_run.unwrap_or(false);
     let safety_settings = safety_settings.map(|mut settings| {
         settings.approval_granted = Some(true);
         settings
@@ -45,19 +53,56 @@ pub fn execute_approved_command(
         let cwd = workspace.ensure_command_cwd(None)?;
         (workspace_path, cwd)
     };
-    let result = state
+    let mut result = state
         .terminal
         .run_command(&command, &cwd, &workspace_path, safety_settings);
+    if let Some(provenance) = result.provenance.as_mut() {
+        provenance.source = "agent".to_string();
+        provenance.trigger = if auto_run {
+            "auto_approved".to_string()
+        } else {
+            "manual".to_string()
+        };
+        provenance.requested_by = Some("agent".to_string());
+        provenance.session_id = Some(session_id.clone());
+        provenance.request_id = Some(request_id.clone());
+        provenance.approval_source = Some(if auto_run {
+            "auto".to_string()
+        } else {
+            "manual".to_string()
+        });
+        provenance.output_summary = result.message.clone();
+    }
+    if let Some(job) = result.background_job.as_mut() {
+        job.request_id = Some(request_id.clone());
+        job.session_id = session_id.clone();
+    }
+    let event_type = match result.status.as_str() {
+        "running" | "executing" => "runtime.command.started",
+        "failed" => "runtime.command.failed",
+        "blocked" | "approval_required" => "runtime.command.blocked",
+        _ => "runtime.command.completed",
+    };
     let payload = json!({
         "requestId": request_id,
         "command": command,
         "result": result.clone(),
-        "provenance": {
-            "approvalSource": "explicit_ui_approval",
-            "executionAuthority": "rust_terminal",
-            "requestedVsExecuted": if result.status == "executed" || result.status == "failed" { "executed_attempted" } else { "requested_only" },
-            "networkDetected": looks_like_network_command(&command),
-            "backgroundDetected": looks_like_background_command(&command)
+        "execution": {
+            "id": format!("exec_{}", uuid::Uuid::new_v4()),
+            "sessionId": session_id,
+            "requestId": request_id,
+            "autoRun": auto_run,
+            "command": command,
+            "cwd": result.cwd,
+            "risk": result.risk,
+            "status": result.status,
+            "exitCode": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "message": result.message,
+            "provenance": result.provenance,
+            "backgroundJob": result.background_job,
+            "createdAt": chrono::Utc::now().to_rfc3339()
         }
     });
     let db = state
@@ -66,38 +111,9 @@ pub fn execute_approved_command(
         .map_err(|_| "Database lock poisoned".to_string())?;
     db.append_authoritative_session_event(
         &session_id,
-        "runtime.command.completed",
+        event_type,
         &payload.to_string(),
     )
         .map_err(|err| format!("Failed to persist command result: {err}"))?;
     Ok(result)
-}
-
-fn looks_like_network_command(command: &str) -> bool {
-    let normalized = command.to_ascii_lowercase();
-    [
-        "curl",
-        "wget",
-        "invoke-webrequest",
-        "iwr ",
-        "irm ",
-        "npm install",
-        "pnpm add",
-        "pnpm install",
-        "pip install",
-        "cargo install",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-}
-
-fn looks_like_background_command(command: &str) -> bool {
-    let normalized = command.to_ascii_lowercase();
-    normalized.contains("python -m http.server")
-        || normalized.contains("npm run dev")
-        || normalized.contains("pnpm dev")
-        || normalized.contains("yarn dev")
-        || normalized.contains("vite")
-        || normalized.contains("next dev")
-        || normalized.contains("react-scripts start")
 }

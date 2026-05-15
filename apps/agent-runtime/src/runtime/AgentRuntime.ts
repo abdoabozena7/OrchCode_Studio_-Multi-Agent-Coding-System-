@@ -260,13 +260,37 @@ export class AgentRuntime {
       stderr: result.stderr,
       message: result.message,
       provenance: {
-        source: request?.provenance?.source ?? "agent",
-        trigger: result.autoRun ? "auto_approved" : "manual",
-        requestedBy: request?.provenance?.requestedBy ?? "runtime",
-        approvalId: request?.provenance?.approvalId,
-        toolCallId: request?.provenance?.toolCallId,
-        reason: result.message ?? request?.reason
+        source: result.provenance?.source ?? request?.provenance?.source ?? "agent",
+        trigger: result.provenance?.trigger ?? (result.autoRun ? "auto_approved" : "manual"),
+        requestedBy: result.provenance?.requestedBy ?? request?.provenance?.requestedBy ?? "unknown",
+        approvalId: result.provenance?.approvalId ?? request?.provenance?.approvalId,
+        toolCallId: result.provenance?.toolCallId ?? request?.provenance?.toolCallId,
+        reason: result.provenance?.reason ?? result.message ?? request?.reason,
+        sessionId,
+        requestId,
+        agentId: result.provenance?.agentId,
+        approvalSource: result.provenance?.approvalSource,
+        policyDecision: result.provenance?.policyDecision,
+        policyReason: result.provenance?.policyReason,
+        executionAuthority: result.provenance?.executionAuthority ?? "rust",
+        background: result.provenance?.background ?? result.backgroundJob?.status === "running",
+        processId: result.provenance?.processId ?? result.backgroundJob?.processId,
+        networkDetected: result.provenance?.networkDetected,
+        backgroundDetected: result.provenance?.backgroundDetected ?? result.backgroundJob?.status === "running",
+        detectionSource: result.provenance?.detectionSource,
+        networkDetectionSource: result.provenance?.networkDetectionSource,
+        backgroundDetectionSource: result.provenance?.backgroundDetectionSource,
+        outputSummary: result.provenance?.outputSummary,
+        backgroundTrackingLimited: result.provenance?.backgroundTrackingLimited ?? Boolean(result.backgroundJob),
+        jobId: result.provenance?.jobId ?? result.backgroundJob?.jobId
       },
+      backgroundJob: result.backgroundJob
+        ? {
+            ...result.backgroundJob,
+            requestId,
+            sessionId
+          }
+        : undefined,
       createdAt: new Date().toISOString()
     };
     await this.sessionManager.addCommandExecution(sessionId, record);
@@ -299,7 +323,12 @@ export class AgentRuntime {
           linkedAgentId: agent.id
         }]);
         appendAgentJournalEntry(agent, {
-          kind: looksLikeTestCommand(result.command) ? "test_run" : "command_completed",
+          kind:
+            result.status === "running" || result.status === "executing"
+              ? "command_requested"
+              : looksLikeTestCommand(result.command)
+                ? "test_run"
+                : "command_completed",
           title: result.command,
           summary: result.message ?? `Command recorded as ${result.status}.`,
           command: result.command,
@@ -308,7 +337,9 @@ export class AgentRuntime {
               ? "failed"
               : result.status === "blocked"
                 ? "blocked"
-                : "completed"
+                : result.status === "running" || result.status === "executing"
+                  ? "running"
+                  : "completed"
         });
       }
     });
@@ -403,10 +434,10 @@ export class AgentRuntime {
       const hasPendingPatchApply = draft.patchProposals.some((proposal) => proposal.status === "approved");
       const hasAppliedPatch = draft.patchProposals.some((proposal) => proposal.status === "applied");
       const hasPendingCommands = draft.commandRequests.some(
-        (request) => request.status === "requested" || request.status === "approved" || request.status === "executing"
+        (request) => request.status === "requested" || request.status === "approved" || request.status === "executing" || request.status === "running"
       );
       const hasFailedCommands = draft.commandRequests.some(
-        (request) => request.status === "failed" || request.status === "blocked" || request.status === "rejected"
+        (request) => request.status === "failed" || request.status === "blocked" || request.status === "rejected" || request.status === "denied" || request.status === "orphaned" || request.status === "terminated"
       );
       const reconciliationStatus = draft.reconciliationReport?.status;
 
@@ -539,11 +570,12 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
     command: request.command,
     status: request.status
   }));
-  const commandFailed = commandStatuses.some((command) => command.status === "failed" || command.status === "blocked");
+  const commandFailed = commandStatuses.some((command) => command.status === "failed" || command.status === "blocked" || command.status === "denied" || command.status === "orphaned" || command.status === "terminated");
   const commandPending = commandStatuses.some(
-    (command) => command.status === "requested" || command.status === "approved" || command.status === "executing"
+    (command) => command.status === "requested" || command.status === "approved" || command.status === "executing" || command.status === "running"
   );
   const commandExecuted = commandStatuses.filter((command) => command.status === "executed");
+  const backgroundRunning = (session.backgroundJobs ?? []).some((job) => job.status === "running");
 
   return {
     id: `verification_${randomUUID()}`,
@@ -551,7 +583,7 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
     status:
       applyFailed || commandFailed || reconciliation?.status === "diverged" || reconciliation?.status === "failed"
         ? "failed"
-        : pendingPatchReview || pendingPatchApply || commandPending || reconciliation?.status === "pending"
+        : pendingPatchReview || pendingPatchApply || commandPending || backgroundRunning || reconciliation?.status === "pending"
           ? "pending"
           : reconciliation?.status === "unavailable"
             ? "unavailable"
@@ -573,7 +605,9 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
                 ? "Patch applied. Reconciliation is still pending."
                 : reconciliation?.status === "unavailable"
                   ? "Patch applied, but reconciliation data is unavailable."
-              : commandPending
+          : backgroundRunning
+            ? "A background command is still running with limited tracking."
+          : commandPending
                 ? "Patch applied. Verification commands are still pending."
                 : "Patch and command verification are complete.",
     checks: [
@@ -631,9 +665,11 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
         id: "post_verify",
         label: "Post-verify",
         name: "Post-verify",
-        status: commandFailed ? "failed" : commandPending ? "pending" : "passed",
+        status: commandFailed ? "failed" : commandPending || backgroundRunning ? "pending" : "passed",
         detail: commandFailed
           ? "At least one verification command failed or was blocked."
+          : backgroundRunning
+            ? "A background verification command is still running with limited tracking."
           : commandPending
             ? "Waiting for verification commands to run."
             : commandExecuted.length

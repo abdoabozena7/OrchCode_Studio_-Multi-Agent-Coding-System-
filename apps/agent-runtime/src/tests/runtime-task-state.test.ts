@@ -114,6 +114,7 @@ test("patch apply success is recorded and moves the runtime into command verific
       reconciliationSnapshot: {
         before: {
           available: true,
+          source: "rust_git_snapshot",
           isGitRepo: true,
           changedFiles: [],
           diffText: "",
@@ -122,6 +123,7 @@ test("patch apply success is recorded and moves the runtime into command verific
         },
         after: {
           available: true,
+          source: "rust_git_snapshot",
           isGitRepo: true,
           changedFiles: ["AGENT_PROPOSAL.md"],
           diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
@@ -146,6 +148,8 @@ test("patch apply success is recorded and moves the runtime into command verific
     assert.equal((session?.taskState as { patchState?: { authority?: string } }).patchState?.authority, "rust");
     assert.equal((session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1")?.workJournal?.length ?? 0) >= 2, true);
     assert.equal(session?.reconciliationReport?.status, "matched");
+    assert.equal(session?.reconciliationReport?.checkedBy, "rust");
+    assert.equal(session?.reconciliationReport?.evidenceSource, "rust_git_snapshot");
   } finally {
     await fixture.close();
   }
@@ -220,6 +224,80 @@ test("command results are recorded in runtime state and finalize the session", a
   }
 });
 
+test("background command starts stay pending and preserve heuristic provenance instead of looking completed", async () => {
+  const fixture = await createPatchFixture("add a README note");
+  try {
+    const patchId = fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.id;
+    assert.ok(patchId);
+    await fixture.runtime.approvePatch(fixture.sessionId, patchId);
+    await fixture.runtime.reportPatchApplyResult(fixture.sessionId, patchId, {
+      status: "applied",
+      message: "Patch applied by Rust authority",
+      reconciliationSnapshot: {
+        after: {
+          available: true,
+          source: "rust_git_snapshot",
+          isGitRepo: true,
+          changedFiles: ["AGENT_PROPOSAL.md"],
+          diffText: fixture.runtime.getSession(fixture.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+          dirty: true,
+          checkedAt: new Date().toISOString()
+        }
+      }
+    });
+    const request = fixture.runtime.getSession(fixture.sessionId)?.commandRequests[0];
+    assert.ok(request);
+    await fixture.runtime.reportCommandResult(fixture.sessionId, request.id, {
+      command: request.command,
+      cwd: request.cwd,
+      risk: request.risk,
+      status: "running",
+      stdout: "",
+      stderr: "",
+      message: "Background process started with limited tracking.",
+      provenance: {
+        source: "agent",
+        trigger: "auto_approved",
+        requestedBy: "agent",
+        approvalSource: "auto",
+        policyDecision: "allow",
+        policyReason: "Policy heuristics allowed the command, but background detection is heuristic.",
+        executionAuthority: "rust",
+        background: true,
+        backgroundDetected: true,
+        detectionSource: "heuristic",
+        backgroundDetectionSource: "heuristic",
+        backgroundTrackingLimited: true,
+        processId: 4242,
+        jobId: "job_4242"
+      },
+      backgroundJob: {
+        jobId: "job_4242",
+        sessionId: fixture.sessionId,
+        requestId: request.id,
+        command: request.command,
+        cwd: request.cwd,
+        processId: 4242,
+        startedAt: new Date().toISOString(),
+        status: "running",
+        lastKnownAt: new Date().toISOString(),
+        detectionSource: "heuristic",
+        outputSummary: "Background process started."
+      }
+    });
+    const session = fixture.runtime.getSession(fixture.sessionId);
+    assert.equal(session?.commandExecutions.at(-1)?.status, "running");
+    assert.equal(session?.commandRequests[0]?.status, "executing");
+    assert.equal(session?.backgroundJobs[0]?.status, "running");
+    assert.equal(session?.commandExecutions.at(-1)?.provenance?.approvalSource, "auto");
+    assert.equal(session?.commandExecutions.at(-1)?.provenance?.backgroundDetectionSource, "heuristic");
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(session?.verificationResult?.status, "pending");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("command execution emits an explicit runtime completion event instead of replaying a request event", async () => {
   const storageDir = path.join(os.tmpdir(), `orchcode-runtime-events-${Date.now()}`);
   const eventBus = new EventBus();
@@ -285,6 +363,7 @@ test("expired session tokens mark the runtime task state as expired for reconcil
 
   const updated = manager.getSession(session.id);
   assert.equal((updated?.taskState as { restoreStatus?: string }).restoreStatus, "expired");
+  assert.equal(updated?.taskState.restoreState?.disposition, "expired");
   assert.equal(updated?.lifecycleStage, "BLOCKED");
 
   await rm(workspace, { recursive: true, force: true });
@@ -340,6 +419,7 @@ test("runtime task state restores with explicit restored markers after runtime r
     const restored = second.runtime.getSession(created.sessionId);
     assert.ok(restored);
     assert.equal((restored?.taskState as { restoreStatus?: string }).restoreStatus, "restored");
+    assert.equal(restored?.taskState.restoreState?.source, "snapshot_restored");
     assert.equal(restored?.taskState.transitions.some((entry) => entry.type === "session.restored"), true);
     assert.equal((restored?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1")?.allowedActions ?? []).includes("inspect_assigned_paths"), true);
     assert.equal((restored?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.testsRun ?? []).includes("git diff --check"), true);
@@ -534,16 +614,20 @@ test("post-apply reconciliation marks unavailable git data as unavailable, not m
       reconciliationSnapshot: {
         after: {
           available: false,
+          source: "rust_git_snapshot",
           isGitRepo: false,
           changedFiles: [],
           diffText: "",
           dirty: false,
-          checkedAt: new Date().toISOString()
+          checkedAt: new Date().toISOString(),
+          unavailableReason: "Workspace is not a git repository."
         }
       }
     });
     const session = fixture.runtime.getSession(fixture.sessionId);
     assert.equal(session?.reconciliationReport?.status, "unavailable");
+    assert.equal(session?.reconciliationReport?.checkedBy, "rust");
+    assert.equal(session?.reconciliationReport?.evidenceSource, "unavailable");
     assert.equal(session?.reviewGate?.recommendation, "caution");
     assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Reconciliation")?.status, "unavailable");
   } finally {
@@ -563,6 +647,7 @@ test("post-apply reconciliation divergence blocks trust when files differ from t
       reconciliationSnapshot: {
         after: {
           available: true,
+          source: "desktop_git_snapshot_bridge",
           isGitRepo: true,
           changedFiles: ["EXTRA_FILE.md"],
           diffText: [
@@ -579,6 +664,8 @@ test("post-apply reconciliation divergence blocks trust when files differ from t
     });
     const session = fixture.runtime.getSession(fixture.sessionId);
     assert.equal(session?.reconciliationReport?.status, "diverged");
+    assert.equal(session?.reconciliationReport?.checkedBy, "git");
+    assert.equal(session?.reconciliationReport?.evidenceSource, "desktop_git_snapshot_bridge");
     assert.equal((session?.reconciliationReport?.extraFiles ?? []).includes("EXTRA_FILE.md"), true);
     assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
     assert.equal(session?.verificationResult?.status, "failed");

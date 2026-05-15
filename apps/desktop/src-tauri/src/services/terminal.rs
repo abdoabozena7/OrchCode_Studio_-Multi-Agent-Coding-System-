@@ -1,5 +1,9 @@
-use crate::models::{CommandResult, CommandRisk, SafetySettingsInput};
-use crate::services::command_policy::CommandPolicyService;
+use crate::models::{
+    BackgroundJobRecord, CommandExecutionProvenance, CommandResult, CommandRisk,
+    SafetySettingsInput,
+};
+use crate::services::command_policy::{CommandPolicyAnalysis, CommandPolicyService};
+use chrono::Utc;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -30,8 +34,9 @@ impl TerminalService {
                 return blocked_result(
                     command,
                     cwd,
-                    CommandRisk::Dangerous,
+                    &synthetic_policy("Workspace path is not accessible."),
                     format!("Workspace path is not accessible: {err}"),
+                    approval_granted,
                 );
             }
         };
@@ -41,20 +46,23 @@ impl TerminalService {
                 return blocked_result(
                     command,
                     cwd,
-                    CommandRisk::Dangerous,
+                    &synthetic_policy("Command cwd is outside the active workspace."),
                     "Command cwd is outside the active workspace".to_string(),
+                    approval_granted,
                 );
             }
             Err(err) => {
                 return blocked_result(
                     command,
                     cwd,
-                    CommandRisk::Dangerous,
+                    &synthetic_policy("Command cwd is not accessible."),
                     format!("Command cwd is not accessible: {err}"),
+                    approval_granted,
                 );
             }
         };
-        let risk = CommandPolicyService::classify(command, workspace);
+        let policy = CommandPolicyService::analyze(command, workspace);
+        let risk = policy.risk.clone();
         if safety.block_dangerous_commands && risk == CommandRisk::Dangerous {
             return CommandResult {
                 command: command.to_string(),
@@ -65,6 +73,16 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: String::new(),
                 message: Some("Dangerous command blocked by policy before execution.".to_string()),
+                provenance: Some(build_provenance(
+                    command,
+                    cwd,
+                    &policy,
+                    approval_granted,
+                    false,
+                    None,
+                    Some("Command was denied by policy before execution.".to_string()),
+                )),
+                background_job: None,
             };
         }
 
@@ -72,8 +90,9 @@ impl TerminalService {
             return blocked_result(
                 command,
                 cwd,
-                risk,
+                &policy,
                 "Network commands are blocked by active safety settings".to_string(),
+                approval_granted,
             );
         }
 
@@ -91,6 +110,16 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: String::new(),
                 message: Some(approval_required_message(command)),
+                provenance: Some(build_provenance(
+                    command,
+                    cwd,
+                    &policy,
+                    false,
+                    false,
+                    None,
+                    Some("Policy heuristics require explicit approval before Rust execution.".to_string()),
+                )),
+                background_job: None,
             };
         }
 
@@ -114,19 +143,49 @@ impl TerminalService {
             };
 
             return match spawned {
-                Ok(child) => CommandResult {
-                    command: command.to_string(),
-                    cwd: cwd.to_string_lossy().to_string(),
-                    risk,
-                    status: "executed".to_string(),
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    message: Some(format!(
-                        "Approved background command started by Rust terminal authority with pid {}. It may continue running after this result.",
-                        child.id()
-                    )),
-                },
+                Ok(child) => {
+                    let now = Utc::now().to_rfc3339();
+                    let pid = child.id();
+                    CommandResult {
+                        command: command.to_string(),
+                        cwd: cwd.to_string_lossy().to_string(),
+                        risk,
+                        status: "running".to_string(),
+                        exit_code: None,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        message: Some(format!(
+                            "Policy-classified background command started by Rust terminal authority with pid {}. Background tracking is limited unless a later terminal result is recorded.",
+                            pid
+                        )),
+                        provenance: Some(build_provenance(
+                            command,
+                            cwd,
+                            &policy,
+                            approval_granted,
+                            true,
+                            Some(pid),
+                            Some("Background command started by Rust authority with limited tracking.".to_string()),
+                        )),
+                        background_job: Some(BackgroundJobRecord {
+                            job_id: format!("job_{}", pid),
+                            request_id: None,
+                            session_id: String::new(),
+                            command: command.to_string(),
+                            cwd: cwd.to_string_lossy().to_string(),
+                            process_id: Some(pid),
+                            started_at: now.clone(),
+                            completed_at: None,
+                            status: "running".to_string(),
+                            last_known_at: now,
+                            exit_code: None,
+                            output_summary: Some(
+                                "Background process started. Durable completion tracking is limited.".to_string(),
+                            ),
+                            detection_source: "heuristic".to_string(),
+                        }),
+                    }
+                }
                 Err(err) => CommandResult {
                     command: command.to_string(),
                     cwd: cwd.to_string_lossy().to_string(),
@@ -138,6 +197,30 @@ impl TerminalService {
                     message: Some(format!(
                         "Approved background command failed to start under Rust terminal authority: {err}"
                     )),
+                    provenance: Some(build_provenance(
+                        command,
+                        cwd,
+                        &policy,
+                        approval_granted,
+                        true,
+                        None,
+                        Some("Background command failed to start under Rust authority.".to_string()),
+                    )),
+                    background_job: Some(BackgroundJobRecord {
+                        job_id: format!("job_failed_{}", Utc::now().timestamp_millis()),
+                        request_id: None,
+                        session_id: String::new(),
+                        command: command.to_string(),
+                        cwd: cwd.to_string_lossy().to_string(),
+                        process_id: None,
+                        started_at: Utc::now().to_rfc3339(),
+                        completed_at: Some(Utc::now().to_rfc3339()),
+                        status: "failed".to_string(),
+                        last_known_at: Utc::now().to_rfc3339(),
+                        exit_code: None,
+                        output_summary: Some("Background process failed to start.".to_string()),
+                        detection_source: "heuristic".to_string(),
+                    }),
                 },
             };
         }
@@ -184,8 +267,22 @@ impl TerminalService {
                             .code()
                             .map(|code| code.to_string())
                             .unwrap_or_else(|| "unknown".to_string())
-                    )
+                        )
                 }),
+                provenance: Some(build_provenance(
+                    command,
+                    cwd,
+                    &policy,
+                    approval_granted,
+                    false,
+                    None,
+                    Some(if output.status.success() {
+                        "Foreground command completed under Rust authority.".to_string()
+                    } else {
+                        "Foreground command failed under Rust authority.".to_string()
+                    }),
+                )),
+                background_job: None,
             },
             Err(err) => CommandResult {
                 command: command.to_string(),
@@ -196,21 +293,120 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: err.to_string(),
                 message: Some("Rust terminal authority failed to execute command".to_string()),
+                provenance: Some(build_provenance(
+                    command,
+                    cwd,
+                    &policy,
+                    approval_granted,
+                    false,
+                    None,
+                    Some("Rust terminal authority failed before completion.".to_string()),
+                )),
+                background_job: None,
             },
         }
     }
 }
 
-fn blocked_result(command: &str, cwd: &Path, risk: CommandRisk, message: String) -> CommandResult {
+fn blocked_result(
+    command: &str,
+    cwd: &Path,
+    policy: &CommandPolicyAnalysis,
+    message: String,
+    approval_granted: bool,
+) -> CommandResult {
     CommandResult {
         command: command.to_string(),
         cwd: cwd.to_string_lossy().to_string(),
-        risk,
+        risk: policy.risk.clone(),
         status: "blocked".to_string(),
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
         message: Some(message),
+        provenance: Some(build_provenance(
+            command,
+            cwd,
+            policy,
+            approval_granted,
+            policy.background_detected.unwrap_or(false),
+            None,
+            Some("Command was blocked before Rust execution.".to_string()),
+        )),
+        background_job: None,
+    }
+}
+
+fn synthetic_policy(reason: &str) -> CommandPolicyAnalysis {
+    CommandPolicyAnalysis {
+        risk: CommandRisk::Dangerous,
+        policy_decision: "deny",
+        policy_reason: reason.to_string(),
+        network_detected: None,
+        background_detected: None,
+        detection_source: "system",
+    }
+}
+
+fn build_provenance(
+    _command: &str,
+    _cwd: &Path,
+    policy: &CommandPolicyAnalysis,
+    approval_granted: bool,
+    background: bool,
+    process_id: Option<u32>,
+    reason: Option<String>,
+) -> CommandExecutionProvenance {
+    CommandExecutionProvenance {
+        source: if approval_granted {
+            "user".to_string()
+        } else {
+            "system".to_string()
+        },
+        trigger: if approval_granted {
+            "manual".to_string()
+        } else {
+            "auto_approved".to_string()
+        },
+        requested_by: Some(if approval_granted {
+            "user".to_string()
+        } else {
+            "system".to_string()
+        }),
+        approval_source: Some(match policy.policy_decision {
+            "deny" => "denied",
+            "require_approval" if approval_granted => "manual",
+            "require_approval" => "none",
+            "allow" if approval_granted => "manual",
+            "allow" => "policy",
+            _ => "unknown",
+        }
+        .to_string()),
+        policy_decision: Some(policy.policy_decision.to_string()),
+        policy_reason: Some(policy.policy_reason.clone()),
+        execution_authority: Some("rust".to_string()),
+        reason,
+        session_id: None,
+        request_id: None,
+        agent_id: None,
+        background: Some(background),
+        process_id,
+        network_detected: policy.network_detected,
+        background_detected: Some(policy.background_detected.unwrap_or(false) || background),
+        detection_source: Some(policy.detection_source.to_string()),
+        network_detection_source: Some(if policy.network_detected.is_some() {
+            policy.detection_source.to_string()
+        } else {
+            "unknown".to_string()
+        }),
+        background_detection_source: Some(if policy.background_detected.is_some() || background {
+            "heuristic".to_string()
+        } else {
+            "unknown".to_string()
+        }),
+        output_summary: None,
+        background_tracking_limited: Some(background),
+        job_id: process_id.map(|pid| format!("job_{pid}")),
     }
 }
 
@@ -286,4 +482,98 @@ fn redact_marker(input: &str, marker: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalService;
+    use crate::models::SafetySettingsInput;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn policy_classified_allowed_command_includes_provenance() {
+        let workspace = temp_workspace();
+        let service = TerminalService::new();
+        let result = service.run_command(
+            "rg --version",
+            &workspace,
+            &workspace,
+            Some(SafetySettingsInput {
+                block_dangerous_commands: true,
+                redact_secrets: true,
+                allow_network_commands: false,
+                approval_granted: None,
+            }),
+        );
+        assert!(matches!(result.status.as_str(), "executed" | "failed"));
+        assert_eq!(
+            result
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.policy_decision.as_deref()),
+            Some("allow")
+        );
+        assert_eq!(
+            result
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.detection_source.as_deref()),
+            Some("policy")
+        );
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn approval_required_command_preserves_heuristic_background_detection() {
+        let workspace = temp_workspace();
+        let service = TerminalService::new();
+        let result = service.run_command(
+            "npm run dev",
+            &workspace,
+            &workspace,
+            Some(SafetySettingsInput {
+                block_dangerous_commands: true,
+                redact_secrets: true,
+                allow_network_commands: false,
+                approval_granted: None,
+            }),
+        );
+        assert_eq!(result.status, "approval_required");
+        assert_eq!(
+            result
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.policy_decision.as_deref()),
+            Some("require_approval")
+        );
+        assert_eq!(
+            result
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.background_detected),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.background_detection_source.as_deref()),
+            Some("heuristic")
+        );
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    fn temp_workspace() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "orchcode-terminal-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_millis()
+        ));
+        fs::create_dir_all(&path).expect("workspace");
+        path
+    }
 }

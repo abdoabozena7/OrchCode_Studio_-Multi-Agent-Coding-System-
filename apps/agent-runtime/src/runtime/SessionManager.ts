@@ -6,6 +6,7 @@ import type {
   AgentRuntimeSession,
   RuntimeTaskState,
   AgentRuntimeMode,
+  RuntimeRestoreState,
   Artifact,
   CommandExecutionRecord,
   CommandRequest,
@@ -21,7 +22,10 @@ import type {
 } from "@orchcode/protocol";
 import { accessProfileDefaults } from "@orchcode/protocol";
 import type { AccessProfile, AccessProfileInput, DeclaredAccessPolicy, ResolvedAccessPolicy } from "@orchcode/protocol";
+import type { DurableRuntimeEvent } from "@orchcode/protocol";
 import { EventBus } from "./EventBus.js";
+import { listDurableRuntimeEventsFromSqlite } from "./DurableRuntimeEvents.js";
+import { replaySessionFromDurableEvents } from "./SessionReplay.js";
 
 type SessionTokenRecord = {
   tokenHash: string;
@@ -63,16 +67,23 @@ type ManagedTaskState = RuntimeTaskState & {
   };
 };
 
+type SessionManagerOptions = {
+  runtimeEventLoader?: (sessionId: string) => Promise<DurableRuntimeEvent[]>;
+};
+
 export class SessionManager {
   private readonly sessions = new Map<string, AgentRuntimeSession>();
   private readonly sessionTokens = new Map<string, SessionTokenRecord>();
   private readonly statePath: string;
+  private readonly runtimeEventLoader: (sessionId: string) => Promise<DurableRuntimeEvent[]>;
 
   constructor(
     private readonly storageDir: string,
-    private readonly eventBus: EventBus
+    private readonly eventBus: EventBus,
+    options: SessionManagerOptions = {}
   ) {
     this.statePath = path.join(storageDir, "sessions.json");
+    this.runtimeEventLoader = options.runtimeEventLoader ?? listDurableRuntimeEventsFromSqlite;
   }
 
   async load() {
@@ -80,7 +91,7 @@ export class SessionManager {
       const raw = await readFile(this.statePath, "utf8");
       const parsed = JSON.parse(raw) as PersistedState;
       for (const session of parsed.sessions ?? []) {
-        const hydrated = hydrateSession(session);
+        const hydrated = await this.restorePersistedSession(session);
         this.sessions.set(hydrated.id, hydrated);
         this.eventBus.publish({ type: "runtime.session.restored", sessionId: hydrated.id, session: hydrated });
       }
@@ -154,6 +165,7 @@ export class SessionManager {
       patchProposals: [],
       commandRequests: [],
       commandExecutions: [],
+      backgroundJobs: [],
       reasoningSummaries: [],
       progressEvents: [],
       agentWorkStatuses: [],
@@ -309,36 +321,51 @@ export class SessionManager {
       if (existingIndex >= 0) {
         session.commandExecutions[existingIndex] = commandExecution;
       } else {
-        session.commandExecutions.push(commandExecution);
+      session.commandExecutions.push(commandExecution);
+      }
+      session.backgroundJobs ??= [];
+      if (commandExecution.backgroundJob) {
+        const existingJobIndex = session.backgroundJobs.findIndex((candidate) => candidate.jobId === commandExecution.backgroundJob?.jobId);
+        if (existingJobIndex >= 0) {
+          session.backgroundJobs[existingJobIndex] = commandExecution.backgroundJob;
+        } else {
+          session.backgroundJobs.push(commandExecution.backgroundJob);
+        }
       }
       const request = session.commandRequests.find((candidate) => candidate.id === commandExecution.requestId);
       if (request) {
         request.status =
           commandExecution.status === "executing"
+            || commandExecution.status === "running"
             ? "executing"
             : commandExecution.status === "executed"
+              || commandExecution.status === "completed"
               ? "executed"
               : commandExecution.status === "blocked"
                 ? "blocked"
-                : commandExecution.status === "failed"
-                  ? "failed"
-                  : commandExecution.status === "approval_required"
-                    ? "approved"
-                  : request.status;
+                : commandExecution.status === "orphaned"
+                  ? "orphaned"
+                  : commandExecution.status === "terminated"
+                    ? "terminated"
+                    : commandExecution.status === "failed"
+                      ? "failed"
+                      : commandExecution.status === "approval_required"
+                        ? "approved"
+                        : request.status;
       }
       const taskState = asManagedTaskState(session.taskState);
       if (commandExecution.requestId) {
-        if (commandExecution.status !== "executing" && commandExecution.status !== "approval_required") {
+        if (commandExecution.status !== "executing" && commandExecution.status !== "running" && commandExecution.status !== "approval_required") {
           taskState.pendingCommandIds = taskState.pendingCommandIds.filter((id) => id !== commandExecution.requestId);
         }
-        if (commandExecution.status === "executed") {
+        if (commandExecution.status === "executed" || commandExecution.status === "completed") {
           if (!taskState.completedCommandIds.includes(commandExecution.requestId)) {
             taskState.completedCommandIds.push(commandExecution.requestId);
           }
           if (!taskState.commandState.completedIds.includes(commandExecution.requestId)) {
             taskState.commandState.completedIds.push(commandExecution.requestId);
           }
-        } else if (commandExecution.status === "failed" || commandExecution.status === "blocked") {
+        } else if (commandExecution.status === "failed" || commandExecution.status === "blocked" || commandExecution.status === "orphaned" || commandExecution.status === "terminated") {
           if (!taskState.failedCommandIds.includes(commandExecution.requestId)) {
             taskState.failedCommandIds.push(commandExecution.requestId);
           }
@@ -351,23 +378,35 @@ export class SessionManager {
       taskState.commandState.authority = "rust";
       taskState.lastCommandProvenance = commandExecution.provenance;
       taskState.reconciliationStatus =
-        taskState.pendingCommandIds.length === 0 && taskState.pendingPatchId === undefined ? "reconciled" : "pending";
+        taskState.pendingCommandIds.length === 0 &&
+        taskState.pendingPatchId === undefined &&
+        !(session.backgroundJobs ?? []).some((job) => job.status === "running")
+          ? "reconciled"
+          : "pending";
       taskState.reconciliationReason =
         taskState.reconciliationStatus === "reconciled"
           ? "Runtime state has a terminal command result for every pending authority action."
-          : "Runtime is still waiting for additional authority-backed actions to complete.";
+          : (session.backgroundJobs ?? []).some((job) => job.status === "running")
+            ? "A background command is still running with limited tracking."
+            : "Runtime is still waiting for additional authority-backed actions to complete.";
       taskState.reconciledAt = taskState.reconciliationStatus === "reconciled" ? commandExecution.createdAt : taskState.reconciledAt;
       pushTaskTransition(
         taskState,
-        "command.completed",
+        commandExecution.status === "executing" || commandExecution.status === "running"
+          ? "command.started"
+          : commandExecution.status === "failed" || commandExecution.status === "blocked" || commandExecution.status === "orphaned" || commandExecution.status === "terminated"
+            ? "command.failed"
+            : "command.completed",
         `Command ${commandExecution.status}: ${commandExecution.command}`
       );
     });
     this.eventBus.publish({
       type:
-        commandExecution.status === "executing"
+        commandExecution.status === "executing" || commandExecution.status === "running"
           ? "runtime.command.started"
           : commandExecution.status === "failed"
+          || commandExecution.status === "orphaned"
+          || commandExecution.status === "terminated"
           ? "runtime.command.failed"
           : commandExecution.status === "blocked"
             ? "runtime.command.blocked"
@@ -528,6 +567,13 @@ export class SessionManager {
       taskState.restoreStatus = "restored";
       taskState.restoredAt = new Date().toISOString();
       taskState.restoreReason = detail;
+      taskState.restoreState = {
+        source: "snapshot_restored",
+        disposition: session.status === "completed" || session.status === "failed" ? "terminal" : "resumable",
+        warnings: ["Session restore remains snapshot-based until durable event replay fully owns restore.", detail],
+        reason: detail,
+        restoredAt: taskState.restoredAt
+      };
       taskState.phase = "restored";
       session.status = "restored";
       pushTaskTransition(taskState, "session.restored", detail);
@@ -544,6 +590,13 @@ export class SessionManager {
     taskState.restoreStatus = "expired";
     taskState.expiredAt = new Date().toISOString();
     taskState.restoreReason = detail;
+    taskState.restoreState = {
+      source: taskState.restoreState?.source ?? "snapshot_restored",
+      disposition: "expired",
+      warnings: [detail],
+      reason: detail,
+      restoredAt: taskState.restoreState?.restoredAt ?? taskState.restoredAt
+    };
     taskState.phase = "expired";
     taskState.reconciliationStatus = taskState.reconciliationStatus === "reconciled" ? "reconciled" : "pending";
     session.lifecycleStage = "BLOCKED";
@@ -588,6 +641,30 @@ export class SessionManager {
     };
     await writeFile(this.statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   }
+
+  private async restorePersistedSession(snapshot: AgentRuntimeSession) {
+    const durableEvents = await this.loadDurableEvents(snapshot.id);
+    if (durableEvents.length > 0) {
+      const replayed = replaySessionFromDurableEvents(durableEvents);
+      if (replayed.session) {
+        return replayed.session;
+      }
+      return hydrateSession(snapshot, {
+        warning: replayed.restoreState.reason ?? "Durable events were insufficient for authoritative replay. Snapshot fallback was used.",
+        eventCount: replayed.restoreState.eventCount,
+        lastEventSequence: replayed.restoreState.lastEventSequence
+      });
+    }
+    return hydrateSession(snapshot);
+  }
+
+  private async loadDurableEvents(sessionId: string) {
+    try {
+      return await this.runtimeEventLoader(sessionId);
+    } catch {
+      return [];
+    }
+  }
 }
 
 export function randomId(prefix: string) {
@@ -598,6 +675,12 @@ function createInitialTaskState(now: string): RuntimeTaskState {
   const taskState: ManagedTaskState = {
     version: 1,
     phase: "created",
+    restoreState: {
+      source: "fresh",
+      disposition: "resumable",
+      warnings: [],
+      reason: "Session is active in live runtime memory."
+    },
     pendingCommandIds: [],
     completedCommandIds: [],
     failedCommandIds: [],
@@ -644,6 +727,12 @@ function hashToken(token: string) {
 function asManagedTaskState(taskState: RuntimeTaskState): ManagedTaskState {
   const managed = taskState as ManagedTaskState;
   managed.restoreStatus ??= "fresh";
+  managed.restoreState ??= {
+    source: managed.restoreStatus === "expired" ? "snapshot_restored" : "fresh",
+    disposition: managed.restoreStatus === "expired" ? "expired" : "resumable",
+    warnings: managed.restoreReason ? [managed.restoreReason] : [],
+    reason: managed.restoreReason
+  };
   managed.reconciliationStatus ??= "not_required";
   managed.patchState ??= {};
   managed.commandState ??= {
@@ -654,11 +743,19 @@ function asManagedTaskState(taskState: RuntimeTaskState): ManagedTaskState {
   return managed;
 }
 
-function hydrateSession(session: AgentRuntimeSession) {
+function hydrateSession(
+  session: AgentRuntimeSession,
+  options?: {
+    warning?: string;
+    eventCount?: number;
+    lastEventSequence?: number;
+  }
+) {
   session.progressEvents ??= [];
   session.agentWorkStatuses ??= [];
   session.toolIntents ??= [];
   session.artifacts ??= [];
+  session.backgroundJobs ??= [];
   session.runPhases ??= [];
   session.decisionLedger ??= [];
   session.declaredAccess ??= buildDeclaredAccessPolicy(session.accessProfile, session.trustProfile);
@@ -667,6 +764,23 @@ function hydrateSession(session: AgentRuntimeSession) {
   session.taskState = taskState;
   taskState.restoreStatus = "restored";
   taskState.restoredAt ??= new Date().toISOString();
+  taskState.restoreState = {
+    source: "snapshot_restored",
+    disposition:
+      session.status === "completed" || session.status === "failed"
+        ? "terminal"
+        : session.status === "expired"
+          ? "expired"
+          : "resumable",
+    warnings: [
+      "Session restored from sessions.json snapshot. This path is not event-replay authoritative yet.",
+      ...(options?.warning ? [options.warning] : [])
+    ],
+    reason: options?.warning ?? "Session restored from durable runtime snapshot fallback.",
+    restoredAt: taskState.restoredAt,
+    eventCount: options?.eventCount,
+    lastEventSequence: options?.lastEventSequence
+  };
   if (session.status === "created") {
     session.status = "restored";
   }

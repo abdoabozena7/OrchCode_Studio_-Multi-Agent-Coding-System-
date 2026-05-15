@@ -17,6 +17,58 @@ import type {
 import type { AgentLifecycleStage, AgentRuntimeSession } from "./agent-runtime.js";
 import type { OrchestrationEvent, PatchChangeStats, RunSummary, RuntimeProgressEvent } from "./orchestration.js";
 
+export const DURABLE_RUNTIME_EVENT_TYPES = [
+  "session.created",
+  "session.snapshot_persisted",
+  "session.restored",
+  "session.expired",
+  "session.reconciliation_required",
+  "run.phase_changed",
+  "agent.created",
+  "agent.updated",
+  "decision.recorded",
+  "evidence.recorded",
+  "patch.proposed",
+  "patch.approved",
+  "patch.rejected",
+  "patch.apply_started",
+  "patch.applied",
+  "patch.apply_failed",
+  "patch.reconciled",
+  "verification.started",
+  "verification.check_completed",
+  "verification.completed",
+  "command.requested",
+  "command.approved",
+  "command.denied",
+  "command.started",
+  "command.completed",
+  "command.failed",
+  "review_gate.updated"
+] as const;
+
+export type DurableRuntimeEventType = (typeof DURABLE_RUNTIME_EVENT_TYPES)[number];
+export type DurableRuntimeEventActor = "runtime" | "user" | "rust" | "system" | "desktop_bridge";
+export type DurableRuntimeEventAuthority = "runtime" | "rust" | "runtime_bridge" | "system";
+
+export type DurableRuntimeEvent = {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  type: DurableRuntimeEventType;
+  version: number;
+  actor: DurableRuntimeEventActor;
+  authority: DurableRuntimeEventAuthority;
+  createdAt: string;
+  correlationId?: string;
+  causationId?: string;
+  payload: Record<string, unknown>;
+};
+
+export function isDurableRuntimeEventType(value: string): value is DurableRuntimeEventType {
+  return (DURABLE_RUNTIME_EVENT_TYPES as readonly string[]).includes(value);
+}
+
 export type AppEvent =
   | { type: "workspace.updated"; workspace: WorkspaceInfo }
   | { type: "git.status.updated"; status: GitStatus }

@@ -93,3 +93,75 @@ fn canonicalize_existing_ancestor(path: &Path, workspace: &Path) -> Result<PathB
     }
     Ok(canonical)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::git::GitService;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rust_git_snapshot_is_unavailable_for_non_git_workspaces() {
+        let workspace = temp_workspace_path("non-git");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let snapshot = GitService::new().snapshot(&workspace, "rust_git_snapshot");
+        assert!(!snapshot.available);
+        assert_eq!(snapshot.source, "rust_git_snapshot");
+        assert_eq!(snapshot.is_git_repo, Some(false));
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn patch_apply_can_be_observed_with_rust_owned_git_snapshots() {
+        let workspace = temp_workspace_path("git-apply");
+        fs::create_dir_all(&workspace).expect("workspace");
+        run_git_ok(&workspace, &["init"]);
+        run_git_ok(&workspace, &["config", "user.email", "orchcode@example.com"]);
+        run_git_ok(&workspace, &["config", "user.name", "OrchCode"]);
+        fs::write(workspace.join("README.md"), "hello\n").expect("seed file");
+        run_git_ok(&workspace, &["add", "README.md"]);
+        run_git_ok(&workspace, &["commit", "-m", "seed"]);
+
+        let git = GitService::new();
+        let before = git.snapshot(&workspace, "rust_git_snapshot");
+        assert!(before.available);
+        assert_eq!(before.changed_files.as_deref(), Some(&[][..]));
+
+        fs::write(workspace.join("README.md"), "hello\nfrom rust\n").expect("mutate file");
+        let patch = GitService::new().diff(&workspace);
+        run_git_ok(&workspace, &["checkout", "--", "README.md"]);
+        PatchService::new()
+            .apply_patch(&patch, &workspace)
+            .expect("apply patch");
+
+        let after = git.snapshot(&workspace, "rust_git_snapshot");
+        assert!(after.available);
+        assert_eq!(after.source, "rust_git_snapshot");
+        assert_eq!(after.changed_files.as_deref(), Some(&["README.md".to_string()][..]));
+        assert_eq!(after.file_stats.as_ref().and_then(|stats| stats.first()).and_then(|stat| stat.additions), Some(1));
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    fn temp_workspace_path(label: &str) -> PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_millis();
+        std::env::temp_dir().join(format!("orchcode-patch-{label}-{millis}"))
+    }
+
+    fn run_git_ok(workspace: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(workspace)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

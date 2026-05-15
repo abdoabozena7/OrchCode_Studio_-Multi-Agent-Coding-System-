@@ -438,13 +438,16 @@ export function buildReconciliationReport(
   }
 ): ReconciliationReport {
   const patch = session.patchProposals.find((candidate) => candidate.id === patchId);
+  const evidenceSource = snapshot?.after?.source ?? snapshot?.before?.source ?? "unknown";
+  const checkedBy = evidenceSource === "rust_git_snapshot" ? "rust" : evidenceSource === "desktop_git_snapshot_bridge" ? "git" : "runtime";
   if (!patch) {
     return {
       status: "failed",
       patchId,
       sourceDiffId: patchId,
       checkedAt: new Date().toISOString(),
-      checkedBy: "runtime",
+      checkedBy,
+      evidenceSource,
       confidence: "unknown",
       reason: "Patch proposal was not found for reconciliation.",
       retryable: false,
@@ -467,9 +470,10 @@ export function buildReconciliationReport(
       patchId,
       sourceDiffId: patchId,
       checkedAt: new Date().toISOString(),
-      checkedBy: "git",
+      checkedBy,
+      evidenceSource: after?.available === false ? "unavailable" : evidenceSource,
       confidence: "unknown",
-      reason: "Post-apply git diff data was unavailable.",
+      reason: after?.unavailableReason ?? "Post-apply git diff data was unavailable.",
       retryable: true,
       proposed,
       matchedFiles: [],
@@ -483,7 +487,7 @@ export function buildReconciliationReport(
     };
   }
 
-  const actualFiles = parseUnifiedDiffToStats(after.diffText, after.changedFiles ?? []);
+  const actualFiles = after.fileStats?.length ? after.fileStats : parseUnifiedDiffToStats(after.diffText, after.changedFiles ?? []);
   const actual = createGlobalDiffSummary("patch_unified_diff", actualFiles);
   const proposedMap = new Map(proposedFiles.map((file) => [file.path, file]));
   const actualMap = new Map(actualFiles.map((file) => [file.path, file]));
@@ -540,7 +544,8 @@ export function buildReconciliationReport(
     patchId,
     sourceDiffId: patch.id,
     checkedAt: after.checkedAt ?? new Date().toISOString(),
-    checkedBy: "git",
+    checkedBy,
+    evidenceSource,
     confidence:
       missingFiles.length || extraFiles.length || changedFilesWithDifferentStats.length
         ? "partial"

@@ -42,6 +42,50 @@ pub enum CommandRisk {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CommandExecutionProvenance {
+    pub source: String,
+    pub trigger: String,
+    pub requested_by: Option<String>,
+    pub approval_source: Option<String>,
+    pub policy_decision: Option<String>,
+    pub policy_reason: Option<String>,
+    pub execution_authority: Option<String>,
+    pub reason: Option<String>,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub background: Option<bool>,
+    pub process_id: Option<u32>,
+    pub network_detected: Option<bool>,
+    pub background_detected: Option<bool>,
+    pub detection_source: Option<String>,
+    pub network_detection_source: Option<String>,
+    pub background_detection_source: Option<String>,
+    pub output_summary: Option<String>,
+    pub background_tracking_limited: Option<bool>,
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundJobRecord {
+    pub job_id: String,
+    pub request_id: Option<String>,
+    pub session_id: String,
+    pub command: String,
+    pub cwd: String,
+    pub process_id: Option<u32>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub status: String,
+    pub last_known_at: String,
+    pub exit_code: Option<i32>,
+    pub output_summary: Option<String>,
+    pub detection_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandResult {
     pub command: String,
     pub cwd: String,
@@ -51,6 +95,8 @@ pub struct CommandResult {
     pub stdout: String,
     pub stderr: String,
     pub message: Option<String>,
+    pub provenance: Option<CommandExecutionProvenance>,
+    pub background_job: Option<BackgroundJobRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +162,35 @@ pub struct PatchApplyResult {
     pub patch_id: String,
     pub status: String,
     pub message: String,
+    pub authority: String,
+    pub reconciliation_source: String,
+    pub before_snapshot: Option<WorkspaceDiffSnapshot>,
+    pub after_snapshot: Option<WorkspaceDiffSnapshot>,
+    pub durable_event_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDiffSnapshot {
+    pub available: bool,
+    pub source: String,
+    pub is_git_repo: Option<bool>,
+    pub changed_files: Option<Vec<String>>,
+    pub diff_text: Option<String>,
+    pub file_stats: Option<Vec<DiffFileStat>>,
+    pub status_entries: Option<Vec<String>>,
+    pub dirty: Option<bool>,
+    pub checked_at: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffFileStat {
+    pub path: String,
+    pub change_type: String,
+    pub additions: Option<i64>,
+    pub deletions: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
