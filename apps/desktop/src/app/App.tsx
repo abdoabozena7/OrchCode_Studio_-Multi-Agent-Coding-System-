@@ -63,6 +63,7 @@ import {
   appendSessionEvent,
   applyRuntimePatch,
   createRuntimeRun,
+  getSavedRuntimeSession,
   getGitDiff,
   getGitStatus,
   getModelProviderConfig,
@@ -131,6 +132,11 @@ type ActiveFileReference = FileReference & {
   error?: string;
 };
 
+type StoredSessionToken = {
+  token: string;
+  expiresAt: string;
+};
+
 const RECENT_WORKSPACES_KEY = "orchcode.recentWorkspaces";
 const RECENT_SESSIONS_KEY = "orchcode.recentSessions";
 const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
@@ -138,6 +144,8 @@ const PROMPT_HISTORY_KEY = "orchcode.promptHistory";
 const COMPOSER_SCALE_KEY = "orchcode.composerScale";
 const FULL_ACCESS_WARNING_KEY = "orchcode.fullAccessAcknowledged";
 const RTL_TEXT_MODE_KEY = "orchcode.rtlTextMode";
+const SIDEBAR_WIDTH_KEY = "orchcode.sidebarWidth";
+const SESSION_TOKENS_KEY = "orchcode.sessionTokens";
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
@@ -145,6 +153,10 @@ const DEFAULT_COMPOSER_SCALE = 0.78;
 const MIN_COMPOSER_SCALE = 0.55;
 const MAX_COMPOSER_SCALE = 1.35;
 const COMPOSER_SCALE_STEP = 0.1;
+const DEFAULT_SIDEBAR_WIDTH = 320;
+const MIN_SIDEBAR_WIDTH = 248;
+const MAX_SIDEBAR_WIDTH = 520;
+const COLLAPSED_SIDEBAR_WIDTH = 72;
 
 const providerPresets: ProviderPreset[] = [
   {
@@ -246,6 +258,8 @@ export function App() {
   const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
   const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
   const [composerScale, setComposerScale] = useState(DEFAULT_COMPOSER_SCALE);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [sessionTokens, setSessionTokens] = useState<Record<string, StoredSessionToken>>({});
   const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
   const [activeRuntimeCommand, setActiveRuntimeCommand] = useState<ActiveRuntimeCommand | null>(null);
   const [showFullAccessBanner, setShowFullAccessBanner] = useState(false);
@@ -267,13 +281,19 @@ export function App() {
       const storedSessions = readStoredJson<RecentSessionEntry[]>(RECENT_SESSIONS_KEY, []);
       const storedPromptHistory = readStoredJson<string[]>(PROMPT_HISTORY_KEY, []);
       const storedComposerScale = Number(localStorage.getItem(COMPOSER_SCALE_KEY));
+      const storedSidebarWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      const storedSessionTokens = pruneExpiredSessionTokens(readStoredJson<Record<string, StoredSessionToken>>(SESSION_TOKENS_KEY, {}));
       const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
+      setSessionTokens(storedSessionTokens);
       setRtlTextMode(storedRtlTextMode);
       if (Number.isFinite(storedComposerScale)) {
         setComposerScale(clampComposerScale(storedComposerScale));
+      }
+      if (Number.isFinite(storedSidebarWidth)) {
+        setSidebarWidth(clampSidebarWidth(storedSidebarWidth));
       }
       const lastWorkspacePath = localStorage.getItem(LAST_WORKSPACE_KEY);
       if (lastWorkspacePath) {
@@ -313,6 +333,29 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(RTL_TEXT_MODE_KEY, rtlTextMode ? "true" : "false");
   }, [rtlTextMode]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(sidebarWidth)));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_TOKENS_KEY, JSON.stringify(pruneExpiredSessionTokens(sessionTokens)));
+  }, [sessionTokens]);
+
+  function rememberPersistedSessionToken(sessionId: string, token: string, expiresAt: string) {
+    setSessionTokens((current) => ({
+      ...pruneExpiredSessionTokens(current),
+      [sessionId]: { token, expiresAt }
+    }));
+  }
+
+  function forgetPersistedSessionToken(sessionId: string) {
+    setSessionTokens((current) => {
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (agentBusy || queuedPrompts.length === 0) return;
@@ -491,6 +534,10 @@ export function App() {
   const agentPanel = runtimeSession ? buildAgentSidePanel(runtimeSession) : { agents: [], backgroundJobs: [] };
   const hasAgentSidePanel = agentPanel.agents.length > 0;
   const showRightPanel = activityOpen;
+  const effectiveSidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : clampSidebarWidth(sidebarWidth);
+  const shellLayoutStyle: CSSProperties = {
+    gridTemplateColumns: `${effectiveSidebarWidth}px ${sidebarCollapsed ? "0px" : "10px"} minmax(0, 1fr) ${showRightPanel ? "390px" : "0px"}`
+  };
   const sidebarProjects = buildSidebarProjects({
     workspace,
     runtimeSession,
@@ -556,17 +603,8 @@ export function App() {
     const workspaceEntry = (options?.recentWorkspaceEntries ?? recentWorkspaces).find((entry) => normalizeWorkspacePath(entry.path) === normalizedPath);
     const recentSessionId = workspaceEntry?.lastSessionId;
     if (!recentSessionId) return;
-    if (!runtimeSessionToken) {
-      if (!options?.silent) {
-        setMessage(`Workspace open: ${nextWorkspace.name}. Previous session history is available, but live restore is unavailable after restart.`);
-      }
-      return;
-    }
     try {
-      suppressPreviewOpenRef.current = true;
-      const restoredSession = await getRuntimeSession(recentSessionId, runtimeSessionToken || undefined);
-      subscribeToRuntimeSession(recentSessionId, runtimeSessionToken || undefined);
-      setRuntimeSession(restoredSession);
+      await restoreRecentSessionById(recentSessionId, nextWorkspace.path);
     } catch {
       setRecentSessions((current) => {
         const next = current.filter((entry) => entry.id !== recentSessionId);
@@ -663,20 +701,36 @@ export function App() {
   }
 
   async function handleRestoreRecentSession(entry: RecentSessionEntry) {
-    if (!runtimeSessionToken) {
-      setMessage("This saved session is history only. Live reconnect requires an active runtime token from this app session.");
-      return;
-    }
     try {
-      await activateWorkspace(entry.workspacePath, { restoreSession: false });
-      suppressPreviewOpenRef.current = true;
-      subscribeToRuntimeSession(entry.id, runtimeSessionToken || undefined);
-      setRuntimeSession(await getRuntimeSession(entry.id, runtimeSessionToken || undefined));
+      await restoreRecentSessionById(entry.id, entry.workspacePath);
       setSidebarCollapsed(false);
       setMessage(`Restored session: ${entry.title}`);
     } catch (error) {
       setMessage(String(error));
     }
+  }
+
+  async function restoreRecentSessionById(sessionId: string, workspacePathForSession: string) {
+    await activateWorkspace(workspacePathForSession, { restoreSession: false, silent: true });
+    suppressPreviewOpenRef.current = true;
+    const persistedToken = getPersistedSessionToken(sessionTokens, sessionId);
+    if (persistedToken) {
+      try {
+        subscribeToRuntimeSession(sessionId, persistedToken.token);
+        const restoredSession = await getRuntimeSession(sessionId, persistedToken.token);
+        setRuntimeSessionToken(persistedToken.token);
+        setRuntimeSession(restoredSession);
+        setRuntimeConnectionState("connected");
+        return restoredSession;
+      } catch {
+        forgetPersistedSessionToken(sessionId);
+      }
+    }
+    const savedSession = await getSavedRuntimeSession(sessionId);
+    setRuntimeSessionToken("");
+    setRuntimeConnectionState("disconnected");
+    setRuntimeSession(savedSession);
+    return savedSession;
   }
 
   async function submitPrompt(nextPrompt?: string, queuedMode?: QueuedPrompt["mode"]) {
@@ -706,14 +760,19 @@ export function App() {
       const canReuseSession =
         runtimeSession &&
         workspace &&
-        runtimeSession.workspacePath === workspace.path;
-      let sessionToken = runtimeSessionToken || undefined;
+        runtimeSession.workspacePath === workspace.path &&
+        Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token);
+      let sessionToken = runtimeSession
+        ? runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token
+        : undefined;
+      let sessionTokenExpiresAt: string | undefined;
       const sessionId = canReuseSession
         ? runtimeSession.id
         : await (async () => {
             const trustProfile = accessProfile === "auto_review" || accessProfile === "bounded_autonomy" || accessProfile === "full_access" ? "trusted_internal" : "strict_gated";
             const rustRun = await createRuntimeRun(input, trustProfile);
             sessionToken = rustRun.sessionToken;
+            sessionTokenExpiresAt = rustRun.sessionTokenExpiresAt;
             setRuntimeSessionToken(rustRun.sessionToken);
             const wantsDemoProvider = /\b(demo|mock)\b/i.test(input);
             const sanitizedProvider =
@@ -745,6 +804,9 @@ export function App() {
               })
             ).sessionId;
           })();
+      if (sessionToken && sessionTokenExpiresAt) {
+        rememberPersistedSessionToken(sessionId, sessionToken, sessionTokenExpiresAt);
+      }
       subscribeToRuntimeSession(sessionId, sessionToken);
       setRuntimeSession(await getRuntimeSession(sessionId, sessionToken));
       setPrompt("");
@@ -777,7 +839,13 @@ export function App() {
   async function refreshRuntimeSession() {
     if (!runtimeSession) return;
     try {
-      setRuntimeSession(await getRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined));
+      const activeToken = runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token;
+      if (!activeToken) {
+        setRuntimeSession(await getSavedRuntimeSession(runtimeSession.id));
+        setRuntimeConnectionState("disconnected");
+        return;
+      }
+      setRuntimeSession(await getRuntimeSession(runtimeSession.id, activeToken));
     } catch (error) {
       setMessage(String(error));
     }
@@ -1053,6 +1121,30 @@ export function App() {
     }
   }
 
+  function handleSidebarResizeStart(event: React.PointerEvent<HTMLButtonElement>) {
+    if (sidebarCollapsed) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    document.body.classList.add("resizing-sidebar");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = clampSidebarWidth(startWidth + (moveEvent.clientX - startX));
+      setSidebarWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      document.body.classList.remove("resizing-sidebar");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerUp, { once: true });
+  }
+
   function updateComposerScale(delta: number) {
     const next = clampComposerScale(composerScale + delta);
     setComposerScaleValue(next);
@@ -1143,7 +1235,7 @@ export function App() {
         </div>
       </header>
 
-      <div className="shell-layout">
+      <div className="shell-layout" style={shellLayoutStyle}>
         <aside className="project-sidebar">
           <div className="sidebar-top">
             <button className="sidebar-link" onClick={handleNewChat}>
@@ -1217,9 +1309,9 @@ export function App() {
                               title={
                                 isActiveSession
                                   ? "Open current session"
-                                  : runtimeSessionToken
-                                    ? "Try live reconnect"
-                                    : "History only"
+                                  : getPersistedSessionToken(sessionTokens, entry.id)
+                                    ? "Reopen chat"
+                                    : "Open saved chat history"
                               }
                             >
                               <span className="project-session-title">{entry.title}</span>
@@ -1244,6 +1336,15 @@ export function App() {
             <span>Settings</span>
           </button>
         </aside>
+
+        <button
+          className="sidebar-resizer"
+          onPointerDown={handleSidebarResizeStart}
+          type="button"
+          aria-label="Resize sidebar"
+          title="Drag to resize sidebar"
+          tabIndex={sidebarCollapsed ? -1 : 0}
+        />
 
         <main className="workspace-canvas">
           <div className="canvas-toolbar">
@@ -1301,7 +1402,7 @@ export function App() {
               <ThreadFeed
                 session={runtimeSession}
                 connectionState={runtimeConnectionState}
-                canReconnect={Boolean(runtimeSessionToken)}
+                canReconnect={Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token)}
                 activeRuntimeCommand={activeRuntimeCommand}
                 onOpenActivity={() => setActivityOpen(true)}
                 onOpenDiff={() => setBottomView("diff")}
@@ -1529,7 +1630,7 @@ export function App() {
                   <dt>Connection</dt>
                   <dd>{runtimeConnectionState === "connected" ? "Live updates connected" : "Live updates disconnected; state may be stale"}</dd>
                   <dt>Restore</dt>
-                  <dd>{runtimeSessionToken ? "This app session can still attempt reconnects." : "History only after restart; no guaranteed live restore path."}</dd>
+                  <dd>{runtimeSessionToken || (runtimeSession && getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token) ? "This app session can still attempt reconnects." : "This chat is open from saved local history."}</dd>
                 </dl>
               ) : (
                 <p className="muted">No active session.</p>
@@ -3706,6 +3807,10 @@ function clampComposerScale(value: number) {
   return Math.min(MAX_COMPOSER_SCALE, Math.max(MIN_COMPOSER_SCALE, Number(value.toFixed(2))));
 }
 
+function clampSidebarWidth(value: number) {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
+}
+
 function accessProfileLabel(profile: AccessProfile) {
   if (profile === "full_access") return "Full Access";
   if (profile === "bounded_autonomy" || profile === "auto_review") return "Bounded";
@@ -3982,6 +4087,24 @@ function readStoredJson<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function pruneExpiredSessionTokens(tokens: Record<string, StoredSessionToken>) {
+  const now = Date.now();
+  return Object.fromEntries(
+    Object.entries(tokens).filter(([, value]) => {
+      const expiresAt = Date.parse(value.expiresAt);
+      return Number.isFinite(expiresAt) && expiresAt > now;
+    })
+  );
+}
+
+function getPersistedSessionToken(tokens: Record<string, StoredSessionToken>, sessionId: string) {
+  const record = tokens[sessionId];
+  if (!record) return undefined;
+  const expiresAt = Date.parse(record.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return undefined;
+  return record;
 }
 
 function persistRecentWorkspaces(entries: RecentWorkspaceEntry[]) {

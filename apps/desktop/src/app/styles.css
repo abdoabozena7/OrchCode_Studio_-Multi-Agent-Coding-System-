@@ -202,23 +202,11 @@ pre {
 
 .shell-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 0;
   min-height: 0;
 }
 
-.activity-open .shell-layout {
-  grid-template-columns: 320px minmax(0, 1fr) 390px;
-}
-
-.sidebar-collapsed .shell-layout {
-  grid-template-columns: 72px minmax(0, 1fr) 0;
-}
-
-.sidebar-collapsed.activity-open .shell-layout {
-  grid-template-columns: 72px minmax(0, 1fr) 390px;
-}
-
 .project-sidebar,
+.sidebar-resizer,
 .workspace-canvas,
 .activity-drawer {
   min-height: 0;
@@ -229,9 +217,36 @@ pre {
   flex-direction: column;
   gap: 14px;
   padding: 12px 10px;
-  border-right: 1px solid var(--line);
   background: rgba(28, 28, 28, 0.94);
   overflow: hidden;
+}
+
+.sidebar-resizer {
+  position: relative;
+  width: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 4px;
+  background: var(--line);
+  transition: background 140ms ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after {
+  background: rgba(143, 212, 255, 0.52);
+}
+
+body.resizing-sidebar,
+body.resizing-sidebar * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .sidebar-top,
@@ -443,6 +458,7 @@ pre {
 
 .sidebar-collapsed .project-sidebar {
   padding-inline: 8px;
+  border-right: 1px solid var(--line);
 }
 
 .sidebar-collapsed .sidebar-link span,
@@ -463,6 +479,11 @@ pre {
 .sidebar-collapsed .sidebar-settings {
   justify-content: center;
   padding-inline: 0;
+}
+
+.sidebar-collapsed .sidebar-resizer {
+  width: 0;
+  pointer-events: none;
 }
 
 .workspace-canvas {

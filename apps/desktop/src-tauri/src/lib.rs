@@ -54,6 +54,7 @@ pub fn run() {
             commands::terminal::execute_approved_command,
             commands::sessions::create_mock_session,
             commands::sessions::create_runtime_run,
+            commands::sessions::get_saved_runtime_session,
             commands::sessions::append_session_event,
             commands::sessions::upsert_orchestration_run,
             commands::sessions::upsert_agent_run,

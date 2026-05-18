@@ -98,6 +98,10 @@ export function appendSessionEvent(sessionId: string, eventType: string, payload
   return invoke<void>("append_session_event", { sessionId, eventType, payload });
 }
 
+export function getSavedRuntimeSession(sessionId: string) {
+  return invoke<AgentRuntimeSession>("get_saved_runtime_session", { sessionId });
+}
+
 export function upsertOrchestrationRun(session: AgentRuntimeSession) {
   return invoke<void>("upsert_orchestration_run", {
     sessionId: session.id,

@@ -123,6 +123,20 @@ pub fn append_session_event(
 }
 
 #[tauri::command]
+pub fn get_saved_runtime_session(
+    session_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Value, String> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    db.get_saved_runtime_session_snapshot(&session_id)
+        .map_err(|err| format!("Failed to load saved runtime session: {err}"))?
+        .ok_or_else(|| "No saved runtime session snapshot was found for this chat.".to_string())
+}
+
+#[tauri::command]
 pub fn upsert_orchestration_run(
     session_id: String,
     status: String,

@@ -608,6 +608,28 @@ impl DatabaseService {
         rows.collect()
     }
 
+    pub fn get_saved_runtime_session_snapshot(
+        &self,
+        session_id: &str,
+    ) -> rusqlite::Result<Option<Value>> {
+        let payload = self
+            .conn
+            .query_row(
+                "SELECT payload FROM session_events WHERE session_id = ?1 AND event_type IN ('runtime.session.updated', 'runtime.session.created', 'runtime.session.restored', 'runtime.session.completed', 'runtime.session.failed', 'runtime.session.expired') ORDER BY created_at DESC LIMIT 1",
+                params![session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let parsed = match serde_json::from_str::<Value>(&payload) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        Ok(parsed.get("session").cloned())
+    }
+
     pub fn get_latest_runtime_event_sequence(&self, session_id: &str) -> rusqlite::Result<i64> {
         self.conn.query_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM runtime_events WHERE session_id = ?1",
