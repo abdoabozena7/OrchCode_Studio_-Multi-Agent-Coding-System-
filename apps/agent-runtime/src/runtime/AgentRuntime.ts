@@ -25,6 +25,7 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { RunEngine } from "./RunEngine.js";
 import { OrchestratedRuntime } from "./OrchestratedRuntime.js";
+import { buildProjectIntake, classifyRunIntent } from "./ProjectIntake.js";
 import {
   appendAgentJournalEntry,
   buildAttributedReviewGate,
@@ -40,6 +41,17 @@ import {
   getCurrentRunToGreenAttempt,
   markNextRunToGreenAttempt
 } from "./RunToGreen.js";
+
+type PlanClarifyAction = {
+  kind: "clarify_plan";
+  message: string;
+  options: Array<{
+    id: string;
+    label: string;
+    prompt: string;
+  }>;
+  allowCustom?: boolean;
+};
 
 type AgentRuntimeOptions = {
   providerFactory?: (session: AgentRuntimeSession) => LlmProvider;
@@ -124,6 +136,28 @@ export class AgentRuntime {
       }
 
       const thinkFirst = session.thinkFirst || modeResolution.directive.thinkFirstRequested;
+      if (thinkFirst) {
+        const intake = buildProjectIntake({
+          workspacePath: session.workspacePath,
+          message: promptForExecution,
+          projectMap,
+          tools
+        });
+        const clarification = buildPlanClarification(promptForExecution, intake);
+        if (clarification) {
+          await this.sessionManager.updateSession(sessionId, (draft) => {
+            draft.status = "needs_approval";
+            draft.lifecycleStage = "PLAN";
+            draft.projectIntake = intake;
+            draft.nextAction = clarification as AgentRuntimeSession["nextAction"];
+          });
+          await this.sessionManager.addMessage(sessionId, {
+            role: "assistant",
+            content: clarification.message
+          });
+          return { sessionId, status: this.requireSession(sessionId).status };
+        }
+      }
       const updated =
         modeResolution.mode === "orchestrated_mode"
           ? await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst)
@@ -832,6 +866,19 @@ export class AgentRuntime {
   private async handlePendingAction(session: AgentRuntimeSession, message: string): Promise<{ handled: boolean; resumePrompt?: string }> {
     if (!session.nextAction) return { handled: false };
     const normalized = message.trim().toLowerCase();
+    const maybeClarify = session.nextAction as typeof session.nextAction | PlanClarifyAction;
+    if (maybeClarify.kind === "clarify_plan") {
+      const selected =
+        maybeClarify.options.find((option) => option.id === normalized || option.label.toLowerCase() === normalized)
+        ?? maybeClarify.options.find((option) => option.prompt.toLowerCase() === normalized);
+      const clarification = (selected?.prompt ?? message).trim();
+      await this.sessionManager.updateSession(session.id, (draft) => {
+        draft.nextAction = undefined as AgentRuntimeSession["nextAction"];
+        draft.thinkFirst = true;
+        draft.userPrompt = `${draft.userPrompt}\n\nPlan mode clarification: ${clarification}`;
+      });
+      return { handled: false, resumePrompt: `${session.userPrompt}\n\nPlan mode clarification: ${clarification}` };
+    }
     if (session.nextAction.kind === "confirm_plan") {
       if (/\b(proceed|continue|implement|go ahead|start)\b/.test(normalized)) {
         await this.sessionManager.updateSession(session.id, (draft) => {
@@ -1170,6 +1217,68 @@ export class AgentRuntime {
     await this.sessionManager.setRunSummary(sessionId, summary);
   }
 
+}
+
+function buildPlanClarification(
+  message: string,
+  intake: ReturnType<typeof buildProjectIntake>
+): PlanClarifyAction | null {
+  const normalized = message.trim().toLowerCase();
+  const genericPlanPrompt =
+    normalized.length < 100 &&
+    !/\b(auth|api|ui|frontend|backend|database|tests?|deploy|runtime|module|component|page|screen|schema)\b/.test(normalized) &&
+    (/\b(plan|think|analyze|review|understand|explain)\b/.test(normalized) || /(خط|خطة|حلل|اشرح|راجع|افهم)/.test(normalized));
+  const unknownIntent = classifyRunIntent(message) === "unknown";
+  const manyAreas = (intake.moduleSummary?.length ?? 0) >= 4 || intake.importantFiles.length >= 8;
+  if (!genericPlanPrompt && !(unknownIntent && manyAreas)) return null;
+
+  return {
+    kind: "clarify_plan",
+    message:
+      containsArabic(message)
+        ? "قبل ما أطلع الخطة، عايز أحدد نوعها بدقة أكثر. اختار الاتجاه الأقرب، أو اكتب اختيارك بنفسك."
+        : "Before I build the plan, I want to narrow the shape of it a bit. Pick the closest direction, or write your own.",
+    options: containsArabic(message)
+      ? [
+          {
+            id: "implementation",
+            label: "خطة تنفيذ آمنة",
+            prompt: "اعمل plan mode يركز على safe implementation plan step by step based on the current codebase."
+          },
+          {
+            id: "architecture",
+            label: "خطة فهم المعمارية",
+            prompt: "اعمل plan mode يركز على architecture understanding, important modules, and data flow based on the current codebase."
+          },
+          {
+            id: "run_setup",
+            label: "خطة تشغيل وإعداد",
+            prompt: "اعمل plan mode يركز على setup, environment, and how to run the current project safely."
+          }
+        ]
+      : [
+          {
+            id: "implementation",
+            label: "Safe implementation plan",
+            prompt: "Use plan mode and focus on a safe implementation plan step by step based on the current codebase."
+          },
+          {
+            id: "architecture",
+            label: "Architecture understanding plan",
+            prompt: "Use plan mode and focus on architecture understanding, important modules, and data flow based on the current codebase."
+          },
+          {
+            id: "run_setup",
+            label: "Run and setup plan",
+            prompt: "Use plan mode and focus on setup, environment, and how to run the current project safely."
+          }
+        ],
+    allowCustom: true
+  };
+}
+
+function containsArabic(value: string) {
+  return /[\u0600-\u06FF]/.test(value);
 }
 
 function setRunPhaseState(

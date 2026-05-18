@@ -188,7 +188,15 @@ export class OrchestratedRuntime {
     if (options.thinkFirst) {
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
-        content: `I planned the working team first. ${engineering.delegationDecision.rationale} Tell me to proceed when you want implementation to start.`
+        content: formatOrchestratedPlanModeMessage(
+          {
+            delegationDecision: engineering.delegationDecision,
+            workOrders: engineering.workOrders,
+            businessBrief,
+            technicalPlan: engineering.technicalPlan
+          },
+          message
+        )
       });
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = "needs_approval";
@@ -541,6 +549,39 @@ export class OrchestratedRuntime {
     });
     await this.emit(sessionId, "agent.completed", task, agentName);
   }
+}
+
+function formatOrchestratedPlanModeMessage(
+  engineering: {
+    delegationDecision: { rationale: string };
+    workOrders: Array<{ objective: string; dynamicRole: string }>;
+    businessBrief: { acceptanceCriteria: string[] };
+    technicalPlan: { risks?: string[]; summary: string };
+  },
+  message: string
+) {
+  const arabic = /[\u0600-\u06FF]/.test(message);
+  return [
+    arabic
+      ? "اشتغلت في Plan mode فقط: رتبت الفريق والخطوات ووقفت قبل أي تعديل."
+      : "I stayed in plan mode only: I organized the team and the steps, then stopped before any edits.",
+    "",
+    engineering.technicalPlan.summary,
+    "",
+    arabic ? "## توزيع الشغل" : "## Work Breakdown",
+    ...engineering.workOrders.map((order, index) => `${index + 1}. ${order.dynamicRole}: ${order.objective}`),
+    "",
+    arabic ? "## معايير القبول" : "## Acceptance Criteria",
+    ...engineering.businessBrief.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    "",
+    arabic ? "## ملاحظات الخطة" : "## Planning Notes",
+    `- ${engineering.delegationDecision.rationale}`,
+    ...(engineering.technicalPlan.risks?.length ? engineering.technicalPlan.risks.map((risk) => `- ${risk}`) : []),
+    "",
+    arabic
+      ? "لو الخطة مناسبة، اختار Implement plan."
+      : "If the plan looks right, choose Implement plan."
+  ].join("\n");
 }
 
 function getPatchStats(patch: PatchProposal): PatchChangeStats[] {

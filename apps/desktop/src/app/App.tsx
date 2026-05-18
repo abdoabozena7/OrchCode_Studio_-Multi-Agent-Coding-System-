@@ -1,14 +1,18 @@
 import {
+  ArrowUp,
   Bot,
   ChevronDown,
+  ChevronRight,
   Code2,
   Copy,
   Diff,
   FileText,
   FolderOpen,
+  FolderTree,
   GitBranch,
   Globe,
   Languages,
+  LoaderCircle,
   MessageSquarePlus,
   PanelLeft,
   Play,
@@ -137,6 +141,19 @@ type StoredSessionToken = {
   expiresAt: string;
 };
 
+type FileExplorerProject = {
+  path: string;
+  name: string;
+};
+
+type FileTreeNode = {
+  key: string;
+  name: string;
+  path: string;
+  isDir: boolean;
+  children: FileTreeNode[];
+};
+
 const RECENT_WORKSPACES_KEY = "orchcode.recentWorkspaces";
 const RECENT_SESSIONS_KEY = "orchcode.recentSessions";
 const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
@@ -146,6 +163,8 @@ const FULL_ACCESS_WARNING_KEY = "orchcode.fullAccessAcknowledged";
 const RTL_TEXT_MODE_KEY = "orchcode.rtlTextMode";
 const SIDEBAR_WIDTH_KEY = "orchcode.sidebarWidth";
 const SESSION_TOKENS_KEY = "orchcode.sessionTokens";
+const COLLAPSED_PROJECTS_KEY = "orchcode.collapsedProjects";
+const SESSION_TITLE_MIGRATION_KEY = "orchcode.sessionTitleMigration.v1";
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
@@ -227,6 +246,8 @@ export function App() {
   const lastCommandCountRef = useRef(0);
   const lastPreviewTargetRef = useRef("");
   const suppressPreviewOpenRef = useRef(false);
+  const startupWorkspaceRestoreRef = useRef(false);
+  const initialRecentWorkspacesRef = useRef<RecentWorkspaceEntry[]>([]);
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -260,6 +281,7 @@ export function App() {
   const [composerScale, setComposerScale] = useState(DEFAULT_COMPOSER_SCALE);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [sessionTokens, setSessionTokens] = useState<Record<string, StoredSessionToken>>({});
+  const [collapsedProjectPaths, setCollapsedProjectPaths] = useState<string[]>([]);
   const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
   const [activeRuntimeCommand, setActiveRuntimeCommand] = useState<ActiveRuntimeCommand | null>(null);
   const [showFullAccessBanner, setShowFullAccessBanner] = useState(false);
@@ -267,8 +289,13 @@ export function App() {
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [activeFileReference, setActiveFileReference] = useState<ActiveFileReference | null>(null);
+  const [fileExplorerProject, setFileExplorerProject] = useState<FileExplorerProject | null>(null);
+  const [fileExplorerFilter, setFileExplorerFilter] = useState("");
+  const [expandedExplorerDirs, setExpandedExplorerDirs] = useState<string[]>([]);
   const [rtlTextMode, setRtlTextMode] = useState(false);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const progressRailCloseTimerRef = useRef<number | null>(null);
+  const titleMigrationStartedRef = useRef(false);
 
   useEffect(() => {
     void (async () => {
@@ -283,11 +310,14 @@ export function App() {
       const storedComposerScale = Number(localStorage.getItem(COMPOSER_SCALE_KEY));
       const storedSidebarWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
       const storedSessionTokens = pruneExpiredSessionTokens(readStoredJson<Record<string, StoredSessionToken>>(SESSION_TOKENS_KEY, {}));
+      const storedCollapsedProjects = readStoredJson<string[]>(COLLAPSED_PROJECTS_KEY, []);
       const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
+      initialRecentWorkspacesRef.current = storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) }));
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
       setSessionTokens(storedSessionTokens);
+      setCollapsedProjectPaths(storedCollapsedProjects.map(normalizeWorkspacePath));
       setRtlTextMode(storedRtlTextMode);
       if (Number.isFinite(storedComposerScale)) {
         setComposerScale(clampComposerScale(storedComposerScale));
@@ -300,6 +330,7 @@ export function App() {
         setWorkspacePath(normalizeWorkspacePath(lastWorkspacePath));
       }
       setShowFullAccessBanner(localStorage.getItem(FULL_ACCESS_WARNING_KEY) !== "true");
+      setBootstrapped(true);
     })();
     return () => runtimeEventUnsubscribeRef.current?.();
   }, []);
@@ -324,6 +355,11 @@ export function App() {
   }, [prompt, composerScale]);
 
   useEffect(() => {
+    if (!fileExplorerProject) return;
+    setExpandedExplorerDirs((current) => (current.length ? current : defaultExpandedExplorerDirs(files)));
+  }, [fileExplorerProject, files]);
+
+  useEffect(() => {
     setSafetySettings((current) => ({
       ...accessProfileDefaults(accessProfile),
       maxParallelAgents: current.maxParallelAgents
@@ -342,6 +378,39 @@ export function App() {
     localStorage.setItem(SESSION_TOKENS_KEY, JSON.stringify(pruneExpiredSessionTokens(sessionTokens)));
   }, [sessionTokens]);
 
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify(collapsedProjectPaths));
+  }, [collapsedProjectPaths]);
+
+  useEffect(() => {
+    if (!recentSessions.length) return;
+    if (titleMigrationStartedRef.current) return;
+    if (localStorage.getItem(SESSION_TITLE_MIGRATION_KEY) === "true") return;
+    titleMigrationStartedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      const migratedEntries = await Promise.all(
+        recentSessions.map(async (entry) => {
+          if (!shouldBackfillSessionTitle(entry.title)) return entry;
+          try {
+            const savedSession = await getSavedRuntimeSession(entry.id);
+            const nextTitle = deriveDisplaySessionTitle(savedSession, entry.title);
+            return nextTitle ? { ...entry, title: nextTitle } : entry;
+          } catch {
+            return entry;
+          }
+        })
+      );
+      if (cancelled) return;
+      setRecentSessions(migratedEntries);
+      persistRecentSessions(migratedEntries);
+      localStorage.setItem(SESSION_TITLE_MIGRATION_KEY, "true");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recentSessions]);
+
   function rememberPersistedSessionToken(sessionId: string, token: string, expiresAt: string) {
     setSessionTokens((current) => ({
       ...pruneExpiredSessionTokens(current),
@@ -355,6 +424,11 @@ export function App() {
       delete next[sessionId];
       return next;
     });
+  }
+
+  function expandProjectPath(projectPath: string) {
+    const normalizedPath = normalizeWorkspacePath(projectPath);
+    setCollapsedProjectPaths((current) => current.filter((entry) => entry !== normalizedPath));
   }
 
   useEffect(() => {
@@ -546,6 +620,9 @@ export function App() {
     agentBusy,
     runtimeConnectionState
   });
+  const allProjectsCollapsed =
+    sidebarProjects.length > 0 &&
+    sidebarProjects.every((project) => collapsedProjectPaths.includes(normalizeWorkspacePath(project.path)));
 
   const sessionSummary = runtimeSession
     ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState)
@@ -555,6 +632,10 @@ export function App() {
   const railActivityItems = runtimeSession ? buildPrimaryActivityItems(runtimeSession, activeRuntimeCommand) : [];
   const railCurrentStep = runtimeSession ? describeCurrentStep(runtimeSession, runtimeConnectionState, activeRuntimeCommand) : null;
   const showProgressRail = Boolean(runtimeSession && (railCurrentStep || railActivityItems.length));
+  const hasPromptDraft = prompt.trim().length > 0;
+  const sendButtonDisabled = !workspace || !hasPromptDraft;
+  const fileExplorerTree = buildFileExplorerTree(files, fileExplorerFilter);
+  const planModeSuggestionVisible = shouldSuggestPlanMode(prompt, thinkFirst);
 
   useEffect(() => {
     if (!agentPanel.agents.length) {
@@ -613,6 +694,18 @@ export function App() {
       });
     }
   }
+
+  useEffect(() => {
+    if (!bootstrapped || workspace || !workspacePath || startupWorkspaceRestoreRef.current) return;
+    startupWorkspaceRestoreRef.current = true;
+    void activateWorkspace(workspacePath, {
+      restoreSession: true,
+      silent: true,
+      recentWorkspaceEntries: initialRecentWorkspacesRef.current
+    }).catch(() => {
+      startupWorkspaceRestoreRef.current = false;
+    });
+  }, [bootstrapped, workspace, workspacePath]);
 
   async function handleOpenWorkspace() {
     try {
@@ -694,6 +787,7 @@ export function App() {
   async function handleSelectRecentWorkspace(entry: RecentWorkspaceEntry) {
     try {
       await activateWorkspace(entry.path, { restoreSession: true });
+      expandProjectPath(entry.path);
       setSidebarCollapsed(false);
     } catch (error) {
       setMessage(String(error));
@@ -703,6 +797,7 @@ export function App() {
   async function handleRestoreRecentSession(entry: RecentSessionEntry) {
     try {
       await restoreRecentSessionById(entry.id, entry.workspacePath);
+      expandProjectPath(entry.workspacePath);
       setSidebarCollapsed(false);
       setMessage(`Restored session: ${entry.title}`);
     } catch (error) {
@@ -745,6 +840,9 @@ export function App() {
     }
 
     const normalizedInput = input.trim();
+    if (containsArabic(normalizedInput)) {
+      setRtlTextMode(true);
+    }
     setPromptHistory((current) => {
       const next = [normalizedInput, ...current.filter((entry) => entry !== normalizedInput)].slice(0, MAX_PROMPT_HISTORY);
       localStorage.setItem(PROMPT_HISTORY_KEY, JSON.stringify(next));
@@ -981,18 +1079,54 @@ export function App() {
     setBottomView((current) => (current === nextView ? "none" : nextView));
   }
 
-  function handleNewChat() {
+  function resetForNewChat(statusMessage: string) {
     runtimeEventUnsubscribeRef.current?.();
     runtimeEventUnsubscribeRef.current = null;
     setPrompt("");
     setRuntimeSession(null);
+    setRuntimeSessionToken("");
     setActivityOpen(false);
     setThinkFirst(false);
     setQueuedPrompts([]);
     setBottomView("none");
     setTerminalResult(null);
     setRuntimeConnectionState("connected");
-    setMessage("Select a workspace and start from the composer.");
+    setMessage(statusMessage);
+  }
+
+  function handleNewChat() {
+    resetForNewChat("Select a workspace and start from the composer.");
+  }
+
+  async function handleNewChatForProject(projectPath: string) {
+    try {
+      const normalizedPath = normalizeWorkspacePath(projectPath);
+      if (!workspace || normalizeWorkspacePath(workspace.path) !== normalizedPath) {
+        await activateWorkspace(normalizedPath, { restoreSession: false, silent: true });
+      }
+      expandProjectPath(normalizedPath);
+      setSidebarCollapsed(false);
+      resetForNewChat(`New chat ready in ${pathBasename(normalizedPath)}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleOpenProjectExplorer(project: FileExplorerProject) {
+    try {
+      const normalizedPath = normalizeWorkspacePath(project.path);
+      if (!workspace || normalizeWorkspacePath(workspace.path) !== normalizedPath) {
+        await activateWorkspace(normalizedPath, { restoreSession: false, silent: true });
+      }
+      setFileExplorerProject({ path: normalizedPath, name: project.name });
+      setFileExplorerFilter("");
+      setExpandedExplorerDirs([]);
+      expandProjectPath(normalizedPath);
+      setSidebarCollapsed(false);
+      setMessage(`Inspecting files in ${project.name}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
   }
 
   function handleWorkspaceButton() {
@@ -1041,6 +1175,27 @@ export function App() {
     setActivityOpen(false);
     setBottomView("none");
     setMessage(workspace ? `Workspace selected: ${workspace.name}` : "Open a workspace first.");
+  }
+
+  async function handleProjectGroupClick(project: {
+    path: string;
+    name: string;
+    lastOpenedAt: string;
+    isActive: boolean;
+    sessions: RecentSessionEntry[];
+  }) {
+    const normalizedPath = normalizeWorkspacePath(project.path);
+    setCollapsedProjectPaths((current) =>
+      current.includes(normalizedPath)
+        ? current.filter((entry) => entry !== normalizedPath)
+        : [...current, normalizedPath]
+    );
+  }
+
+  function handleToggleAllProjects() {
+    const projectPaths = sidebarProjects.map((project) => normalizeWorkspacePath(project.path));
+    const allCollapsed = projectPaths.length > 0 && projectPaths.every((path) => collapsedProjectPaths.includes(path));
+    setCollapsedProjectPaths(allCollapsed ? [] : projectPaths);
   }
 
   function enqueuePrompt(mode: QueuedPrompt["mode"]) {
@@ -1225,6 +1380,7 @@ export function App() {
           <button className="frame-icon-button" onClick={() => setSidebarCollapsed((current) => !current)} title="Toggle sidebar">
             <PanelLeft size={16} />
           </button>
+          <img className="app-brand-mark" src="/orchcode-icon.png" alt="OrchCode Studio" />
         </div>
 
         <div className="frame-bar-right">
@@ -1245,9 +1401,6 @@ export function App() {
           </div>
 
           <section className="sidebar-section">
-            <div className="sidebar-section-header">
-              <span>Projects</span>
-            </div>
             <div className="workspace-open-row">
               <input
                 ref={workspaceInputRef}
@@ -1259,72 +1412,98 @@ export function App() {
                 <FolderOpen size={16} />
               </button>
             </div>
-
-            {workspace ? (
-              <div className="workspace-path-pill" title={workspace.path}>
-                {workspace.path}
+            <div className="sidebar-section-header">
+              <span>Projects</span>
+              <div className="sidebar-section-actions">
+                <button
+                  className="frame-icon-button"
+                  onClick={handleToggleAllProjects}
+                  title={allProjectsCollapsed ? "Expand all projects" : "Collapse all projects"}
+                  type="button"
+                >
+                  {allProjectsCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                </button>
+                <button className="frame-icon-button" onClick={handleNewChat} title="Start a new chat" type="button">
+                  <MessageSquarePlus size={14} />
+                </button>
               </div>
-            ) : null}
+            </div>
 
             {sidebarProjects.length ? (
               <div className="project-groups">
-                {sidebarProjects.map((project) => (
-                  <section
-                    key={project.path}
-                    className={`project-group ${project.isActive ? "active-project-group" : ""}`}
-                  >
-                    <button
-                      className="project-group-header"
-                      onClick={() =>
-                        project.isActive
-                          ? handleProjectClick()
-                          : void handleSelectRecentWorkspace({
-                              path: project.path,
-                              name: project.name,
-                              lastOpenedAt: project.lastOpenedAt,
-                              lastSessionId: project.sessions[0]?.id
-                            })
-                      }
+                {sidebarProjects.map((project) => {
+                  const isCollapsed = collapsedProjectPaths.includes(normalizeWorkspacePath(project.path));
+                  return (
+                    <section
+                      key={project.path}
+                      className={`project-group ${project.isActive ? "active-project-group" : ""} ${isCollapsed ? "collapsed-project-group" : ""}`}
                     >
-                      <div className="project-group-title">
-                        <FolderOpen size={15} />
-                        <strong>{project.name}</strong>
+                      <div className="project-group-header" title={project.path}>
+                        <button
+                          className="project-group-main"
+                          onClick={() => void handleProjectGroupClick(project)}
+                          type="button"
+                        >
+                          <div className="project-group-title">
+                            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                            <FolderOpen size={15} />
+                            <strong>{project.name}</strong>
+                          </div>
+                          <small>{project.isActive ? gitStatus?.branch ?? "active" : formatRelativeDate(project.lastOpenedAt)}</small>
+                        </button>
+                        <div className="project-group-actions">
+                          <button
+                            className="frame-icon-button"
+                            onClick={() => void handleOpenProjectExplorer({ path: project.path, name: project.name })}
+                            title={`Explore files in ${project.name}`}
+                            type="button"
+                          >
+                            <FolderTree size={14} />
+                          </button>
+                          <button
+                            className="frame-icon-button"
+                            onClick={() => void handleNewChatForProject(project.path)}
+                            title={`New chat in ${project.name}`}
+                            type="button"
+                          >
+                            <MessageSquarePlus size={14} />
+                          </button>
+                        </div>
                       </div>
-                      <small>{project.isActive ? gitStatus?.branch ?? "active" : formatRelativeDate(project.lastOpenedAt)}</small>
-                    </button>
 
-                    {project.sessions.length ? (
-                      <div className="project-session-list">
-                        {project.sessions.slice(0, project.isActive ? 8 : 5).map((entry) => {
-                          const isActiveSession = entry.id === runtimeSession?.id;
-                          return (
-                            <button
-                              key={entry.id}
-                              className={`project-session-item ${isActiveSession ? "active-session-item" : ""}`}
-                              onClick={() =>
-                                isActiveSession
-                                  ? setActivityOpen(true)
-                                  : void handleRestoreRecentSession(entry)
-                              }
-                              title={
-                                isActiveSession
-                                  ? "Open current session"
-                                  : getPersistedSessionToken(sessionTokens, entry.id)
-                                    ? "Reopen chat"
-                                    : "Open saved chat history"
-                              }
-                            >
-                              <span className="project-session-title">{entry.title}</span>
-                              <small>{formatRelativeDate(entry.updatedAt)}</small>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="sidebar-empty">No chats yet for this project.</div>
-                    )}
-                  </section>
-                ))}
+                      {!isCollapsed && project.sessions.length ? (
+                        <div className="project-session-list">
+                          {project.sessions.slice(0, project.isActive ? 8 : 5).map((entry) => {
+                            const isActiveSession = entry.id === runtimeSession?.id;
+                            return (
+                              <button
+                                key={entry.id}
+                                className={`project-session-item ${isActiveSession ? "active-session-item" : ""}`}
+                                onClick={() =>
+                                  isActiveSession
+                                    ? setActivityOpen(true)
+                                    : void handleRestoreRecentSession(entry)
+                                }
+                                title={
+                                  isActiveSession
+                                    ? "Open current session"
+                                    : getPersistedSessionToken(sessionTokens, entry.id)
+                                      ? "Reopen chat"
+                                      : "Open saved chat history"
+                                }
+                              >
+                                <span className="project-session-title">{entry.title}</span>
+                                <small>{formatRelativeDate(entry.updatedAt)}</small>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : !isCollapsed ? (
+                        <div className="sidebar-empty">No chats yet for this project.</div>
+                      ) : null}
+                    </section>
+                  );
+                })}
               </div>
             ) : (
               <div className="sidebar-empty">Your active workspace will appear here.</div>
@@ -1389,6 +1568,18 @@ export function App() {
               >
                 <TerminalSquare size={16} />
               </button>
+              <button
+                className={`frame-icon-button ${fileExplorerProject ? "active-toggle" : ""}`}
+                onClick={() =>
+                  workspace
+                    ? void handleOpenProjectExplorer({ path: workspace.path, name: workspace.name })
+                    : undefined
+                }
+                title="Explore workspace files"
+                disabled={!workspace}
+              >
+                <FolderTree size={16} />
+              </button>
             </div>
           </div>
 
@@ -1404,6 +1595,7 @@ export function App() {
                 connectionState={runtimeConnectionState}
                 canReconnect={Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token)}
                 activeRuntimeCommand={activeRuntimeCommand}
+                agentBusy={agentBusy}
                 onOpenActivity={() => setActivityOpen(true)}
                 onOpenDiff={() => setBottomView("diff")}
                 onQuickReply={submitPrompt}
@@ -1433,12 +1625,12 @@ export function App() {
               <div className="composer-topline">
                 <div className="composer-select-row">
                   <button
-                    className={`composer-chip ${thinkFirst ? "active-toggle" : ""}`}
+                    className={`composer-chip plan-mode-chip ${thinkFirst ? "active-toggle" : ""}`}
                     onClick={() => setThinkFirst((current) => !current)}
                     type="button"
                   >
                     {thinkFirst ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                    <span>Think first</span>
+                    <span>Plan mode</span>
                   </button>
                   <button
                     className={`composer-chip ${rtlTextMode ? "active-toggle" : ""}`}
@@ -1473,8 +1665,14 @@ export function App() {
                     ) : null}
                   </div>
 
-                  <button className="send-button" disabled={!workspace} onClick={handleRunAgent}>
-                    <Play size={16} />
+                  <button
+                    className={`send-button ${hasPromptDraft ? "has-draft" : ""} ${agentBusy ? "is-busy" : ""}`}
+                    disabled={sendButtonDisabled}
+                    onClick={handleRunAgent}
+                    title={agentBusy ? "Working on your request" : hasPromptDraft ? "Send message" : "Write a message first"}
+                    type="button"
+                  >
+                    {agentBusy ? <LoaderCircle size={16} className="spin-icon" /> : hasPromptDraft ? <ArrowUp size={16} /> : <Play size={16} />}
                   </button>
                   {agentBusy && prompt.trim() ? (
                     <button className="composer-chip" onClick={() => enqueuePrompt("steer")} type="button">
@@ -1495,6 +1693,22 @@ export function App() {
                   <span>Details</span>
                 </button>
               </div>
+
+              {planModeSuggestionVisible ? (
+                <div className="plan-mode-suggestion-row">
+                  <button
+                    className="plan-mode-suggestion"
+                    onClick={() => {
+                      setThinkFirst(true);
+                      setMessage("Plan mode enabled. I will read first, ask only when needed, and stop before any edits.");
+                    }}
+                    type="button"
+                  >
+                    <Workflow size={14} />
+                    <span>Use plan mode</span>
+                  </button>
+                </div>
+              ) : null}
 
               {accessProfile === "full_access" && showFullAccessBanner ? (
                 <div className="full-access-banner">
@@ -1603,6 +1817,29 @@ export function App() {
             reference={activeFileReference}
             workspacePath={workspace?.path ?? ""}
             onClose={() => setActiveFileReference(null)}
+          />
+        ) : null}
+
+        {fileExplorerProject ? (
+          <FileExplorerPanel
+            project={fileExplorerProject}
+            filter={fileExplorerFilter}
+            onFilterChange={setFileExplorerFilter}
+            tree={fileExplorerTree}
+            expandedDirs={expandedExplorerDirs}
+            onToggleDir={(targetPath) =>
+              setExpandedExplorerDirs((current) =>
+                current.includes(targetPath)
+                  ? current.filter((entry) => entry !== targetPath)
+                  : [...current, targetPath]
+              )
+            }
+            onOpenFile={(targetPath) => void handleOpenFileReference({ path: targetPath, line: 1 })}
+            onClose={() => {
+              setFileExplorerProject(null);
+              setFileExplorerFilter("");
+              setExpandedExplorerDirs([]);
+            }}
           />
         ) : null}
 
@@ -1824,6 +2061,7 @@ function ThreadFeed({
   connectionState,
   canReconnect,
   activeRuntimeCommand,
+  agentBusy,
   onOpenActivity,
   onOpenDiff,
   onQuickReply,
@@ -1836,6 +2074,7 @@ function ThreadFeed({
   connectionState: "connected" | "disconnected";
   canReconnect: boolean;
   activeRuntimeCommand: ActiveRuntimeCommand | null;
+  agentBusy: boolean;
   onOpenActivity: () => void;
   onOpenDiff: () => void;
   onQuickReply: (message: string) => void | Promise<void>;
@@ -1845,17 +2084,58 @@ function ThreadFeed({
   rtlTextMode: boolean;
 }) {
   const isExplainOnly = session.runMode === "inspect_only";
+  const lastUserMessageIndex = findLastMessageIndex(session.messages, "user");
+  const lastAssistantMessageIndex = findLastMessageIndex(session.messages, "assistant");
+  const latestAssistantMessageId =
+    lastAssistantMessageIndex >= 0 ? session.messages[lastAssistantMessageIndex]?.id ?? "" : "";
+  const waitingForAssistant = agentBusy && lastUserMessageIndex > lastAssistantMessageIndex;
+
   return (
     <div className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
-      {session.messages.map((message) => (
-        <div key={message.id} className={`thread-entry ${message.role}`}>
-          <div className="thread-entry-header">
-            <div className="thread-entry-label">{message.role === "user" ? "You" : message.role === "assistant" ? session.agentName : "System"}</div>
-            <CopyMessageButton text={message.content} />
+      {session.messages.map((message) => {
+        const isUserMessage = message.role === "user";
+        const shouldAnimateAssistantMessage =
+          message.role === "assistant"
+          && message.id === latestAssistantMessageId
+          && (agentBusy || isFreshMessage(message.createdAt));
+        return (
+          <div key={message.id} className={`thread-entry ${message.role}`}>
+            {!isUserMessage ? (
+              <div className="thread-entry-header">
+                <div className="thread-entry-label">{message.role === "assistant" ? session.agentName : "System"}</div>
+                <CopyMessageButton text={message.content} />
+              </div>
+            ) : null}
+            {isUserMessage ? (
+              <div className="thread-entry-bubble user-bubble">
+                <MessageMarkdown text={message.content} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
+              </div>
+            ) : (
+              <AnimatedMessageMarkdown
+                text={message.content}
+                workspacePath={session.workspacePath}
+                onOpenFileReference={onOpenFileReference}
+                animate={shouldAnimateAssistantMessage}
+              />
+            )}
+            {isUserMessage ? (
+              <div className="thread-entry-footer">
+                <span>{formatMessageTime(message.createdAt)}</span>
+                <CopyMessageButton text={message.content} />
+              </div>
+            ) : null}
           </div>
-          <MessageMarkdown text={message.content} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
+        );
+      })}
+
+      {waitingForAssistant ? (
+        <div className="thread-entry assistant pending-assistant-entry">
+          <div className="thread-entry-header">
+            <div className="thread-entry-label">{session.agentName}</div>
+          </div>
+          <TypingIndicator />
         </div>
-      ))}
+      ) : null}
 
       {!isExplainOnly ? (
         <>
@@ -1878,6 +2158,18 @@ function ThreadFeed({
   );
 }
 
+function findLastMessageIndex(messages: AgentRuntimeSession["messages"], role: "user" | "assistant") {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === role) return index;
+  }
+  return -1;
+}
+
+function isFreshMessage(createdAt: string) {
+  const ageMs = Date.now() - Date.parse(createdAt);
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 5_000;
+}
+
 function CopyMessageButton({ text }: { text: string }) {
   async function handleCopy() {
     try {
@@ -1897,6 +2189,84 @@ function CopyMessageButton({ text }: { text: string }) {
 type MarkdownBlock =
   | { type: "code"; language: string; content: string }
   | { type: "text"; lines: string[] };
+
+function AnimatedMessageMarkdown({
+  text,
+  workspacePath,
+  onOpenFileReference,
+  animate
+}: {
+  text: string;
+  workspacePath: string;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+  animate: boolean;
+}) {
+  const [displayText, setDisplayText] = useState(animate ? "" : text);
+
+  useEffect(() => {
+    if (!animate) {
+      setDisplayText(text);
+      return;
+    }
+    if (!text) {
+      setDisplayText("");
+      return;
+    }
+
+    const tokens = tokenizeForReveal(text);
+    let cancelled = false;
+    let cursor = 0;
+    let timer: number | undefined;
+
+    setDisplayText("");
+
+    const step = () => {
+      if (cancelled) return;
+      cursor = Math.min(tokens.length, cursor + revealBatchSize(cursor, tokens.length));
+      setDisplayText(tokens.slice(0, cursor).join(""));
+      if (cursor < tokens.length) {
+        timer = window.setTimeout(step, cursor < 24 ? 18 : 26);
+      }
+    };
+
+    step();
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [animate, text]);
+
+  const stillTyping = animate && displayText !== text;
+
+  return (
+    <div className={`animated-markdown ${stillTyping ? "is-streaming" : ""}`}>
+      <MessageMarkdown text={displayText} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} />
+      {stillTyping ? <span className="message-typing-cursor" aria-hidden="true" /> : null}
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="typing-indicator" aria-label="Assistant is typing">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+function tokenizeForReveal(text: string) {
+  return text.split(/(\s+)/).filter((token) => token.length > 0);
+}
+
+function revealBatchSize(cursor: number, total: number) {
+  const remaining = total - cursor;
+  if (remaining > 240) return 6;
+  if (remaining > 120) return 4;
+  return 2;
+}
 
 function MessageMarkdown({
   text,
@@ -2225,6 +2595,113 @@ function FileReferencePanel({
   );
 }
 
+function FileExplorerPanel({
+  project,
+  filter,
+  onFilterChange,
+  tree,
+  expandedDirs,
+  onToggleDir,
+  onOpenFile,
+  onClose
+}: {
+  project: FileExplorerProject;
+  filter: string;
+  onFilterChange: (value: string) => void;
+  tree: FileTreeNode[];
+  expandedDirs: string[];
+  onToggleDir: (targetPath: string) => void;
+  onOpenFile: (targetPath: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="file-reference-panel">
+      <div className="file-reference-backdrop" onClick={onClose} />
+      <section className="file-reference-drawer file-explorer-drawer">
+        <div className="drawer-header">
+          <div>
+            <strong>{project.name}</strong>
+            <span>{project.path}</span>
+          </div>
+          <div className="file-reference-actions">
+            <button className="frame-icon-button" onClick={onClose} title="Close file explorer" type="button">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="file-explorer-toolbar">
+          <input
+            value={filter}
+            onChange={(event) => onFilterChange(event.target.value)}
+            placeholder="Filter files..."
+          />
+        </div>
+
+        <div className="file-explorer-tree" role="tree" aria-label={`${project.name} files`}>
+          {tree.length ? (
+            tree.map((node) => (
+              <FileTreeNodeRow
+                key={node.key}
+                node={node}
+                depth={0}
+                expandedDirs={expandedDirs}
+                onToggleDir={onToggleDir}
+                onOpenFile={onOpenFile}
+              />
+            ))
+          ) : (
+            <div className="file-reference-loading">No files match this filter.</div>
+          )}
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+function FileTreeNodeRow({
+  node,
+  depth,
+  expandedDirs,
+  onToggleDir,
+  onOpenFile
+}: {
+  node: FileTreeNode;
+  depth: number;
+  expandedDirs: string[];
+  onToggleDir: (targetPath: string) => void;
+  onOpenFile: (targetPath: string) => void;
+}) {
+  const expanded = node.isDir && expandedDirs.includes(node.path);
+  return (
+    <div className="file-tree-node">
+      <button
+        className={`file-tree-row ${node.isDir ? "is-directory" : "is-file"}`}
+        style={{ paddingLeft: `${12 + depth * 18}px` }}
+        onClick={() => (node.isDir ? onToggleDir(node.path) : onOpenFile(node.path))}
+        title={node.path}
+        type="button"
+      >
+        {node.isDir ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span className="file-tree-spacer" />}
+        {node.isDir ? <FolderOpen size={14} /> : <FileText size={14} />}
+        <span>{node.name}</span>
+      </button>
+      {node.isDir && expanded
+        ? node.children.map((child) => (
+          <FileTreeNodeRow
+            key={child.key}
+            node={child}
+            depth={depth + 1}
+            expandedDirs={expandedDirs}
+            onToggleDir={onToggleDir}
+            onOpenFile={onOpenFile}
+          />
+        ))
+        : null}
+    </div>
+  );
+}
+
 function CurrentStepCard({
   session,
   currentStep,
@@ -2271,14 +2748,26 @@ function PrimaryActionCard({
   onQuickReply: (message: string) => void | Promise<void>;
   onRunPendingCommands: () => void;
 }) {
+  if (session.nextAction?.kind === "clarify_plan") {
+    return (
+      <PlanClarificationCard
+        message={session.nextAction.message}
+        options={session.nextAction.options}
+        allowCustom={session.nextAction.allowCustom}
+        onQuickReply={onQuickReply}
+      />
+    );
+  }
+
   if (session.nextAction?.kind === "confirm_plan") {
     return (
       <ActionCard
-        title="Plan review required"
+        title="Plan mode ready"
         message={session.nextAction.message}
         actions={
           <>
-            <button onClick={() => void onQuickReply("Proceed with implementation.")}>Proceed now</button>
+            <button onClick={() => void onQuickReply("Proceed with implementation.")}>Implement plan</button>
+            <button onClick={() => void onQuickReply("Hold the plan for now.")}>Dismiss</button>
             <button onClick={onOpenActivity}>Review plan</button>
           </>
         }
@@ -2339,6 +2828,53 @@ function PrimaryActionCard({
   }
 
   return null;
+}
+
+function PlanClarificationCard({
+  message,
+  options,
+  allowCustom,
+  onQuickReply
+}: {
+  message: string;
+  options: Array<{ id: string; label: string; prompt: string }>;
+  allowCustom?: boolean;
+  onQuickReply: (message: string) => void | Promise<void>;
+}) {
+  const [customValue, setCustomValue] = useState("");
+  return (
+    <ActionCard
+      title="Plan mode question"
+      message={message}
+      actions={
+        <div className="plan-clarification-actions">
+          {options.map((option) => (
+            <button key={option.id} onClick={() => void onQuickReply(option.prompt)}>
+              {option.label}
+            </button>
+          ))}
+          {allowCustom ? (
+            <div className="plan-clarification-custom">
+              <input
+                value={customValue}
+                onChange={(event) => setCustomValue(event.target.value)}
+                placeholder="Write your own direction..."
+              />
+              <button
+                onClick={() => {
+                  if (!customValue.trim()) return;
+                  void onQuickReply(customValue.trim());
+                  setCustomValue("");
+                }}
+              >
+                Send
+              </button>
+            </div>
+          ) : null}
+        </div>
+      }
+    />
+  );
 }
 
 function InlineAgentOverview({
@@ -3833,6 +4369,8 @@ function humanSessionStatus(
   if (agentBusy) return "Working on your request";
 
   switch (session.nextAction?.kind) {
+    case "clarify_plan":
+      return "Plan clarification needed";
     case "confirm_plan":
       return "Plan review required";
     case "confirm_preview":
@@ -3863,6 +4401,9 @@ function humanSessionStatus(
 function describeOperatorHeadline(session: AgentRuntimeSession, connectionState: "connected" | "disconnected") {
   if (connectionState === "disconnected" && session.status === "running") {
     return "The run may still be active, but the live event stream is disconnected.";
+  }
+  if (session.nextAction?.kind === "clarify_plan") {
+    return "Plan mode needs one clarification before it locks the plan.";
   }
   if (session.nextAction?.kind === "approve_commands") {
     return "Runtime commands are queued and waiting for operator execution.";
@@ -4135,11 +4676,15 @@ function upsertRecentSession(
   workspace: WorkspaceInfo
 ) {
   const existingEntry = current.find((entry) => entry.id === session.id);
+  const derivedTitle = deriveDisplaySessionTitle(session, existingEntry?.title);
+  if (!derivedTitle) {
+    return current.filter((entry) => entry.id !== session.id).slice(0, MAX_RECENT_SESSIONS);
+  }
   const nextEntry: RecentSessionEntry = {
     id: session.id,
     workspacePath: workspace.path,
     workspaceName: workspace.name,
-    title: deriveSessionTitle(session, existingEntry?.title),
+    title: derivedTitle,
     status: humanSessionStatus(session, false),
     updatedAt: session.updatedAt
   };
@@ -4147,24 +4692,26 @@ function upsertRecentSession(
 }
 
 function deriveSessionTitle(session: AgentRuntimeSession, fallbackTitle?: string) {
+  const displayTitle = deriveDisplaySessionTitle(session, fallbackTitle);
+  return truncateSessionLabel(displayTitle || "OrchCode", 42);
+}
+
+function deriveDisplaySessionTitle(session: AgentRuntimeSession, fallbackTitle?: string) {
   const assistantLine = session.messages
     .filter((message) => message.role === "assistant")
     .flatMap((message) => message.content.split("\n"))
     .map((line) => normalizeSessionTitleCandidate(line))
     .find((line) => line.length > 0 && !isLowSignalSessionTitleCandidate(line));
   const candidates = [
-    session.userPrompt,
     fallbackTitle,
     assistantLine,
-    session.plan?.summary,
     session.runSummary?.summary,
-    session.agentName,
-    "Session"
+    session.plan?.summary
   ]
     .map((value) => normalizeSessionTitleCandidate(value))
     .filter(Boolean);
-  const preferredCandidate = candidates.find((value) => !isLowSignalSessionTitleCandidate(value)) ?? candidates[0] ?? "Session";
-  return truncateSessionLabel(preferredCandidate, 42);
+  const preferredCandidate = candidates.find((value) => !isLowSignalSessionTitleCandidate(value)) ?? "";
+  return preferredCandidate ? truncateSessionLabel(preferredCandidate, 42) : "";
 }
 
 function normalizeSessionTitleCandidate(value: string | null | undefined) {
@@ -4183,13 +4730,29 @@ function isLowSignalSessionTitleCandidate(value: string) {
     /^use a deterministic\b/i,
     /^working on your request\b/i,
     /^completed\b/i,
+    /^reload\b/i,
+    /^reloaded\b/i,
+    /^hot reload\b/i,
     /^verification passed\b/i,
     /^preview available\b/i,
+    /^explain\b/i,
+    /^analyze\b/i,
+    /^fix\b/i,
+    /^edit\b/i,
+    /^update\b/i,
+    /^اشرح\b/i,
+    /^حلل\b/i,
+    /^صلح\b/i,
+    /^عدل\b/i,
     /^i (inspected|selected|prepared|could not)\b/i,
     /^select a workspace\b/i,
     /^workspace open\b/i,
     /^full access\b/i
   ].some((pattern) => pattern.test(value));
+}
+
+function shouldBackfillSessionTitle(value: string) {
+  return !value || value === "OrchCode" || isLowSignalSessionTitleCandidate(value);
 }
 
 function truncateSessionLabel(value: string, max = 42) {
@@ -4198,6 +4761,95 @@ function truncateSessionLabel(value: string, max = 42) {
 
 function truncateLabel(value: string, max = 42) {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function pathBasename(targetPath: string) {
+  const compact = normalizeWorkspacePath(targetPath).replaceAll("\\", "/").replace(/\/$/, "");
+  return compact.split("/").pop() || compact;
+}
+
+function buildFileExplorerTree(files: FileEntry[], filter: string) {
+  const normalizedFilter = filter.trim().toLowerCase();
+  const root: FileTreeNode = {
+    key: ".",
+    name: ".",
+    path: ".",
+    isDir: true,
+    children: []
+  };
+  const nodeMap = new Map<string, FileTreeNode>([[".", root]]);
+
+  const relevantFiles = files
+    .filter((entry) => (normalizedFilter ? entry.path.toLowerCase().includes(normalizedFilter) : true))
+    .sort((left, right) => left.path.localeCompare(right.path));
+
+  for (const entry of relevantFiles) {
+    const parts = entry.path.split("/").filter(Boolean);
+    if (!parts.length) continue;
+    let currentPath = ".";
+    let parent = root;
+    for (let index = 0; index < parts.length; index += 1) {
+      const name = parts[index]!;
+      const nextPath = currentPath === "." ? name : `${currentPath}/${name}`;
+      const isLeaf = index === parts.length - 1;
+      let node = nodeMap.get(nextPath);
+      if (!node) {
+        node = {
+          key: nextPath,
+          name,
+          path: nextPath,
+          isDir: isLeaf ? entry.isDir : true,
+          children: []
+        };
+        nodeMap.set(nextPath, node);
+        parent.children.push(node);
+      }
+      if (!isLeaf) node.isDir = true;
+      parent = node;
+      currentPath = nextPath;
+    }
+  }
+
+  const sortChildren = (nodes: FileTreeNode[]) => {
+    nodes.sort((left, right) => {
+      if (left.isDir && !right.isDir) return -1;
+      if (!left.isDir && right.isDir) return 1;
+      return left.name.localeCompare(right.name);
+    });
+    for (const node of nodes) {
+      if (node.children.length) sortChildren(node.children);
+    }
+  };
+
+  sortChildren(root.children);
+  return root.children;
+}
+
+function defaultExpandedExplorerDirs(files: FileEntry[]) {
+  const expanded = new Set<string>();
+  for (const file of files) {
+    const parts = file.path.split("/").filter(Boolean);
+    if (parts.length > 1) {
+      expanded.add(parts[0]!);
+    }
+    if (parts.length > 2) {
+      expanded.add(`${parts[0]!}/${parts[1]!}`);
+    }
+  }
+  return [...expanded];
+}
+
+function containsArabic(value: string) {
+  return /[\u0600-\u06FF]/.test(value);
+}
+
+function shouldSuggestPlanMode(prompt: string, planModeEnabled: boolean) {
+  if (planModeEnabled) return false;
+  const compact = prompt.trim();
+  if (!compact) return false;
+  if (compact.length >= 160) return true;
+  return /\b(plan|review|analyze|understand|architecture|approach)\b/i.test(compact)
+    || /(خطة|حلل|راجع|افهم|معمارية|اقترح)/.test(compact);
 }
 
 function buildSidebarProjects(input: {
@@ -4254,16 +4906,17 @@ function buildSidebarProjects(input: {
 
   if (input.runtimeSession && input.workspace) {
     const existingActiveEntry = grouped.get(input.workspace.path)?.sessions.find((entry) => entry.id === input.runtimeSession?.id);
+    const activeTitle = deriveDisplaySessionTitle(input.runtimeSession, existingActiveEntry?.title);
     const activeEntry: RecentSessionEntry = {
       id: input.runtimeSession.id,
       workspacePath: input.workspace.path,
       workspaceName: input.workspace.name,
-      title: deriveSessionTitle(input.runtimeSession, existingActiveEntry?.title),
+      title: activeTitle || "OrchCode",
       status: humanSessionStatus(input.runtimeSession, input.agentBusy, input.runtimeConnectionState),
       updatedAt: input.runtimeSession.updatedAt
     };
     const project = grouped.get(input.workspace.path);
-    if (project) {
+    if (project && activeTitle) {
       project.sessions = [activeEntry, ...project.sessions.filter((entry) => entry.id !== activeEntry.id)];
       project.isActive = true;
       project.lastOpenedAt = activeEntry.updatedAt;
@@ -4298,6 +4951,15 @@ function formatRelativeDate(value: string) {
   if (weeks < 5) return `${weeks}w`;
   const months = Math.floor(days / 30);
   return `${months}mo`;
+}
+
+function formatMessageTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
 function shortenPath(targetPath: string) {

@@ -17,6 +17,8 @@ test("large project explain report clusters modules and ignores vendor/build fol
   await mkdir(path.join(workspace, "packages", "core", "src"), { recursive: true });
   await mkdir(path.join(workspace, "apps", "api", "src", "features"), { recursive: true });
   await mkdir(path.join(workspace, "node_modules", "ignored"), { recursive: true });
+  await mkdir(path.join(workspace, ".venv", "Lib", "site-packages"), { recursive: true });
+  await mkdir(path.join(workspace, "apps", "api", "__pycache__"), { recursive: true });
   await mkdir(path.join(workspace, "dist"), { recursive: true });
 
   try {
@@ -30,6 +32,8 @@ test("large project explain report clusters modules and ignores vendor/build fol
     await writeFile(path.join(workspace, "packages", "core", "src", "index.ts"), "export const core = true;\n", "utf8");
     await writeFile(path.join(workspace, "packages", "core", "src", "index.test.ts"), "import { core } from './index';\n", "utf8");
     await writeFile(path.join(workspace, "node_modules", "ignored", "index.js"), "module.exports = {}\n", "utf8");
+    await writeFile(path.join(workspace, ".venv", "Lib", "site-packages", "ignored.py"), "value = 1\n", "utf8");
+    await writeFile(path.join(workspace, "apps", "api", "__pycache__", "ignored.pyc"), "compiled\n", "utf8");
     await writeFile(path.join(workspace, "dist", "bundle.js"), "console.log('generated')\n", "utf8");
     for (let index = 0; index < 1005; index += 1) {
       await writeFile(
@@ -54,10 +58,13 @@ test("large project explain report clusters modules and ignores vendor/build fol
 
     assert.ok(report.contextPack.inventory.scannedFiles > 1000);
     assert.ok(report.contextPack.inventory.ignoredDirectories.includes("node_modules"));
+    assert.ok(report.contextPack.inventory.ignoredDirectories.includes(".venv"));
     assert.ok(report.contextPack.inventory.ignoredDirectories.includes("dist"));
     assert.ok(report.moduleMap.some((module) => module.root === "apps/web"));
     assert.ok(report.moduleMap.some((module) => module.root === "packages/core"));
     assert.equal(report.contextPack.sampledFiles.some((file) => file.path.includes("node_modules")), false);
+    assert.equal(report.contextPack.sampledFiles.some((file) => file.path.includes(".venv")), false);
+    assert.equal(report.contextPack.sampledFiles.some((file) => file.path.includes("__pycache__")), false);
     assert.equal(report.contextPack.sampledFiles.some((file) => file.path.includes("dist/")), false);
     assert.ok(report.sections.length > 0);
     assert.ok(report.sections.every((section) => section.lineStart > 0 && section.snippet.length > 0));

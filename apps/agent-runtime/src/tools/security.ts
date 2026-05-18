@@ -2,7 +2,35 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WorkerCapabilityGrant } from "@orchcode/protocol";
 
-export const ignoredDirectories = new Set(["node_modules", "target", "dist", "build", ".git", ".vite"]);
+export const ignoredDirectories = new Set([
+  ".cache",
+  ".coverage",
+  ".eggs",
+  ".git",
+  ".mypy_cache",
+  ".next",
+  ".nox",
+  ".nuxt",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".svelte-kit",
+  ".tox",
+  ".turbo",
+  ".venv",
+  ".vite",
+  "__pycache__",
+  "ENV",
+  "build",
+  "coverage",
+  "dist",
+  "env",
+  "htmlcov",
+  "node_modules",
+  "out",
+  "site-packages",
+  "target",
+  "venv"
+]);
 
 export function resolveInsideWorkspace(workspacePath: string, requestedPath = ".") {
   const workspace = fs.realpathSync(workspacePath);

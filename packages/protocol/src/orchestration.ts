@@ -312,6 +312,16 @@ export type OrchestrationRunContext = {
 
 export type SessionNextAction =
   | {
+      kind: "clarify_plan";
+      message: string;
+      options: Array<{
+        id: string;
+        label: string;
+        prompt: string;
+      }>;
+      allowCustom?: boolean;
+    }
+  | {
       kind: "confirm_plan";
       message: string;
     }

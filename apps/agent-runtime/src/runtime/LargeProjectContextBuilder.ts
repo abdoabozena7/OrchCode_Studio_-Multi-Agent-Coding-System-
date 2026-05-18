@@ -75,16 +75,28 @@ const DEFAULT_EXPLAIN_SETTINGS: ProjectExplainSettings = {
 const IGNORED_DIRS = new Set([
   ".cache",
   ".git",
+  ".mypy_cache",
   ".next",
+  ".nox",
   ".nuxt",
+  ".pytest_cache",
+  ".ruff_cache",
   ".svelte-kit",
+  ".tox",
   ".turbo",
+  ".venv",
   ".vite",
+  "__pycache__",
+  "ENV",
   "build",
   "coverage",
   "dist",
+  "env",
+  "htmlcov",
   "node_modules",
   "out",
+  "site-packages",
+  "venv",
   "target"
 ]);
 

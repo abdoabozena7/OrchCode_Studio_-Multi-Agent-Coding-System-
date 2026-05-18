@@ -7,10 +7,12 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 test("ToolRegistry exposes guarded workspace tools", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-tools-${Date.now()}`);
-  await mkdir(workspace, { recursive: true });
+  await mkdir(path.join(workspace, ".venv", "Lib"), { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello agent\n", "utf8");
+  await writeFile(path.join(workspace, ".venv", "Lib", "ignored.py"), "value = 1\n", "utf8");
   const registry = new ToolRegistry(workspace);
   assert.equal(registry.workspace.readFile("README.md"), "hello agent\n");
+  assert.equal(registry.workspace.listFiles().some((entry) => entry.path.includes(".venv")), false);
   assert.throws(() => registry.workspace.readFile("../outside.txt"), /outside/);
   await rm(workspace, { recursive: true, force: true });
 });

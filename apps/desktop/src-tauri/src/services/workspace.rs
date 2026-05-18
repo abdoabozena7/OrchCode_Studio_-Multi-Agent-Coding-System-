@@ -128,7 +128,31 @@ fn should_skip_path(path: &Path) -> bool {
         let value = component.as_os_str().to_string_lossy();
         matches!(
             value.as_ref(),
-            "node_modules" | "target" | "dist" | "build" | ".git"
+            ".cache"
+                | ".git"
+                | ".mypy_cache"
+                | ".next"
+                | ".nox"
+                | ".nuxt"
+                | ".pytest_cache"
+                | ".ruff_cache"
+                | ".svelte-kit"
+                | ".tox"
+                | ".turbo"
+                | ".venv"
+                | ".vite"
+                | "__pycache__"
+                | "ENV"
+                | "build"
+                | "coverage"
+                | "dist"
+                | "env"
+                | "htmlcov"
+                | "node_modules"
+                | "out"
+                | "site-packages"
+                | "target"
+                | "venv"
         )
     })
 }

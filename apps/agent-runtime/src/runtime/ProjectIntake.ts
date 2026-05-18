@@ -167,6 +167,10 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
   const doNotTouchCandidates = uniqueStrings([
     ...lockFiles,
     ".git/",
+    ".venv/",
+    "__pycache__/",
+    "env/",
+    "venv/",
     "node_modules/",
     "dist/",
     "build/",

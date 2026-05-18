@@ -608,7 +608,7 @@ export class RunEngine {
       });
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
-        content: `I prepared the run plan and stopped before action.\n\n${plan.summary}`
+        content: formatPlanModeMessage(plan, message)
       });
       await this.updateRunPhase(sessionId, "review_final_diff", "active", "Plan is waiting for operator confirmation before implementation.");
       return this.requireSession(sessionId);
@@ -1949,6 +1949,35 @@ function createRunSummary(session: AgentRuntimeSession, verification: Verificati
         : "completed",
     "Review changes, then apply and run verification through Rust."
   );
+}
+
+function formatPlanModeMessage(plan: RunPlanModel, message: string) {
+  const arabic = /[\u0600-\u06FF]/.test(message);
+  const intro = arabic
+    ? "اشتغلت في Plan mode فقط: قريت الموجود، بنيت خطة، ووقفت قبل أي تعديل أو تشغيل."
+    : "I stayed in plan mode only: I read the current project, built a plan, and stopped before any edits or commands.";
+  const stepsTitle = arabic ? "## الخطة" : "## Plan";
+  const criteriaTitle = arabic ? "## معايير القبول" : "## Acceptance Criteria";
+  const risksTitle = arabic ? "## المخاطر أو الغموض" : "## Risks And Unknowns";
+  const close = arabic
+    ? "لو الخطة مناسبة، اختار Implement plan. ولو تحب نفضل في التخطيط فقط، سيبها زي ما هي أو ابعت توضيح إضافي."
+    : "If the plan looks right, choose Implement plan. If you want to stay in planning only, leave it as-is or send more clarification.";
+  return [
+    intro,
+    "",
+    plan.summary,
+    "",
+    stepsTitle,
+    ...plan.tasks.map((task, index) => `${index + 1}. ${task.title}: ${task.objective}`),
+    "",
+    criteriaTitle,
+    ...(plan.acceptanceCriteria.length ? plan.acceptanceCriteria.map((item) => `- ${item}`) : [arabic ? "- لا توجد معايير إضافية واضحة حتى الآن." : "- No extra acceptance criteria were inferred yet."]),
+    "",
+    risksTitle,
+    ...(plan.risks.length ? plan.risks.map((item) => `- ${item}`) : [arabic ? "- لا توجد مخاطر كبيرة واضحة من القراءة الأولية." : "- No major risks stood out from the initial read."]),
+    "",
+    close
+  ].join("\n");
 }
 
 function createInitialRunPhases(runMode: RunMode): RunPhase[] {
