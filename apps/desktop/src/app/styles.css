@@ -394,7 +394,7 @@ pre {
 .project-session-list {
   display: grid;
   gap: 2px;
-  padding-left: 28px;
+  padding-left: 0;
 }
 
 .project-session-item {
@@ -721,6 +721,34 @@ pre {
   align-content: start;
   overflow: auto;
   padding: 4px 6px 20px;
+}
+
+.thread-feed.rtl-text-mode .markdown-message h3,
+.thread-feed.rtl-text-mode .markdown-message h4,
+.thread-feed.rtl-text-mode .markdown-message p,
+.thread-feed.rtl-text-mode .markdown-message ul,
+.thread-feed.rtl-text-mode .markdown-message li,
+.thread-feed.rtl-text-mode .message-table-wrap th,
+.thread-feed.rtl-text-mode .message-table-wrap td,
+.composer-shell.rtl-text-mode textarea {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: plaintext;
+}
+
+.thread-feed.rtl-text-mode .markdown-message ul {
+  padding-inline-start: 0;
+  padding-inline-end: 22px;
+}
+
+.thread-feed.rtl-text-mode .markdown-message code,
+.thread-feed.rtl-text-mode .message-file-ref,
+.thread-feed.rtl-text-mode .message-code-block,
+.thread-feed.rtl-text-mode .message-code-block *,
+.thread-feed.rtl-text-mode .message-table-wrap table {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
 }
 
 .thread-entry {

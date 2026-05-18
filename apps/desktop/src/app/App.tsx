@@ -8,6 +8,7 @@ import {
   FolderOpen,
   GitBranch,
   Globe,
+  Languages,
   MessageSquarePlus,
   PanelLeft,
   Play,
@@ -136,6 +137,7 @@ const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
 const PROMPT_HISTORY_KEY = "orchcode.promptHistory";
 const COMPOSER_SCALE_KEY = "orchcode.composerScale";
 const FULL_ACCESS_WARNING_KEY = "orchcode.fullAccessAcknowledged";
+const RTL_TEXT_MODE_KEY = "orchcode.rtlTextMode";
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
@@ -251,6 +253,7 @@ export function App() {
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [activeFileReference, setActiveFileReference] = useState<ActiveFileReference | null>(null);
+  const [rtlTextMode, setRtlTextMode] = useState(false);
   const progressRailCloseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -264,9 +267,11 @@ export function App() {
       const storedSessions = readStoredJson<RecentSessionEntry[]>(RECENT_SESSIONS_KEY, []);
       const storedPromptHistory = readStoredJson<string[]>(PROMPT_HISTORY_KEY, []);
       const storedComposerScale = Number(localStorage.getItem(COMPOSER_SCALE_KEY));
+      const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
+      setRtlTextMode(storedRtlTextMode);
       if (Number.isFinite(storedComposerScale)) {
         setComposerScale(clampComposerScale(storedComposerScale));
       }
@@ -304,6 +309,10 @@ export function App() {
       maxParallelAgents: current.maxParallelAgents
     }));
   }, [accessProfile]);
+
+  useEffect(() => {
+    localStorage.setItem(RTL_TEXT_MODE_KEY, rtlTextMode ? "true" : "false");
+  }, [rtlTextMode]);
 
   useEffect(() => {
     if (agentBusy || queuedPrompts.length === 0) return;
@@ -1300,10 +1309,11 @@ export function App() {
                 onOpenPreview={() => void handleOpenPreview()}
                 onRunPendingCommands={() => void handleRunPendingCommands()}
                 onOpenFileReference={handleOpenFileReference}
+                rtlTextMode={rtlTextMode}
               />
             ) : null}
 
-            <div className="composer-shell" style={{ "--composer-scale": String(composerScale) } as CSSProperties}>
+            <div className={`composer-shell ${rtlTextMode ? "rtl-text-mode" : ""}`} style={{ "--composer-scale": String(composerScale) } as CSSProperties}>
               <textarea
                 ref={promptTextareaRef}
                 value={prompt}
@@ -1316,6 +1326,7 @@ export function App() {
                 onKeyDown={handlePromptKeyDown}
                 placeholder="Ask local Codex to create or edit a project with Ollama..."
                 rows={1}
+                dir={rtlTextMode ? "rtl" : "auto"}
               />
 
               <div className="composer-topline">
@@ -1327,6 +1338,16 @@ export function App() {
                   >
                     {thinkFirst ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                     <span>Think first</span>
+                  </button>
+                  <button
+                    className={`composer-chip ${rtlTextMode ? "active-toggle" : ""}`}
+                    onClick={() => setRtlTextMode((current) => !current)}
+                    type="button"
+                    title="Toggle RTL for Arabic text in the composer and chat messages"
+                    aria-pressed={rtlTextMode}
+                  >
+                    <Languages size={15} />
+                    <span>RTL</span>
                   </button>
                   <div className="access-menu-shell">
                     <button className="composer-chip access-chip" onClick={() => setAccessMenuOpen((current) => !current)} type="button">
@@ -1707,7 +1728,8 @@ function ThreadFeed({
   onQuickReply,
   onOpenPreview,
   onRunPendingCommands,
-  onOpenFileReference
+  onOpenFileReference,
+  rtlTextMode
 }: {
   session: AgentRuntimeSession;
   connectionState: "connected" | "disconnected";
@@ -1719,10 +1741,11 @@ function ThreadFeed({
   onOpenPreview: () => void;
   onRunPendingCommands: () => void;
   onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+  rtlTextMode: boolean;
 }) {
   const isExplainOnly = session.runMode === "inspect_only";
   return (
-    <div className="thread-feed">
+    <div className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
       {session.messages.map((message) => (
         <div key={message.id} className={`thread-entry ${message.role}`}>
           <div className="thread-entry-header">
@@ -3988,31 +4011,62 @@ function upsertRecentSession(
   session: AgentRuntimeSession,
   workspace: WorkspaceInfo
 ) {
+  const existingEntry = current.find((entry) => entry.id === session.id);
   const nextEntry: RecentSessionEntry = {
     id: session.id,
     workspacePath: workspace.path,
     workspaceName: workspace.name,
-    title: deriveSessionTitle(session),
+    title: deriveSessionTitle(session, existingEntry?.title),
     status: humanSessionStatus(session, false),
     updatedAt: session.updatedAt
   };
   return [nextEntry, ...current.filter((entry) => entry.id !== session.id)].slice(0, MAX_RECENT_SESSIONS);
 }
 
-function deriveSessionTitle(session: AgentRuntimeSession) {
+function deriveSessionTitle(session: AgentRuntimeSession, fallbackTitle?: string) {
   const assistantLine = session.messages
     .filter((message) => message.role === "assistant")
     .flatMap((message) => message.content.split("\n"))
+    .map((line) => normalizeSessionTitleCandidate(line))
+    .find((line) => line.length > 0 && !isLowSignalSessionTitleCandidate(line));
+  const candidates = [
+    session.userPrompt,
+    fallbackTitle,
+    assistantLine,
+    session.plan?.summary,
+    session.runSummary?.summary,
+    session.agentName,
+    "Session"
+  ]
+    .map((value) => normalizeSessionTitleCandidate(value))
+    .filter(Boolean);
+  const preferredCandidate = candidates.find((value) => !isLowSignalSessionTitleCandidate(value)) ?? candidates[0] ?? "Session";
+  return truncateSessionLabel(preferredCandidate, 42);
+}
+
+function normalizeSessionTitleCandidate(value: string | null | undefined) {
+  return (value ?? "")
+    .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => line.length > 0 && !/^i (inspected|selected|prepared|could not)/i.test(line));
-  const candidate =
-    session.plan?.summary ||
-    session.runSummary?.summary ||
-    assistantLine ||
-    session.userPrompt ||
-    session.agentName ||
-    "Session";
-  return truncateSessionLabel(candidate.replace(/^#+\s*/, ""), 42);
+    .find(Boolean)
+    ?.replace(/^#+\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim() ?? "";
+}
+
+function isLowSignalSessionTitleCandidate(value: string) {
+  if (!value) return true;
+  return [
+    /^use a deterministic\b/i,
+    /^working on your request\b/i,
+    /^completed\b/i,
+    /^verification passed\b/i,
+    /^preview available\b/i,
+    /^i (inspected|selected|prepared|could not)\b/i,
+    /^select a workspace\b/i,
+    /^workspace open\b/i,
+    /^full access\b/i
+  ].some((pattern) => pattern.test(value));
 }
 
 function truncateSessionLabel(value: string, max = 42) {
@@ -4076,11 +4130,12 @@ function buildSidebarProjects(input: {
   }
 
   if (input.runtimeSession && input.workspace) {
+    const existingActiveEntry = grouped.get(input.workspace.path)?.sessions.find((entry) => entry.id === input.runtimeSession?.id);
     const activeEntry: RecentSessionEntry = {
       id: input.runtimeSession.id,
       workspacePath: input.workspace.path,
       workspaceName: input.workspace.name,
-      title: deriveSessionTitle(input.runtimeSession),
+      title: deriveSessionTitle(input.runtimeSession, existingActiveEntry?.title),
       status: humanSessionStatus(input.runtimeSession, input.agentBusy, input.runtimeConnectionState),
       updatedAt: input.runtimeSession.updatedAt
     };
