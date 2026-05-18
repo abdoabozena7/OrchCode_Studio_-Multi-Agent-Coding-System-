@@ -642,6 +642,9 @@ function createEmptyOrchestration(): NonNullable<AgentRuntimeSession["orchestrat
       allowNetworkCommands: false,
       autoApplyValidatedPatches: false,
       autoRunSafeCommands: false,
+      autoRunMediumCommands: false,
+      autoRunBackgroundCommands: false,
+      autoRunNetworkCommands: false,
       requireApprovalForPatches: true,
       maxParallelAgents: 3
     },

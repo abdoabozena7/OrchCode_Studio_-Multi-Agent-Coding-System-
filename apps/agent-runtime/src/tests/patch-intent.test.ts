@@ -65,7 +65,7 @@ test("existing-file edits use patch intents and generate focused reviewable diff
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("malformed patch intents are rejected", async () => {
+test("malformed broad patch intents fail with a chat explanation instead of creating AGENT_PROPOSAL", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-patch-malformed-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-patch-malformed-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -87,10 +87,73 @@ test("malformed patch intents are rejected", async () => {
     }
   });
 
-  await assert.rejects(
-    () => runTurnWithProvider(workspace, storageDir, provider, "break the patch intent"),
-    /Patch intent validation failed/
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "break the patch intent");
+  assert.equal(session.status, "failed");
+  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; using deterministic implementation fallback."));
+  assert.equal(session.patchProposals.length, 0);
+  assert.match(session.messages.at(-1)?.content ?? "", /could not produce a file change/i);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("malformed simple file requests fall back to the requested file instead of AGENT_PROPOSAL", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-patch-simple-file-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-patch-simple-file-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const provider = new PatchIntentProvider({
+    targetFiles: ["hello.txt"],
+    patchOutput: {
+      title: "Broken intent",
+      summary: "Missing required operation.",
+      intents: [{ path: "hello.txt", reason: "Broken test fixture." }]
+    }
+  });
+
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "اكتب ملف hello.txt فيه hello");
+  const proposal = session.patchProposals[0];
+  assert.equal(session.status, "needs_approval");
+  assert.equal(proposal?.filesChanged[0]?.path, "hello.txt");
+  assert.match(proposal?.unifiedDiff ?? "", /\+hello/);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("single-file pygame requests use deterministic implementation fallback", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-pygame-fallback-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-pygame-fallback-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const provider = new PatchIntentProvider({
+    targetFiles: ["main.py"],
+    patchOutput: {
+      title: "Broken intent",
+      summary: "Invalid structured patch output.",
+      intents: [{ path: "main.py", reason: "broken" }]
+    }
+  });
+
+  const session = await runTurnWithProvider(
+    workspace,
+    storageDir,
+    provider,
+    "make a one python code for a 3d snake game with pygame",
+    {
+      stack: ["Python"],
+      packageManagers: [],
+      testCommands: ["python main.py"],
+      importantFiles: []
+    }
   );
+
+  assert.equal(session.status, "needs_approval");
+  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; using deterministic implementation fallback."));
+  assert.equal(session.patchProposals[0]?.filesChanged[0]?.path, "main.py");
+  assert.match(session.patchProposals[0]?.unifiedDiff ?? "", /import pygame/);
+  assert.match(session.patchProposals[0]?.unifiedDiff ?? "", /def main\(\):/);
+  assert.equal(session.commandRequests[0]?.command, "python main.py");
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -232,6 +295,116 @@ test("file creation intents still work", async () => {
   await rm(storageDir, { recursive: true, force: true });
 });
 
+test("overwrite file intents generate whole-file replacement diffs", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-patch-overwrite-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-patch-overwrite-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "notes.txt"), "old\n", "utf8");
+
+  const provider = new PatchIntentProvider({
+    targetFiles: ["notes.txt"],
+    patchOutput: {
+      title: "Overwrite notes",
+      summary: "Replace notes content.",
+      intents: [
+        {
+          path: "notes.txt",
+          operation: "overwrite_file",
+          replacementText: "new\n",
+          reason: "Replace the whole file.",
+          risk: "low"
+        }
+      ]
+    }
+  });
+
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "replace notes.txt");
+  const diff = session.patchProposals[0]?.unifiedDiff ?? "";
+  assert.match(diff, /-old/);
+  assert.match(diff, /\+new/);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("insert and delete patch intents generate focused diffs", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-patch-ops-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-patch-ops-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "list.txt"), "one\ntwo\nremove\n", "utf8");
+
+  const insertAfter = await runTurnWithProvider(
+    workspace,
+    `${storageDir}-after`,
+    new PatchIntentProvider({
+      targetFiles: ["list.txt"],
+      patchOutput: {
+        title: "Insert after",
+        summary: "Insert after an anchor.",
+        intents: [{
+          path: "list.txt",
+          operation: "insert_after",
+          anchorText: "one\n",
+          replacementText: "after-one\n",
+          reason: "Add line after one.",
+          risk: "low"
+        }]
+      }
+    }),
+    "insert after one"
+  );
+  assert.match(insertAfter.patchProposals[0]?.unifiedDiff ?? "", /\+after-one/);
+
+  const insertBefore = await runTurnWithProvider(
+    workspace,
+    `${storageDir}-before`,
+    new PatchIntentProvider({
+      targetFiles: ["list.txt"],
+      patchOutput: {
+        title: "Insert before",
+        summary: "Insert before an anchor.",
+        intents: [{
+          path: "list.txt",
+          operation: "insert_before",
+          anchorText: "two",
+          replacementText: "before-two\n",
+          reason: "Add line before two.",
+          risk: "low"
+        }]
+      }
+    }),
+    "insert before two"
+  );
+  assert.match(insertBefore.patchProposals[0]?.unifiedDiff ?? "", /\+before-two/);
+
+  const deleteRange = await runTurnWithProvider(
+    workspace,
+    `${storageDir}-delete`,
+    new PatchIntentProvider({
+      targetFiles: ["list.txt"],
+      patchOutput: {
+        title: "Delete range",
+        summary: "Delete an anchored range.",
+        intents: [{
+          path: "list.txt",
+          operation: "delete_range",
+          anchorText: "remove\n",
+          replacementText: "",
+          reason: "Remove the target line.",
+          risk: "low"
+        }]
+      }
+    }),
+    "delete remove line"
+  );
+  assert.match(deleteRange.patchProposals[0]?.unifiedDiff ?? "", /-remove/);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(`${storageDir}-after`, { recursive: true, force: true });
+  await rm(`${storageDir}-before`, { recursive: true, force: true });
+  await rm(`${storageDir}-delete`, { recursive: true, force: true });
+});
+
 type PatchIntentProviderConfig = {
   targetFiles: string[];
   patchOutput: unknown;
@@ -278,7 +451,7 @@ async function runTurnWithProvider(
   storageDir: string,
   provider: PatchIntentProvider,
   message: string,
-  importantFiles: string[] = ["src/App.tsx"]
+  projectMapInput: string[] | ProjectMapFixture = ["src/App.tsx"]
 ) {
   const sessionManager = new SessionManager(storageDir, new EventBus());
   await sessionManager.load();
@@ -289,17 +462,27 @@ async function runTurnWithProvider(
   });
   await new RunEngine(provider, sessionManager).runTurn(session.id, message, {
     resolvedMode: "simple_mode",
-    projectMap: createProjectMap(importantFiles)
+    projectMap: createProjectMap(projectMapInput)
   });
   return sessionManager.getSession(session.id)!;
 }
 
-function createProjectMap(importantFiles: string[]): ProjectMap {
+type ProjectMapFixture = {
+  stack?: string[];
+  packageManagers?: string[];
+  testCommands?: string[];
+  importantFiles: string[];
+};
+
+function createProjectMap(projectMapInput: string[] | ProjectMapFixture): ProjectMap {
+  const fixture = Array.isArray(projectMapInput)
+    ? { importantFiles: projectMapInput }
+    : projectMapInput;
   return {
-    stack: ["TypeScript"],
-    packageManagers: ["npm"],
-    testCommands: ["npm test"],
-    entryPoints: importantFiles,
-    importantFiles
+    stack: fixture.stack ?? ["TypeScript"],
+    packageManagers: fixture.packageManagers ?? ["npm"],
+    testCommands: fixture.testCommands ?? ["npm test"],
+    entryPoints: fixture.importantFiles,
+    importantFiles: fixture.importantFiles
   };
 }

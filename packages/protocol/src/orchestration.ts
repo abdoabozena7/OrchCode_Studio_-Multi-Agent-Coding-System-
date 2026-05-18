@@ -167,7 +167,7 @@ export type AgentWorkStatus = {
 };
 
 export type RunSummary = {
-  status: "completed" | "blocked" | "failed";
+  status: "pending" | "completed" | "blocked" | "failed";
   summary: string;
   filesChanged: PatchChangeStats[];
   appliedPatchIds: string[];

@@ -99,7 +99,6 @@ function isDesktopAlreadyRunning() {
   if (isWindows) {
     const result = spawnSync("tasklist", ["/FI", "IMAGENAME eq orchcode-desktop.exe"], {
       cwd: root,
-      shell: true,
       encoding: "utf8"
     });
     return /orchcode-desktop\.exe/i.test(result.stdout ?? "");

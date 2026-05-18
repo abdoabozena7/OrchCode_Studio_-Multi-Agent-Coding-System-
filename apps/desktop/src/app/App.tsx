@@ -42,16 +42,17 @@ import type {
   RunMode,
   RunPhase,
   SafetySettings,
+  WorkerSpec,
+  WorkOrder,
   WorkspaceInfo
 } from "@orchcode/protocol";
 import { accessProfileDefaults, defaultSafetySettings } from "@orchcode/protocol";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   approveRuntimePatch,
   createRuntimeSession,
   getRuntimeSession,
   rejectRuntimePatch,
-  reportRuntimeCommandResult,
   reportRuntimePatchApplyResult,
   runRuntimeTurn,
   subscribeRuntimeEvents
@@ -69,7 +70,7 @@ import {
   openWorkspace,
   openExternalTarget,
   pickWorkspaceDirectory,
-  executeApprovedCommand,
+  readWorkspaceFile,
   runWorkspaceCommand,
   upsertAgentRun,
   upsertOrchestrationRun,
@@ -77,6 +78,8 @@ import {
   validateModelProvider,
   type ModelProviderConfigInput
 } from "../lib/tauri";
+import { canAutoRunRuntimeCommand, executeRuntimeCommandRequest } from "../lib/terminalOrchestrator";
+import { buildPrimaryActivityItems, describeCurrentStep, type ActivityStreamItem, type ActiveRuntimeCommand } from "./activityStream";
 
 type ProviderPreset = {
   label: string;
@@ -115,13 +118,31 @@ type RecentSessionEntry = {
   updatedAt: string;
 };
 
+type FileReference = {
+  path: string;
+  line: number;
+  lineEnd?: number;
+};
+
+type ActiveFileReference = FileReference & {
+  content: string;
+  status: "loading" | "ready" | "failed";
+  error?: string;
+};
+
 const RECENT_WORKSPACES_KEY = "orchcode.recentWorkspaces";
 const RECENT_SESSIONS_KEY = "orchcode.recentSessions";
 const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
 const PROMPT_HISTORY_KEY = "orchcode.promptHistory";
+const COMPOSER_SCALE_KEY = "orchcode.composerScale";
+const FULL_ACCESS_WARNING_KEY = "orchcode.fullAccessAcknowledged";
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
+const DEFAULT_COMPOSER_SCALE = 0.78;
+const MIN_COMPOSER_SCALE = 0.55;
+const MAX_COMPOSER_SCALE = 1.35;
+const COMPOSER_SCALE_STEP = 0.1;
 
 const providerPresets: ProviderPreset[] = [
   {
@@ -166,31 +187,29 @@ const starterPrompts = [
 
 const accessOptions: AccessOption[] = [
   {
-    value: "default_permissions",
-    label: "Default permissions",
-    description: "Review patches and manually run commands that current policy heuristics classify as safe."
+    value: "full_access",
+    label: "Full Access",
+    description: "Trusted local mode: write files, apply validated patches, and run requested setup/dev/test commands automatically."
   },
   {
-    value: "auto_review",
-    label: "Auto-review",
-    description: "Auto-run validation commands only when current policy heuristics classify them as safe, but still stop before previews."
+    value: "default_permissions",
+    label: "Default",
+    description: "Keep the guarded default workflow with manual review for anything beyond the safest commands."
   },
   {
     value: "bounded_autonomy",
-    label: "Bounded autonomy",
-    description: "Auto-run policy-classified validation when allowed, but patch apply and command execution still depend on explicit Rust authority."
-  },
-  {
-    value: "custom_config",
-    label: "Custom (config.toml)",
-    description: "Advanced custom policy surface reserved for later."
+    label: "Bounded",
+    description: "Auto-run safe project commands inside the workspace. Risky, background, admin, or outside-workspace commands still need approval or stop safely."
   }
 ];
 
 export function App() {
   const workspaceInputRef = useRef<HTMLInputElement | null>(null);
+  const promptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const queueIdRef = useRef(0);
   const runtimeEventUnsubscribeRef = useRef<(() => void) | null>(null);
+  const autoRunningCommandIdsRef = useRef<Set<string>>(new Set());
+  const autoApplyingPatchIdsRef = useRef<Set<string>>(new Set());
   const lastCommandCountRef = useRef(0);
   const lastPreviewTargetRef = useRef("");
   const suppressPreviewOpenRef = useRef(false);
@@ -205,11 +224,11 @@ export function App() {
   const [runtimeSession, setRuntimeSession] = useState<AgentRuntimeSession | null>(null);
   const [runtimeSessionToken, setRuntimeSessionToken] = useState("");
   const [thinkFirst, setThinkFirst] = useState(false);
-  const [accessProfile, setAccessProfile] = useState<AccessProfile>("default_permissions");
+  const [accessProfile, setAccessProfile] = useState<AccessProfile>("full_access");
   const [accessMenuOpen, setAccessMenuOpen] = useState(false);
   const [safetySettings, setSafetySettings] = useState<SafetySettings>({
     ...defaultSafetySettings,
-    ...accessProfileDefaults("default_permissions")
+    ...accessProfileDefaults("full_access")
   });
   const [providerConfig, setProviderConfig] = useState<ModelProviderConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -224,7 +243,15 @@ export function App() {
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
   const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
+  const [composerScale, setComposerScale] = useState(DEFAULT_COMPOSER_SCALE);
   const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
+  const [activeRuntimeCommand, setActiveRuntimeCommand] = useState<ActiveRuntimeCommand | null>(null);
+  const [showFullAccessBanner, setShowFullAccessBanner] = useState(false);
+  const [progressRailOpen, setProgressRailOpen] = useState(false);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [activeFileReference, setActiveFileReference] = useState<ActiveFileReference | null>(null);
+  const progressRailCloseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -236,16 +263,40 @@ export function App() {
       const storedWorkspaces = readStoredJson<RecentWorkspaceEntry[]>(RECENT_WORKSPACES_KEY, []);
       const storedSessions = readStoredJson<RecentSessionEntry[]>(RECENT_SESSIONS_KEY, []);
       const storedPromptHistory = readStoredJson<string[]>(PROMPT_HISTORY_KEY, []);
+      const storedComposerScale = Number(localStorage.getItem(COMPOSER_SCALE_KEY));
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
+      if (Number.isFinite(storedComposerScale)) {
+        setComposerScale(clampComposerScale(storedComposerScale));
+      }
       const lastWorkspacePath = localStorage.getItem(LAST_WORKSPACE_KEY);
       if (lastWorkspacePath) {
         setWorkspacePath(normalizeWorkspacePath(lastWorkspacePath));
       }
+      setShowFullAccessBanner(localStorage.getItem(FULL_ACCESS_WARNING_KEY) !== "true");
     })();
     return () => runtimeEventUnsubscribeRef.current?.();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (progressRailCloseTimerRef.current !== null) {
+        window.clearTimeout(progressRailCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const textarea = promptTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const minHeight = Math.round((prompt.trim() ? 62 : 54) * composerScale);
+    const maxHeight = Math.round(230 * composerScale);
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [prompt, composerScale]);
 
   useEffect(() => {
     setSafetySettings((current) => ({
@@ -280,7 +331,8 @@ export function App() {
           exitCode: latestExecution.exitCode,
           stdout: latestExecution.stdout,
           stderr: latestExecution.stderr,
-          message: latestExecution.message
+          message: latestExecution.message,
+          diagnosis: latestExecution.diagnosis
         });
       }
       setBottomView("terminal");
@@ -300,6 +352,104 @@ export function App() {
     lastPreviewTargetRef.current = target;
     void handleOpenPreview(runtimeSession.nextAction.preview);
   }, [runtimeSession]);
+
+  useEffect(() => {
+    if (!runtimeSession) return;
+    const runnable = runtimeSession.commandRequests.filter((request) =>
+      canAutoRunRuntimeCommand(runtimeSession, request, safetySettings)
+      && !autoRunningCommandIdsRef.current.has(request.id)
+    );
+    if (!runnable.length) return;
+
+    let cancelled = false;
+    void (async () => {
+      for (const request of runnable) {
+        if (cancelled) return;
+        autoRunningCommandIdsRef.current.add(request.id);
+        try {
+          setTerminalCommand(request.command);
+          const result = await runCommandRequest(runtimeSession, request, true);
+          if (cancelled) return;
+          setTerminalResult(result);
+          setMessage(result.diagnosis?.summary ?? result.message ?? `Policy-classified auto-run completed: ${request.command}`);
+          await refreshWorkspaceState();
+        } catch (error) {
+          if (!cancelled) {
+            setMessage(String(error));
+          }
+        } finally {
+          autoRunningCommandIdsRef.current.delete(request.id);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeSession, safetySettings]);
+
+  useEffect(() => {
+    if (!runtimeSession || !safetySettings.autoApplyValidatedPatches) return;
+    const candidate = runtimeSession.patchProposals.find((patch) =>
+      (patch.status === "proposed" || patch.status === "approved")
+      && !autoApplyingPatchIdsRef.current.has(patch.id)
+    );
+    if (!candidate) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        autoApplyingPatchIdsRef.current.add(candidate.id);
+        try {
+          setMessage(`Full Access applying ${candidate.title}...`);
+          const applied = await applyRuntimePatchWithRetry(runtimeSession.id, candidate.id);
+          if (cancelled) return;
+          const updated = await reportRuntimePatchApplyResult(
+            runtimeSession.id,
+            candidate.id,
+            {
+              status: "applied",
+              message: applied.message,
+              reconciliationSnapshot:
+                applied.beforeSnapshot || applied.afterSnapshot
+                  ? {
+                      before: applied.beforeSnapshot,
+                      after: applied.afterSnapshot
+                    }
+                  : undefined
+            },
+            runtimeSessionToken || undefined
+          );
+          if (cancelled) return;
+          setRuntimeSession(updated);
+          setMessage(applied.message);
+          await refreshWorkspaceState();
+        } catch (error) {
+          if (!cancelled) {
+            try {
+              const updated = await reportRuntimePatchApplyResult(
+                runtimeSession.id,
+                candidate.id,
+                { status: "failed", message: String(error) },
+                runtimeSessionToken || undefined
+              );
+              setRuntimeSession(updated);
+            } catch {
+              // Keep the original apply error visible.
+            }
+            setMessage(String(error));
+          }
+        } finally {
+          autoApplyingPatchIdsRef.current.delete(candidate.id);
+        }
+      })();
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [runtimeSession, runtimeSessionToken, safetySettings.autoApplyValidatedPatches]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -327,14 +477,39 @@ export function App() {
     });
   }, [runtimeSession, workspace]);
 
-  const sessionTitle = runtimeSession?.agentName ?? "OrchCode";
+  const sessionTitle = runtimeSession ? deriveSessionTitle(runtimeSession) : "OrchCode";
   const hasSessionView = Boolean(runtimeSession);
+  const agentPanel = runtimeSession ? buildAgentSidePanel(runtimeSession) : { agents: [], backgroundJobs: [] };
+  const hasAgentSidePanel = agentPanel.agents.length > 0;
+  const showRightPanel = activityOpen;
+  const sidebarProjects = buildSidebarProjects({
+    workspace,
+    runtimeSession,
+    recentWorkspaces,
+    recentSessions,
+    agentBusy,
+    runtimeConnectionState
+  });
 
   const sessionSummary = runtimeSession
     ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState)
     : workspace
       ? `Connected to ${workspace.name}`
       : "Open a workspace to begin";
+  const railActivityItems = runtimeSession ? buildPrimaryActivityItems(runtimeSession, activeRuntimeCommand) : [];
+  const railCurrentStep = runtimeSession ? describeCurrentStep(runtimeSession, runtimeConnectionState, activeRuntimeCommand) : null;
+  const showProgressRail = Boolean(runtimeSession && (railCurrentStep || railActivityItems.length));
+
+  useEffect(() => {
+    if (!agentPanel.agents.length) {
+      setSelectedAgentId("");
+      setAgentPanelOpen(false);
+      return;
+    }
+    if (!selectedAgentId || !agentPanel.agents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(agentPanel.agents[0]!.id);
+    }
+  }, [agentPanel.agents, selectedAgentId]);
 
   async function refreshWorkspaceState(nextWorkspace?: WorkspaceInfo) {
     const activeWorkspace = nextWorkspace ?? workspace;
@@ -415,9 +590,9 @@ export function App() {
 
   async function handleRunCommand() {
     try {
-      const result = await runWorkspaceCommand(terminalCommand);
+      const result = await runWorkspaceCommand(terminalCommand, commandSafetySettings(safetySettings));
       setTerminalResult(result);
-      setMessage(result.message ?? `Command ${result.status}.`);
+      setMessage(result.diagnosis?.summary ?? result.message ?? `Command ${result.status}.`);
       if (terminalCommand.trim().startsWith("git ")) {
         await refreshWorkspaceState();
       }
@@ -527,13 +702,13 @@ export function App() {
       const sessionId = canReuseSession
         ? runtimeSession.id
         : await (async () => {
-            const trustProfile = accessProfile === "auto_review" || accessProfile === "bounded_autonomy" ? "trusted_internal" : "strict_gated";
+            const trustProfile = accessProfile === "auto_review" || accessProfile === "bounded_autonomy" || accessProfile === "full_access" ? "trusted_internal" : "strict_gated";
             const rustRun = await createRuntimeRun(input, trustProfile);
             sessionToken = rustRun.sessionToken;
             setRuntimeSessionToken(rustRun.sessionToken);
             const wantsDemoProvider = /\b(demo|mock)\b/i.test(input);
             const sanitizedProvider =
-              providerConfig && providerConfig.providerType === "ollama"
+              providerConfig
                 ? {
                     providerType: providerConfig.providerType,
                     providerName: providerConfig.providerName,
@@ -542,8 +717,8 @@ export function App() {
                     isValid: providerConfig.isValid
                   }
                 : undefined;
-            if (!wantsDemoProvider && (!sanitizedProvider?.isValid || sanitizedProvider.providerType !== "ollama")) {
-              throw new Error("Configure a valid local Ollama provider before starting a real coding run. Recommended models: qwen2.5-coder:7b or llama3:8b.");
+            if (!wantsDemoProvider && !sanitizedProvider?.isValid) {
+              throw new Error("Configure a valid model provider before starting a real coding run, or include `demo` in the prompt for mock mode.");
             }
             return (
               await createRuntimeSession({
@@ -568,7 +743,6 @@ export function App() {
       const nextSession = await getRuntimeSession(sessionId, sessionToken);
       setRuntimeSession(nextSession);
       await mirrorRuntimeSession(nextSession);
-      await autoRunTrustedSafeCommands(nextSession, normalizedInput);
       await refreshWorkspaceState();
       setMessage(
         queuedMode === "steer"
@@ -614,7 +788,7 @@ export function App() {
   async function handleApplyPatch(patchId: string) {
     if (!runtimeSession) return;
     try {
-      const applied = await applyRuntimePatch(runtimeSession.id, patchId);
+      const applied = await applyRuntimePatchWithRetry(runtimeSession.id, patchId);
       const updated = await reportRuntimePatchApplyResult(
         runtimeSession.id,
         patchId,
@@ -665,73 +839,27 @@ export function App() {
 
   async function runCommandRequest(session: AgentRuntimeSession, request: CommandRequest, autoRun = false) {
     try {
-      const result = await executeApprovedCommand(session.id, request.id, request.command, autoRun, {
-        blockDangerousCommands: safetySettings.blockDangerousCommands,
-        redactSecrets: safetySettings.redactSecrets,
-        allowNetworkCommands: safetySettings.allowNetworkCommands
+      setActiveRuntimeCommand({
+        sessionId: session.id,
+        requestId: request.id,
+        command: request.command,
+        cwd: request.cwd,
+        autoRun
       });
-      const updated = await reportRuntimeCommandResult(
-        session.id,
-        request.id,
-        {
-          command: result.command,
-          cwd: result.cwd,
-          risk: result.risk,
-          status: result.status,
-          exitCode: result.exitCode,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          message: result.message,
-          autoRun,
-          provenance: result.provenance,
-          backgroundJob: result.backgroundJob
-        },
-        runtimeSessionToken || undefined
-      );
-      setRuntimeSession((current) => current && current.id === session.id ? updated : current);
-      return result;
+      const execution = await executeRuntimeCommandRequest({
+        session,
+        request,
+        autoRun,
+        safetySettings: commandSafetySettings(safetySettings),
+        sessionToken: runtimeSessionToken || undefined
+      });
+      setRuntimeSession((current) => current && current.id === session.id ? execution.updatedSession : current);
+      return execution.result;
     } catch (error) {
-      const updated = await reportRuntimeCommandResult(
-        session.id,
-        request.id,
-        {
-          command: request.command,
-          cwd: request.cwd,
-          risk: request.risk,
-          status: "failed",
-          stdout: "",
-          stderr: String(error),
-          message: String(error),
-          autoRun,
-          provenance: {
-            source: "agent",
-            trigger: autoRun ? "auto_approved" : "manual",
-            requestedBy: "agent",
-            approvalSource: autoRun ? "auto" : "manual",
-            policyDecision: "unavailable",
-            policyReason: "Rust command execution failed before a terminal result could be recorded.",
-            executionAuthority: "rust"
-          }
-        },
-        runtimeSessionToken || undefined
-      );
-      setRuntimeSession((current) => current && current.id === session.id ? updated : current);
+      await refreshRuntimeSession();
       throw error;
-    }
-  }
-
-  async function autoRunTrustedSafeCommands(session: AgentRuntimeSession, input: string) {
-    if (session.trustProfile !== "trusted_internal" || !safetySettings.autoRunSafeCommands) return;
-    const runnable = session.commandRequests.filter((request) => request.risk === "safe" && (request.status === "requested" || request.status === "approved"));
-    if (!runnable.length) return;
-    setBottomView("terminal");
-    for (const request of runnable) {
-      setTerminalCommand(request.command);
-      const result = await runCommandRequest(session, request, true);
-      setTerminalResult(result);
-    }
-    if (session.previewRecommendation && /\b(open|launch|run|start|serve)\b/i.test(input)) {
-      await handleOpenPreview(session.previewRecommendation);
+    } finally {
+      setActiveRuntimeCommand((current) => current?.requestId === request.id ? null : current);
     }
   }
 
@@ -763,9 +891,9 @@ export function App() {
       const request = runtimeSession?.commandRequests.find((item) => item.id === requestId);
       const result = runtimeSession && request
         ? await runCommandRequest(runtimeSession, request)
-        : await runWorkspaceCommand(command);
+        : await runWorkspaceCommand(command, commandSafetySettings(safetySettings));
       setTerminalResult(result);
-      setMessage(result.message ?? `Command ${result.status}.`);
+      setMessage(result.diagnosis?.summary ?? result.message ?? `Command ${result.status}.`);
       await refreshWorkspaceState();
     } catch (error) {
       setMessage(String(error));
@@ -799,6 +927,38 @@ export function App() {
     void handlePickWorkspace();
   }
 
+  function openProgressRail() {
+    if (progressRailCloseTimerRef.current !== null) {
+      window.clearTimeout(progressRailCloseTimerRef.current);
+      progressRailCloseTimerRef.current = null;
+    }
+    setProgressRailOpen(true);
+  }
+
+  function closeProgressRailSoon() {
+    if (progressRailCloseTimerRef.current !== null) {
+      window.clearTimeout(progressRailCloseTimerRef.current);
+    }
+    progressRailCloseTimerRef.current = window.setTimeout(() => {
+      setProgressRailOpen(false);
+      progressRailCloseTimerRef.current = null;
+    }, 180);
+  }
+
+  function handleSelectAccessProfile(option: AccessOption) {
+    if (option.value === "full_access") {
+      const confirmed = window.confirm(
+        "Full Access can write files, apply generated patches, and run setup/dev/test/network/background commands automatically. Use it only in a workspace you trust."
+      );
+      if (!confirmed) return;
+      localStorage.setItem(FULL_ACCESS_WARNING_KEY, "true");
+      setShowFullAccessBanner(true);
+    }
+    setAccessProfile(option.value);
+    setAccessMenuOpen(false);
+    setMessage(option.description);
+  }
+
   function handleProjectClick() {
     setSidebarCollapsed(false);
     setActivityOpen(false);
@@ -825,6 +985,25 @@ export function App() {
   }
 
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      if (event.key === "=" || event.key === "+") {
+        event.preventDefault();
+        updateComposerScale(COMPOSER_SCALE_STEP);
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        updateComposerScale(-COMPOSER_SCALE_STEP);
+        return;
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        setComposerScaleValue(DEFAULT_COMPOSER_SCALE);
+        setMessage("Input size reset.");
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       void handleRunAgent();
@@ -865,6 +1044,18 @@ export function App() {
     }
   }
 
+  function updateComposerScale(delta: number) {
+    const next = clampComposerScale(composerScale + delta);
+    setComposerScaleValue(next);
+    setMessage(`Input size ${Math.round(next * 100)}%. Use Ctrl/Cmd 0 to reset.`);
+  }
+
+  function setComposerScaleValue(next: number) {
+    const normalized = clampComposerScale(next);
+    setComposerScale(normalized);
+    localStorage.setItem(COMPOSER_SCALE_KEY, String(normalized));
+  }
+
   async function handleOpenPreview(preview?: AgentRuntimeSession["previewRecommendation"]) {
     preview ??= runtimeSession?.previewRecommendation;
     if (!preview || !workspace) return;
@@ -879,6 +1070,44 @@ export function App() {
     }
   }
 
+  async function handleOpenFileReference(reference: FileReference) {
+    if (!workspace) {
+      setMessage("Open a workspace before opening file references.");
+      return;
+    }
+    if (!isSafeRelativeFilePath(reference.path)) {
+      setActiveFileReference({
+        ...reference,
+        content: "",
+        status: "failed",
+        error: "This file reference is outside the active workspace."
+      });
+      setMessage("File reference blocked because it points outside the workspace.");
+      return;
+    }
+
+    const normalizedReference = {
+      ...reference,
+      line: Math.max(1, Math.floor(reference.line)),
+      lineEnd: reference.lineEnd ? Math.max(reference.line, Math.floor(reference.lineEnd)) : undefined
+    };
+    setActiveFileReference({ ...normalizedReference, content: "", status: "loading" });
+
+    try {
+      const content = await readWorkspaceFile(normalizedReference.path);
+      setActiveFileReference({ ...normalizedReference, content, status: "ready" });
+      setMessage(`Opened ${normalizedReference.path}:${normalizedReference.line}`);
+    } catch (error) {
+      setActiveFileReference({
+        ...normalizedReference,
+        content: "",
+        status: "failed",
+        error: String(error)
+      });
+      setMessage(`File preview failed: ${String(error)}`);
+    }
+  }
+
   async function handleCopyText(text: string, label = "Copied output.") {
     try {
       await navigator.clipboard.writeText(text);
@@ -889,7 +1118,7 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${activityOpen ? "activity-open" : ""}`}>
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${showRightPanel ? "activity-open" : ""}`}>
       <header className="frame-bar">
         <div className="frame-bar-left">
           <button className="frame-icon-button" onClick={() => setSidebarCollapsed((current) => !current)} title="Toggle sidebar">
@@ -931,68 +1160,74 @@ export function App() {
             </div>
 
             {workspace ? (
-              <button className="project-item active-project" onClick={handleProjectClick}>
-                <div>
-                  <strong>{workspace.name}</strong>
-                  <span>{runtimeSession ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState) : "Workspace ready"}</span>
-                </div>
-                <small>{gitStatus?.branch ?? "local"}</small>
-              </button>
+              <div className="workspace-path-pill" title={workspace.path}>
+                {workspace.path}
+              </div>
+            ) : null}
+
+            {sidebarProjects.length ? (
+              <div className="project-groups">
+                {sidebarProjects.map((project) => (
+                  <section
+                    key={project.path}
+                    className={`project-group ${project.isActive ? "active-project-group" : ""}`}
+                  >
+                    <button
+                      className="project-group-header"
+                      onClick={() =>
+                        project.isActive
+                          ? handleProjectClick()
+                          : void handleSelectRecentWorkspace({
+                              path: project.path,
+                              name: project.name,
+                              lastOpenedAt: project.lastOpenedAt,
+                              lastSessionId: project.sessions[0]?.id
+                            })
+                      }
+                    >
+                      <div className="project-group-title">
+                        <FolderOpen size={15} />
+                        <strong>{project.name}</strong>
+                      </div>
+                      <small>{project.isActive ? gitStatus?.branch ?? "active" : formatRelativeDate(project.lastOpenedAt)}</small>
+                    </button>
+
+                    {project.sessions.length ? (
+                      <div className="project-session-list">
+                        {project.sessions.slice(0, project.isActive ? 8 : 5).map((entry) => {
+                          const isActiveSession = entry.id === runtimeSession?.id;
+                          return (
+                            <button
+                              key={entry.id}
+                              className={`project-session-item ${isActiveSession ? "active-session-item" : ""}`}
+                              onClick={() =>
+                                isActiveSession
+                                  ? setActivityOpen(true)
+                                  : void handleRestoreRecentSession(entry)
+                              }
+                              title={
+                                isActiveSession
+                                  ? "Open current session"
+                                  : runtimeSessionToken
+                                    ? "Try live reconnect"
+                                    : "History only"
+                              }
+                            >
+                              <span className="project-session-title">{entry.title}</span>
+                              <small>{formatRelativeDate(entry.updatedAt)}</small>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="sidebar-empty">No chats yet for this project.</div>
+                    )}
+                  </section>
+                ))}
+              </div>
             ) : (
               <div className="sidebar-empty">Your active workspace will appear here.</div>
             )}
-
-            {runtimeSession ? (
-              <button className="project-item" onClick={() => setActivityOpen(true)}>
-                <div>
-                  <strong>{sessionTitle}</strong>
-                  <span>{humanizeLifecycleStage(runtimeSession.lifecycleStage)}</span>
-                </div>
-                <small>{runtimeSession.tasks.length}</small>
-              </button>
-            ) : null}
-
-            {recentWorkspaces
-              .filter((entry) => entry.path !== workspace?.path)
-              .map((entry) => {
-                const lastSession = recentSessions.find((sessionEntry) => sessionEntry.id === entry.lastSessionId);
-                return (
-                  <button key={entry.path} className="project-item" onClick={() => void handleSelectRecentWorkspace(entry)}>
-                    <div>
-                      <strong>{entry.name}</strong>
-                      <span>
-                        {lastSession
-                          ? `${humanizeRuntimeStatus(lastSession.status)}${!runtimeSessionToken ? " | history only" : ""}`
-                          : "Recent workspace"}
-                      </span>
-                    </div>
-                    <small>{shortenPath(entry.path)}</small>
-                  </button>
-                );
-              })}
-
-            {recentSessions
-              .filter((entry) => entry.id !== runtimeSession?.id)
-              .slice(0, 4)
-              .map((entry) => (
-                <button
-                  key={entry.id}
-                  className="project-item"
-                  disabled={!runtimeSessionToken}
-                  onClick={() => void handleRestoreRecentSession(entry)}
-                  title={runtimeSessionToken ? "Try live reconnect" : "History only"}
-                >
-                  <div>
-                    <strong>{entry.title}</strong>
-                    <span>
-                      {runtimeSessionToken
-                        ? `${humanizeRuntimeStatus(entry.status)} | reconnect may work in this app session`
-                        : `${humanizeRuntimeStatus(entry.status)} | history only, not reconnectable after restart`}
-                    </span>
-                  </div>
-                  <small>{entry.workspaceName}</small>
-                </button>
-              ))}
           </section>
 
           <button className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
@@ -1012,10 +1247,21 @@ export function App() {
             </div>
 
             <div className="toolbar-group">
+              {hasAgentSidePanel ? (
+                <AgentIconRow
+                  agents={agentPanel.agents}
+                  selectedAgentId={selectedAgentId}
+                  panelOpen={agentPanelOpen}
+                  onSelectAgent={(agentId) => {
+                    setSelectedAgentId(agentId);
+                    setAgentPanelOpen(true);
+                  }}
+                />
+              ) : null}
               <button
                 className={`frame-icon-button ${activityOpen ? "active-toggle" : ""}`}
                 onClick={() => setActivityOpen((current) => !current)}
-                title="Toggle activity panel"
+                title="Toggle details panel"
               >
                 <Bot size={16} />
               </button>
@@ -1047,16 +1293,19 @@ export function App() {
                 session={runtimeSession}
                 connectionState={runtimeConnectionState}
                 canReconnect={Boolean(runtimeSessionToken)}
+                activeRuntimeCommand={activeRuntimeCommand}
                 onOpenActivity={() => setActivityOpen(true)}
                 onOpenDiff={() => setBottomView("diff")}
                 onQuickReply={submitPrompt}
                 onOpenPreview={() => void handleOpenPreview()}
                 onRunPendingCommands={() => void handleRunPendingCommands()}
+                onOpenFileReference={handleOpenFileReference}
               />
             ) : null}
 
-            <div className="composer-shell">
+            <div className="composer-shell" style={{ "--composer-scale": String(composerScale) } as CSSProperties}>
               <textarea
+                ref={promptTextareaRef}
                 value={prompt}
                 onChange={(event) => {
                   setPrompt(event.target.value);
@@ -1066,7 +1315,7 @@ export function App() {
                 }}
                 onKeyDown={handlePromptKeyDown}
                 placeholder="Ask local Codex to create or edit a project with Ollama..."
-                rows={4}
+                rows={1}
               />
 
               <div className="composer-topline">
@@ -1090,12 +1339,8 @@ export function App() {
                         {accessOptions.map((option) => (
                           <button
                             key={option.value}
-                            className={`access-option ${accessProfile === option.value ? "selected" : ""}`}
-                            onClick={() => {
-                              setAccessProfile(option.value);
-                              setAccessMenuOpen(false);
-                              setMessage(option.description);
-                            }}
+                            className={`access-option ${isAccessOptionSelected(accessProfile, option.value) ? "selected" : ""}`}
+                            onClick={() => handleSelectAccessProfile(option)}
                             type="button"
                           >
                             <strong>{option.label}</strong>
@@ -1128,6 +1373,18 @@ export function App() {
                   <span>Details</span>
                 </button>
               </div>
+
+              {accessProfile === "full_access" && showFullAccessBanner ? (
+                <div className="full-access-banner">
+                  <div>
+                    <strong>Full Access is on</strong>
+                    <span>Validated file changes apply automatically, and requested setup/dev/test/network/background commands can run without another prompt.</span>
+                  </div>
+                  <button className="frame-icon-button" onClick={() => setShowFullAccessBanner(false)} title="Dismiss full access notice">
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
 
               {agentBusy || queuedPrompts.length ? (
                 <div className="queue-strip">
@@ -1186,7 +1443,7 @@ export function App() {
                     ) : null}
                   </div>
                   <pre>
-                    {terminalResult ? formatTerminalResult(terminalResult) : "Manual console for commands that current policy heuristics may allow. Medium-risk runtime commands pause for approval. Dangerous commands remain blocked."}
+                    {terminalResult ? formatTerminalResult(terminalResult) : "Manual console for commands that current policy heuristics may allow. Medium-risk runtime commands pause for approval. Dangerous commands still stop safely."}
                   </pre>
                 </div>
               ) : (
@@ -1208,7 +1465,26 @@ export function App() {
           ) : null}
         </main>
 
-        {activityOpen ? (
+        {agentPanelOpen && hasAgentSidePanel ? (
+          <AgentPanelOverlay
+            agents={agentPanel.agents}
+            backgroundJobs={agentPanel.backgroundJobs}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={setSelectedAgentId}
+            onOpenDiff={() => setBottomView("diff")}
+            onClose={() => setAgentPanelOpen(false)}
+          />
+        ) : null}
+
+        {activeFileReference ? (
+          <FileReferencePanel
+            reference={activeFileReference}
+            workspacePath={workspace?.path ?? ""}
+            onClose={() => setActiveFileReference(null)}
+          />
+        ) : null}
+
+        {showRightPanel ? (
           <aside className="activity-drawer">
             <div className="drawer-header">
               <div>
@@ -1304,7 +1580,7 @@ export function App() {
                     ) : request.status === "executing" || request.status === "running" ? (
                       <button disabled>Background tracking limited</button>
                     ) : request.status === "blocked" ? (
-                      <button disabled>Blocked by policy</button>
+                      <button disabled>Needs attention</button>
                     ) : request.status === "denied" || request.status === "rejected" ? (
                       <button disabled>Denied</button>
                     ) : (
@@ -1374,6 +1650,20 @@ export function App() {
         ) : null}
       </div>
 
+      {showProgressRail && railCurrentStep ? (
+        <ProgressHoverRail
+          open={progressRailOpen}
+          currentStep={railCurrentStep}
+          items={railActivityItems}
+          session={runtimeSession}
+          onMouseEnter={openProgressRail}
+          onMouseLeave={closeProgressRailSoon}
+          onOpenPreview={() => void handleOpenPreview()}
+          onOpenActivity={() => setActivityOpen(true)}
+          onRunPendingCommands={() => void handleRunPendingCommands()}
+        />
+      ) : null}
+
       {settingsOpen ? (
         <SettingsDialog
           currentConfig={providerConfig}
@@ -1411,37 +1701,26 @@ function ThreadFeed({
   session,
   connectionState,
   canReconnect,
+  activeRuntimeCommand,
   onOpenActivity,
   onOpenDiff,
   onQuickReply,
   onOpenPreview,
-  onRunPendingCommands
+  onRunPendingCommands,
+  onOpenFileReference
 }: {
   session: AgentRuntimeSession;
   connectionState: "connected" | "disconnected";
   canReconnect: boolean;
+  activeRuntimeCommand: ActiveRuntimeCommand | null;
   onOpenActivity: () => void;
   onOpenDiff: () => void;
   onQuickReply: (message: string) => void | Promise<void>;
   onOpenPreview: () => void;
   onRunPendingCommands: () => void;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
 }) {
-  const patchStats = getSessionPatchStats(session);
-  const agentContracts = getAgentContracts(session);
-  const [selectedAgentId, setSelectedAgentId] = useState(agentContracts[0]?.id ?? "");
-
-  useEffect(() => {
-    if (!agentContracts.length) {
-      setSelectedAgentId("");
-      return;
-    }
-    if (!agentContracts.some((agent) => agent.id === selectedAgentId)) {
-      setSelectedAgentId(agentContracts[0]?.id ?? "");
-    }
-  }, [agentContracts, selectedAgentId]);
-
-  const selectedAgent = agentContracts.find((agent) => agent.id === selectedAgentId) ?? agentContracts[0];
-
+  const isExplainOnly = session.runMode === "inspect_only";
   return (
     <div className="thread-feed">
       {session.messages.map((message) => (
@@ -1450,80 +1729,26 @@ function ThreadFeed({
             <div className="thread-entry-label">{message.role === "user" ? "You" : message.role === "assistant" ? session.agentName : "System"}</div>
             <CopyMessageButton text={message.content} />
           </div>
-          <div className="thread-entry-body">{message.content}</div>
+          <MessageMarkdown text={message.content} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
         </div>
       ))}
 
-      <RunHeaderCard session={session} patchStats={patchStats} />
-      <ProgressChecklistCard session={session} />
-      <AgentStripCard agents={agentContracts} selectedAgentId={selectedAgentId} onSelectAgent={setSelectedAgentId} />
-      <AgentDetailCard agent={selectedAgent} />
-      <OperatorStateCard session={session} connectionState={connectionState} canReconnect={canReconnect} />
-      <EvidenceLedgerCard records={session.decisionLedger ?? []} />
-      <ProgressTimeline session={session} />
-      <ReasoningSummaryCard session={session} />
-      <ToolIntentCard session={session} />
-      <ArtifactCard session={session} onOpenDiff={onOpenDiff} onOpenPreview={onOpenPreview} />
-      <WorkingTeamCard session={session} onOpenActivity={onOpenActivity} />
-      <CodeChangesCard session={session} patchStats={patchStats} onOpenActivity={onOpenActivity} onOpenDiff={onOpenDiff} />
-      <ReviewGateCard session={session} />
-      <RunResultCard session={session} onOpenPreview={onOpenPreview} />
-      <RunSummaryCard session={session} />
-
-      {session.nextAction?.kind === "confirm_plan" ? (
-        <ActionCard
-          title="Plan review required"
-          message={session.nextAction.message}
-          actions={
-            <>
-              <button onClick={() => void onQuickReply("Proceed with implementation.")}>Proceed now</button>
-              <button onClick={onOpenActivity}>Review plan</button>
-            </>
-          }
-        />
+      {!isExplainOnly ? (
+        <>
+          <PrimaryActionCard
+            session={session}
+            onOpenActivity={onOpenActivity}
+            onOpenPreview={onOpenPreview}
+            onQuickReply={onQuickReply}
+            onRunPendingCommands={onRunPendingCommands}
+          />
+          <CompactPatchCallout session={session} onOpenDiff={onOpenDiff} />
+          <CompactCommandCallout session={session} onOpenActivity={onOpenActivity} />
+          <CompactOutcomeCallout session={session} onOpenPreview={onOpenPreview} />
+        </>
       ) : null}
-
-      {session.nextAction?.kind === "confirm_preview" ? (
-        <ActionCard
-          title="Preview launch still pending"
-          message={`${session.nextAction.message} Nothing has been launched yet.`}
-          actions={
-            <>
-              <button onClick={() => void onQuickReply("Run it now.")}>Run it now</button>
-              <button onClick={() => void onQuickReply("Show me the results first.")}>Show results</button>
-              <button onClick={onOpenActivity}>Details</button>
-            </>
-          }
-        />
-      ) : null}
-
-      {session.nextAction?.kind === "preview_ready" ? (
-        <ActionCard
-          title="Preview can be opened"
-          message={`${session.nextAction.message} Opening it is still a separate operator action.`}
-          actions={
-            <button onClick={() => onOpenPreview()}>
-              <Globe size={14} />
-              Open preview
-            </button>
-          }
-        />
-      ) : null}
-
-      {session.nextAction?.kind === "approve_commands" ? (
-        <ActionCard
-          title="Runtime command approval required"
-          message={`${session.nextAction.message} Commands have not run until you approve execution.`}
-          actions={
-            <>
-              <button onClick={() => onRunPendingCommands()}>
-                <Play size={14} />
-                Run pending commands in Rust
-              </button>
-              <button onClick={onOpenActivity}>Details</button>
-            </>
-          }
-        />
+      {connectionState === "disconnected" && !isExplainOnly ? (
+        <CurrentStepCard session={session} currentStep={describeCurrentStep(session, connectionState, activeRuntimeCommand)} canReconnect={canReconnect} onOpenActivity={onOpenActivity} />
       ) : null}
     </div>
   );
@@ -1542,6 +1767,818 @@ function CopyMessageButton({ text }: { text: string }) {
     <button className="thread-copy-button" onClick={() => void handleCopy()} title="Copy message">
       <Copy size={14} />
     </button>
+  );
+}
+
+type MarkdownBlock =
+  | { type: "code"; language: string; content: string }
+  | { type: "text"; lines: string[] };
+
+function MessageMarkdown({
+  text,
+  workspacePath,
+  onOpenFileReference
+}: {
+  text: string;
+  workspacePath: string;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+}) {
+  const blocks = parseMarkdownBlocks(text);
+  return (
+    <div className="thread-entry-body markdown-message">
+      {blocks.map((block, index) =>
+        block.type === "code"
+          ? (
+            <div className="message-code-block" key={`code-${index}`}>
+              {block.language ? <div className="message-code-language">{block.language}</div> : null}
+              <pre><code>{block.content}</code></pre>
+            </div>
+          )
+          : <MarkdownTextBlock block={block} key={`text-${index}`} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} />
+      )}
+    </div>
+  );
+}
+
+function MarkdownTextBlock({
+  block,
+  workspacePath,
+  onOpenFileReference
+}: {
+  block: Extract<MarkdownBlock, { type: "text" }>;
+  workspacePath: string;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+}) {
+  const nodes: ReactNode[] = [];
+  let index = 0;
+  while (index < block.lines.length) {
+    const line = block.lines[index] ?? "";
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    if (/^\|.+\|$/.test(line) && block.lines[index + 1]?.includes("---")) {
+      const tableLines: string[] = [];
+      while (index < block.lines.length && /^\|.+\|$/.test(block.lines[index] ?? "")) {
+        tableLines.push(block.lines[index] ?? "");
+        index += 1;
+      }
+      nodes.push(renderMarkdownTable(tableLines, nodes.length, workspacePath, onOpenFileReference));
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1]!.length;
+      const content = renderInlineMarkdown(heading[2]!, workspacePath, onOpenFileReference);
+      nodes.push(level <= 2 ? <h3 key={nodes.length}>{content}</h3> : <h4 key={nodes.length}>{content}</h4>);
+      index += 1;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < block.lines.length && /^\s*[-*]\s+/.test(block.lines[index] ?? "")) {
+        items.push((block.lines[index] ?? "").replace(/^\s*[-*]\s+/, ""));
+        index += 1;
+      }
+      nodes.push(
+        <ul key={nodes.length}>
+          {items.map((item, itemIndex) => <li key={`${itemIndex}-${item}`}>{renderInlineMarkdown(item, workspacePath, onOpenFileReference)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+    const paragraph: string[] = [];
+    while (
+      index < block.lines.length &&
+      block.lines[index]?.trim() &&
+      !/^(#{1,4})\s+/.test(block.lines[index] ?? "") &&
+      !/^\s*[-*]\s+/.test(block.lines[index] ?? "") &&
+      !(/^\|.+\|$/.test(block.lines[index] ?? "") && block.lines[index + 1]?.includes("---"))
+    ) {
+      paragraph.push(block.lines[index] ?? "");
+      index += 1;
+    }
+    nodes.push(<p key={nodes.length}>{renderInlineMarkdown(paragraph.join(" "), workspacePath, onOpenFileReference)}</p>);
+  }
+  return <>{nodes}</>;
+}
+
+function parseMarkdownBlocks(text: string): MarkdownBlock[] {
+  const lines = text.split(/\r?\n/);
+  const blocks: MarkdownBlock[] = [];
+  let textLines: string[] = [];
+  let codeLanguage = "";
+  let codeLines: string[] | null = null;
+  const flushText = () => {
+    if (textLines.length) {
+      blocks.push({ type: "text", lines: textLines });
+      textLines = [];
+    }
+  };
+  for (const line of lines) {
+    const fence = line.match(/^```(\w+)?\s*$/);
+    if (fence) {
+      if (codeLines) {
+        blocks.push({ type: "code", language: codeLanguage, content: codeLines.join("\n") });
+        codeLines = null;
+        codeLanguage = "";
+      } else {
+        flushText();
+        codeLanguage = fence[1] ?? "";
+        codeLines = [];
+      }
+      continue;
+    }
+    if (codeLines) {
+      codeLines.push(line);
+    } else {
+      textLines.push(line);
+    }
+  }
+  if (codeLines) blocks.push({ type: "code", language: codeLanguage, content: codeLines.join("\n") });
+  flushText();
+  return blocks;
+}
+
+function renderInlineMarkdown(
+  text: string,
+  workspacePath: string,
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>
+): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\[((?:[A-Za-z]:)?[^:[\]\n]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\])/g;
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index === undefined) continue;
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    if (match[4]) {
+      nodes.push(<code key={`code-${match.index}`}>{match[4]}</code>);
+    } else if (match[5] && match[6]) {
+      const reference = {
+        path: match[5].trim(),
+        line: Number.parseInt(match[6], 10),
+        lineEnd: match[7] ? Number.parseInt(match[7], 10) : undefined
+      };
+      nodes.push(
+        <MarkdownLink
+          href={`orchcode-file:${encodeURIComponent(reference.path)}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
+          label={`${reference.path}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
+          workspacePath={workspacePath}
+          onOpenFileReference={onOpenFileReference}
+          key={`file-ref-${match.index}`}
+        />
+      );
+    } else {
+      const label = match[2] ?? "";
+      const href = match[3] ?? "";
+      nodes.push(<MarkdownLink href={href} label={label} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} key={`link-${match.index}`} />);
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+function MarkdownLink({
+  href,
+  label,
+  workspacePath,
+  onOpenFileReference
+}: {
+  href: string;
+  label: string;
+  workspacePath: string;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+}) {
+  const fileRef = parseFileRef(href);
+  async function handleClick(event: MouseEvent) {
+    event.preventDefault();
+    try {
+      if (fileRef) {
+        await onOpenFileReference(fileRef);
+      } else {
+        await openExternalTarget(href);
+      }
+    } catch {
+      if (fileRef) {
+        await navigator.clipboard.writeText(`${fileRef.path}:${fileRef.line}`);
+      }
+    }
+  }
+  return (
+    <a href={href} onClick={(event) => void handleClick(event)} className={fileRef ? "message-file-ref" : undefined}>
+      {label}
+    </a>
+  );
+}
+
+function renderMarkdownTable(
+  lines: string[],
+  key: number,
+  workspacePath: string,
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>
+) {
+  const rows = lines
+    .filter((line) => !/^\|\s*-+/.test(line))
+    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+  const [header, ...body] = rows;
+  return (
+    <div className="message-table-wrap" key={`table-${key}`}>
+      <table>
+        {header ? <thead><tr>{header.map((cell) => <th key={cell}>{renderInlineMarkdown(cell, workspacePath, onOpenFileReference)}</th>)}</tr></thead> : null}
+        <tbody>
+          {body.map((row, rowIndex) => (
+            <tr key={`${rowIndex}-${row.join("|")}`}>
+              {row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{renderInlineMarkdown(cell, workspacePath, onOpenFileReference)}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function parseFileRef(href: string) {
+  if (!href.startsWith("orchcode-file:")) return null;
+  const rest = href.slice("orchcode-file:".length);
+  const separator = rest.lastIndexOf(":");
+  if (separator <= 0) return null;
+  const pathPart = rest.slice(0, separator);
+  const linePart = rest.slice(separator + 1);
+  const [lineValue, lineEndValue] = linePart.split("-");
+  const line = Number.parseInt(lineValue ?? "", 10);
+  const lineEnd = lineEndValue ? Number.parseInt(lineEndValue, 10) : undefined;
+  if (!Number.isFinite(line)) return null;
+  return { path: decodeURIComponent(pathPart), line, lineEnd: Number.isFinite(lineEnd) ? lineEnd : undefined };
+}
+
+function FileReferencePanel({
+  reference,
+  workspacePath,
+  onClose
+}: {
+  reference: ActiveFileReference;
+  workspacePath: string;
+  onClose: () => void;
+}) {
+  const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const lines = reference.content.split(/\r?\n/);
+  const lineEnd = reference.lineEnd ?? reference.line;
+  useEffect(() => {
+    const target = lineRefs.current.get(reference.line);
+    target?.scrollIntoView({ block: "center" });
+  }, [reference.path, reference.line, reference.status]);
+
+  async function handleOpenInVsCode() {
+    if (!workspacePath) return;
+    const workspaceRoot = workspacePath.replaceAll("\\", "/").replace(/\/$/, "");
+    const absolutePath = `${workspaceRoot}/${reference.path}`;
+    try {
+      await openExternalTarget(`vscode://file/${encodeURI(absolutePath)}:${reference.line}`);
+    } catch {
+      await navigator.clipboard.writeText(`${reference.path}:${reference.line}`);
+    }
+  }
+
+  return (
+    <aside className="file-reference-panel">
+      <div className="file-reference-backdrop" onClick={onClose} />
+      <section className="file-reference-drawer">
+        <div className="drawer-header">
+          <div>
+            <strong>{reference.path}</strong>
+            <span>
+              {reference.status === "ready"
+                ? `Line ${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`
+                : reference.status === "loading"
+                  ? "Loading file preview..."
+                  : "Preview failed"}
+            </span>
+          </div>
+          <div className="file-reference-actions">
+            <button
+              className="vscode-open-button"
+              onClick={() => void handleOpenInVsCode()}
+              title="Open this file in Visual Studio Code"
+              type="button"
+            >
+              <Code2 size={15} />
+              <span>VS Code</span>
+            </button>
+            <button className="frame-icon-button" onClick={onClose} title="Close file preview">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {reference.status === "failed" ? (
+          <div className="file-reference-error">{reference.error ?? "Could not open this file reference."}</div>
+        ) : reference.status === "loading" ? (
+          <div className="file-reference-loading">Opening file inside OrchCode...</div>
+        ) : (
+          <div className="file-reference-code" role="region" aria-label={`${reference.path} preview`}>
+            {lines.map((line, index) => {
+              const lineNumber = index + 1;
+              const highlighted = lineNumber >= reference.line && lineNumber <= lineEnd;
+              return (
+                <div
+                  key={`${reference.path}-${lineNumber}`}
+                  ref={(node) => {
+                    if (node) lineRefs.current.set(lineNumber, node);
+                    else lineRefs.current.delete(lineNumber);
+                  }}
+                  className={`file-reference-line ${highlighted ? "highlighted" : ""}`}
+                >
+                  <span className="file-reference-line-number">{lineNumber}</span>
+                  <code>{line || " "}</code>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </aside>
+  );
+}
+
+function CurrentStepCard({
+  session,
+  currentStep,
+  canReconnect,
+  onOpenActivity
+}: {
+  session: AgentRuntimeSession;
+  currentStep: ActivityStreamItem;
+  canReconnect: boolean;
+  onOpenActivity: () => void;
+}) {
+  return (
+    <section className={`thread-status-row ${currentStep.status}`}>
+      <div className="thread-status-head">
+        <div className={`thread-status-dot ${currentStep.status}`} />
+        <div>
+          <strong>{currentStep.title}</strong>
+          <span>{currentStep.summary}</span>
+        </div>
+      </div>
+      <div className="thread-status-meta">
+        <span>{humanizeRuntimeStatus(session.status)}</span>
+        <span>{humanizeLifecycleStage(session.lifecycleStage)}</span>
+        <span>{humanizeRunMode(session.runMode)}</span>
+        <span>{describeVerificationState(session)}</span>
+      </div>
+      <div className="command-actions">
+        <button onClick={onOpenActivity}>{canReconnect ? "Open details" : "Show details"}</button>
+      </div>
+    </section>
+  );
+}
+
+function PrimaryActionCard({
+  session,
+  onOpenActivity,
+  onOpenPreview,
+  onQuickReply,
+  onRunPendingCommands
+}: {
+  session: AgentRuntimeSession;
+  onOpenActivity: () => void;
+  onOpenPreview: () => void;
+  onQuickReply: (message: string) => void | Promise<void>;
+  onRunPendingCommands: () => void;
+}) {
+  if (session.nextAction?.kind === "confirm_plan") {
+    return (
+      <ActionCard
+        title="Plan review required"
+        message={session.nextAction.message}
+        actions={
+          <>
+            <button onClick={() => void onQuickReply("Proceed with implementation.")}>Proceed now</button>
+            <button onClick={onOpenActivity}>Review plan</button>
+          </>
+        }
+      />
+    );
+  }
+
+  if (session.nextAction?.kind === "confirm_preview") {
+    return (
+      <ActionCard
+        title="Preview launch still pending"
+        message={`${session.nextAction.message} Nothing has been launched yet.`}
+        actions={
+          <>
+            <button onClick={() => void onQuickReply("Run it now.")}>Run it now</button>
+            <button onClick={() => void onQuickReply("Show me the results first.")}>Show results</button>
+            <button onClick={onOpenActivity}>Details</button>
+          </>
+        }
+      />
+    );
+  }
+
+  if (session.nextAction?.kind === "preview_ready") {
+    return (
+      <ActionCard
+        title="Preview available"
+        message={`${session.nextAction.message} Opening it remains an explicit operator action.`}
+        actions={
+          <>
+            <button onClick={onOpenPreview}>
+              <Globe size={14} />
+              Open preview
+            </button>
+            <button onClick={onOpenActivity}>Details</button>
+          </>
+        }
+      />
+    );
+  }
+
+  if (session.nextAction?.kind === "approve_commands") {
+    return (
+      <ActionCard
+        title="Run command"
+        message={`${session.nextAction.message} Command output will stream back into the run state after Rust execution.`}
+        actions={
+          <>
+            <button onClick={onRunPendingCommands}>
+              <Play size={14} />
+              Run in Rust
+            </button>
+            <button onClick={onOpenActivity}>Details</button>
+          </>
+        }
+      />
+    );
+  }
+
+  return null;
+}
+
+function InlineAgentOverview({
+  agents,
+  onOpenActivity
+}: {
+  agents: AgentSidePanelAgentView[];
+  onOpenActivity: () => void;
+}) {
+  const visibleAgents = agents.slice(0, 4);
+  const extraCount = Math.max(0, agents.length - visibleAgents.length);
+  return (
+    <section className="inline-agent-overview">
+      <div className="inline-agent-overview-header">
+        <strong>Working team</strong>
+        <button className="activity-link" onClick={onOpenActivity}>Open side panel</button>
+      </div>
+      <div className="inline-agent-chip-row">
+        {visibleAgents.map((agent) => (
+          <div key={agent.id} className={`inline-agent-chip ${agent.status}`}>
+            <div className="inline-agent-chip-top">
+              <strong>{agent.name}</strong>
+              <span>{humanizeAgentStatus(agent.status)}</span>
+            </div>
+            <small>{agent.currentAction}</small>
+          </div>
+        ))}
+        {extraCount > 0 ? <div className="inline-agent-chip more">+{extraCount} more</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function InlineActivityFeed({ items }: { items: ActivityStreamItem[] }) {
+  if (!items.length) return null;
+  return (
+    <section className="inline-activity-feed">
+      {items.map((item) => (
+        <div key={item.id} className={`inline-activity-row ${item.status}`}>
+          <div className={`inline-activity-dot ${item.status}`} />
+          <div>
+            <strong>{item.title}</strong>
+            <span>{item.summary}</span>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function CompactPatchCallout({
+  session,
+  onOpenDiff
+}: {
+  session: AgentRuntimeSession;
+  onOpenDiff: () => void;
+}) {
+  const proposal = session.patchProposals.at(-1);
+  if (!proposal) return null;
+  return (
+    <section className="compact-review-bar">
+      <div>
+        <strong>{proposal.filesChanged.length} file changed</strong>
+        <span>{formatPatchTotalsLabel(proposal.filesChanged.length)} | {humanizePatchStatus(proposal.status)}</span>
+      </div>
+      <button onClick={onOpenDiff}>Review changes</button>
+    </section>
+  );
+}
+
+function CompactCommandCallout({
+  session,
+  onOpenActivity
+}: {
+  session: AgentRuntimeSession;
+  onOpenActivity: () => void;
+}) {
+  const latestExecution = session.commandExecutions.at(-1);
+  const pendingRequest = !latestExecution ? session.commandRequests.at(-1) : null;
+  if (!latestExecution && !pendingRequest) return null;
+
+  if (latestExecution) {
+    return (
+      <section className={`thread-callout ${latestExecution.status === "failed" ? "failed" : "completed"}`}>
+        <div className="thread-callout-header">
+          <strong>{latestExecution.command}</strong>
+          <span>{humanizeCommandResultStatus(latestExecution.status)}{typeof latestExecution.exitCode === "number" ? ` | exit ${latestExecution.exitCode}` : ""}</span>
+        </div>
+        <p>{latestExecution.diagnosis?.summary ?? latestExecution.message ?? describeCommandExecutionProvenance(latestExecution)}</p>
+        {latestExecution.diagnosis?.nextStep ? <small>{latestExecution.diagnosis.nextStep}</small> : null}
+      </section>
+    );
+  }
+
+  return (
+    <section className="thread-callout running">
+      <div className="thread-callout-header">
+        <strong>{pendingRequest?.command}</strong>
+        <span>{humanizeCommandRequestStatus(pendingRequest?.status ?? "requested")}</span>
+      </div>
+      <p>{pendingRequest?.reason}</p>
+      <div className="command-actions">
+        <button onClick={onOpenActivity}>Show command details</button>
+      </div>
+    </section>
+  );
+}
+
+function CompactOutcomeCallout({
+  session,
+  onOpenPreview
+}: {
+  session: AgentRuntimeSession;
+  onOpenPreview: () => void;
+}) {
+  if (session.nextAction?.kind === "preview_ready") {
+    return (
+      <section className="thread-callout completed">
+        <div className="thread-callout-header">
+          <strong>Preview available</strong>
+          <span>{session.previewRecommendation?.target ?? "Static preview"}</span>
+        </div>
+        <p>{session.nextAction.message}</p>
+        <div className="command-actions">
+          <button onClick={onOpenPreview}>Open preview</button>
+        </div>
+      </section>
+    );
+  }
+
+  if (session.status === "completed" && session.runSummary?.summary) {
+    return (
+      <section className="thread-callout completed">
+        <div className="thread-callout-header">
+          <strong>Completed</strong>
+          <span>{describeVerificationState(session)}</span>
+        </div>
+        <p>{session.runSummary.summary}</p>
+      </section>
+    );
+  }
+
+  if ((session.status === "blocked" || session.status === "failed") && session.runSummary?.summary) {
+    return (
+      <section className={`thread-callout ${session.status === "failed" ? "failed" : "blocked"}`}>
+        <div className="thread-callout-header">
+          <strong>{session.status === "failed" ? "Needs review" : "Needs attention"}</strong>
+          <span>{humanizeRuntimeStatus(session.status)}</span>
+        </div>
+        <p>{session.runSummary.summary}</p>
+      </section>
+    );
+  }
+
+  return null;
+}
+
+function ProgressHoverRail({
+  open,
+  currentStep,
+  items,
+  session,
+  onMouseEnter,
+  onMouseLeave,
+  onOpenPreview,
+  onOpenActivity,
+  onRunPendingCommands
+}: {
+  open: boolean;
+  currentStep: ActivityStreamItem;
+  items: ActivityStreamItem[];
+  session: AgentRuntimeSession | null;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  onOpenPreview: () => void;
+  onOpenActivity: () => void;
+  onRunPendingCommands: () => void;
+}) {
+  const title = currentStep.status === "completed" ? "Finished" : "Working now";
+  const visibleItems = items.slice(-6).reverse();
+  return (
+    <div className="progress-rail-shell">
+      <div className="progress-rail-hotzone" aria-hidden="true" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} />
+      <aside className={`progress-rail ${open ? "open" : ""}`} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+        <div className="progress-rail-header">
+          <strong>{title}</strong>
+          <span>{currentStep.title}</span>
+        </div>
+        <p className="progress-rail-summary">{currentStep.summary}</p>
+        <div className="progress-rail-list">
+          {visibleItems.map((item) => (
+            <div key={item.id} className={`progress-rail-item ${item.status}`}>
+              <span className={`progress-rail-icon ${item.status}`} />
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.summary}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="progress-rail-actions">
+          {session?.nextAction?.kind === "preview_ready" ? (
+            <button onClick={onOpenPreview}>Open preview</button>
+          ) : session?.nextAction?.kind === "approve_commands" ? (
+            <button onClick={onRunPendingCommands}>Approve</button>
+          ) : null}
+          <button onClick={onOpenActivity}>Show details</button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function AgentIconRow({
+  agents,
+  selectedAgentId,
+  panelOpen,
+  onSelectAgent
+}: {
+  agents: AgentSidePanelAgentView[];
+  selectedAgentId: string;
+  panelOpen: boolean;
+  onSelectAgent: (agentId: string) => void;
+}) {
+  return (
+    <div className="agent-icon-row">
+      {agents.map((agent) => (
+        <button
+          key={agent.id}
+          className={`agent-icon-button ${panelOpen && selectedAgentId === agent.id ? "selected" : ""} ${agent.status}`}
+          onClick={() => onSelectAgent(agent.id)}
+          title={`${agent.name} | ${agent.role} | ${humanizeAgentStatus(agent.status)}`}
+          type="button"
+        >
+          <span className="agent-icon-ring" style={{ "--agent-color": agent.color } as CSSProperties}>
+            <Bot size={13} />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AgentPanelOverlay({
+  agents,
+  backgroundJobs,
+  selectedAgentId,
+  onSelectAgent,
+  onOpenDiff,
+  onClose
+}: {
+  agents: AgentSidePanelAgentView[];
+  backgroundJobs: AgentRuntimeSession["backgroundJobs"];
+  selectedAgentId: string;
+  onSelectAgent: (agentId: string) => void;
+  onOpenDiff: () => void;
+  onClose: () => void;
+}) {
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
+  const updates = selectedAgent ? buildAgentPanelUpdates(selectedAgent) : [];
+  return (
+    <aside className="agent-panel-overlay">
+      <div className="agent-panel-backdrop" onClick={onClose} />
+      <section className="activity-drawer agent-side-panel">
+      <div className="agent-side-panel-header">
+        <div>
+          <strong>Agents</strong>
+          <span>{agents.length} active worker{agents.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="agent-side-panel-actions">
+          <button className="activity-link" onClick={onOpenDiff}>Review changes</button>
+          <button className="frame-icon-button" onClick={onClose} title="Close agent panel">
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+
+      <div className="agent-side-tab-row">
+        {agents.map((agent) => (
+          <button
+            key={agent.id}
+            className={`agent-side-tab ${selectedAgent?.id === agent.id ? "selected" : ""} ${agent.status}`}
+            onClick={() => onSelectAgent(agent.id)}
+            type="button"
+            title={`${agent.name} | ${humanizeAgentStatus(agent.status)}`}
+          >
+            <span className="agent-side-color" style={{ "--agent-color": agent.color } as CSSProperties} />
+            <strong>{agent.name}</strong>
+          </button>
+        ))}
+      </div>
+
+      {selectedAgent ? (
+        <div className="agent-side-thread">
+          <div className="agent-side-summary">
+            <strong>{selectedAgent.name}</strong>
+            <span>{selectedAgent.role} | {selectedAgent.currentAction}</span>
+          </div>
+          <div className="agent-side-update-list">
+            {updates.map((update) => (
+              <div key={update.id} className={`agent-side-update ${update.status}`}>
+                <div className={`agent-side-status ${update.status}`} />
+                <div>
+                  <strong>{update.title}</strong>
+                  <span>{update.summary}</span>
+                  {update.meta ? <small>{update.meta}</small> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="agent-side-footer">
+            <span>{selectedAgent.diffLabel}</span>
+            <span>{selectedAgent.commandsRun.length ? `Ran ${selectedAgent.commandsRun.length} command(s)` : "No commands yet"}</span>
+          </div>
+
+          <details className="agent-side-details">
+            <summary>Show more</summary>
+            <div className="agent-side-details-grid">
+              <div>
+                <strong>Objective</strong>
+                <span>{selectedAgent.objective}</span>
+              </div>
+              <div>
+                <strong>Agent trace</strong>
+                <span>{selectedAgent.assignedPrompt ?? "Assigned prompt is not reported yet."}</span>
+              </div>
+              <div>
+                <strong>Tasks</strong>
+                <span>{selectedAgent.tasks.length ? selectedAgent.tasks.join(" | ") : "Not reported yet."}</span>
+              </div>
+              <div>
+                <strong>Target files</strong>
+                <span>{selectedAgent.targetFiles.length ? selectedAgent.targetFiles.join(", ") : "Not reported yet."}</span>
+              </div>
+              <div>
+                <strong>Changed files</strong>
+                <span>{selectedAgent.changedFiles.length ? selectedAgent.changedFiles.join(", ") : "Not reported yet."}</span>
+              </div>
+              <div>
+                <strong>Recent actions</strong>
+                <span>{selectedAgent.recentActions.length ? selectedAgent.recentActions.join(" | ") : "Not reported yet."}</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {backgroundJobs?.length ? (
+        <section className="agent-background-jobs">
+          <div className="drawer-section-title">Background jobs</div>
+          {backgroundJobs.slice(-4).map((job) => (
+            <div key={job.jobId} className="agent-side-update running">
+              <div className="agent-side-status running" />
+              <div>
+                <strong>{job.command}</strong>
+                <span>{job.status} | {job.cwd}</span>
+              </div>
+            </div>
+          ))}
+        </section>
+      ) : null}
+      </section>
+    </aside>
   );
 }
 
@@ -1957,9 +2994,13 @@ function RunResultCard({
         {latestExecution ? (
           <>
             <div className="summary-line compact">Command: {latestExecution.command}</div>
+            <div className="summary-line compact">Cwd: {latestExecution.cwd}</div>
             <div className="summary-line compact">Mode: {latestExecution.provenance?.background || latestExecution.backgroundJob ? "Background" : shouldDescribeBackground(latestExecution.command) ? "Background" : "Foreground"}</div>
             <div className="summary-line compact">Status: {humanizeCommandResultStatus(latestExecution.status)}</div>
+            {typeof latestExecution.exitCode === "number" ? <div className="summary-line compact">Exit code: {latestExecution.exitCode}</div> : null}
             <div className="summary-line compact">{describeCommandExecutionProvenance(latestExecution)}</div>
+            {latestExecution.diagnosis ? <div className="summary-line compact">Diagnosis: {latestExecution.diagnosis.summary}</div> : null}
+            {latestExecution.diagnosis?.nextStep ? <div className="summary-line compact">Next step: {latestExecution.diagnosis.nextStep}</div> : null}
             {latestExecution.backgroundJob ? <div className="summary-line compact">Background tracking limited: {latestExecution.backgroundJob.status}</div> : null}
             {latestExecution.message ? <div className="summary-line compact">{latestExecution.message}</div> : null}
           </>
@@ -2175,7 +3216,7 @@ function StatusRow({ label, status, detail }: { label: string; status: string; d
       <div>
         <strong>{label}</strong>
         <span>
-          {status}
+          {humanizeUiStatus(status)}
           {detail ? ` | ${detail}` : ""}
         </span>
       </div>
@@ -2263,6 +3304,37 @@ type AgentContractView = {
   diffLabel: string;
 };
 
+type AgentSidePanelAgentView = {
+  id: string;
+  name: string;
+  role: string;
+  color: string;
+  status: AgentContractView["status"];
+  currentAction: string;
+  diffLabel: string;
+  updatedAt?: string;
+  changedFiles: string[];
+  commandsRun: string[];
+  recentActions: string[];
+  workJournal: AgentWorkJournalEntry[];
+  objective: string;
+  assignedPrompt?: string;
+  tasks: string[];
+  targetFiles: string[];
+  traceEntries: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    meta?: string;
+    status: "running" | "completed" | "blocked" | "failed";
+  }>;
+};
+
+type AgentSidePanelModel = {
+  agents: AgentSidePanelAgentView[];
+  backgroundJobs: AgentRuntimeSession["backgroundJobs"];
+};
+
 function getDisplayRunPhases(session: AgentRuntimeSession): RunPhase[] {
   if (session.runPhases?.length) return session.runPhases;
   const pending = (id: RunPhase["id"], summary: string): RunPhase => ({ id, status: "pending", summary });
@@ -2276,6 +3348,61 @@ function getDisplayRunPhases(session: AgentRuntimeSession): RunPhase[] {
     pending("review_final_diff", session.runSummary?.nextAction ?? "Review gate is not ready yet."),
     pending("final_report", session.runSummary?.summary ?? "Final report is not ready yet.")
   ];
+}
+
+function buildAgentSidePanel(session: AgentRuntimeSession): AgentSidePanelModel {
+  const workerSpecs = session.orchestration?.assignmentPlan?.workerSpecs ?? [];
+  const workOrders = session.orchestration?.workOrders ?? [];
+  const artifactHandoffs = session.orchestration?.artifactHandoffs ?? [];
+  const contracts = getAgentContracts(session)
+    .filter((agent) => agent.status !== "idle")
+    .filter((agent) => !isCoordinatorLikeAgent(agent.name, agent.role));
+  const workersOnly = contracts.filter((agent) => {
+    if (session.delegationDecision?.selectedAgentCount && session.delegationDecision.selectedAgentCount > 1) {
+      return true;
+    }
+    return !isCoordinatorLikeAgent(agent.name, agent.role);
+  });
+  const agents = workersOnly.map((agent) => {
+    const workerSpec = workerSpecs.find((spec) =>
+      spec.roleTitle === agent.role
+      || spec.objective === agent.objective
+      || spec.id === agent.id
+    );
+    const workOrder = workOrders.find((order) =>
+      order.agentName === agent.name
+      || order.dynamicRole === agent.role
+      || order.objective === agent.objective
+    );
+    const handoffs = artifactHandoffs.filter((handoff) =>
+      handoff.roleTitle === agent.role
+      || handoff.workerId === workerSpec?.id
+      || handoff.summary === agent.objective
+    );
+    return {
+      id: agent.id,
+      name: prettyAgentName(agent.name),
+      role: agent.role,
+      color: colorForAgent(agent.id),
+      status: agent.status,
+      currentAction: agent.currentAction,
+      diffLabel: agent.diffLabel,
+      updatedAt: agent.workJournal.at(-1)?.timestamp,
+      changedFiles: agent.changedFiles,
+      commandsRun: agent.commandsRun,
+      recentActions: agent.recentActions,
+      workJournal: agent.workJournal,
+      objective: workOrder?.objective ?? workerSpec?.objective ?? agent.objective,
+      assignedPrompt: buildAssignedPrompt(workerSpec, workOrder),
+      tasks: workerSpec?.tasks ?? (workOrder ? [workOrder.objective, ...workOrder.acceptanceCriteria] : []),
+      targetFiles: workerSpec?.targetFiles ?? workOrder?.requiredArtifacts ?? agent.changedFiles,
+      traceEntries: buildAgentTraceEntries(agent, handoffs)
+    };
+  });
+  return {
+    agents: agents.length > 1 ? agents : [],
+    backgroundJobs: session.backgroundJobs ?? []
+  };
 }
 
 function getAgentContracts(session: AgentRuntimeSession): AgentContractView[] {
@@ -2351,6 +3478,8 @@ function humanizeRunMode(mode: RunMode | undefined) {
       return "Quick fix";
     case "normal_run":
       return "Normal run";
+    case "inspect_only":
+      return "Explain only";
     case "deep_audit":
       return "Deep local run";
     case "soak_mode":
@@ -2406,10 +3535,81 @@ function humanizeAgentStatus(status: AgentContractView["status"]) {
     case "completed":
       return "Done";
     case "blocked":
-      return "Blocked";
+      return "Needs attention";
     case "failed":
       return "Failed";
   }
+}
+
+function buildAgentPanelUpdates(agent: AgentSidePanelAgentView) {
+  if (agent.traceEntries.length) {
+    return agent.traceEntries.slice(-8).reverse();
+  }
+  if (agent.workJournal.length) {
+    return agent.workJournal.slice(-6).reverse().map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      summary: entry.summary,
+      meta: entry.filePath ? entry.filePath : entry.command ? entry.command : undefined,
+      status: mapJournalStatus(entry.status)
+    }));
+  }
+
+  return agent.recentActions.slice(-4).reverse().map((action, index) => ({
+    id: `${agent.id}-recent-${index}`,
+    title: action,
+    summary: agent.currentAction,
+    meta: agent.updatedAt ? formatRelativeDate(agent.updatedAt) : undefined,
+    status: agent.status === "failed" ? "failed" : agent.status === "blocked" ? "blocked" : agent.status === "completed" ? "completed" : "running"
+  }));
+}
+
+function buildAssignedPrompt(workerSpec: WorkerSpec | undefined, workOrder: WorkOrder | undefined) {
+  if (!workerSpec && !workOrder) return undefined;
+  const parts = [
+    workerSpec?.persona,
+    workerSpec?.objective,
+    ...(workerSpec?.tasks ?? []),
+    ...(workOrder?.acceptanceCriteria ?? [])
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+function buildAgentTraceEntries(
+  agent: AgentContractView,
+  handoffs: Array<NonNullable<NonNullable<AgentRuntimeSession["orchestration"]>["artifactHandoffs"]>[number]>
+) {
+  const journalEntries = agent.workJournal.map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+    meta: entry.filePath ? entry.filePath : entry.command ? entry.command : undefined,
+      status: mapJournalStatus(entry.status) as "running" | "completed" | "blocked" | "failed"
+    }));
+  const handoffEntries = handoffs.flatMap((handoff) =>
+    handoff.details.map((detail, index) => ({
+      id: `${handoff.id}-${index}`,
+      title: handoff.summary,
+      summary: detail,
+      meta: handoff.patchProposalIds[0] ?? handoff.commandRequestIds[0],
+      status: "completed" as const
+    }))
+  );
+  return [...journalEntries, ...handoffEntries];
+}
+
+function isCoordinatorLikeAgent(name: string, role: string) {
+  return /local codex run|coordinator|product orchestrator|business orchestrator|engineering orchestrator/i.test(name)
+    || /senior coding agent|coordinator|product orchestrator|business orchestrator|engineering orchestrator/i.test(role);
+}
+
+function colorForAgent(agentId: string) {
+  const palette = ["#5ea2ff", "#ff8a4c", "#67d58c", "#b27dff", "#ff6b6b", "#ffd166", "#6dd3ce"];
+  let hash = 0;
+  for (const char of agentId) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return palette[hash % palette.length]!;
 }
 
 function describeEvidenceRefs(evidenceRefs: EvidenceRef[]) {
@@ -2444,7 +3644,7 @@ function humanizeJournalKind(kind: AgentWorkJournalEntry["kind"]) {
 }
 
 function humanizeVerificationCheckStatus(status: AgentRuntimeSession["verificationResult"] extends infer T ? T extends { checks: Array<infer C> } ? C extends { status: infer S } ? S : never : never : never) {
-  return String(status).replaceAll("_", " ");
+  return humanizeUiStatus(String(status));
 }
 
 function describeReconciliation(report: AgentRuntimeSession["reconciliationReport"]) {
@@ -2479,8 +3679,20 @@ function formatPatchTotalsLabel(fileCount?: number, additions?: number, deletion
   return `${filesLabel}, line diff not reported yet.`;
 }
 
+function clampComposerScale(value: number) {
+  return Math.min(MAX_COMPOSER_SCALE, Math.max(MIN_COMPOSER_SCALE, Number(value.toFixed(2))));
+}
+
 function accessProfileLabel(profile: AccessProfile) {
-  return accessOptions.find((option) => option.value === profile)?.label ?? "Default permissions";
+  if (profile === "full_access") return "Full Access";
+  if (profile === "bounded_autonomy" || profile === "auto_review") return "Bounded";
+  return "Default";
+}
+
+function isAccessOptionSelected(profile: AccessProfile, option: AccessProfile) {
+  if (option === "bounded_autonomy") return profile === "bounded_autonomy" || profile === "auto_review";
+  if (option === "full_access") return profile === "full_access";
+  return profile === "default_permissions" || profile === "custom_config";
 }
 
 function humanSessionStatus(
@@ -2510,7 +3722,9 @@ function humanSessionStatus(
   if (restoreDisposition === "non_restorable") return "Restore unavailable";
   if (restoreDisposition === "reconciliation_required") return "Manual inspection required";
   if (restoreDisposition === "expired") return "Expired";
-  if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") return "Run blocked";
+  if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
+    return "Needs attention";
+  }
   if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
@@ -2526,7 +3740,7 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
     return "Runtime commands are queued and waiting for operator execution.";
   }
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
-    return session.runToGreen?.blockerReason ?? "The run was blocked before execution.";
+    return session.runToGreen?.blockerReason ?? "The run needs attention before it can continue.";
   }
   if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
     return "A reviewed patch is waiting for explicit apply.";
@@ -2583,7 +3797,9 @@ function describePatchState(session: AgentRuntimeSession) {
 
 function describeCommandState(session: AgentRuntimeSession) {
   if (session.runToGreen?.status === "blocked" && !session.commandExecutions.length) {
-    return "Rust command execution was not started because no grounded command was selected.";
+    return session.previewRecommendation
+      ? "No grounded command was selected, but a preview is available."
+      : "No grounded command was selected, so there is nothing safe to run automatically yet.";
   }
   if (session.commandRequests.some((request) => request.status === "requested" || request.status === "approved" || request.status === "executing" || request.status === "running")) {
     return "One or more runtime commands are waiting for approval or execution.";
@@ -2599,8 +3815,8 @@ function describeVerificationState(session: AgentRuntimeSession) {
   if (!session.verificationResult) return "No verification record yet.";
   if (session.runToGreen?.status === "blocked" && (session.verificationResult.status === "unavailable" || session.verificationResult.status === "skipped")) {
     return session.runToGreen.blockerReason
-      ? `Verification was not started because the run blocked early: ${session.runToGreen.blockerReason}`
-      : "Verification was not started because the run blocked before command execution.";
+      ? `Verification was not started yet: ${session.runToGreen.blockerReason}`
+      : "Verification was not started because the run could not continue automatically.";
   }
   if (session.verificationResult.status === "pending" || session.verificationResult.status === "running") return "Verification is still pending.";
   if (session.verificationResult.status === "failed") return "Verification failed; inspect the checks before trusting the output.";
@@ -2619,7 +3835,7 @@ function describeAuditTrail(session: AgentRuntimeSession) {
 function humanizeRuntimeStatus(status: string) {
   switch (status) {
     case "blocked":
-      return "blocked";
+      return "needs attention";
     case "needs_approval":
       return "waiting for review";
     case "completed":
@@ -2631,7 +3847,7 @@ function humanizeRuntimeStatus(status: string) {
     case "created":
       return "created";
     default:
-      return status.replaceAll("_", " ");
+      return humanizeUiStatus(status);
   }
 }
 
@@ -2646,11 +3862,16 @@ function humanizePatchStatus(status: string) {
 function humanizeCommandRequestStatus(status: string) {
   if (status === "requested") return "requested, not executed";
   if (status === "executing") return "running";
-  return status.replaceAll("_", " ");
+  return humanizeUiStatus(status);
 }
 
 function humanizeCommandResultStatus(status: string) {
-  return status === "approval_required" ? "approval required" : status.replaceAll("_", " ");
+  return status === "approval_required" ? "approval required" : humanizeUiStatus(status);
+}
+
+function humanizeUiStatus(status: string) {
+  if (status === "blocked") return "needs attention";
+  return status.replaceAll("_", " ");
 }
 
 function describeCommandRequestProvenance(session: AgentRuntimeSession, request: CommandRequest) {
@@ -2665,7 +3886,7 @@ function describeCommandExecutionProvenance(execution: AgentRuntimeSession["comm
   const approval = execution.provenance?.approvalSource ?? "unknown";
   const policy = execution.provenance?.policyDecision ?? "unknown";
   const detection = execution.provenance?.detectionSource ?? "unknown";
-  return `approval: ${approval.replaceAll("_", " ")} | policy: ${policy.replaceAll("_", " ")} | detection: ${detection.replaceAll("_", " ")}`;
+  return `approval: ${approval.replaceAll("_", " ")} | policy: ${policy.replaceAll("_", " ")} | detection: ${detection.replaceAll("_", " ")} | cwd: ${execution.cwd}`;
 }
 
 function summarizeLatestQueueEntry(entry: QueuedPrompt | undefined) {
@@ -2677,10 +3898,13 @@ function summarizeLatestQueueEntry(entry: QueuedPrompt | undefined) {
 function formatTerminalResult(result: CommandResult) {
   return [
     `$ ${result.command}`,
-    `risk: ${result.risk} status: ${result.status}`,
+    `cwd: ${result.cwd}`,
+    `risk: ${result.risk} status: ${result.status}${typeof result.exitCode === "number" ? ` exit=${result.exitCode}` : ""}`,
     result.provenance
       ? `approval: ${(result.provenance.approvalSource ?? "unknown").replaceAll("_", " ")} | policy: ${(result.provenance.policyDecision ?? "unknown").replaceAll("_", " ")} | detection: ${(result.provenance.detectionSource ?? "unknown").replaceAll("_", " ")}`
       : "",
+    result.diagnosis ? `diagnosis: ${result.diagnosis.category} | ${result.diagnosis.summary}` : "",
+    result.diagnosis?.nextStep ? `next: ${result.diagnosis.nextStep}` : "",
     result.backgroundJob ? `background job: ${result.backgroundJob.status}${result.backgroundJob.processId ? ` pid=${result.backgroundJob.processId}` : ""}` : "",
     normalizeTerminalText(result.message ?? ""),
     normalizeTerminalText(result.stdout),
@@ -2688,6 +3912,31 @@ function formatTerminalResult(result: CommandResult) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function commandSafetySettings(settings: SafetySettings) {
+  return {
+    blockDangerousCommands: settings.blockDangerousCommands,
+    redactSecrets: settings.redactSecrets,
+    allowNetworkCommands: settings.allowNetworkCommands,
+    autoRunMediumCommands: settings.autoRunMediumCommands,
+    autoRunBackgroundCommands: settings.autoRunBackgroundCommands,
+    autoRunNetworkCommands: settings.autoRunNetworkCommands
+  };
+}
+
+async function applyRuntimePatchWithRetry(sessionId: string, patchId: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await applyRuntimePatch(sessionId, patchId);
+    } catch (error) {
+      lastError = error;
+      if (!String(error).includes("Patch proposal not found")) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    }
+  }
+  throw lastError;
 }
 
 function normalizeTerminalText(text: string) {
@@ -2743,11 +3992,134 @@ function upsertRecentSession(
     id: session.id,
     workspacePath: workspace.path,
     workspaceName: workspace.name,
-    title: session.agentName || session.userPrompt || "Session",
+    title: deriveSessionTitle(session),
     status: humanSessionStatus(session, false),
     updatedAt: session.updatedAt
   };
   return [nextEntry, ...current.filter((entry) => entry.id !== session.id)].slice(0, MAX_RECENT_SESSIONS);
+}
+
+function deriveSessionTitle(session: AgentRuntimeSession) {
+  const assistantLine = session.messages
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => message.content.split("\n"))
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !/^i (inspected|selected|prepared|could not)/i.test(line));
+  const candidate =
+    session.plan?.summary ||
+    session.runSummary?.summary ||
+    assistantLine ||
+    session.userPrompt ||
+    session.agentName ||
+    "Session";
+  return truncateSessionLabel(candidate.replace(/^#+\s*/, ""), 42);
+}
+
+function truncateSessionLabel(value: string, max = 42) {
+  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+}
+
+function truncateLabel(value: string, max = 42) {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function buildSidebarProjects(input: {
+  workspace: WorkspaceInfo | null;
+  runtimeSession: AgentRuntimeSession | null;
+  recentWorkspaces: RecentWorkspaceEntry[];
+  recentSessions: RecentSessionEntry[];
+  agentBusy: boolean;
+  runtimeConnectionState: "connected" | "disconnected";
+}) {
+  const grouped = new Map<string, {
+    path: string;
+    name: string;
+    lastOpenedAt: string;
+    isActive: boolean;
+    sessions: RecentSessionEntry[];
+  }>();
+
+  for (const workspaceEntry of input.recentWorkspaces) {
+    grouped.set(workspaceEntry.path, {
+      path: workspaceEntry.path,
+      name: workspaceEntry.name,
+      lastOpenedAt: workspaceEntry.lastOpenedAt,
+      isActive: workspaceEntry.path === input.workspace?.path,
+      sessions: []
+    });
+  }
+
+  if (input.workspace) {
+    grouped.set(input.workspace.path, {
+      path: input.workspace.path,
+      name: input.workspace.name,
+      lastOpenedAt: new Date().toISOString(),
+      isActive: true,
+      sessions: grouped.get(input.workspace.path)?.sessions ?? []
+    });
+  }
+
+  for (const sessionEntry of input.recentSessions) {
+    const existing = grouped.get(sessionEntry.workspacePath);
+    if (existing) {
+      existing.sessions.push(sessionEntry);
+      existing.lastOpenedAt = existing.lastOpenedAt > sessionEntry.updatedAt ? existing.lastOpenedAt : sessionEntry.updatedAt;
+    } else {
+      grouped.set(sessionEntry.workspacePath, {
+        path: sessionEntry.workspacePath,
+        name: sessionEntry.workspaceName,
+        lastOpenedAt: sessionEntry.updatedAt,
+        isActive: sessionEntry.workspacePath === input.workspace?.path,
+        sessions: [sessionEntry]
+      });
+    }
+  }
+
+  if (input.runtimeSession && input.workspace) {
+    const activeEntry: RecentSessionEntry = {
+      id: input.runtimeSession.id,
+      workspacePath: input.workspace.path,
+      workspaceName: input.workspace.name,
+      title: deriveSessionTitle(input.runtimeSession),
+      status: humanSessionStatus(input.runtimeSession, input.agentBusy, input.runtimeConnectionState),
+      updatedAt: input.runtimeSession.updatedAt
+    };
+    const project = grouped.get(input.workspace.path);
+    if (project) {
+      project.sessions = [activeEntry, ...project.sessions.filter((entry) => entry.id !== activeEntry.id)];
+      project.isActive = true;
+      project.lastOpenedAt = activeEntry.updatedAt;
+    }
+  }
+
+  return [...grouped.values()]
+    .map((project) => ({
+      ...project,
+      sessions: project.sessions
+        .filter((entry, index, array) => array.findIndex((candidate) => candidate.id === entry.id) === index)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    }))
+    .sort((left, right) => {
+      if (left.isActive && !right.isActive) return -1;
+      if (!left.isActive && right.isActive) return 1;
+      return right.lastOpenedAt.localeCompare(left.lastOpenedAt);
+    });
+}
+
+function formatRelativeDate(value: string) {
+  const delta = Date.now() - Date.parse(value);
+  if (!Number.isFinite(delta)) return "";
+  const minutes = Math.floor(delta / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w`;
+  const months = Math.floor(days / 30);
+  return `${months}mo`;
 }
 
 function shortenPath(targetPath: string) {
@@ -2757,6 +4129,14 @@ function shortenPath(targetPath: string) {
 
 function normalizeWorkspacePath(targetPath: string) {
   return targetPath.startsWith("\\\\?\\") ? targetPath.slice(4) : targetPath;
+}
+
+function isSafeRelativeFilePath(targetPath: string) {
+  const normalized = targetPath.replaceAll("\\", "/");
+  return Boolean(normalized)
+    && !normalized.startsWith("/")
+    && !/^[A-Za-z]:/.test(normalized)
+    && !normalized.split("/").some((part) => part === ".." || part === "");
 }
 
 function SettingsDialog({
@@ -2950,7 +4330,7 @@ function SettingsDialog({
               <input
                 value={form.selectedModel}
                 onChange={(event) => setForm((current) => ({ ...current, selectedModel: event.target.value }))}
-                placeholder={isOllama ? "qwen2.5-coder:7b or llama3:8b" : "OpenAI-compatible execution is blocked for now"}
+                placeholder={isOllama ? "qwen2.5-coder:7b or llama3:8b" : "OpenAI-compatible execution is not available yet"}
               />
             )}
           </label>

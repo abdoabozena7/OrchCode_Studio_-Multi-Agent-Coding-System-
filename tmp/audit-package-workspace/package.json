@@ -1,0 +1,1 @@
+{"name":"audit-pkg","private":true,"scripts":{"test":"node -e \"console.log('ok')\""}}

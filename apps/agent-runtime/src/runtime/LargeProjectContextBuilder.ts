@@ -1,0 +1,995 @@
+import fs from "node:fs";
+import path from "node:path";
+import type {
+  ProjectExplainEvidenceRef,
+  ProjectExplainModule,
+  ProjectExplainReport,
+  ProjectExplainSection,
+  ProjectIntake,
+  ProjectMap
+} from "@orchcode/protocol";
+import { isSecretCandidate, resolveInsideWorkspace } from "../tools/security.js";
+
+export type ProjectExplainSettings = {
+  maxExplainFiles: number;
+  maxModuleSamples: number;
+  maxFileReadChars: number;
+  maxFinalAnswerChars: number;
+};
+
+type BuildProjectExplainReportInput = {
+  workspacePath: string;
+  message: string;
+  projectMap: ProjectMap;
+  intake?: ProjectIntake;
+  settings?: Partial<ProjectExplainSettings>;
+};
+
+type InventoryFile = {
+  path: string;
+  ext: string;
+  basename: string;
+  root: string;
+  language?: string;
+  readable: boolean;
+  isManifest: boolean;
+  isDoc: boolean;
+  isTest: boolean;
+  isEntryPoint: boolean;
+};
+
+type Inventory = {
+  files: InventoryFile[];
+  totalFiles: number;
+  totalDirectories: number;
+  omittedFiles: number;
+  ignoredDirectories: string[];
+  rootCounts: Map<string, number>;
+  languages: Record<string, number>;
+};
+
+type SampledFile = {
+  path: string;
+  reason: string;
+  charsRead: number;
+  summary: string;
+  excerpt: string;
+  dependencies: string[];
+  language?: string;
+  lineCount: number;
+  anchors: ProjectExplainSection[];
+};
+
+type ModuleDraft = {
+  root: string;
+  files: InventoryFile[];
+};
+
+const DEFAULT_EXPLAIN_SETTINGS: ProjectExplainSettings = {
+  maxExplainFiles: 10_000,
+  maxModuleSamples: 12,
+  maxFileReadChars: 20_000,
+  maxFinalAnswerChars: 12_000
+};
+
+const IGNORED_DIRS = new Set([
+  ".cache",
+  ".git",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".vite",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "target"
+]);
+
+const TEXT_EXTENSIONS = new Set([
+  ".c",
+  ".cc",
+  ".conf",
+  ".cpp",
+  ".cs",
+  ".css",
+  ".go",
+  ".h",
+  ".hpp",
+  ".html",
+  ".java",
+  ".js",
+  ".json",
+  ".jsx",
+  ".kt",
+  ".md",
+  ".mjs",
+  ".py",
+  ".rs",
+  ".scss",
+  ".sh",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".yaml",
+  ".yml"
+]);
+
+const MANIFEST_NAMES = new Set([
+  "package.json",
+  "Cargo.toml",
+  "pyproject.toml",
+  "requirements.txt",
+  "go.mod",
+  "pom.xml",
+  "build.gradle",
+  "settings.gradle",
+  "tsconfig.json",
+  "vite.config.ts",
+  "next.config.js",
+  "tauri.conf.json"
+]);
+
+export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
+  const settings = { ...DEFAULT_EXPLAIN_SETTINGS, ...input.settings };
+  const workspaceRoot = resolveInsideWorkspace(input.workspacePath);
+  const inventory = collectInventory(workspaceRoot, settings.maxExplainFiles);
+  const modules = buildModules(inventory, input.projectMap, input.intake, settings, input.message);
+  const sampledFiles = readSampledFiles(workspaceRoot, inventory, modules, input, settings);
+  const sampledByPath = new Map(sampledFiles.map((sample) => [sample.path, sample]));
+  const sections = createExplainSections(sampledFiles, input.message, settings);
+  const moduleMap = modules.map((module, index) => createExplainModule(module, index, sampledByPath, settings));
+  const importantFiles = uniqueStrings([
+    ...(input.intake?.importantFiles ?? []),
+    ...input.projectMap.importantFiles,
+    ...inventory.files.filter((file) => file.isManifest || file.isDoc || file.isEntryPoint).map((file) => file.path)
+  ].filter((file) => shouldIncludeAgentArtifact(file, input.message))).slice(0, 30);
+  const entryPoints = uniqueStrings([
+    ...(input.intake?.knownEntryPoints ?? []),
+    ...input.projectMap.entryPoints,
+    ...inventory.files.filter((file) => file.isEntryPoint).map((file) => file.path)
+  ]).slice(0, 20);
+  const evidence = createReportEvidence(moduleMap, sampledFiles, importantFiles);
+  const howToRun = uniqueStrings([
+    ...(input.intake?.buildCommands ?? []),
+    ...(input.intake?.knownCommands ?? []),
+    ...(input.intake?.testCommands ?? []),
+    ...input.projectMap.testCommands
+  ]).slice(0, 10);
+  const rootFolders = [...inventory.rootCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([root, files]) => ({ path: root, files }))
+    .slice(0, 30);
+  const risksAndUnknowns = createRisksAndUnknowns(input, inventory, moduleMap, entryPoints);
+
+  return {
+    overview: createOverview(input, inventory, moduleMap),
+    architecture: createArchitectureSummary(input, rootFolders, moduleMap),
+    sections,
+    findings: sections,
+    moduleMap,
+    entryPoints,
+    dataFlow: createDataFlowSummary(moduleMap, entryPoints),
+    importantFiles,
+    howToRun,
+    risksAndUnknowns,
+    suggestedNextQuestions: createSuggestedNextQuestions(moduleMap, entryPoints, howToRun),
+    evidence,
+    contextPack: {
+      inventory: {
+        totalFiles: inventory.totalFiles,
+        totalDirectories: inventory.totalDirectories,
+        scannedFiles: inventory.files.length,
+        omittedFiles: inventory.omittedFiles,
+        ignoredDirectories: inventory.ignoredDirectories,
+        languages: inventory.languages,
+        rootFolders
+      },
+      readBudget: {
+        maxExplainFiles: settings.maxExplainFiles,
+        maxModuleSamples: settings.maxModuleSamples,
+        maxFileReadChars: settings.maxFileReadChars,
+        sampledFiles: sampledFiles.length
+      },
+      sampledFiles: sampledFiles.map((sample) => ({
+        path: sample.path,
+        reason: sample.reason,
+        charsRead: sample.charsRead,
+        summary: sample.summary
+      }))
+    }
+  };
+}
+
+export function formatProjectExplainReportForChat(
+  report: ProjectExplainReport,
+  message: string,
+  settings: Partial<ProjectExplainSettings> = {}
+) {
+  const maxChars = settings.maxFinalAnswerChars ?? DEFAULT_EXPLAIN_SETTINGS.maxFinalAnswerChars;
+  const arabic = containsArabic(message);
+  const sections = chooseSectionsForChat(report, message);
+  const sectionBlocks = sections.map((section) => formatExplainSection(section, arabic));
+  const flowLines = createFlowLines(report, arabic);
+  const importantFiles = report.importantFiles.slice(0, 12).map((file, index) => {
+    const section = report.sections.find((entry) => entry.filePath === file);
+    return section
+      ? formatImportantFileLine(section, index, arabic)
+      : `- ${file}`;
+  });
+  const risks = report.risksAndUnknowns.slice(0, 6).map((risk) => `- ${risk}`);
+  const nextQuestions = report.suggestedNextQuestions.slice(0, 4).map((question) => `- ${question}`);
+  const commands = report.howToRun.length
+    ? report.howToRun.slice(0, 8).map((command) => `- \`${command}\``)
+    : [arabic ? "- لم أقدر أثبت أمر تشغيل من الملفات المقروءة." : "- I could not prove a run command from the scanned files."];
+  const inventory = report.contextPack.inventory;
+  const body = arabic
+    ? [
+        createChatOverview(report, true),
+        "",
+        "## الفكرة العامة",
+        `ببساطة: أنا شايف إن نقطة الدخول الأساسية هي ${report.entryPoints.slice(0, 3).join(", ") || "مش واضحة قوي من أول قراءة"}، وبعدها المنطق بيتوزع على الملفات اللي تحت. هشرحها واحدة واحدة، وكل نقطة عليها لينك للسطر اللي جبت منه الكلام.`,
+        "",
+        "## يمشي إزاي؟",
+        ...flowLines,
+        "",
+        "## أهم الملفات واحدة واحدة",
+        ...importantFiles,
+        "",
+        "## شرح الكود بالسطر",
+        ...sectionBlocks,
+        "",
+        "## ملاحظات مهمة وأنا بقراه",
+        ...(risks.length ? risks : ["- لم تظهر مخاطر واضحة من القراءة الأولى."]),
+        "",
+        "## التشغيل",
+        ...commands,
+        "",
+        "## قرأت إيه بالظبط؟",
+        `غطيت ${inventory.scannedFiles} ملف من أصل ${inventory.totalFiles} ملف ظاهر في المشروع. تجاهلت folders مش مفيدة للشرح زي generated/vendor: ${inventory.ignoredDirectories.slice(0, 6).join(", ") || "لا يوجد"}.`,
+        "",
+        "## نكمل منين؟",
+        ...nextQuestions
+      ]
+    : [
+        createChatOverview(report, false),
+        "",
+        "## Overview",
+        `The strongest entry point is ${report.entryPoints.slice(0, 3).join(", ") || "not obvious from the first read"}. I will walk through the important files and ground each claim in a clickable file/line reference.`,
+        "",
+        "## How It Works",
+        ...flowLines,
+        "",
+        "## Key Files",
+        ...importantFiles,
+        "",
+        "## Code Walkthrough",
+        ...sectionBlocks,
+        "",
+        "## Risks And Unknowns",
+        ...(risks.length ? risks : ["- No clear risks appeared in the first read."]),
+        "",
+        "## How To Run",
+        ...commands,
+        "",
+        "## Evidence",
+        `Scanned ${inventory.scannedFiles} file(s) out of ${inventory.totalFiles}; ignored generated/vendor folders: ${inventory.ignoredDirectories.slice(0, 6).join(", ") || "none"}.`,
+        "",
+        "## Useful Follow-Up Questions",
+        ...nextQuestions
+      ];
+  const text = body.join("\n");
+  return text.length > maxChars
+    ? `${text.slice(0, maxChars - 180)}\n\n${arabic ? "تم اختصار الشرح لأن المشروع كبير. اسألني عن ملف أو module معين وأوسعه لك بنفس الأسلوب وبسطور أكتر." : "I shortened this explanation because the project is large. Ask about a file or module and I can expand it with more line evidence."}`
+    : text;
+}
+
+function chooseSectionsForChat(report: ProjectExplainReport, message: string) {
+  const normalized = message.toLowerCase();
+  const mentioned = report.sections.filter((section) =>
+    normalized.includes(section.filePath.toLowerCase()) ||
+    normalized.includes(path.basename(section.filePath).toLowerCase())
+  );
+  const pool = mentioned.length ? mentioned : report.sections;
+  return pool.slice(0, mentioned.length ? 10 : report.contextPack.inventory.scannedFiles <= 8 ? 14 : 8);
+}
+
+function createChatOverview(report: ProjectExplainReport, arabic: boolean) {
+  const languages = Object.entries(report.contextPack.inventory.languages)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 4)
+    .map(([language]) => language)
+    .join(", ") || "mixed";
+  const moduleCount = report.moduleMap.length;
+  const fileCount = report.contextPack.inventory.scannedFiles;
+  if (arabic) {
+    return `المشروع ده عبارة عن workspace صغير/متوسط باين عليه ${languages}. قرأت ${fileCount} ملف وطلعت منه ${moduleCount} منطقة أساسية، والشرح الجاي مبني على سطور فعلية تقدر تدوس عليها وتفتحها.`;
+  }
+  return `This looks like a ${languages} workspace. I read ${fileCount} file(s), mapped ${moduleCount} main area(s), and grounded the walkthrough in clickable file/line evidence.`;
+}
+
+function formatImportantFileLine(section: ProjectExplainSection, index: number, arabic: boolean) {
+  const location = formatFileLineLink(section.filePath, section.lineStart);
+  const title = humanizeSectionTitle(section.title, arabic);
+  if (arabic) {
+    return `- ${index + 1}. ${location}: مهم لأنه هنا ظاهر ${title}. ${section.whyItMatters}`;
+  }
+  return `- ${index + 1}. ${location}: important because this shows ${title}. ${section.whyItMatters}`;
+}
+
+function formatExplainSection(section: ProjectExplainSection, arabic: boolean) {
+  const location = formatFileLineLink(section.filePath, section.lineStart);
+  const lineRange = section.lineEnd > section.lineStart ? `${section.lineStart}-${section.lineEnd}` : `${section.lineStart}`;
+  const language = section.language ?? languageForPath(section.filePath) ?? "text";
+  const title = humanizeSectionTitle(section.title, arabic);
+  return [
+    `### ${title}`,
+    arabic
+      ? `بص على ${location}، خصوصا السطور ${lineRange}. الحتة دي بتقول: ${section.explanation}`
+      : `Look at ${location}, especially line ${lineRange}. This part means: ${section.explanation}`,
+    "",
+    `\`\`\`${language.toLowerCase()}`,
+    section.snippet,
+    "```",
+    "",
+    arabic
+      ? `المعنى العملي: ${section.whyItMatters} يعني وإنت بتفهم المشروع، اعتبر السطر ده علامة طريق مش مجرد كود منفصل.`
+      : `Practical meaning: ${section.whyItMatters} Treat this as a navigation point, not an isolated line.`,
+    ""
+  ].join("\n");
+}
+
+function humanizeSectionTitle(title: string, arabic: boolean) {
+  if (!arabic) return title;
+  const map: Record<string, string> = {
+    "HTML loads the app script": "تحميل سكربت التطبيق من HTML",
+    "HTML mount point": "نقطة تركيب الواجهة",
+    "Dependency import": "اعتماد أو مكتبة داخلة في الملف",
+    "DOM wiring": "ربط JavaScript بعناصر الصفحة",
+    "User interaction handler": "تعامل مع تفاعل المستخدم",
+    "Render or update loop": "حلقة الرندر أو التحديث",
+    "Three.js scene setup": "تجهيز مشهد Three.js",
+    "Public export": "تصدير عام من الملف",
+    "Function or callback": "دالة أو callback مهم",
+    "CSS rule": "قاعدة CSS مؤثرة",
+    "Project scripts": "أوامر تشغيل المشروع",
+    "Project dependencies": "اعتمادات المشروع",
+    "Documentation heading": "عنوان توثيقي",
+    "Readable file sample": "عينة مقروءة من الملف"
+  };
+  return map[title] ?? title;
+}
+
+function createFlowLines(report: ProjectExplainReport, arabic: boolean) {
+  const html = report.sections.find((section) => /\.html$/i.test(section.filePath) && /script|entry|html|mount/i.test(section.title));
+  const js = report.sections.find((section) => /\.(js|jsx|ts|tsx)$/i.test(section.filePath) && /entry|import|dom|event|loop|render|three|export/i.test(section.title));
+  const css = report.sections.find((section) => /\.css$/i.test(section.filePath));
+  const lines: string[] = [];
+  if (html) {
+    lines.push(arabic
+      ? `- البداية من ${formatFileLineLink(html.filePath, html.lineStart)}: صفحة HTML بتجهز العناصر وتحمل السكربت الأساسي.`
+      : `- Starts at ${formatFileLineLink(html.filePath, html.lineStart)}: HTML prepares the page elements and loads the main script.`);
+  }
+  if (js) {
+    lines.push(arabic
+      ? `- المنطق الأساسي في ${formatFileLineLink(js.filePath, js.lineStart)}: JavaScript يمسك عناصر الصفحة ويشغل التفاعل/الرندر.`
+      : `- Core behavior lives in ${formatFileLineLink(js.filePath, js.lineStart)}: JavaScript wires page elements and interaction/rendering.`);
+  }
+  if (css) {
+    lines.push(arabic
+      ? `- الشكل والتخطيط في ${formatFileLineLink(css.filePath, css.lineStart)}: CSS يحدد شكل التجربة على الشاشة.`
+      : `- Styling and layout live in ${formatFileLineLink(css.filePath, css.lineStart)}: CSS defines the visible experience.`);
+  }
+  if (!lines.length) {
+    lines.push(arabic
+      ? `- أقوى نقاط البداية: ${report.entryPoints.slice(0, 5).join(", ") || "غير واضحة من القراءة الأولى"}.`
+      : `- Strongest entry points: ${report.entryPoints.slice(0, 5).join(", ") || "unclear from the first read"}.`);
+  }
+  return lines;
+}
+
+function createExplainSections(
+  sampledFiles: SampledFile[],
+  message: string,
+  settings: ProjectExplainSettings
+): ProjectExplainSection[] {
+  const normalized = message.toLowerCase();
+  const smallProject = sampledFiles.length <= 8;
+  const anchors = sampledFiles.flatMap((sample) => {
+    const perFileLimit = smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
+    return sample.anchors.slice(0, perFileLimit);
+  });
+  return anchors
+    .sort((left, right) => scoreSection(right, normalized) - scoreSection(left, normalized) || left.filePath.localeCompare(right.filePath) || left.lineStart - right.lineStart)
+    .slice(0, smallProject ? Math.min(24, anchors.length) : Math.max(8, settings.maxModuleSamples));
+}
+
+function scoreSection(section: ProjectExplainSection, normalizedMessage: string) {
+  let score = 0;
+  const pathText = section.filePath.toLowerCase();
+  const title = section.title.toLowerCase();
+  if (normalizedMessage.includes(path.basename(pathText))) score += 80;
+  if (/index\.html|main\.(js|ts)|app\.(tsx|jsx|ts|js)|server\.(ts|js)|lib\.rs/.test(pathText)) score += 40;
+  if (/entry|script|import|dom|event|loop|render|three|export|manifest|style/i.test(title)) score += 30;
+  if (/agent_proposal|agent-proposal|proposal|orchcode/i.test(pathText)) score -= 100;
+  return score;
+}
+
+function extractExplainAnchors(filePath: string, content: string): ProjectExplainSection[] {
+  const lines = content.split(/\r?\n/);
+  const anchors: ProjectExplainSection[] = [];
+  const add = (lineIndex: number, title: string, explanation: string, whyItMatters: string, symbol?: string) => {
+    const lineStart = lineIndex + 1;
+    const snippetWindow = snippetAround(lines, lineIndex, symbol ? 2 : 1);
+    anchors.push({
+      title,
+      explanation,
+      filePath,
+      lineStart: snippetWindow.lineStart,
+      lineEnd: snippetWindow.lineEnd,
+      symbol,
+      language: languageForPath(filePath) ?? "text",
+      snippet: snippetWindow.snippet,
+      whyItMatters
+    });
+    if (snippetWindow.lineStart !== lineStart && anchors.at(-1)) {
+      anchors[anchors.length - 1]!.lineStart = lineStart;
+    }
+  };
+
+  lines.forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    if (/\.html$/i.test(filePath)) {
+      if (/<script\b/i.test(line)) add(index, "HTML loads the app script", "السطر ده بيربط صفحة HTML بملف JavaScript المسؤول عن السلوك.", "من غير الربط ده الصفحة هتبقى هيكل ثابت من غير منطق التطبيق.", "script");
+      else if (/<canvas\b|id=["']scene["']|id=["']app["']|id=["']root["']/i.test(line)) add(index, "HTML mount point", "ده العنصر اللي JavaScript غالبا بيرسم أو يركب عليه التجربة.", "بيعرفك نقطة اتصال الواجهة بالكود.", "mount");
+    } else if (/\.(js|jsx|ts|tsx)$/i.test(filePath)) {
+      const imported = line.match(/^import\s+(.+?)\s+from\s+["'](.+?)["']/);
+      const exported = line.match(/^export\s+(class|function|const|let|type|interface)\s+([A-Za-z0-9_$]+)/);
+      const fn = line.match(/^(export\s+)?(async\s+)?function\s+([A-Za-z0-9_$]+)/) ?? line.match(/^(const|let)\s+([A-Za-z0-9_$]+)\s*=\s*(async\s*)?\(/);
+      if (imported) add(index, "Dependency import", `السطر ده يدخل اعتماد مهم: \`${imported[2]}\`.`, "الـ imports بتوضح المكتبات أو modules اللي الملف مبني عليها.", imported[2]);
+      else if (/document\.getElementById|querySelector/.test(line)) add(index, "DOM wiring", "هنا الكود بيمسك عنصر من الصفحة عشان يقرأ منه أو يحدثه.", "دي نقطة الربط بين HTML والـ JavaScript.", extractQuotedValue(line));
+      else if (/addEventListener|onkeydown|onclick|pointer|mouse|touch/i.test(line)) add(index, "User interaction handler", "هنا بيتسجل تفاعل المستخدم أو إدخال من لوحة المفاتيح/الماوس.", "دي السطور اللي بتفسر إزاي المستخدم بيأثر في التطبيق.", "event");
+      else if (/requestAnimationFrame|setInterval|setTimeout|renderer\.render|animate\(/i.test(line)) add(index, "Render or update loop", "ده جزء من loop أو تحديث مستمر للتطبيق.", "لو التطبيق لعبة أو مشهد تفاعلي، ده غالبا قلب الحركة.", "loop");
+      else if (/new\s+THREE\.|THREE\./.test(line)) add(index, "Three.js scene setup", "هنا الملف بيستخدم Three.js لبناء المشهد أو الكاميرا أو المجسمات.", "دي علامة إن التجربة مرئية/ثلاثية الأبعاد وليست DOM عادي فقط.", "THREE");
+      else if (exported) add(index, "Public export", `هنا الملف يصدّر \`${exported[2]}\` للاستخدام من ملفات أخرى.`, "الـ exports بتوضح الحدود العامة للـ module.", exported[2]);
+      else if (fn) add(index, "Function or callback", `هنا تعريف \`${fn[3] ?? fn[2]}\`، وهي وحدة منطق قابلة للتتبع.`, "الدوال هي أفضل نقاط تبدأ منها لفهم السلوك خطوة بخطوة.", fn[3] ?? fn[2]);
+    } else if (/\.css$/i.test(filePath)) {
+      if (/^[.#]?[A-Za-z0-9_:-][^{]+{/.test(line) || line.startsWith(":root")) {
+        add(index, "CSS rule", "هنا قاعدة CSS بتحدد جزء من الشكل أو التخطيط.", "الـ CSS يشرح ليه التجربة طالعة بالشكل اللي شايفه.", line.replace(/\s*\{$/, "").slice(0, 60));
+      }
+    } else if (isManifestFile(filePath)) {
+      if (/"scripts"\s*:/.test(line)) add(index, "Project scripts", "هنا manifest بيبدأ تعريف أوامر التشغيل والاختبار.", "دي أفضل طريقة لإثبات أوامر التشغيل بدل التخمين.", "scripts");
+      else if (/"dependencies"\s*:|^\[dependencies\]/.test(line)) add(index, "Project dependencies", "هنا manifest بيعلن الاعتمادات الأساسية.", "الاعتمادات بتوضح stack المشروع وإزاي يتبني.", "dependencies");
+    } else if (isDocFile(filePath) && /^#/.test(line)) {
+      add(index, "Documentation heading", "ده عنوان وثائقي يشرح نية أو اسم جزء من المشروع.", "الوثائق مفيدة كدليل، لكنها أقل دقة من الكود عند التعارض.", line.replace(/^#+\s*/, "").slice(0, 80));
+    }
+  });
+
+  if (!anchors.length && lines.length) {
+    const firstMeaningful = Math.max(0, lines.findIndex((line) => line.trim().length > 0));
+    add(firstMeaningful, "Readable file sample", "ده أول جزء مقروء من الملف ويستخدم كدليل عام.", "لما الملف مفيهوش anchors واضحة، بناخد بداية مقروءة بدل ما نخمن.");
+  }
+
+  return dedupeSections(anchors).slice(0, 8);
+}
+
+function snippetAround(lines: string[], lineIndex: number, radius: number) {
+  const start = Math.max(0, lineIndex - radius);
+  const end = Math.min(lines.length - 1, lineIndex + Math.max(radius, 3));
+  return {
+    lineStart: start + 1,
+    lineEnd: end + 1,
+    snippet: lines.slice(start, end + 1).join("\n").trimEnd()
+  };
+}
+
+function formatFileLineLink(filePath: string, line: number) {
+  return `[${filePath}:${line}](orchcode-file:${encodeURIComponent(filePath)}:${line})`;
+}
+
+function collectInventory(workspaceRoot: string, maxFiles: number): Inventory {
+  const files: InventoryFile[] = [];
+  const rootCounts = new Map<string, number>();
+  const ignoredDirectories = new Set<string>();
+  const languages: Record<string, number> = {};
+  let totalFiles = 0;
+  let totalDirectories = 0;
+  let omittedFiles = 0;
+  const stack = ["."];
+
+  while (stack.length) {
+    const relativeDir = stack.pop()!;
+    const absoluteDir = path.join(workspaceRoot, relativeDir);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const relativePath = normalizePath(path.join(relativeDir, entry.name));
+      if (entry.isDirectory()) {
+        totalDirectories += 1;
+        if (shouldIgnoreDirectory(entry.name, relativePath)) {
+          ignoredDirectories.add(relativePath);
+          continue;
+        }
+        stack.push(relativePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      totalFiles += 1;
+      if (files.length >= maxFiles) {
+        omittedFiles += 1;
+        continue;
+      }
+
+      const absolutePath = path.join(workspaceRoot, relativePath);
+      if (isSecretCandidate(absolutePath)) {
+        omittedFiles += 1;
+        continue;
+      }
+
+      const ext = path.extname(entry.name).toLowerCase();
+      const language = languageForPath(relativePath);
+      const readable = isTextLike(relativePath);
+      const root = selectModuleRoot(relativePath);
+      if (language) languages[language] = (languages[language] ?? 0) + 1;
+      rootCounts.set(root, (rootCounts.get(root) ?? 0) + 1);
+      files.push({
+        path: relativePath,
+        ext,
+        basename: entry.name,
+        root,
+        language,
+        readable,
+        isManifest: isManifestFile(relativePath),
+        isDoc: isDocFile(relativePath),
+        isTest: isTestFile(relativePath),
+        isEntryPoint: isEntryPointFile(relativePath)
+      });
+    }
+  }
+
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    files,
+    totalFiles,
+    totalDirectories,
+    omittedFiles,
+    ignoredDirectories: [...ignoredDirectories].sort(),
+    rootCounts,
+    languages
+  };
+}
+
+function buildModules(
+  inventory: Inventory,
+  projectMap: ProjectMap,
+  intake: ProjectIntake | undefined,
+  settings: ProjectExplainSettings,
+  message: string
+): ModuleDraft[] {
+  const grouped = new Map<string, InventoryFile[]>();
+  for (const file of inventory.files.filter((entry) => entry.readable)) {
+    if (!shouldIncludeAgentArtifact(file.path, message)) continue;
+    const root = chooseClusterRoot(file, projectMap, intake);
+    const current = grouped.get(root) ?? [];
+    current.push(file);
+    grouped.set(root, current);
+  }
+
+  const importantRoots = new Set([
+    ...projectMap.importantFiles.map(selectModuleRoot),
+    ...(intake?.importantFiles ?? []).map(selectModuleRoot),
+    ...(intake?.knownEntryPoints ?? []).map(selectModuleRoot)
+  ]);
+
+  return [...grouped.entries()]
+    .map(([root, files]) => ({ root, files }))
+    .sort((left, right) => {
+      const leftImportant = importantRoots.has(left.root) ? 1 : 0;
+      const rightImportant = importantRoots.has(right.root) ? 1 : 0;
+      if (leftImportant !== rightImportant) return rightImportant - leftImportant;
+      return right.files.length - left.files.length;
+    })
+    .slice(0, Math.max(8, settings.maxModuleSamples * 2));
+}
+
+function readSampledFiles(
+  workspaceRoot: string,
+  inventory: Inventory,
+  modules: ModuleDraft[],
+  input: BuildProjectExplainReportInput,
+  settings: ProjectExplainSettings
+): SampledFile[] {
+  const selected = new Map<string, string>();
+  const add = (filePath: string, reason: string) => {
+    const file = inventory.files.find((entry) => entry.path === normalizePath(filePath));
+    if (!file?.readable) return;
+    if (!shouldIncludeAgentArtifact(file.path, input.message)) return;
+    if (!selected.has(file.path)) selected.set(file.path, reason);
+  };
+
+  for (const file of inventory.files.filter((entry) => entry.isManifest || entry.isDoc)) add(file.path, file.isManifest ? "manifest" : "documentation");
+  for (const file of input.projectMap.importantFiles) add(file, "project-map-important-file");
+  for (const file of input.intake?.importantFiles ?? []) add(file, "project-intake-important-file");
+  for (const file of input.intake?.knownEntryPoints ?? []) add(file, "entrypoint");
+  for (const file of inventory.files.filter((entry) => entry.isEntryPoint)) add(file.path, "entrypoint");
+
+  for (const module of modules) {
+    for (const file of rankFilesForModule(module.files).slice(0, settings.maxModuleSamples)) {
+      add(file.path, `${module.root}-module-sample`);
+    }
+  }
+
+  const maxSamples = Math.min(240, 30 + modules.length * settings.maxModuleSamples);
+  const sampled: SampledFile[] = [];
+  for (const [filePath, reason] of [...selected.entries()].slice(0, maxSamples)) {
+    try {
+      const absolutePath = path.join(workspaceRoot, filePath);
+      const content = fs.readFileSync(absolutePath, "utf8").slice(0, settings.maxFileReadChars);
+      const anchors = extractExplainAnchors(filePath, content);
+      sampled.push({
+        path: filePath,
+        reason,
+        charsRead: content.length,
+        summary: summarizeFile(filePath, content),
+        excerpt: compactText(content).slice(0, 280),
+        dependencies: inferDependencies(filePath, content),
+        language: languageForPath(filePath),
+        lineCount: content.split(/\r?\n/).length,
+        anchors
+      });
+    } catch {
+      // Ignore unreadable files; the report still carries inventory evidence.
+    }
+  }
+  return sampled;
+}
+
+function createExplainModule(
+  module: ModuleDraft,
+  index: number,
+  sampledByPath: Map<string, SampledFile>,
+  settings: ProjectExplainSettings
+): ProjectExplainModule {
+  const rankedFiles = rankFilesForModule(module.files);
+  const importantFiles = rankedFiles.slice(0, settings.maxModuleSamples).map((file) => file.path);
+  const entryPoints = module.files.filter((file) => file.isEntryPoint).map((file) => file.path).slice(0, 8);
+  const tests = module.files.filter((file) => file.isTest).map((file) => file.path).slice(0, 8);
+  const samples = importantFiles.map((file) => sampledByPath.get(file)).filter((sample): sample is SampledFile => Boolean(sample));
+  const dependencies = uniqueStrings(samples.flatMap((sample) => sample.dependencies)).slice(0, 10);
+  const risksAndUnknowns = [
+    tests.length ? "" : "No nearby tests were detected in this module sample.",
+    module.files.length > 200 ? `Large module surface (${module.files.length} readable files); explanation is summary-first.` : "",
+    samples.length ? "" : "No readable samples were captured for this module."
+  ].filter(Boolean);
+
+  return {
+    id: `module_${index + 1}`,
+    name: humanizeModuleName(module.root),
+    root: module.root,
+    responsibility: inferResponsibility(module.root, rankedFiles, samples),
+    importantFiles,
+    entryPoints,
+    tests,
+    dependencies,
+    risksAndUnknowns,
+    evidence: samples.slice(0, 5).map((sample) => ({
+      type: evidenceTypeForPath(sample.path),
+      path: sample.path,
+      reason: sample.summary,
+      excerpt: sample.excerpt,
+      lineStart: sample.anchors[0]?.lineStart,
+      lineEnd: sample.anchors[0]?.lineEnd,
+      symbol: sample.anchors[0]?.symbol,
+      language: sample.language,
+      snippet: sample.anchors[0]?.snippet
+    }))
+  };
+}
+
+function createReportEvidence(
+  moduleMap: ProjectExplainModule[],
+  sampledFiles: SampledFile[],
+  importantFiles: string[]
+): ProjectExplainEvidenceRef[] {
+  const sampledEvidence = sampledFiles.slice(0, 20).map((sample) => ({
+    type: evidenceTypeForPath(sample.path),
+    path: sample.path,
+    reason: sample.summary,
+    excerpt: sample.excerpt,
+    lineStart: sample.anchors[0]?.lineStart,
+    lineEnd: sample.anchors[0]?.lineEnd,
+    symbol: sample.anchors[0]?.symbol,
+    language: sample.language,
+    snippet: sample.anchors[0]?.snippet
+  }));
+  const importantEvidence = importantFiles.slice(0, 10).map((file) => ({
+    type: evidenceTypeForPath(file),
+    path: file,
+    reason: "High-signal file selected by intake or project map."
+  }));
+  const moduleEvidence = moduleMap.slice(0, 8).map((module) => ({
+    type: "directory" as const,
+    path: module.root,
+    reason: module.responsibility
+  }));
+  return dedupeEvidence([...sampledEvidence, ...importantEvidence, ...moduleEvidence]).slice(0, 40);
+}
+
+function createOverview(input: BuildProjectExplainReportInput, inventory: Inventory, modules: ProjectExplainModule[]) {
+  const stack = input.projectMap.stack.length ? input.projectMap.stack.join(", ") : Object.keys(inventory.languages).slice(0, 4).join(", ") || "unknown stack";
+  const projectName = input.intake?.detectedProjectName ?? path.basename(path.resolve(input.workspacePath));
+  const moduleNames = modules.slice(0, 5).map((module) => module.root).join(", ") || "no clear module roots";
+  return `${projectName} appears to be a ${stack} workspace with ${inventory.files.length} scanned file(s) across ${modules.length} mapped module(s). Main areas: ${moduleNames}.`;
+}
+
+function createArchitectureSummary(
+  input: BuildProjectExplainReportInput,
+  rootFolders: Array<{ path: string; files: number }>,
+  modules: ProjectExplainModule[]
+) {
+  if (input.intake?.architectureSummary) return input.intake.architectureSummary;
+  const roots = rootFolders.slice(0, 6).map((entry) => `${entry.path} (${entry.files})`).join(", ");
+  const responsibilities = modules.slice(0, 4).map((module) => `${module.root}: ${module.responsibility}`).join(" | ");
+  return `The project is organized around ${roots || "the workspace root"}. ${responsibilities || "No module responsibility could be inferred beyond the file inventory."}`;
+}
+
+function createDataFlowSummary(moduleMap: ProjectExplainModule[], entryPoints: string[]) {
+  const apiModules = moduleMap.filter((module) => /(api|server|runtime|backend|tauri|protocol)/i.test(`${module.root} ${module.name}`));
+  const uiModules = moduleMap.filter((module) => /(app|ui|desktop|component|frontend|web)/i.test(`${module.root} ${module.name}`));
+  const tests = moduleMap.filter((module) => module.tests.length);
+  const parts = [
+    entryPoints.length ? `Entry starts around ${entryPoints.slice(0, 4).join(", ")}.` : "No proven entry point was found.",
+    uiModules.length ? `UI-facing modules include ${uiModules.slice(0, 3).map((module) => module.root).join(", ")}.` : "",
+    apiModules.length ? `Runtime/API/backend-facing modules include ${apiModules.slice(0, 3).map((module) => module.root).join(", ")}.` : "",
+    tests.length ? `Tests are visible near ${tests.slice(0, 3).map((module) => module.root).join(", ")}.` : "Tests were not strongly visible in the sampled module map."
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
+function createRisksAndUnknowns(
+  input: BuildProjectExplainReportInput,
+  inventory: Inventory,
+  moduleMap: ProjectExplainModule[],
+  entryPoints: string[]
+) {
+  return uniqueStrings([
+    ...(input.intake?.warnings ?? []),
+    ...(input.intake?.unknowns ?? []),
+    inventory.omittedFiles ? `${inventory.omittedFiles} file(s) were omitted after the explain inventory limit.` : "",
+    entryPoints.length ? "" : "No definitive runtime entry point was proven from filenames and manifests.",
+    moduleMap.some((module) => !module.tests.length) ? "Some modules do not have nearby tests in the scanned file tree." : "",
+    inventory.ignoredDirectories.length ? `Ignored generated/vendor directories: ${inventory.ignoredDirectories.slice(0, 8).join(", ")}.` : ""
+  ].filter(Boolean)).slice(0, 12);
+}
+
+function createSuggestedNextQuestions(moduleMap: ProjectExplainModule[], entryPoints: string[], howToRun: string[]) {
+  const firstModule = moduleMap[0]?.root;
+  return [
+    firstModule ? `Explain ${firstModule} in more detail.` : "",
+    entryPoints[0] ? `Trace what happens from ${entryPoints[0]}.` : "",
+    howToRun[0] ? `Explain how ${howToRun[0]} works and what it starts.` : "",
+    "Show the risky or unclear parts before editing."
+  ].filter(Boolean).slice(0, 4);
+}
+
+function rankFilesForModule(files: InventoryFile[]) {
+  return [...files].sort((left, right) => scoreFile(right) - scoreFile(left) || left.path.localeCompare(right.path));
+}
+
+function scoreFile(file: InventoryFile) {
+  let score = 0;
+  if (file.isManifest) score += 50;
+  if (file.isDoc) score += 35;
+  if (file.isEntryPoint) score += 30;
+  if (file.isTest) score += 10;
+  if (/types?|schema|protocol|config|route|server|runtime|main|index|app/i.test(file.path)) score += 12;
+  if (!shouldIncludeAgentArtifact(file.path, "")) score -= 100;
+  if (/lock|snapshot|generated/i.test(file.path)) score -= 30;
+  return score;
+}
+
+function chooseClusterRoot(file: InventoryFile, projectMap: ProjectMap, intake: ProjectIntake | undefined) {
+  const directSignals = uniqueStrings([
+    ...projectMap.importantFiles,
+    ...(intake?.importantFiles ?? []),
+    ...(intake?.knownEntryPoints ?? [])
+  ]).map(selectModuleRoot);
+  return directSignals.includes(file.root) ? file.root : file.root;
+}
+
+function selectModuleRoot(filePath: string) {
+  const normalized = normalizePath(filePath);
+  const parts = normalized.split("/");
+  if (parts.length >= 2 && /^(apps|packages|services|libs|crates|plugins|examples)$/.test(parts[0] ?? "")) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  if (parts[0] === "src" && parts[1] && parts.length >= 3) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  if (parts[0] === "app" && parts[1] && parts.length >= 3) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  return parts[0] || ".";
+}
+
+function shouldIgnoreDirectory(name: string, relativePath: string) {
+  return IGNORED_DIRS.has(name) || relativePath.split("/").some((part) => IGNORED_DIRS.has(part));
+}
+
+function isTextLike(filePath: string) {
+  return TEXT_EXTENSIONS.has(path.extname(filePath).toLowerCase()) || MANIFEST_NAMES.has(path.basename(filePath));
+}
+
+function isManifestFile(filePath: string) {
+  return MANIFEST_NAMES.has(path.basename(filePath));
+}
+
+function isDocFile(filePath: string) {
+  return /(^|\/)(README|CHANGELOG|CONTRIBUTING|ARCHITECTURE|docs\/)/i.test(filePath) || /\.md$/i.test(filePath);
+}
+
+function isTestFile(filePath: string) {
+  return /(^|\/)(test|tests|__tests__)\b|(\.test\.|\.(spec)\.)/i.test(filePath);
+}
+
+function isEntryPointFile(filePath: string) {
+  return /(^|\/)(index|main|app|server|cli|lib)\.(ts|tsx|js|jsx|rs|py|html)$/i.test(filePath)
+    || /(^|\/)src-tauri\/src\/main\.rs$/i.test(filePath);
+}
+
+function evidenceTypeForPath(filePath: string): ProjectExplainEvidenceRef["type"] {
+  if (isManifestFile(filePath)) return "manifest";
+  if (isEntryPointFile(filePath)) return "entrypoint";
+  if (isTestFile(filePath)) return "test";
+  return "file";
+}
+
+function languageForPath(filePath: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".cs": "C#",
+    ".css": "CSS",
+    ".go": "Go",
+    ".html": "HTML",
+    ".java": "Java",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".kt": "Kotlin",
+    ".md": "Markdown",
+    ".mjs": "JavaScript",
+    ".py": "Python",
+    ".rs": "Rust",
+    ".scss": "CSS",
+    ".sql": "SQL",
+    ".swift": "Swift",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".toml": "TOML",
+    ".yaml": "YAML",
+    ".yml": "YAML"
+  };
+  return map[ext];
+}
+
+function summarizeFile(filePath: string, content: string) {
+  const compact = compactText(content);
+  if (path.basename(filePath) === "package.json") {
+    try {
+      const parsed = JSON.parse(content) as { name?: string; scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      const scripts = Object.keys(parsed.scripts ?? {}).slice(0, 6).join(", ") || "no scripts";
+      const deps = Object.keys({ ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) }).slice(0, 6).join(", ") || "no listed dependencies";
+      return `package.json${parsed.name ? ` for ${parsed.name}` : ""}; scripts: ${scripts}; deps: ${deps}.`;
+    } catch {
+      return "package.json manifest could not be parsed as JSON.";
+    }
+  }
+  if (/README|ARCHITECTURE|CONTRIBUTING|CHANGELOG|\.md$/i.test(filePath)) {
+    const heading = content.split(/\r?\n/).find((line) => /^#/.test(line.trim()))?.replace(/^#+\s*/, "");
+    return heading ? `Documentation: ${heading}.` : `Documentation sample: ${compact.slice(0, 120)}.`;
+  }
+  const declarations = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^(export\s+)?(class|function|type|interface|const|async function)\b|^import\b|^pub\s+(struct|enum|fn|mod)\b/.test(line))
+    .slice(0, 5)
+    .map((line) => line.slice(0, 100));
+  return declarations.length ? `Code declarations/imports: ${declarations.join(" | ")}.` : `Readable text/code sample: ${compact.slice(0, 140)}.`;
+}
+
+function inferDependencies(filePath: string, text: string) {
+  if (path.basename(filePath) === "package.json") {
+    try {
+      const parsed = JSON.parse(text) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      return Object.keys({ ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) });
+    } catch {
+      return [];
+    }
+  }
+  const deps: string[] = [];
+  for (const match of text.matchAll(/\bfrom\s+["']([^"']+)["']|require\(["']([^"']+)["']\)/g)) {
+    const dep = match[1] ?? match[2];
+    if (dep && !dep.startsWith(".")) deps.push(dep.split("/")[0] ?? dep);
+  }
+  return deps;
+}
+
+function inferResponsibility(root: string, files: InventoryFile[], samples: SampledFile[]) {
+  const joined = `${root} ${files.map((file) => file.path).slice(0, 20).join(" ")}`.toLowerCase();
+  if (/protocol|schema|types?/.test(joined)) return "Shared contracts, protocol types, or schema definitions.";
+  if (/runtime|agent|orchestrat/.test(joined)) return "Agent runtime, orchestration, or execution behavior.";
+  if (/desktop|tauri|electron/.test(joined)) return "Desktop shell, native bridge, or app host behavior.";
+  if (/app|ui|component|frontend|web/.test(joined)) return "User-facing application or UI surface.";
+  if (/test|spec/.test(joined)) return "Test coverage and behavior verification.";
+  if (/docs|readme|architecture/.test(joined)) return "Documentation and project guidance.";
+  const summary = samples[0]?.summary;
+  return summary ? `Inferred from samples: ${summary}` : "General project module inferred from its directory and file names.";
+}
+
+function humanizeModuleName(root: string) {
+  return root
+    .split("/")
+    .map((part) => part.replace(/[-_]/g, " "))
+    .join(" / ");
+}
+
+function compactText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizePath(value: string) {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  return normalized || ".";
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function dedupeEvidence(values: ProjectExplainEvidenceRef[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.type}:${value.path}:${value.reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeSections(values: ProjectExplainSection[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.filePath}:${value.lineStart}:${value.title}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractQuotedValue(value: string) {
+  return value.match(/["']([^"']+)["']/)?.[1];
+}
+
+function shouldIncludeAgentArtifact(filePath: string, message: string) {
+  const normalizedPath = filePath.toLowerCase();
+  const normalizedMessage = message.toLowerCase();
+  if (!/(agent[_-]?proposal|agent\.proposal|orchcode|work[_-]?journal|decision)/i.test(normalizedPath)) {
+    return true;
+  }
+  return /\b(agent|proposal|orchcode|journal|decision)\b/i.test(normalizedMessage) || /(اقتراح|اورك|أورك|وكيل|اجينت)/.test(normalizedMessage);
+}
+
+function containsArabic(value: string) {
+  return /[\u0600-\u06ff]/.test(value);
+}

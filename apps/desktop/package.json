@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "dev:reuse": "node scripts/dev-or-reuse.mjs",
     "build": "tsc -p tsconfig.json && vite build",
+    "smoke:run-project": "tsx scripts/run-project-smoke.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

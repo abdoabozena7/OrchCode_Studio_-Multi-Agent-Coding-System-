@@ -35,6 +35,7 @@ import type {
 import type {
   ModelProviderConfig,
   ProjectContextPack,
+  ProjectExplainReport,
   ProjectIntake,
   ProjectRunIntent,
   ModuleExecutionPlan,
@@ -168,6 +169,7 @@ export type AgentRuntimeSession = {
   decisionLedger: DecisionRecord[];
   projectIntake?: ProjectIntake;
   contextPack?: ProjectContextPack;
+  explainReport?: ProjectExplainReport;
   runIntent?: ProjectRunIntent;
   runToGreen?: RunToGreenState;
   moduleExecutionPlan?: ModuleExecutionPlan;
@@ -254,6 +256,7 @@ export type ReportCommandResultRequest = {
   stdout: string;
   stderr: string;
   message?: string;
+  diagnosis?: import("./models.js").CommandFailureDiagnosis;
   autoRun?: boolean;
   provenance?: import("./models.js").CommandExecutionProvenance;
   backgroundJob?: import("./models.js").BackgroundJobRecord;

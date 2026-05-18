@@ -51,18 +51,18 @@ test("auto mode chooses orchestrated workers dynamically and respects explicit c
   assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
   assert.equal(session?.tasks.length, 3);
   assert.deepEqual(session?.tasks.map((task) => task.agentRole), [
-    "Gameplay Implementer",
-    "3D Rendering Implementer",
-    "Frontend Integration Implementer"
+    "GameLogicAgent",
+    "ThreeJsRenderingAgent",
+    "FrontendIntegrationAgent"
   ]);
+  assert.equal(session?.status, "needs_approval");
   assert.equal((session?.patchProposals.length ?? 0) > 0, true);
-  assert.equal(session?.verificationResult?.status, "pending");
   assert.equal(session?.patchProposals[0]?.status, "proposed");
-  assert.ok((session?.toolIntents.length ?? 0) >= 4);
-  assert.ok((session?.artifacts.length ?? 0) >= 3);
+  assert.ok((session?.orchestration?.workOrders.length ?? 0) >= 3);
+  assert.ok((session?.orchestration?.agentRuns.length ?? 0) >= 3);
   assert.ok(session?.runSummary);
   assert.equal((session?.runSummary?.filesChanged.length ?? 0) > 0, true);
-  assert.equal(session?.runSummary?.gates.some((gate) => gate.name === "Rust apply"), true);
+  assert.equal(session?.runSummary?.gates.some((gate) => gate.name === "ReviewerGate"), true);
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
@@ -86,8 +86,35 @@ test("explicit one-agent request still uses one worker plus mandatory gates", as
   const session = runtime.getSession(created.sessionId);
 
   assert.equal(session?.tasks.length, 1);
-  assert.deepEqual(session?.tasks.map((task) => task.agentRole), ["Gameplay Implementer"]);
+  assert.deepEqual(session?.tasks.map((task) => task.agentRole), ["FrontendIntegrationAgent"]);
   assert.equal(session?.status, "needs_approval");
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("explicit three-agent single-file pygame request requires plan confirmation instead of failing", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-three-agent-pygame-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-three-agent-pygame-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const prompt = "use 3 agents to make a one python code for a 3d snake game with py game";
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    executionMode: "auto_mode",
+    accessProfile: "full_access",
+    userPrompt: prompt
+  });
+  await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+
+  assert.equal(session?.status, "needs_approval");
+  assert.equal(session?.nextAction?.kind, "confirm_plan");
+  assert.match(session?.nextAction?.message ?? "", /Python file/i);
+  assert.notEqual(session?.status, "failed");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

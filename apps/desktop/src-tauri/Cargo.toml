@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local desktop coding agent foundation"
 authors = ["OrchCode Studio"]
 edition = "2021"
+default-run = "orchcode-desktop"
 
 [lib]
 name = "orchcode_desktop_lib"

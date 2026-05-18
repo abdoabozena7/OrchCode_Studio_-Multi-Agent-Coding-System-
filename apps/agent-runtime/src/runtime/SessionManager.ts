@@ -314,6 +314,10 @@ export class SessionManager {
 
   async addCommandExecution(sessionId: string, commandExecution: CommandExecutionRecord) {
     await this.updateSession(sessionId, (session) => {
+      const hadExecutionForRequest = Boolean(
+        commandExecution.requestId
+        && session.commandExecutions.some((candidate) => candidate.requestId === commandExecution.requestId)
+      );
       const existingIndex = session.commandExecutions.findIndex(
         (candidate) =>
           candidate.id === commandExecution.id ||
@@ -391,6 +395,14 @@ export class SessionManager {
             ? "A background command is still running with limited tracking."
             : "Runtime is still waiting for additional authority-backed actions to complete.";
       taskState.reconciledAt = taskState.reconciliationStatus === "reconciled" ? commandExecution.createdAt : taskState.reconciledAt;
+      if (
+        !hadExecutionForRequest
+        && commandExecution.status !== "executing"
+        && commandExecution.status !== "running"
+        && commandExecution.status !== "approval_required"
+      ) {
+        pushTaskTransition(taskState, "command.started", `Command started: ${commandExecution.command}`);
+      }
       pushTaskTransition(
         taskState,
         commandExecution.status === "executing" || commandExecution.status === "running"
@@ -527,7 +539,10 @@ export class SessionManager {
     await this.updateSession(sessionId, (session) => {
       session.runSummary = summary;
       const taskState = asManagedTaskState(session.taskState);
-      taskState.finalStatus = summary.status === "blocked" ? "blocked" : summary.status;
+      taskState.finalStatus =
+        summary.status === "completed" || summary.status === "failed" || summary.status === "blocked"
+          ? summary.status
+          : taskState.finalStatus;
       if (summary.status === "completed") {
         taskState.phase = "completed";
         pushTaskTransition(taskState, "session.completed", summary.summary);
@@ -535,6 +550,8 @@ export class SessionManager {
         taskState.phase = "failed";
         pushTaskTransition(taskState, "session.failed", summary.summary);
       } else if (summary.status === "blocked") {
+        taskState.phase = "verification_pending";
+      } else if (summary.status === "pending") {
         taskState.phase = "verification_pending";
       }
     });
@@ -827,20 +844,40 @@ function uniqueStrings(values: string[]) {
 }
 
 function normalizeAccessProfile(profile: AccessProfileInput | undefined): AccessProfile {
-  if (!profile || profile === "default_permissions" || profile === "auto_review" || profile === "bounded_autonomy" || profile === "custom_config") {
+  if (!profile || profile === "default_permissions" || profile === "auto_review" || profile === "bounded_autonomy" || profile === "full_access" || profile === "custom_config") {
     return profile ?? "default_permissions";
   }
-  return "bounded_autonomy";
+  return "default_permissions";
 }
 
 function inferTrustProfile(accessProfile: AccessProfile): import("@orchcode/protocol").RunTrustProfile {
-  return accessProfile === "auto_review" || accessProfile === "bounded_autonomy" ? "trusted_internal" : "strict_gated";
+  return accessProfile === "auto_review" || accessProfile === "bounded_autonomy" || accessProfile === "full_access" ? "trusted_internal" : "strict_gated";
 }
 
 function buildDeclaredAccessPolicy(
   accessProfile: AccessProfile,
   trustProfile: import("@orchcode/protocol").RunTrustProfile
 ): DeclaredAccessPolicy {
+  if (accessProfile === "full_access") {
+    return {
+      accessProfile,
+      trustProfile,
+      requestedAuthority: "backend_enforced",
+      requestedCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command",
+        "execute_medium_command",
+        "execute_dangerous_command",
+        "use_network"
+      ],
+      note: "Full Access is a trusted local profile that auto-applies validated workspace patches and auto-runs requested commands while preserving provenance."
+    };
+  }
+
   if (accessProfile === "bounded_autonomy") {
     return {
       accessProfile,
@@ -892,10 +929,34 @@ function buildDeclaredAccessPolicy(
 
 function buildResolvedAccessPolicy(declared: DeclaredAccessPolicy, resolvedAt: string): ResolvedAccessPolicy {
   const baseRestrictions = [
-    "Patch application is performed by Rust authority after explicit review.",
+    "Patch application is performed by Rust authority.",
     "Session restore requires a valid session token and persisted runtime snapshot.",
-    "Dangerous commands remain blocked by backend policy."
+    "Command policy remains heuristic and is recorded as provenance."
   ];
+
+  if (declared.accessProfile === "full_access") {
+    return {
+      declared,
+      enforcedAuthority: "backend_enforced",
+      effectiveCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command",
+        "execute_medium_command",
+        "execute_dangerous_command",
+        "use_network",
+        "restore_session"
+      ],
+      blockedCapabilities: [],
+      requiresApprovalFor: ["session_restore"],
+      backendRestrictions: baseRestrictions,
+      resolvedBy: "runtime",
+      resolvedAt
+    };
+  }
 
   if (declared.accessProfile === "bounded_autonomy") {
     return {

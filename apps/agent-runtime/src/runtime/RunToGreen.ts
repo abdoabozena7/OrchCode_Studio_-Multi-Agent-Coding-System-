@@ -164,6 +164,16 @@ export function diagnoseRunToGreenFailure(input: DiagnoseInput): RunToGreenDiagn
         : "The selected package script is missing and no safe alternate command was discovered."
     };
   }
+  if (/\bnot a git repository\b/i.test(combined) && input.command.trim().toLowerCase().startsWith("git status")) {
+    return {
+      category: "not_git_repository",
+      confidence: "high",
+      evidence,
+      safeFixAvailable: false,
+      requiresApproval: false,
+      reason: "The selected Git command ran in a workspace that is not a Git repository."
+    };
+  }
   if (/\b(command not found|is not recognized as an internal or external command|not recognized as an internal or external command)\b/i.test(combined)) {
     return {
       category: "command_not_found",

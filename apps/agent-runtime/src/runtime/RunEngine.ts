@@ -11,6 +11,8 @@ import type {
   PatchProposal,
   ProjectMap,
   ReviewGateSummary,
+  RunPatchIntent,
+  RunPatchIntentModel,
   RunMode,
   RunPhase,
   RunPhaseId,
@@ -21,6 +23,7 @@ import type {
   ToolIntent,
   VerificationResult
 } from "@orchcode/protocol";
+import { accessProfileDefaults } from "@orchcode/protocol";
 import { randomUUID } from "node:crypto";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { runPatchIntentSchema, runPlanSchema, runVerificationSchema } from "../schemas/sessionSchemas.js";
@@ -48,6 +51,10 @@ import {
   validatePatchAgainstModulePlan
 } from "./ModuleExecutionPlanning.js";
 import { initializeRunToGreenState } from "./RunToGreen.js";
+import {
+  buildLargeProjectExplainReport,
+  formatProjectExplainReportForChat
+} from "./LargeProjectContextBuilder.js";
 
 type RunPlanTask = {
   id?: string;
@@ -68,25 +75,6 @@ type RunPlanModel = {
   risks: string[];
   suggestedCommands?: Array<{ command: string; reason: string }>;
   fallbackWarning?: string;
-};
-
-type PatchIntentOperation = "create_file" | "replace_range" | "insert_after" | "insert_before" | "delete_range";
-
-type RunPatchIntent = {
-  path: string;
-  operation: PatchIntentOperation;
-  anchorText?: string;
-  preimageText?: string;
-  replacementText: string;
-  reason: string;
-  risk: PatchProposal["riskLevel"];
-};
-
-type RunPatchIntentModel = {
-  title: string;
-  summary: string;
-  intents: RunPatchIntent[];
-  suggestedCommands?: Array<{ command: string; reason: string }>;
 };
 
 type RunVerificationModel = {
@@ -299,7 +287,7 @@ export class RunEngine {
         ? createCommandRequests(sessionId, session.workspacePath, [{
             command: runToGreen.selectedCommands[0]!.command,
             reason: runToGreen.selectedCommands[0]!.reason
-          }], [])
+          }], [], { fullAccess: session.accessProfile === "full_access" })
         : [];
       for (const request of commandRequests) {
         await this.addIntent(sessionId, "command.requested", request.command, request.reason, { commandRequestId: request.id, risk: request.risk }, request.status === "blocked" ? "blocked" : "proposed");
@@ -307,43 +295,57 @@ export class RunEngine {
       }
       const verification = await this.createVerification(sessionId, commandRequests.length
         ? "Run-to-green verification is pending until Rust runs the selected command."
-        : (runToGreen.blockerReason ?? "Run-to-green was blocked before command execution."), [
+        : recommendation?.preview
+          ? "No grounded run command was found. A preview is available instead."
+          : (runToGreen.blockerReason ?? "No grounded run command was found for this workspace."), [
         { name: "Run-to-green intent", status: "passed", detail: "Bounded repair loop was initialized." },
         {
           name: "Command selection",
           status: commandRequests.length ? "passed" : "unavailable",
-          detail: commandRequests[0]?.command ?? (runToGreen.blockerReason ?? "No grounded command could be selected.")
+          detail: commandRequests[0]?.command ?? (
+            recommendation?.preview
+              ? "No grounded run command was selected. Preview the workspace instead."
+              : (runToGreen.blockerReason ?? "No grounded command could be selected.")
+          )
         },
         {
           name: "Rust command execution",
           status: commandRequests.length ? "pending" : "not_run",
-          detail: commandRequests[0]?.command ?? "No grounded command was selected, so Rust command execution was not started."
+          detail: commandRequests[0]?.command ?? (
+            recommendation?.preview
+              ? "No grounded command was selected, so Rust command execution was not started. Preview is available."
+              : "No grounded command was selected, so Rust command execution was not started."
+          )
         }
       ]);
       await this.addIntent(sessionId, "validation.requested", "Run-to-green verification", verification.summary, { verificationId: verification.id }, commandRequests.length ? "proposed" : "blocked");
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.runToGreen = runToGreen;
-        draft.status = commandRequests.length ? "needs_approval" : "blocked";
-        draft.lifecycleStage = commandRequests.length ? "APPROVAL" : "BLOCKED";
+        draft.status = commandRequests.length ? "needs_approval" : "completed";
+        draft.lifecycleStage = commandRequests.length ? "APPROVAL" : "DONE";
         draft.reasoningSummaries.push(runToGreenPlan.reasoningSummary);
         draft.previewRecommendation = recommendation?.preview;
         draft.nextAction = commandRequests.length
           ? { kind: "approve_commands", message: "Approve the selected run-to-green command to start the bounded repair loop through Rust." }
-          : undefined;
+          : recommendation?.preview
+            ? { kind: "preview_ready", message: "No grounded run command was found. Preview is available instead.", preview: recommendation.preview }
+            : undefined;
         draft.reviewGate = createRunToGreenReviewGate(draft, verification, commandRequests);
         updateAgentRunRecord(draft, "agent_local_codex", (agent) => {
-          agent.status = commandRequests.length ? "blocked" : "blocked";
-          agent.lifecycleStage = commandRequests.length ? "APPROVAL" : "BLOCKED";
+          agent.status = commandRequests.length ? "running" : "completed";
+          agent.lifecycleStage = commandRequests.length ? "APPROVAL" : "DONE";
           agent.currentAction = commandRequests.length
-            ? "Waiting for operator review before Rust starts the selected run-to-green command."
-            : (runToGreen.blockerReason ?? "Run-to-green stopped before command execution.");
-          agent.lastEvent = commandRequests.length ? "awaiting:command-approval" : "blocked:no-grounded-command";
+            ? "Safe project command is ready for Rust execution."
+            : recommendation?.preview
+              ? "No grounded run command was found. Preview is available instead."
+              : (runToGreen.blockerReason ?? "No grounded run command was found.");
+          agent.lastEvent = commandRequests.length ? "awaiting:command-execution" : "completed:no-grounded-command";
           if (!commandRequests.length) {
             agent.completedAt = new Date().toISOString();
           }
         });
       });
-      await this.addArtifact(sessionId, "run_to_green", "Run-to-green state", commandRequests.length ? "Bounded repair loop initialized." : "Run-to-green blocked before the first attempt.", { runToGreen });
+      await this.addArtifact(sessionId, "run_to_green", "Run-to-green state", commandRequests.length ? "Bounded repair loop initialized." : "Run-to-green finished without a runnable command.", { runToGreen });
       await this.addDecisionRecord(sessionId, {
         category: commandRequests.length ? "decision" : "risk",
         finding: commandRequests.length
@@ -364,13 +366,33 @@ export class RunEngine {
       });
       await this.updateRunPhase(sessionId, "agents_running", "completed", "Inspection completed and run-to-green command selection finished.");
       await this.updateRunPhase(sessionId, "run_verification", commandRequests.length ? "active" : "blocked", verification.summary, verification.checks.length);
-      await this.updateRunPhase(sessionId, "review_final_diff", commandRequests.length ? "active" : "blocked", commandRequests.length ? "Run-to-green is waiting for command approval or a repair result." : "No grounded run command was found.");
-      await this.updateRunPhase(sessionId, "final_report", commandRequests.length ? "active" : "blocked", commandRequests.length ? "Run-to-green is blocked on the first command approval." : "Run-to-green was blocked before execution.");
+      await this.updateRunPhase(
+        sessionId,
+        "review_final_diff",
+        commandRequests.length ? "active" : "completed",
+        commandRequests.length
+          ? "Run-to-green is waiting for command execution or a repair result."
+          : recommendation?.preview
+            ? "No grounded run command was found. Preview is available instead."
+            : "No grounded run command was found."
+      );
+      await this.updateRunPhase(
+        sessionId,
+        "final_report",
+        commandRequests.length ? "active" : "completed",
+        commandRequests.length
+          ? "Run-to-green is waiting for the first command result."
+          : recommendation?.preview
+            ? "Run-to-green did not start because only a preview could be grounded safely."
+            : "Run-to-green did not start because no grounded command could be selected."
+      );
       await this.sessionManager.setRunSummary(sessionId, {
-        status: "blocked",
+        status: commandRequests.length ? "pending" : "completed",
         summary: commandRequests.length
           ? `Prepared run-to-green command: ${commandRequests[0]?.command}`
-          : runToGreen.blockerReason ?? "No launch, build, start, or test command could be inferred safely.",
+          : recommendation?.preview
+            ? "No grounded run command was found. Preview is available instead."
+            : runToGreen.blockerReason ?? "No launch, build, start, or test command could be inferred safely.",
         filesChanged: [],
         appliedPatchIds: [],
         proposedPatchIds: [],
@@ -380,16 +402,31 @@ export class RunEngine {
           status: check.status === "failed" ? "failed" : check.status === "passed" ? "passed" : "blocked",
           notes: [check.detail]
         })),
-        nextAction: commandRequests.length ? "Approve the command, then inspect the command result artifact." : "Open the static workspace manually or configure a run script.",
+        nextAction: commandRequests.length
+          ? "Run the selected command through Rust and inspect the terminal result."
+          : recommendation?.preview
+            ? "Open the preview target."
+            : "Open the static workspace manually or configure a run script.",
         createdAt: new Date().toISOString()
-      });
+      } as RunSummary);
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
         content: commandRequests.length
           ? `I selected a run-to-green command and prepared it for approval.\n\nCommand: \`${commandRequests[0]?.command}\`\n\nReasoning summary: ${runToGreen.selectedCommands[0]?.reason ?? "Selected from grounded workspace signals."}`
-          : `I inspected the workspace, but I could not infer a grounded run command.\n\n${runToGreen.blockerReason ?? "No grounded command was available."}`
+          : recommendation?.preview
+            ? `I inspected the workspace, but I could not infer a grounded run command.\n\nPreview is available at ${recommendation.preview.target}.`
+            : `I inspected the workspace, but I could not infer a grounded run command.\n\n${runToGreen.blockerReason ?? "No grounded command was available."}`
       });
-      await this.updateStage(sessionId, commandRequests.length ? "APPROVAL" : "BLOCKED", "reviewing", commandRequests.length ? "completed" : "blocked", "Run-to-green command", runToGreen.selectedCommands[0]?.reason ?? runToGreen.blockerReason ?? "No run-to-green command inferred.");
+      await this.updateStage(
+        sessionId,
+        commandRequests.length ? "APPROVAL" : "DONE",
+        "reviewing",
+        commandRequests.length ? "completed" : "completed",
+        "Run-to-green command",
+        runToGreen.selectedCommands[0]?.reason
+          ?? (recommendation?.preview ? "No grounded command was found, but a preview is available." : runToGreen.blockerReason)
+          ?? "No run-to-green command inferred."
+      );
       return this.requireSession(sessionId);
     }
 
@@ -504,6 +541,65 @@ export class RunEngine {
     await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", plan.reasoningSummary || plan.summary);
     await this.updateRunPhase(sessionId, "split_agents", "completed", `Prepared ${plan.tasks.length} work item(s) for the local run.`, plan.tasks.length);
 
+    const singleFilePygameRequest = isSingleFilePythonPygameRequest(message, snapshot);
+    const explicitAgentCount = inferExplicitAgentCount(message);
+    if (singleFilePygameRequest && explicitAgentCount !== null && explicitAgentCount >= 3) {
+      const confirmMessage =
+        "This request targets a single Python file, but you explicitly asked for 3 agents. Running multiple agents against one file can create conflicting edits. Continue with 3 agents and merge into one file, or switch to a simpler workflow first.";
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "PLAN";
+        draft.nextAction = { kind: "confirm_plan", message: confirmMessage };
+        draft.reasoningSummaries.push(
+          "Single-file Python game requested with an explicit 3-agent workflow; plan confirmation is required before implementation."
+        );
+      });
+      await this.addArtifact(sessionId, "summary", "Plan review required", confirmMessage, {
+        reason: "multi_agent_single_file_conflict",
+        explicitAgentCount,
+        targetShape: "single_python_file"
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "risk",
+        finding: "The request asks for multiple agents to edit a single Python file.",
+        decision: "Pause before implementation and require plan confirmation instead of collapsing the workflow automatically.",
+        rationaleSummary: confirmMessage,
+        evidenceRefs: [],
+        linkedFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []).slice(0, 4),
+        uncertainty: "A single-file merge may create overlapping edits or regressions without operator confirmation.",
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
+      });
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: [
+          "Plan review required before implementation.",
+          "",
+          "You asked for 3 agents, but the target is a single Python file for a Pygame game.",
+          "",
+          "Options:",
+          "1. Continue with 3 agents and merge their work into one final file.",
+          "2. Simplify the workflow before implementation.",
+          "",
+          "Tell me to continue when you want to proceed."
+        ].join("\n")
+      });
+      await this.updateRunPhase(
+        sessionId,
+        "review_final_diff",
+        "active",
+        "Plan confirmation is required because multiple agents were requested for a single Python file."
+      );
+      await this.updateRunPhase(
+        sessionId,
+        "final_report",
+        "active",
+        "Waiting for plan confirmation before generating a single-file implementation."
+      );
+      return this.requireSession(sessionId);
+    }
+
     if (options.thinkFirst) {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = "needs_approval";
@@ -519,24 +615,69 @@ export class RunEngine {
     }
 
     if (plan.mode === "inspect_only") {
-      const verification = await this.createVerification(sessionId, "No file changes requested.", [
-        { name: "Workspace inspected", status: "passed", detail: snapshot.summary },
+      const explainReport = buildLargeProjectExplainReport({
+        workspacePath: session.workspacePath,
+        message,
+        projectMap: enrichedProjectMap,
+        intake
+      });
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.explainReport = explainReport;
+      });
+      await this.addArtifact(sessionId, "project_explain_report", "Project explain report", explainReport.overview, {
+        explainReport
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "finding",
+        finding: "Large-project explanation completed without write or command execution.",
+        decision: "Use a hierarchical read-only project report as the source of truth for the chat explanation.",
+        rationaleSummary: explainReport.overview,
+        evidenceRefs: explainReport.evidence
+          .filter((entry) => entry.type !== "directory")
+          .slice(0, 8)
+          .map((entry) => ({
+            type: "file" as const,
+            path: entry.path,
+            category: "project-explain",
+            reason: entry.reason,
+            lineStart: entry.lineStart,
+            lineEnd: entry.lineEnd,
+            symbol: entry.symbol
+          })),
+        linkedFiles: explainReport.importantFiles.slice(0, 8),
+        uncertainty: explainReport.risksAndUnknowns[0],
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+      const explainMessage = formatProjectExplainReportForChat(explainReport, message);
+      const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
+        {
+          name: "Workspace inventory",
+          status: "passed",
+          detail: `Scanned ${explainReport.contextPack.inventory.scannedFiles} file(s), ignored ${explainReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).`
+        },
+        {
+          name: "Module map",
+          status: "passed",
+          detail: `Mapped ${explainReport.moduleMap.length} module(s) with ${explainReport.contextPack.readBudget.sampledFiles} sampled file(s).`
+        },
         { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
       ]);
       await this.finish(sessionId, "completed", "DONE", {
         status: "completed",
-        summary: plan.summary,
+        summary: explainReport.overview,
         filesChanged: [],
         appliedPatchIds: [],
         proposedPatchIds: [],
         commandResults: [],
         gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
-        nextAction: "Ask for a concrete edit or creation task when you want code changes.",
+        nextAction: explainReport.suggestedNextQuestions[0] ?? "Ask for a concrete edit or creation task when you want code changes.",
         createdAt: new Date().toISOString()
       });
-      await this.updateRunPhase(sessionId, "agents_running", "completed", "Inspection-only run completed without file changes.");
+      await this.updateRunPhase(sessionId, "agents_running", "completed", `Read-only explanation mapped ${explainReport.moduleMap.length} module(s) without file changes.`);
       await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
-      await this.sessionManager.addMessage(sessionId, { role: "assistant", content: `${plan.summary}\n\n${plan.reasoningSummary}` });
+      await this.sessionManager.addMessage(sessionId, { role: "assistant", content: explainMessage });
       return this.requireSession(sessionId);
     }
 
@@ -549,6 +690,66 @@ export class RunEngine {
       }
     });
     const patchIntentModel = await this.createPatchIntent(session, message, snapshot, plan);
+    if (!patchIntentModel.intents.length) {
+      const summary = patchIntentModel.summary || "I could not generate a safe file change from the provider output.";
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.reasoningSummaries.push(patchIntentModel.fallbackWarning ?? summary);
+      });
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: [
+          "I could not produce a file change for that request.",
+          "",
+          summary,
+          "",
+          "Try a smaller edit, name the exact target file, or switch to a stronger configured provider."
+        ].join("\n")
+      });
+      const verification = await this.createVerification(sessionId, summary, [
+        { name: "Patch intent", status: "failed", detail: patchIntentModel.fallbackWarning ?? summary }
+      ]);
+      await this.finish(sessionId, "failed", "FAILED", {
+        status: "failed",
+        summary,
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: verification.checks.map((check) => ({ name: check.name, status: "failed", notes: [check.detail] })),
+        nextAction: "Retry with a smaller request or name the exact file and content to write.",
+        createdAt: new Date().toISOString()
+      });
+      return this.requireSession(sessionId);
+    }
+    if (patchIntentModel.fallbackWarning) {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.reasoningSummaries.push(patchIntentModel.fallbackWarning!);
+        draft.taskState.version += 1;
+        draft.taskState.transitions.push({
+          id: randomId("transition"),
+          phase: "planning",
+          type: "plan.updated",
+          detail: patchIntentModel.fallbackWarning!,
+          createdAt: new Date().toISOString()
+        });
+      });
+      await this.addArtifact(sessionId, "summary", "Implementation fallback", patchIntentModel.fallbackWarning, {
+        fallbackKind: patchIntentModel.fallbackKind ?? "generic",
+        targetFiles: patchIntentModel.intents.map((intent) => intent.path)
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "risk",
+        finding: "Provider patch output was invalid for the requested implementation.",
+        decision: "Use a deterministic implementation fallback instead of failing the run.",
+        rationaleSummary: patchIntentModel.fallbackWarning,
+        evidenceRefs: [],
+        linkedFiles: patchIntentModel.intents.map((intent) => intent.path).slice(0, 4),
+        uncertainty: patchIntentModel.fallbackWarning,
+        createdByAgent: "Local Codex Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+    }
     const patchInput = compilePatchProposalInput(session.workspacePath, tools, patchIntentModel);
     const patch = tools.patch.propose(patchInput, sessionId);
     const validation = tools.patch.validate(patch);
@@ -627,7 +828,9 @@ export class RunEngine {
     }
     await this.updateRunPhase(sessionId, "integrate_changes", "completed", `Prepared ${patch.filesChanged.length} file change(s) for review.`, patch.filesChanged.length);
 
-    const commandRequests = createCommandRequests(sessionId, session.workspacePath, patchIntentModel.suggestedCommands ?? plan.suggestedCommands ?? [], snapshot.testCommands);
+    const commandRequests = createCommandRequests(sessionId, session.workspacePath, patchIntentModel.suggestedCommands ?? plan.suggestedCommands ?? [], snapshot.testCommands, {
+      fullAccess: session.accessProfile === "full_access"
+    });
     for (const request of commandRequests) {
       await this.addIntent(sessionId, "command.requested", request.command, request.reason, { commandRequestId: request.id, risk: request.risk }, request.status === "blocked" ? "blocked" : "proposed");
       await this.sessionManager.addCommandRequest(sessionId, request);
@@ -803,8 +1006,8 @@ export class RunEngine {
       "Create a reviewable patch intent as JSON for a local coding agent.",
       "For existing files, do not return full file contents.",
       "Return JSON with: title, summary, intents[{path,operation,anchorText?,preimageText?,replacementText,reason,risk}], suggestedCommands.",
-      "Allowed operations: create_file, replace_range, insert_after, insert_before, delete_range.",
-      "For this runtime version, prefer create_file for new files and replace_range for existing files.",
+      "Allowed operations: create_file, overwrite_file, replace_range, insert_after, insert_before, delete_range.",
+      "Use create_file for new files, overwrite_file only when the user asks to replace a whole file, and focused anchor operations for existing files.",
       "When using replace_range, choose a preimageText snippet that appears exactly once in the current file excerpt.",
       "Respect the scoped module plan. Do not introduce broad edits, duplicate systems, or out-of-scope files.",
       `User request: ${message}`,
@@ -813,15 +1016,19 @@ export class RunEngine {
       `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`,
       `Relevant file excerpts: ${JSON.stringify(relevantFiles)}`
     ].join("\n");
-    const generated = await this.provider.generateStructured<Partial<RunPatchIntentModel>>(
-      { systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only.", userPrompt: prompt },
-      runPatchIntentSchema
-    );
-    const validation = validateStructuredOutput(generated, runPatchIntentSchema);
-    if (!validation.valid) {
-      throw new Error(`Patch intent validation failed: ${validation.errors.join("; ")}`);
+    try {
+      const generated = await this.provider.generateStructured<Partial<RunPatchIntentModel>>(
+        { systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only.", userPrompt: prompt },
+        runPatchIntentSchema
+      );
+      const validation = validateStructuredOutput(generated, runPatchIntentSchema);
+      if (!validation.valid) {
+        return createPatchIntentFallback(message, snapshot, plan);
+      }
+      return normalizePatchIntent(generated, message, snapshot, plan);
+    } catch {
+      return createPatchIntentFallback(message, snapshot, plan);
     }
-    return normalizePatchIntent(generated, message, snapshot, plan);
   }
 
   private async createVerification(sessionId: string, summary: string, checks: VerificationResult["checks"]) {
@@ -996,7 +1203,14 @@ export class RunEngine {
       draft.status = status;
       draft.lifecycleStage = stage;
       updateAgentRunRecord(draft, "agent_local_codex", (agent) => {
-        agent.status = status === "failed" ? "failed" : status === "needs_approval" ? "blocked" : "completed";
+        agent.status =
+          status === "failed"
+            ? "failed"
+            : status === "blocked"
+              ? "blocked"
+              : status === "needs_approval"
+                ? "running"
+                : "completed";
         agent.lifecycleStage = stage;
         agent.currentAction = summary.summary;
         agent.lastEvent = `finish:${status}`;
@@ -1135,8 +1349,8 @@ function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: 
 function shouldForceInferredInspectOnly(message: string, snapshot: RepoSnapshot) {
   return (
     inferRunMode(message, snapshot) === "inspect_only" &&
-    /\b(continue|resume|inspect|explain|analyze|summarize|map|understand)\b/i.test(message) &&
-    !/\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|create)\b/i.test(message)
+    (/\b(continue|resume|inspect|explain|analyze|summarize|map|understand)\b/i.test(message) || /(اشرح|حلل|افهم|لخص|راجع)/.test(message)) &&
+    !(/\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|create)\b/i.test(message) || /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني|امسح|احذف)/.test(message))
   );
 }
 
@@ -1146,10 +1360,56 @@ function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: stri
       title: input.title || "Ollama patch intent proposal",
       summary: input.summary || `Prepared changes for: ${message}`,
       intents: input.intents,
-      suggestedCommands: input.suggestedCommands
+      suggestedCommands: input.suggestedCommands,
+      fallbackWarning: input.fallbackWarning,
+      fallbackKind: input.fallbackKind
     };
   }
   return createDemoPatchIntent(message, snapshot, plan);
+}
+
+function createPatchIntentFallback(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
+  const fallbackWarning = "Provider patch output was invalid; using deterministic implementation fallback.";
+  if (isSingleFilePythonPygameRequest(message, snapshot)) {
+    return {
+      ...createSingleFilePygameFallbackIntent(message, snapshot, plan),
+      fallbackWarning,
+      fallbackKind: "single_file_pygame"
+    };
+  }
+  const simpleFile = inferSimpleFileWriteRequest(message);
+  if (simpleFile) {
+    return {
+      title: `Create ${simpleFile.path}`,
+      summary: `Writes the requested content to ${simpleFile.path}.`,
+      intents: [
+        {
+          path: simpleFile.path,
+          operation: "overwrite_file",
+          replacementText: simpleFile.content,
+          reason: "User asked for a concrete file and content.",
+          risk: "low"
+        }
+      ],
+      fallbackWarning,
+      fallbackKind: "simple_file_request"
+    };
+  }
+  if (plan.mode !== "create_project") {
+    return {
+      title: "Provider patch generation failed",
+      summary: "The provider did not return a valid patch intent, and the request was too broad for a deterministic file-write fallback.",
+      intents: [],
+      suggestedCommands: [],
+      fallbackWarning,
+      fallbackKind: "generic"
+    };
+  }
+  return {
+    ...createDemoPatchIntent(message, snapshot, plan),
+    fallbackWarning,
+    fallbackKind: "generic"
+  };
 }
 
 function createDemoPatchIntent(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
@@ -1182,6 +1442,205 @@ function createDemoPatchIntent(message: string, snapshot: RepoSnapshot, plan: Ru
     ],
     suggestedCommands: [{ command: snapshot.testCommands[0] ?? "git diff --check", reason: "Validate the approved patch." }]
   };
+}
+
+function createSingleFilePygameFallbackIntent(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
+  const target = chooseSingleFilePythonTarget(snapshot, plan);
+  const command = `python ${target}`;
+  return {
+    title: "Create single-file Pygame snake prototype",
+    summary: "Build a runnable one-file Pygame snake prototype from a deterministic fallback.",
+    intents: [
+      {
+        path: target,
+        operation: "create_file",
+        replacementText: createSingleFilePygameBootstrap(message),
+        reason: "Create a grounded one-file Python fallback when structured patch generation fails.",
+        risk: "medium"
+      }
+    ],
+    suggestedCommands: [
+      {
+        command,
+        reason: "Launch the generated single-file Pygame prototype after approval."
+      }
+    ]
+  };
+}
+
+function createSingleFilePygameBootstrap(message: string) {
+  const title = escapePythonString(message);
+  return [
+    "import random",
+    "import pygame",
+    "",
+    "CELL_SIZE = 24",
+    "GRID_WIDTH = 22",
+    "GRID_HEIGHT = 18",
+    "HUD_HEIGHT = 72",
+    "WINDOW_WIDTH = GRID_WIDTH * CELL_SIZE",
+    "WINDOW_HEIGHT = GRID_HEIGHT * CELL_SIZE + HUD_HEIGHT",
+    "FPS = 10",
+    "",
+    'BACKGROUND = (12, 15, 22)',
+    'GRID_LINE = (28, 34, 48)',
+    'SNAKE_HEAD = (94, 233, 124)',
+    'SNAKE_BODY = (45, 161, 74)',
+    'FOOD_COLOR = (255, 92, 92)',
+    'TEXT_COLOR = (235, 238, 245)',
+    "",
+    "",
+    "def random_food(snake):",
+    "    while True:",
+    "        position = (random.randrange(GRID_WIDTH), random.randrange(GRID_HEIGHT))",
+    "        if position not in snake:",
+    "            return position",
+    "",
+    "",
+    "def reset_game():",
+    "    snake = [(GRID_WIDTH // 2, GRID_HEIGHT // 2), (GRID_WIDTH // 2 - 1, GRID_HEIGHT // 2)]",
+    '    direction = (1, 0)',
+    "    food = random_food(snake)",
+    "    score = 0",
+    "    game_over = False",
+    "    return snake, direction, food, score, game_over",
+    "",
+    "",
+    "def draw_grid(surface):",
+    "    for x in range(GRID_WIDTH + 1):",
+    "        pygame.draw.line(surface, GRID_LINE, (x * CELL_SIZE, HUD_HEIGHT), (x * CELL_SIZE, WINDOW_HEIGHT))",
+    "    for y in range(GRID_HEIGHT + 1):",
+    "        pygame.draw.line(surface, GRID_LINE, (0, HUD_HEIGHT + y * CELL_SIZE), (WINDOW_WIDTH, HUD_HEIGHT + y * CELL_SIZE))",
+    "",
+    "",
+    "def draw_snake(surface, snake):",
+    "    for index, segment in enumerate(snake):",
+    "        color = SNAKE_HEAD if index == 0 else SNAKE_BODY",
+    "        rect = pygame.Rect(segment[0] * CELL_SIZE + 2, HUD_HEIGHT + segment[1] * CELL_SIZE + 2, CELL_SIZE - 4, CELL_SIZE - 4)",
+    "        pygame.draw.rect(surface, color, rect, border_radius=8)",
+    "",
+    "",
+    "def draw_food(surface, food):",
+    "    rect = pygame.Rect(food[0] * CELL_SIZE + 4, HUD_HEIGHT + food[1] * CELL_SIZE + 4, CELL_SIZE - 8, CELL_SIZE - 8)",
+    "    pygame.draw.rect(surface, FOOD_COLOR, rect, border_radius=8)",
+    "",
+    "",
+    "def step_snake(snake, direction, food):",
+    "    head_x, head_y = snake[0]",
+    "    next_head = (head_x + direction[0], head_y + direction[1])",
+    "    hit_wall = not (0 <= next_head[0] < GRID_WIDTH and 0 <= next_head[1] < GRID_HEIGHT)",
+    "    hit_self = next_head in snake",
+    "    if hit_wall or hit_self:",
+    "        return snake, food, False, True",
+    "    snake = [next_head, *snake]",
+    "    ate_food = next_head == food",
+    "    if not ate_food:",
+    "        snake.pop()",
+    "    else:",
+    "        food = random_food(snake)",
+    "    return snake, food, ate_food, False",
+    "",
+    "",
+    "def main():",
+    "    pygame.init()",
+    '    pygame.display.set_caption("Single-File 3D-ish Snake")',
+    "    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))",
+    "    clock = pygame.time.Clock()",
+    "    font = pygame.font.SysFont('consolas', 22)",
+    "    hint_font = pygame.font.SysFont('consolas', 16)",
+    "",
+    "    snake, direction, food, score, game_over = reset_game()",
+    "    running = True",
+    "",
+    "    while running:",
+    "        clock.tick(FPS)",
+    "        for event in pygame.event.get():",
+    "            if event.type == pygame.QUIT:",
+    "                running = False",
+    "            elif event.type == pygame.KEYDOWN:",
+    "                if event.key in (pygame.K_ESCAPE, pygame.K_q):",
+    "                    running = False",
+    "                elif event.key == pygame.K_r and game_over:",
+    "                    snake, direction, food, score, game_over = reset_game()",
+    "                elif event.key in (pygame.K_UP, pygame.K_w) and direction != (0, 1):",
+    "                    direction = (0, -1)",
+    "                elif event.key in (pygame.K_DOWN, pygame.K_s) and direction != (0, -1):",
+    "                    direction = (0, 1)",
+    "                elif event.key in (pygame.K_LEFT, pygame.K_a) and direction != (1, 0):",
+    "                    direction = (-1, 0)",
+    "                elif event.key in (pygame.K_RIGHT, pygame.K_d) and direction != (-1, 0):",
+    "                    direction = (1, 0)",
+    "",
+    "        if not game_over:",
+    "            snake, food, ate_food, game_over = step_snake(snake, direction, food)",
+    "            if ate_food:",
+    "                score += 1",
+    "",
+    "        screen.fill(BACKGROUND)",
+    "        draw_grid(screen)",
+    "        draw_food(screen, food)",
+    "        draw_snake(screen, snake)",
+    "",
+    `        title_surface = font.render(${JSON.stringify(title)}, True, TEXT_COLOR)`,
+    "        score_surface = hint_font.render(f'Score: {score}', True, TEXT_COLOR)",
+    "        hint_text = 'Press R to restart after a collision.' if game_over else 'Arrows/WASD to move. Esc to quit.'",
+    "        hint_surface = hint_font.render(hint_text, True, TEXT_COLOR)",
+    "        screen.blit(title_surface, (16, 14))",
+    "        screen.blit(score_surface, (16, 42))",
+    "        screen.blit(hint_surface, (170, 42))",
+    "",
+    "        if game_over:",
+    "            overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)",
+    "            overlay.fill((5, 8, 12, 170))",
+    "            screen.blit(overlay, (0, 0))",
+    "            game_over_surface = font.render('Game over', True, (255, 210, 120))",
+    "            restart_surface = hint_font.render('Press R to play again.', True, TEXT_COLOR)",
+    "            screen.blit(game_over_surface, (WINDOW_WIDTH // 2 - game_over_surface.get_width() // 2, WINDOW_HEIGHT // 2 - 24))",
+    "            screen.blit(restart_surface, (WINDOW_WIDTH // 2 - restart_surface.get_width() // 2, WINDOW_HEIGHT // 2 + 12))",
+    "",
+    "        pygame.display.flip()",
+    "",
+    "    pygame.quit()",
+    "",
+    "",
+    "if __name__ == '__main__':",
+    "    main()",
+    ""
+  ].join("\n");
+}
+
+function escapePythonString(value: string) {
+  return value.replaceAll("\\", "\\\\").replaceAll("\"", '\\"');
+}
+
+function chooseSingleFilePythonTarget(snapshot: RepoSnapshot, plan: RunPlanModel) {
+  const plannedPython = plan.tasks
+    .flatMap((task) => task.targetFiles ?? [])
+    .find((file) => /\.py$/i.test(file));
+  if (plannedPython) return plannedPython;
+  if (!snapshot.candidateFiles.includes("main.py")) return "main.py";
+  if (!snapshot.candidateFiles.includes("snake_game.py")) return "snake_game.py";
+  return "snake_game_fallback.py";
+}
+
+function inferExplicitAgentCount(message: string): number | null {
+  const match = message.match(/\buse\s+(\d+)\s+agents?\b/i) ?? message.match(/\b(\d+)\s+agents?\b/i);
+  if (!match) return null;
+  const value = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(value) ? value : null;
+}
+
+function isSingleFilePythonPygameRequest(message: string, snapshot: RepoSnapshot) {
+  const normalized = message.toLowerCase();
+  const mentionsPython = /\bpython\b/.test(normalized) || snapshot.stack.some((entry) => /python/i.test(entry));
+  const mentionsPygame = /\bpy\s*game\b/.test(normalized) || /\bpygame\b/.test(normalized);
+  const singleFile =
+    /\bone python code\b/.test(normalized) ||
+    /\bsingle file\b/.test(normalized) ||
+    /\bone file\b/.test(normalized) ||
+    /\bone python file\b/.test(normalized) ||
+    /\bsingle python\b/.test(normalized);
+  return mentionsPython && mentionsPygame && singleFile;
 }
 
 function compilePatchProposalInput(
@@ -1243,7 +1702,21 @@ function compileIntent(
     };
   }
 
-  if (intent.operation !== "replace_range") {
+  if (intent.operation === "overwrite_file") {
+    const exists = tools.workspace.fileExists(intent.path);
+    const current = exists ? tools.workspace.readWholeFile(intent.path) : "";
+    return {
+      path: intent.path,
+      changeType: exists ? "modify" : "create",
+      explanation: intent.reason,
+      content: intent.replacementText,
+      unifiedDiff: exists
+        ? createWholeFileReplaceDiff(intent.path, current, intent.replacementText)
+        : createFileDiff(intent.path, intent.replacementText)
+    };
+  }
+
+  if (!["replace_range", "insert_after", "insert_before", "delete_range"].includes(intent.operation)) {
     throw new Error(`Unsupported patch intent operation: ${intent.operation}`);
   }
 
@@ -1266,13 +1739,29 @@ function compileIntent(
   }
 
   const match = matches[0]!;
-  const updated = `${current.slice(0, match.start)}${intent.replacementText}${current.slice(match.end)}`;
+  const start =
+    intent.operation === "insert_after"
+      ? match.end
+      : match.start;
+  const end =
+    intent.operation === "insert_before"
+      ? match.start
+      : intent.operation === "insert_after"
+        ? match.end
+        : match.end;
+  const replacement =
+    intent.operation === "delete_range"
+      ? ""
+      : intent.operation === "insert_after" || intent.operation === "insert_before"
+        ? intent.replacementText
+        : intent.replacementText;
+  const updated = `${current.slice(0, start)}${replacement}${current.slice(end)}`;
   return {
     path: intent.path,
     changeType: "modify",
     explanation: intent.reason,
     content: updated,
-    unifiedDiff: createReplaceRangeDiff(intent.path, current, updated, match.start, match.end)
+    unifiedDiff: createReplaceRangeDiff(intent.path, current, updated, start, end)
   };
 }
 
@@ -1319,6 +1808,20 @@ function createReplaceRangeDiff(filePath: string, before: string, after: string,
     `+++ b/${filePath}`,
     `@@ -${oldSliceStart + 1},${oldSliceEnd - oldSliceStart + 1} +${newSliceStart + 1},${newSliceEnd - newSliceStart + 1} @@`,
     ...hunkLines
+  ].join("\n");
+}
+
+function createWholeFileReplaceDiff(filePath: string, before: string, after: string) {
+  const beforeLines = splitLinesForDiff(before);
+  const afterLines = splitLinesForDiff(after);
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    "index 1111111..2222222 100644",
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    `@@ -1,${Math.max(beforeLines.length, 1)} +1,${Math.max(afterLines.length, 1)} @@`,
+    ...beforeLines.map((line) => `-${line}`),
+    ...afterLines.map((line) => `+${line}`)
   ].join("\n");
 }
 
@@ -1380,10 +1883,18 @@ function highestRiskLevel(risks: PatchProposal["riskLevel"][]) {
   return "low";
 }
 
-function createCommandRequests(sessionId: string, workspacePath: string, suggested: Array<{ command: string; reason: string }>, fallbackCommands: string[]): CommandRequest[] {
+function createCommandRequests(
+  sessionId: string,
+  workspacePath: string,
+  suggested: Array<{ command: string; reason: string }>,
+  fallbackCommands: string[],
+  options: { fullAccess?: boolean } = {}
+): CommandRequest[] {
   const commands = suggested.length ? suggested : fallbackCommands.slice(0, 1).map((command) => ({ command, reason: "Validate the approved change." }));
   return commands.slice(0, 3).map((item) => {
     const risk = classifyCommandRisk(item.command, workspacePath);
+    const fullAccess = options.fullAccess === true;
+    const policyDecision = risk === "dangerous" && !fullAccess ? "deny" : risk === "safe" || fullAccess ? "allow" : "require_approval";
     return {
       id: `cmd_${randomUUID()}`,
       sessionId,
@@ -1396,8 +1907,8 @@ function createCommandRequests(sessionId: string, workspacePath: string, suggest
         trigger: "manual",
         requestedBy: "agent",
         agentId: "agent_local_codex",
-        approvalSource: risk === "dangerous" ? "denied" : "none",
-        policyDecision: risk === "dangerous" ? "deny" : risk === "safe" ? "allow" : "require_approval",
+        approvalSource: fullAccess ? "auto" : risk === "dangerous" ? "denied" : "none",
+        policyDecision,
         policyReason: item.reason,
         background: looksLikeBackgroundCommand(item.command.toLowerCase()),
         networkDetected: looksLikeNetworkCommand(item.command.toLowerCase()),
@@ -1407,7 +1918,7 @@ function createCommandRequests(sessionId: string, workspacePath: string, suggest
         backgroundDetectionSource: "heuristic",
         reason: item.reason
       },
-      status: risk === "dangerous" ? "blocked" : "requested",
+      status: risk === "dangerous" && !fullAccess ? "blocked" : "requested",
       createdAt: new Date().toISOString()
     };
   });
@@ -1481,6 +1992,7 @@ function inferLocalRunMode(
 ): RunMode {
   const normalized = message.toLowerCase();
   if (runIntent === "run_to_green") return "run_to_green" as RunMode;
+  if (runIntent === "inspect_only") return "inspect_only" as RunMode;
   if (/\b(paranoid|double check|double-check|review twice)\b/.test(normalized)) return "paranoid_mode";
   if (/\b(soak|stability|burn in|burn-in|retry a lot)\b/.test(normalized)) return "soak_mode";
   if (/\b(audit|deep|inspect thoroughly|thorough|analyze deeply)\b/.test(normalized)) return "deep_audit";
@@ -1851,10 +2363,12 @@ function createRunToGreenReviewGate(
         }
       : undefined,
     unresolvedBlockers,
-    recommendation: commandRequests.length ? "caution" : "do_not_apply",
+    recommendation: commandRequests.length ? "caution" : session.previewRecommendation ? "caution" : "do_not_apply",
     summary: commandRequests.length
       ? "Run-to-green is initialized and waiting for command execution results."
-      : session.runToGreen?.blockerReason ?? "Run-to-green was blocked before command execution."
+      : session.previewRecommendation
+        ? "No grounded run command was found, but a preview is available."
+        : session.runToGreen?.blockerReason ?? "Run-to-green was blocked before command execution."
   };
 }
 
@@ -1908,25 +2422,29 @@ function inferRunMode(message: string, snapshot: RepoSnapshot): RunPlanModel["mo
   const normalized = message.toLowerCase();
   const explicitEditPattern =
     /\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|modify)\b/;
+  const arabicEditPattern = /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني|امسح|احذف)/;
+  const explainPattern = /\b(explain|inspect|analyze|summarize)\b/.test(normalized) || /(اشرح|حلل|افهم|لخص|راجع)/.test(normalized);
   if (
-    /\b(create|new|scaffold|generate|build me|make a new)\b/.test(normalized) &&
+    (/\b(create|new|scaffold|generate|build me|make a new)\b/.test(normalized) || /(أنشئ|انشئ|اعمل|اكتب).*(مشروع|تطبيق|app|project)/.test(normalized)) &&
     snapshot.intake?.projectKind === "empty_project"
   ) {
     return "create_project";
   }
   if (
     snapshot.intake?.projectKind === "unknown" &&
-    !explicitEditPattern.test(normalized)
+    !explicitEditPattern.test(normalized) &&
+    !arabicEditPattern.test(normalized)
   ) {
     return "inspect_only";
   }
   if (isLaunchRequest(message)) return "inspect_only";
-  if (/\b(explain|inspect|analyze|summarize)\b/.test(normalized) && !/\b(change|changing|edit|fix|add|create|implement|update|build|make|write|replace|modify)\b/.test(normalized)) return "inspect_only";
+  if (explainPattern && !explicitEditPattern.test(normalized) && !arabicEditPattern.test(normalized)) return "inspect_only";
   return "edit_project";
 }
 
 function isLaunchRequest(message: string): boolean {
-  return /\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/i.test(message);
+  return /\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/i.test(message)
+    || /(شغل|ثبت|نزل|افتح).*(المشروع|التطبيق|اللعبة|السيرفر|البروجكت|الأبلكيشن|الابلكيشن)/i.test(message);
 }
 
 function inferTargetFiles(message: string, snapshot: RepoSnapshot, mode: RunPlanModel["mode"]) {
@@ -1959,6 +2477,27 @@ function inferProjectBaseName(message: string) {
   return (words.slice(0, 3).join("-") || "orchcode-project").replace(/^-+|-+$/g, "");
 }
 
+function inferSimpleFileWriteRequest(message: string): { path: string; content: string } | null {
+  const normalized = message.trim();
+  const patterns = [
+    /\b(?:write|create|make)\s+(?:a\s+)?file\s+([^\s]+)\s+(?:with|containing|that says)\s+([\s\S]+)$/i,
+    /\b(?:write|create|make)\s+([^\s]+\.[a-z0-9_-]+)\s+(?:with|containing|that says)\s+([\s\S]+)$/i,
+    /(?:اكتب|اعمل|أنشئ|انشئ|اخلق)\s+(?:ملف\s+)?([^\s]+)\s+(?:فيه|به|محتواه|يحتوي(?:\s+على)?)\s+([\s\S]+)$/i
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match?.[1] || !match?.[2]) continue;
+    const targetPath = match[1].replace(/^["'`]+|["'`،,؛;]+$/g, "");
+    if (!/\.[a-z0-9_-]+$/i.test(targetPath)) continue;
+    const content = match[2].replace(/^["'`]+|["'`]+$/g, "");
+    return {
+      path: targetPath.replaceAll("\\", "/"),
+      content: content.endsWith("\n") ? content : `${content}\n`
+    };
+  }
+  return null;
+}
+
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char] ?? char);
 }
@@ -1971,15 +2510,7 @@ function createEmptyOrchestration(session: AgentRuntimeSession): NonNullable<Age
     reviewerSummaries: [],
     orchestrationEvents: [],
     approvalDecisions: [],
-    safetySettings: session.orchestration?.safetySettings ?? {
-      maxParallelAgents: 3,
-      autoRunSafeCommands: false,
-      requireApprovalForPatches: true,
-      autoApplyValidatedPatches: false,
-      blockDangerousCommands: true,
-      redactSecrets: true,
-      allowNetworkCommands: false
-    },
+    safetySettings: session.orchestration?.safetySettings ?? accessProfileDefaults(session.accessProfile),
     lockedFiles: {},
     selectedWorkerAgents: [],
     mandatoryGateAgents: [],

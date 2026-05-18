@@ -1,5 +1,5 @@
 use crate::models::{
-    BackgroundJobRecord, CommandExecutionProvenance, CommandResult, CommandRisk,
+    BackgroundJobRecord, CommandExecutionProvenance, CommandFailureDiagnosis, CommandResult, CommandRisk,
     SafetySettingsInput,
 };
 use crate::services::command_policy::{CommandPolicyAnalysis, CommandPolicyService};
@@ -25,9 +25,15 @@ impl TerminalService {
             block_dangerous_commands: true,
             redact_secrets: true,
             allow_network_commands: false,
+            auto_run_medium_commands: Some(false),
+            auto_run_background_commands: Some(false),
+            auto_run_network_commands: Some(false),
             approval_granted: None,
         });
         let approval_granted = safety.approval_granted.unwrap_or(false);
+        let auto_run_medium = safety.auto_run_medium_commands.unwrap_or(false);
+        let auto_run_background = safety.auto_run_background_commands.unwrap_or(false);
+        let auto_run_network = safety.auto_run_network_commands.unwrap_or(false);
         let canonical_workspace = match std::fs::canonicalize(workspace) {
             Ok(path) => path,
             Err(err) => {
@@ -61,8 +67,14 @@ impl TerminalService {
                 );
             }
         };
-        let policy = CommandPolicyService::analyze(command, workspace);
+        let mut policy = CommandPolicyService::analyze(command, workspace);
         let risk = policy.risk.clone();
+        if !safety.block_dangerous_commands && risk == CommandRisk::Dangerous {
+            policy.policy_decision = "allow";
+            policy.policy_reason =
+                "Full Access allowed a command that heuristic policy would normally deny."
+                    .to_string();
+        }
         if safety.block_dangerous_commands && risk == CommandRisk::Dangerous {
             return CommandResult {
                 command: command.to_string(),
@@ -73,6 +85,12 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: String::new(),
                 message: Some("Dangerous command blocked by policy before execution.".to_string()),
+                diagnosis: Some(CommandFailureDiagnosis {
+                    category: "policy_blocked".to_string(),
+                    severity: "error".to_string(),
+                    summary: "This command was blocked by policy before execution.".to_string(),
+                    next_step: Some("Use a safe foreground command or explicitly approve a narrower operation.".to_string()),
+                }),
                 provenance: Some(build_provenance(
                     command,
                     cwd,
@@ -86,7 +104,10 @@ impl TerminalService {
             };
         }
 
-        if !safety.allow_network_commands && looks_like_network_command(command) {
+        let network_detected = looks_like_network_command(command);
+        let background_detected = looks_like_background_server(command);
+
+        if !safety.allow_network_commands && network_detected {
             return blocked_result(
                 command,
                 cwd,
@@ -96,11 +117,10 @@ impl TerminalService {
             );
         }
 
-        if !approval_granted
-            && (risk == CommandRisk::Medium
-                || looks_like_background_server(command)
-                || looks_like_network_command(command))
-        {
+        let medium_needs_approval = risk == CommandRisk::Medium && !auto_run_medium;
+        let background_needs_approval = background_detected && !auto_run_background;
+        let network_needs_approval = network_detected && !auto_run_network;
+        if !approval_granted && (medium_needs_approval || background_needs_approval || network_needs_approval) {
             return CommandResult {
                 command: command.to_string(),
                 cwd: cwd.to_string_lossy().to_string(),
@@ -110,6 +130,23 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: String::new(),
                 message: Some(approval_required_message(command)),
+                diagnosis: Some(CommandFailureDiagnosis {
+                    category: if background_detected {
+                        "background_command".to_string()
+                    } else {
+                        "approval_required".to_string()
+                    },
+                    severity: "warning".to_string(),
+                    summary: "This command needs explicit approval before Rust execution.".to_string(),
+                    next_step: Some(
+                        if background_detected {
+                            "Approve it only if you expect a long-running or server command."
+                        } else {
+                            "Approve it if expected, or choose a policy-classified safe foreground command."
+                        }
+                        .to_string(),
+                    ),
+                }),
                 provenance: Some(build_provenance(
                     command,
                     cwd,
@@ -123,7 +160,7 @@ impl TerminalService {
             };
         }
 
-        if looks_like_background_server(command) {
+        if background_detected {
             let spawned = if cfg!(windows) {
                 Command::new("cmd")
                     .args(["/C", command])
@@ -158,6 +195,12 @@ impl TerminalService {
                             "Policy-classified background command started by Rust terminal authority with pid {}. Background tracking is limited unless a later terminal result is recorded.",
                             pid
                         )),
+                        diagnosis: Some(CommandFailureDiagnosis {
+                            category: "background_command".to_string(),
+                            severity: "warning".to_string(),
+                            summary: "This command started a background process with limited tracking.".to_string(),
+                            next_step: Some("Use foreground verification commands when you need a terminal result that can feed back into the runtime loop.".to_string()),
+                        }),
                         provenance: Some(build_provenance(
                             command,
                             cwd,
@@ -197,6 +240,12 @@ impl TerminalService {
                     message: Some(format!(
                         "Approved background command failed to start under Rust terminal authority: {err}"
                     )),
+                    diagnosis: Some(CommandFailureDiagnosis {
+                        category: "background_command".to_string(),
+                        severity: "error".to_string(),
+                        summary: "The background command did not start successfully.".to_string(),
+                        next_step: Some("Inspect the command and cwd, then retry with an explicit foreground verification command if possible.".to_string()),
+                    }),
                     provenance: Some(build_provenance(
                         command,
                         cwd,
@@ -257,18 +306,18 @@ impl TerminalService {
                     String::from_utf8_lossy(&output.stderr).to_string(),
                     safety.redact_secrets,
                 ),
-                message: Some(if output.status.success() {
-                    "Command executed by Rust terminal authority.".to_string()
-                } else {
-                    format!(
-                        "Command execution failed under Rust terminal authority with exit code {}.",
-                        output
-                            .status
-                            .code()
-                            .map(|code| code.to_string())
-                            .unwrap_or_else(|| "unknown".to_string())
-                        )
-                }),
+                message: Some(command_result_message(
+                    command,
+                    output.status.code(),
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                )),
+                diagnosis: diagnose_command_failure(
+                    command,
+                    output.status.code(),
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                ),
                 provenance: Some(build_provenance(
                     command,
                     cwd,
@@ -293,6 +342,12 @@ impl TerminalService {
                 stdout: String::new(),
                 stderr: err.to_string(),
                 message: Some("Rust terminal authority failed to execute command".to_string()),
+                diagnosis: Some(CommandFailureDiagnosis {
+                    category: "unknown".to_string(),
+                    severity: "error".to_string(),
+                    summary: "Rust could not start the command process.".to_string(),
+                    next_step: Some("Check whether the executable exists and whether the workspace cwd is correct.".to_string()),
+                }),
                 provenance: Some(build_provenance(
                     command,
                     cwd,
@@ -315,6 +370,7 @@ fn blocked_result(
     message: String,
     approval_granted: bool,
 ) -> CommandResult {
+    let lowered_message = message.to_ascii_lowercase();
     CommandResult {
         command: command.to_string(),
         cwd: cwd.to_string_lossy().to_string(),
@@ -323,7 +379,28 @@ fn blocked_result(
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
-        message: Some(message),
+        message: Some(message.clone()),
+        diagnosis: Some(CommandFailureDiagnosis {
+            category: if lowered_message.contains("outside the active workspace") {
+                "outside_workspace".to_string()
+            } else if lowered_message.contains("network") {
+                "network_blocked".to_string()
+            } else {
+                "policy_blocked".to_string()
+            },
+            severity: "error".to_string(),
+            summary: message.clone(),
+            next_step: Some(
+                if lowered_message.contains("outside the active workspace") {
+                    "Run the command inside the current project root or switch to the intended workspace."
+                } else if lowered_message.contains("network") {
+                    "Use a non-network command or explicitly allow the network action."
+                } else {
+                    "Choose a narrower safe command or request explicit approval."
+                }
+                .to_string(),
+            ),
+        }),
         provenance: Some(build_provenance(
             command,
             cwd,
@@ -423,6 +500,72 @@ fn approval_required_message(command: &str) -> String {
     detail
 }
 
+fn command_result_message(command: &str, exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+    if let Some(diagnosis) = diagnose_command_failure(command, exit_code, stdout, stderr) {
+        return diagnosis.summary;
+    }
+    if exit_code == Some(0) {
+        "Command executed by Rust terminal authority.".to_string()
+    } else {
+        format!(
+            "Command finished with exit code {}.",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        )
+    }
+}
+
+fn diagnose_command_failure(
+    command: &str,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> Option<CommandFailureDiagnosis> {
+    if exit_code == Some(0) {
+        return None;
+    }
+
+    let combined = format!("{stdout}\n{stderr}");
+    let normalized = combined.to_ascii_lowercase();
+    if command.trim().to_ascii_lowercase().starts_with("git status")
+        && exit_code.unwrap_or(1) != 0
+        && normalized.contains("not a git repository")
+    {
+        return Some(CommandFailureDiagnosis {
+            category: "not_git_repository".to_string(),
+            severity: "informative".to_string(),
+            summary: "This workspace is not a Git repository.".to_string(),
+            next_step: Some(
+                "Initialize Git or open a Git workspace if you need Git status.".to_string(),
+            ),
+        });
+    }
+
+    if normalized.contains("not recognized as an internal or external command")
+        || normalized.contains("command not found")
+    {
+        return Some(CommandFailureDiagnosis {
+            category: "command_not_found".to_string(),
+            severity: "error".to_string(),
+            summary: "The requested executable was not found in this environment.".to_string(),
+            next_step: Some("Check the command name, PATH, or project scripts before retrying.".to_string()),
+        });
+    }
+
+    Some(CommandFailureDiagnosis {
+        category: "unknown".to_string(),
+        severity: "warning".to_string(),
+        summary: format!(
+            "The command finished with exit code {}.",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        next_step: Some("Inspect stdout and stderr to decide the next safe step.".to_string()),
+    })
+}
+
 fn looks_like_network_command(command: &str) -> bool {
     let normalized = command.to_lowercase();
     [
@@ -497,13 +640,16 @@ mod tests {
         let workspace = temp_workspace();
         let service = TerminalService::new();
         let result = service.run_command(
-            "rg --version",
+            "node -e \"console.log('ok')\"",
             &workspace,
             &workspace,
             Some(SafetySettingsInput {
                 block_dangerous_commands: true,
                 redact_secrets: true,
                 allow_network_commands: false,
+                auto_run_medium_commands: Some(false),
+                auto_run_background_commands: Some(false),
+                auto_run_network_commands: Some(false),
                 approval_granted: None,
             }),
         );
@@ -522,6 +668,7 @@ mod tests {
                 .and_then(|provenance| provenance.detection_source.as_deref()),
             Some("policy")
         );
+        assert_eq!(result.diagnosis.is_none(), true);
         let _ = fs::remove_dir_all(&workspace);
     }
 
@@ -537,6 +684,9 @@ mod tests {
                 block_dangerous_commands: true,
                 redact_secrets: true,
                 allow_network_commands: false,
+                auto_run_medium_commands: Some(false),
+                auto_run_background_commands: Some(false),
+                auto_run_network_commands: Some(false),
                 approval_granted: None,
             }),
         );
@@ -557,6 +707,13 @@ mod tests {
         );
         assert_eq!(
             result
+                .diagnosis
+                .as_ref()
+                .map(|diagnosis| diagnosis.category.as_str()),
+            Some("background_command")
+        );
+        assert_eq!(
+            result
                 .provenance
                 .as_ref()
                 .and_then(|provenance| provenance.background_detection_source.as_deref()),
@@ -565,13 +722,51 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
+    #[test]
+    fn git_status_in_non_git_workspace_returns_informative_diagnosis() {
+        let workspace = temp_workspace();
+        let service = TerminalService::new();
+        let result = service.run_command(
+            "git status",
+            &workspace,
+            &workspace,
+            Some(SafetySettingsInput {
+                block_dangerous_commands: true,
+                redact_secrets: true,
+                allow_network_commands: false,
+                auto_run_medium_commands: Some(false),
+                auto_run_background_commands: Some(false),
+                auto_run_network_commands: Some(false),
+                approval_granted: None,
+            }),
+        );
+        assert_eq!(result.status, "failed");
+        assert_eq!(
+            result
+                .diagnosis
+                .as_ref()
+                .map(|diagnosis| diagnosis.category.as_str()),
+            Some("not_git_repository")
+        );
+        assert_eq!(
+            result
+                .diagnosis
+                .as_ref()
+                .map(|diagnosis| diagnosis.summary.as_str()),
+            Some("This workspace is not a Git repository.")
+        );
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
     fn temp_workspace() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "orchcode-terminal-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_millis()
+            "orchcode-terminal-{}-{}",
+            std::process::id(),
+            unique
         ));
         fs::create_dir_all(&path).expect("workspace");
         path

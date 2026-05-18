@@ -139,7 +139,7 @@ test("patch apply success is recorded and moves the runtime into command verific
     assert.equal(session?.taskState.phase, "verification_pending");
     assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust apply")?.status, "passed");
     assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Reconciliation")?.status, "passed");
-    assert.equal(session?.runSummary?.status, "blocked");
+    assert.equal(session?.runSummary?.status, "pending");
     assert.equal(session?.reviewGate?.totalAdditions === undefined || typeof session?.reviewGate?.totalAdditions === "number", true);
     assert.equal(session?.reviewGate?.totalDeletions === undefined || typeof session?.reviewGate?.totalDeletions === "number", true);
     assert.equal((session?.reviewGate?.changesByAgent[0]?.fileCount ?? 0) >= 1, true);
@@ -339,8 +339,11 @@ test("command execution emits an explicit runtime completion event instead of re
     createdAt: new Date().toISOString()
   });
 
+  const updated = manager.getSession(session.id);
   assert.equal(events.some((type) => type === "runtime.command.completed"), true);
   assert.equal(events.filter((type) => type === "runtime.command.requested").length, 1);
+  assert.equal(updated?.taskState.transitions.some((entry) => entry.type === "command.started"), true);
+  assert.equal(updated?.taskState.transitions.some((entry) => entry.type === "command.completed"), true);
   await rm(storageDir, { recursive: true, force: true });
 });
 
@@ -473,7 +476,7 @@ test("review gate marks shared and unattributed files conservatively", async () 
       reviewerSummaries: [],
       orchestrationEvents: [],
       approvalDecisions: [],
-      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
+      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, autoRunMediumCommands: false, autoRunBackgroundCommands: false, autoRunNetworkCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
       lockedFiles: {},
       selectedWorkerAgents: [],
       mandatoryGateAgents: [],
@@ -564,7 +567,7 @@ test("review gate keeps line totals unknown when unified diff stats are unavaila
       reviewerSummaries: [],
       orchestrationEvents: [],
       approvalDecisions: [],
-      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
+      safetySettings: draft.orchestration?.safetySettings ?? { blockDangerousCommands: true, redactSecrets: true, allowNetworkCommands: false, autoApplyValidatedPatches: false, autoRunSafeCommands: false, autoRunMediumCommands: false, autoRunBackgroundCommands: false, autoRunNetworkCommands: false, requireApprovalForPatches: true, maxParallelAgents: 3 },
       lockedFiles: {},
       selectedWorkerAgents: [],
       mandatoryGateAgents: [],

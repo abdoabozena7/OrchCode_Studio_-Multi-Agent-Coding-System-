@@ -164,17 +164,20 @@ function validateRunPatchIntentShape(value: unknown): ValidationResult {
         errors.push(`intents[${index}] must be an object`);
         return;
       }
-      errors.push(...requiredStrings(intent, ["path", "operation", "replacementText", "reason", "risk"]).map((error) => `intents[${index}].${error}`));
+      errors.push(...requiredStrings(intent, ["path", "operation", "reason", "risk"]).map((error) => `intents[${index}].${error}`));
+      if (intent.operation !== "delete_range" && (typeof intent.replacementText !== "string" || intent.replacementText.length === 0)) {
+        errors.push(`intents[${index}].replacementText is required`);
+      }
       if (
         typeof intent.operation === "string" &&
-        !["create_file", "replace_range", "insert_after", "insert_before", "delete_range"].includes(intent.operation)
+        !["create_file", "overwrite_file", "replace_range", "insert_after", "insert_before", "delete_range"].includes(intent.operation)
       ) {
         errors.push(`intents[${index}].operation is invalid`);
       }
       if (typeof intent.risk === "string" && !["low", "medium", "high"].includes(intent.risk)) {
         errors.push(`intents[${index}].risk is invalid`);
       }
-      if (intent.operation !== "create_file") {
+      if (intent.operation !== "create_file" && intent.operation !== "overwrite_file") {
         const hasAnchor = typeof intent.anchorText === "string" && intent.anchorText.length > 0;
         const hasPreimage = typeof intent.preimageText === "string" && intent.preimageText.length > 0;
         if (!hasAnchor && !hasPreimage) {

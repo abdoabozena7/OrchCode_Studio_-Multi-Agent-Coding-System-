@@ -4,11 +4,12 @@ export type AccessProfile =
   | "default_permissions"
   | "auto_review"
   | "bounded_autonomy"
+  | "full_access"
   | "custom_config";
 
-export type LegacyAccessProfile = "full_access";
+export type LegacyAccessProfile = never;
 
-export type AccessProfileInput = AccessProfile | LegacyAccessProfile;
+export type AccessProfileInput = AccessProfile;
 
 export type RunTrustProfile = "strict_gated" | "trusted_internal";
 
@@ -64,6 +65,26 @@ export function declaredAccessPolicyForProfile(profile: AccessProfileInput): Dec
   const normalizedProfile = normalizeAccessProfile(profile);
   const trustProfile = trustProfileFromAccessProfile(normalizedProfile);
 
+  if (normalizedProfile === "full_access") {
+    return {
+      accessProfile: normalizedProfile,
+      trustProfile,
+      requestedAuthority: "backend_enforced",
+      requestedCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command",
+        "execute_medium_command",
+        "execute_dangerous_command",
+        "use_network"
+      ],
+      note: "Full Access is a trusted local profile that auto-applies validated workspace patches and auto-runs requested commands while preserving provenance."
+    };
+  }
+
   if (normalizedProfile === "bounded_autonomy") {
     return {
       accessProfile: normalizedProfile,
@@ -115,12 +136,37 @@ export function declaredAccessPolicyForProfile(profile: AccessProfileInput): Dec
 
 export function resolvedAccessPolicyForProfile(profile: AccessProfileInput): ResolvedAccessPolicy {
   const declared = declaredAccessPolicyForProfile(profile);
-  const baseBlocked: ResolvedCapability[] = ["execute_dangerous_command", "use_network"];
   const baseRestrictions = [
-    "Patch application is performed by Rust authority after explicit review.",
+    "Patch application is performed by Rust authority.",
     "Session restore requires a valid session token and persisted runtime snapshot.",
-    "Dangerous commands remain blocked by backend policy."
+    "Command policy remains heuristic and is recorded as provenance."
   ];
+
+  if (declared.accessProfile === "full_access") {
+    return {
+      declared,
+      enforcedAuthority: "backend_enforced",
+      effectiveCapabilities: [
+        "read_workspace",
+        "write_workspace",
+        "propose_patch",
+        "apply_patch",
+        "request_command",
+        "execute_safe_command",
+        "execute_medium_command",
+        "execute_dangerous_command",
+        "use_network",
+        "restore_session"
+      ],
+      blockedCapabilities: [],
+      requiresApprovalFor: ["session_restore"],
+      backendRestrictions: baseRestrictions,
+      resolvedBy: "backend",
+      resolvedAt: new Date().toISOString()
+    };
+  }
+
+  const baseBlocked: ResolvedCapability[] = ["execute_dangerous_command", "use_network"];
 
   if (declared.accessProfile === "bounded_autonomy") {
     return {
@@ -187,6 +233,9 @@ export type ApprovalRecord = {
 export type SafetySettings = {
   maxParallelAgents: number;
   autoRunSafeCommands: boolean;
+  autoRunMediumCommands: boolean;
+  autoRunBackgroundCommands: boolean;
+  autoRunNetworkCommands: boolean;
   requireApprovalForPatches: boolean;
   autoApplyValidatedPatches: boolean;
   blockDangerousCommands: boolean;
@@ -197,6 +246,9 @@ export type SafetySettings = {
 export const defaultSafetySettings: SafetySettings = {
   maxParallelAgents: 3,
   autoRunSafeCommands: false,
+  autoRunMediumCommands: false,
+  autoRunBackgroundCommands: false,
+  autoRunNetworkCommands: false,
   requireApprovalForPatches: true,
   autoApplyValidatedPatches: false,
   blockDangerousCommands: true,
@@ -205,7 +257,7 @@ export const defaultSafetySettings: SafetySettings = {
 };
 
 export function normalizeAccessProfile(profile: AccessProfileInput): AccessProfile {
-  return profile === "full_access" ? "bounded_autonomy" : profile;
+  return profile;
 }
 
 export function accessProfileDefaults(profile: AccessProfileInput): SafetySettings {
@@ -221,6 +273,19 @@ export function accessProfileDefaults(profile: AccessProfileInput): SafetySettin
     return {
       ...defaultSafetySettings,
       autoRunSafeCommands: true
+    };
+  }
+  if (normalizedProfile === "full_access") {
+    return {
+      ...defaultSafetySettings,
+      autoRunSafeCommands: true,
+      autoRunMediumCommands: true,
+      autoRunBackgroundCommands: true,
+      autoRunNetworkCommands: true,
+      requireApprovalForPatches: false,
+      autoApplyValidatedPatches: true,
+      blockDangerousCommands: false,
+      allowNetworkCommands: true
     };
   }
   if (normalizedProfile === "custom_config") {
@@ -243,7 +308,7 @@ export function safetySettingsForTrustProfile(profile: RunTrustProfile): SafetyS
 
 export function trustProfileFromAccessProfile(profile: AccessProfileInput): RunTrustProfile {
   const normalizedProfile = normalizeAccessProfile(profile);
-  return normalizedProfile === "auto_review" || normalizedProfile === "bounded_autonomy"
+  return normalizedProfile === "auto_review" || normalizedProfile === "bounded_autonomy" || normalizedProfile === "full_access"
     ? "trusted_internal"
     : "strict_gated";
 }

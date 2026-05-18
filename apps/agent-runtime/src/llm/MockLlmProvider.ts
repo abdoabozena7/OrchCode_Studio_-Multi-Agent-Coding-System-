@@ -113,10 +113,11 @@ export class MockLlmProvider implements LlmProvider {
 
   private createRunPlan(userPrompt: string) {
     const request = extractUserRequest(userPrompt);
-    const mode = /\b(create|new|scaffold|generate|make a new)\b/i.test(request)
+    const mode = /\b(create|new|scaffold|generate|make a new)\b/i.test(request) || /(أنشئ|انشئ|اعمل).*(مشروع|تطبيق|app|project)/.test(request)
       ? "create_project"
       : (/\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/i.test(request) ||
-          (/\b(explain|inspect|analyze)\b/i.test(request) && !/\b(change|edit|fix|add|create)\b/i.test(request)))
+          (/(شغل|افتح).*(المشروع|التطبيق|اللعبة|project|app|game)/i.test(request)) ||
+          ((/\b(explain|inspect|analyze)\b/i.test(request) || /(اشرح|حلل|افهم|لخص|راجع)/.test(request)) && !(/\b(change|edit|fix|add|create|write|make)\b/i.test(request) || /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|اكتب|اعمل|أنشئ|انشئ)/.test(request))))
         ? "inspect_only"
         : "edit_project";
     const requestedCount = Number(request.match(/\buse\s+(\d+)\s+agents?\b/i)?.[1] ?? "1");

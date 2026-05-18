@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "smoke:run-to-green": "tsx scripts/run-to-green-smoke.ts"
+    "smoke:run-to-green": "tsx scripts/run-to-green-smoke.ts",
+    "smoke:python-pygame-fallback": "tsx scripts/python-pygame-fallback-smoke.ts"
   },
   "dependencies": {
     "@orchcode/protocol": "file:../../packages/protocol",

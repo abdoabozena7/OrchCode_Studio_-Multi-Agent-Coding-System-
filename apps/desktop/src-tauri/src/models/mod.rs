@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,15 @@ pub struct BackgroundJobRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CommandFailureDiagnosis {
+    pub category: String,
+    pub severity: String,
+    pub summary: String,
+    pub next_step: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandResult {
     pub command: String,
     pub cwd: String,
@@ -95,8 +105,16 @@ pub struct CommandResult {
     pub stdout: String,
     pub stderr: String,
     pub message: Option<String>,
+    pub diagnosis: Option<CommandFailureDiagnosis>,
     pub provenance: Option<CommandExecutionProvenance>,
     pub background_job: Option<BackgroundJobRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommandExecutionResponse {
+    pub result: CommandResult,
+    pub updated_session: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +171,9 @@ pub struct SafetySettingsInput {
     pub block_dangerous_commands: bool,
     pub redact_secrets: bool,
     pub allow_network_commands: bool,
+    pub auto_run_medium_commands: Option<bool>,
+    pub auto_run_background_commands: Option<bool>,
+    pub auto_run_network_commands: Option<bool>,
     pub approval_granted: Option<bool>,
 }
 

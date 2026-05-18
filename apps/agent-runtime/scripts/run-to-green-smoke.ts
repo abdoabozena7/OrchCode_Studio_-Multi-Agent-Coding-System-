@@ -58,9 +58,9 @@ async function runStaticWorkspaceScenario() {
     const session = runtime.getSession(created.sessionId);
     assert.ok(session);
 
-    assert.equal(turn.status, "blocked");
-    assert.equal(session.status, "blocked");
-    assert.equal(session.lifecycleStage, "BLOCKED");
+    assert.equal(turn.status, "completed");
+    assert.equal(session.status, "completed");
+    assert.equal(session.lifecycleStage, "DONE");
     assert.equal(session.runMode, "run_to_green");
     assert.equal(session.projectIntake?.projectKind === "existing_project" || session.projectIntake?.projectKind === "mid_progress_project", true);
     assert.equal(session.commandRequests.length, 0);
@@ -68,11 +68,12 @@ async function runStaticWorkspaceScenario() {
     assert.equal(session.patchProposals.length, 0);
     assert.equal(session.runToGreen?.status, "blocked");
     assert.equal(session.verificationResult?.status, "unavailable");
-    assert.equal(session.reviewGate?.recommendation, "do_not_apply");
-    assert.equal(session.runSummary?.status, "blocked");
+    assert.equal(session.reviewGate?.recommendation, "caution");
+    assert.equal(session.runSummary?.status, "completed");
     assert.match(session.runToGreen?.blockerReason ?? "", /No grounded run command/i);
     assert.equal(session.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
-    assert.equal(session.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "blocked");
+    assert.equal(session.nextAction?.kind, "preview_ready");
+    assert.equal(session.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "completed");
 
     return summarizeSession(session, turn.status);
   } finally {
@@ -166,12 +167,13 @@ async function runMalformedProviderScenario() {
     const session = runtime.getSession(created.sessionId);
     assert.ok(session);
 
-    assert.equal(turn.status, "blocked");
-    assert.equal(session.status, "blocked");
+    assert.equal(turn.status, "completed");
+    assert.equal(session.status, "completed");
     assert.equal(session.runMode, "run_to_green");
     assert.equal(provider.structuredCalls, 0);
     assert.equal(session.commandRequests.length, 0);
     assert.equal(session.patchProposals.length, 0);
+    assert.equal(session.runSummary?.status, "completed");
     assert.equal(session.reasoningSummaries.some((entry) => /invalid_json|schema_validation_failed/i.test(entry)), false);
     assert.equal(session.messages.some((entry) => /invalid_json|schema_validation_failed/i.test(entry.content)), false);
     const runToGreenStructuredCalls = provider.structuredCalls;

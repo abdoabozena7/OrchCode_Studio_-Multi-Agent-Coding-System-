@@ -49,7 +49,7 @@ export type PatchProposalStatus = "proposed" | "approved" | "rejected" | "applie
 export type VerificationStatus = "pending" | "passed" | "failed";
 export type VerificationCheckStatus = "not_run" | "running" | "passed" | "failed" | "skipped" | "unavailable" | "pending";
 
-export type RunMode = "quick_fix" | "normal_run" | "deep_audit" | "soak_mode" | "paranoid_mode" | "run_to_green";
+export type RunMode = "quick_fix" | "normal_run" | "inspect_only" | "deep_audit" | "soak_mode" | "paranoid_mode" | "run_to_green";
 
 export type RunPhaseId =
   | "inspect_workspace"
@@ -469,6 +469,83 @@ export type ProjectContextPack = {
   guardrails: ProjectEditGuardrails;
 };
 
+export type ProjectExplainEvidenceRef = {
+  type: "file" | "directory" | "manifest" | "test" | "entrypoint" | "search";
+  path: string;
+  reason: string;
+  excerpt?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  symbol?: string;
+  language?: string;
+  snippet?: string;
+};
+
+export type ProjectExplainSection = {
+  title: string;
+  explanation: string;
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  symbol?: string;
+  language?: string;
+  snippet: string;
+  whyItMatters: string;
+};
+
+export type ProjectExplainModule = {
+  id: string;
+  name: string;
+  root: string;
+  responsibility: string;
+  importantFiles: string[];
+  entryPoints: string[];
+  tests: string[];
+  dependencies: string[];
+  risksAndUnknowns: string[];
+  evidence: ProjectExplainEvidenceRef[];
+};
+
+export type ProjectExplainContextPack = {
+  inventory: {
+    totalFiles: number;
+    totalDirectories: number;
+    scannedFiles: number;
+    omittedFiles: number;
+    ignoredDirectories: string[];
+    languages: Record<string, number>;
+    rootFolders: Array<{ path: string; files: number }>;
+  };
+  readBudget: {
+    maxExplainFiles: number;
+    maxModuleSamples: number;
+    maxFileReadChars: number;
+    sampledFiles: number;
+  };
+  sampledFiles: Array<{
+    path: string;
+    reason: string;
+    charsRead: number;
+    summary: string;
+  }>;
+};
+
+export type ProjectExplainReport = {
+  overview: string;
+  architecture: string;
+  sections: ProjectExplainSection[];
+  findings: ProjectExplainSection[];
+  moduleMap: ProjectExplainModule[];
+  entryPoints: string[];
+  dataFlow: string;
+  importantFiles: string[];
+  howToRun: string[];
+  risksAndUnknowns: string[];
+  suggestedNextQuestions: string[];
+  evidence: ProjectExplainEvidenceRef[];
+  contextPack: ProjectExplainContextPack;
+};
+
 export type ProjectRunIntent = "run_once" | "run_to_green" | "inspect_only" | "implement_module" | "unknown";
 
 export type RunToGreenStatus =
@@ -500,6 +577,7 @@ export type RunToGreenSelectedCommand = {
 };
 
 export type RunToGreenDiagnosisCategory =
+  | "not_git_repository"
   | "dependency_missing"
   | "script_missing"
   | "type_error"
@@ -733,8 +811,28 @@ export type CommandResult = {
   stdout: string;
   stderr: string;
   message?: string;
+  diagnosis?: CommandFailureDiagnosis;
   provenance?: CommandExecutionProvenance;
   backgroundJob?: BackgroundJobRecord;
+};
+
+export type CommandFailureDiagnosisCategory =
+  | "not_git_repository"
+  | "command_not_found"
+  | "outside_workspace"
+  | "approval_required"
+  | "policy_blocked"
+  | "network_blocked"
+  | "background_command"
+  | "unknown";
+
+export type CommandFailureDiagnosisSeverity = "informative" | "warning" | "error";
+
+export type CommandFailureDiagnosis = {
+  category: CommandFailureDiagnosisCategory;
+  severity: CommandFailureDiagnosisSeverity;
+  summary: string;
+  nextStep?: string;
 };
 
 export type CommandExecutionProvenance = {
@@ -823,6 +921,7 @@ export type ArtifactType =
   | "command_result"
   | "file_tree"
   | "project_intake"
+  | "project_explain_report"
   | "context_pack"
   | "module_plan"
   | "module_execution_summary"

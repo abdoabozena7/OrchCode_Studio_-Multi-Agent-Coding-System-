@@ -126,12 +126,13 @@ test("Mock orchestrated run creates dynamic tasks, intents, artifacts, and patch
   const session = runtime.getSession(created.sessionId);
 
   assert.equal(turn.status, "needs_approval");
-  assert.ok(session?.plan);
+  assert.ok(session?.orchestration?.technicalPlan);
   assert.ok((session?.tasks.length ?? 0) >= 1);
-  assert.ok((session?.toolIntents.length ?? 0) >= 4);
-  assert.ok((session?.artifacts.length ?? 0) >= 3);
+  assert.ok((session?.orchestration?.workOrders.length ?? 0) >= 1);
+  assert.ok((session?.orchestration?.agentRuns.length ?? 0) >= 1);
+  assert.ok((session?.orchestration?.workerOutputs.length ?? 0) >= 1);
   assert.ok((session?.patchProposals.length ?? 0) >= 1);
-  assert.equal(session?.verificationResult?.status, "pending");
+  assert.ok((session?.orchestration?.qualityGateResults.length ?? 0) >= 1);
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

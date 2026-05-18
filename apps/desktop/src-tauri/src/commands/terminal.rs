@@ -1,4 +1,4 @@
-use crate::models::{CommandResult, SafetySettingsInput};
+use crate::models::{CommandResult, RuntimeCommandExecutionResponse, SafetySettingsInput};
 use crate::AppState;
 use serde_json::json;
 use std::sync::Arc;
@@ -31,14 +31,15 @@ pub fn run_workspace_command(
 }
 
 #[tauri::command]
-pub fn execute_approved_command(
+pub async fn execute_approved_command(
     session_id: String,
     request_id: String,
     command: String,
     auto_run: Option<bool>,
     safety_settings: Option<SafetySettingsInput>,
+    session_token: Option<String>,
     state: State<'_, Arc<AppState>>,
-) -> Result<CommandResult, String> {
+) -> Result<RuntimeCommandExecutionResponse, String> {
     let auto_run = auto_run.unwrap_or(false);
     let safety_settings = safety_settings.map(|mut settings| {
         settings.approval_granted = Some(true);
@@ -100,20 +101,85 @@ pub fn execute_approved_command(
             "stdout": result.stdout,
             "stderr": result.stderr,
             "message": result.message,
+            "diagnosis": result.diagnosis,
             "provenance": result.provenance,
             "backgroundJob": result.background_job,
             "createdAt": chrono::Utc::now().to_rfc3339()
         }
     });
-    let db = state
-        .db
-        .lock()
-        .map_err(|_| "Database lock poisoned".to_string())?;
-    db.append_authoritative_session_event(
+    {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| "Database lock poisoned".to_string())?;
+        db.append_authoritative_session_event(&session_id, event_type, &payload.to_string())
+            .map_err(|err| format!("Failed to persist command result: {err}"))?;
+    }
+
+    let updated_session = post_runtime_command_result(
         &session_id,
-        event_type,
-        &payload.to_string(),
+        &request_id,
+        &command,
+        auto_run,
+        &result,
+        session_token.as_deref(),
     )
-        .map_err(|err| format!("Failed to persist command result: {err}"))?;
-    Ok(result)
+    .await?;
+
+    Ok(RuntimeCommandExecutionResponse {
+        result,
+        updated_session,
+    })
+}
+
+async fn post_runtime_command_result(
+    session_id: &str,
+    request_id: &str,
+    command: &str,
+    auto_run: bool,
+    result: &CommandResult,
+    session_token: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let runtime_base = std::env::var("ORCHCODE_AGENT_RUNTIME_URL")
+        .or_else(|_| std::env::var("VITE_AGENT_RUNTIME_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
+    let url = format!(
+        "{}/sessions/{}/commands/{}/result",
+        runtime_base.trim_end_matches('/'),
+        session_id,
+        request_id
+    );
+    let mut request = client.post(url).json(&json!({
+        "command": command,
+        "cwd": result.cwd,
+        "risk": result.risk,
+        "status": result.status,
+        "exitCode": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "message": result.message,
+        "diagnosis": result.diagnosis,
+        "autoRun": auto_run,
+        "provenance": result.provenance,
+        "backgroundJob": result.background_job
+    }));
+    if let Some(token) = session_token {
+        request = request.header("x-orchcode-session-token", token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("Failed to report command result to runtime: {err}"))?;
+    if !response.status().is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Runtime rejected the command result.".to_string());
+        return Err(format!("Runtime rejected command result: {body}"));
+    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|err| format!("Failed to decode runtime session payload: {err}"))
 }

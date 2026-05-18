@@ -5,15 +5,18 @@ import type {
   CreateRuntimeSessionResponse,
   ReportCommandResultRequest,
   ReportPatchApplyResultRequest,
+  RunToGreenDiagnosis,
   RunSummary,
   RuntimeSessionStatus,
   RuntimeTurnResponse
 } from "@orchcode/protocol";
+import { accessProfileDefaults } from "@orchcode/protocol";
 import { randomUUID } from "node:crypto";
 import type { RuntimeConfig } from "../config.js";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
 import { OllamaProvider } from "../llm/OllamaProvider.js";
+import { OpenAIProvider } from "../llm/OpenAIProvider.js";
 import { runPatchIntentSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { SessionManager } from "./SessionManager.js";
@@ -21,6 +24,7 @@ import { createSimpleDelegationDecision, parsePromptDirective, resolveExecutionM
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { RunEngine } from "./RunEngine.js";
+import { OrchestratedRuntime } from "./OrchestratedRuntime.js";
 import {
   appendAgentJournalEntry,
   buildAttributedReviewGate,
@@ -68,10 +72,11 @@ export class AgentRuntime {
 
   async runTurn(sessionId: string, message: string): Promise<RuntimeTurnResponse> {
     const session = this.requireSession(sessionId);
-    const confirmationHandled = await this.handlePendingAction(session, message);
-    if (confirmationHandled) {
+    const pendingAction = await this.handlePendingAction(session, message);
+    if (pendingAction.handled) {
       return { sessionId, status: this.requireSession(sessionId).status };
     }
+    const promptForExecution = pendingAction.resumePrompt ?? message;
 
     const provider = this.getProvider(session);
     try {
@@ -86,18 +91,47 @@ export class AgentRuntime {
       };
       const modeResolution =
         session.executionMode === "auto_mode"
-          ? resolveExecutionMode(message, projectMap)
+          ? resolveExecutionMode(promptForExecution, projectMap)
           : {
               mode: session.executionMode,
-              directive: parsePromptDirective(message),
-              complexity: createSimpleDelegationDecision({ prompt: message, projectMap }).estimatedComplexity
+              directive: parsePromptDirective(promptForExecution),
+              complexity: createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }).estimatedComplexity
             };
 
-      const updated = await new RunEngine(provider, this.sessionManager).runTurn(sessionId, message, {
-        resolvedMode: modeResolution.mode,
-        projectMap,
-        thinkFirst: session.thinkFirst || modeResolution.directive.thinkFirstRequested
-      });
+      const requestedAgentCount = modeResolution.directive.requestedAgentCount ?? 0;
+      if (modeResolution.mode === "orchestrated_mode" && shouldConfirmSingleFilePygamePlan(promptForExecution, requestedAgentCount)) {
+        await this.sessionManager.updateSession(sessionId, (draft) => {
+          draft.status = "needs_approval";
+          draft.lifecycleStage = "PLAN";
+          draft.resolvedExecutionMode = "orchestrated_mode";
+          draft.agentName = "Dynamic Working Team";
+          draft.orchestration ??= createEmptyOrchestration(draft);
+          draft.delegationDecision = {
+            ...createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }),
+            requestedAgentCount,
+            selectedAgentCount: requestedAgentCount,
+            rationale: "A single Python file can be built with multiple agents, but it needs explicit merge confirmation first."
+          };
+          draft.nextAction = {
+            kind: "confirm_plan",
+            message: `You asked for ${requestedAgentCount} agents to collaborate on one Python file. Confirm the merge plan before implementation starts so the workers do not collide on the same file.`
+          };
+          if (!draft.reasoningSummaries.some((entry) => /single python file/i.test(entry))) {
+            draft.reasoningSummaries.push("Single-file Python work with multiple agents needs explicit merge confirmation before implementation.");
+          }
+        });
+        return { sessionId, status: this.requireSession(sessionId).status };
+      }
+
+      const thinkFirst = session.thinkFirst || modeResolution.directive.thinkFirstRequested;
+      const updated =
+        modeResolution.mode === "orchestrated_mode"
+          ? await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst)
+          : await new RunEngine(provider, this.sessionManager).runTurn(sessionId, promptForExecution, {
+              resolvedMode: modeResolution.mode,
+              projectMap,
+              thinkFirst
+            });
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.resolvedExecutionMode = modeResolution.mode;
       });
@@ -201,6 +235,12 @@ export class AgentRuntime {
         message: result.message
       },
       createdAt: new Date().toISOString()
+    });
+    await this.sessionManager.addMessage(sessionId, {
+      role: "assistant",
+      content: result.status === "applied"
+        ? `Applied patch ${patchId}.\n\n${result.message}`
+        : `Patch ${patchId} failed to apply.\n\n${result.message}`
     });
     await this.sessionManager.updateSession(sessionId, (draft) => {
       if (result.status === "applied") {
@@ -307,6 +347,7 @@ export class AgentRuntime {
       stdout: result.stdout,
       stderr: result.stderr,
       message: result.message,
+      diagnosis: result.diagnosis,
       provenance: {
         source: result.provenance?.source ?? request?.provenance?.source ?? "agent",
         trigger: result.provenance?.trigger ?? (result.autoRun ? "auto_approved" : "manual"),
@@ -353,6 +394,10 @@ export class AgentRuntime {
         result: record
       },
       createdAt: new Date().toISOString()
+    });
+    await this.sessionManager.addMessage(sessionId, {
+      role: "assistant",
+      content: formatCommandResultMessage(record)
     });
     await this.sessionManager.updateSession(sessionId, (draft) => {
       for (const agent of draft.orchestration?.agentRuns ?? []) {
@@ -423,8 +468,26 @@ export class AgentRuntime {
       record.backgroundJob?.status === "running" ||
       record.provenance?.background === true;
     const alternate = findAlternateRunToGreenCommand(runToGreen);
-    const diagnosis = backgroundRunning
+    const diagnosis: RunToGreenDiagnosis | undefined = backgroundRunning
       ? undefined
+      : record.diagnosis
+        ? {
+            category: record.diagnosis.category === "not_git_repository"
+              ? "not_git_repository"
+              : record.diagnosis.category === "command_not_found"
+                ? "command_not_found"
+                : "unknown",
+            confidence: record.diagnosis.category === "unknown" ? "low" : "high",
+            evidence: {
+              command: record.command,
+              exitCode: record.exitCode,
+              stdoutSummary: summarizeRuntimeOutput(record.stdout),
+              stderrSummary: summarizeRuntimeOutput(record.stderr)
+            },
+            safeFixAvailable: false,
+            requiresApproval: false,
+            reason: record.diagnosis.summary
+          }
       : record.status === "executed" || record.status === "completed"
         ? record.exitCode === 0
           ? undefined
@@ -766,8 +829,8 @@ export class AgentRuntime {
     return session;
   }
 
-  private async handlePendingAction(session: AgentRuntimeSession, message: string) {
-    if (!session.nextAction) return false;
+  private async handlePendingAction(session: AgentRuntimeSession, message: string): Promise<{ handled: boolean; resumePrompt?: string }> {
+    if (!session.nextAction) return { handled: false };
     const normalized = message.trim().toLowerCase();
     if (session.nextAction.kind === "confirm_plan") {
       if (/\b(proceed|continue|implement|go ahead|start)\b/.test(normalized)) {
@@ -775,13 +838,13 @@ export class AgentRuntime {
           draft.nextAction = undefined;
           draft.thinkFirst = false;
         });
-        return false;
+        return { handled: false, resumePrompt: session.userPrompt };
       }
       await this.sessionManager.addMessage(session.id, {
         role: "assistant",
         content: "Okay. Review the plan and tell me when to proceed with implementation."
       });
-      return true;
+      return { handled: true };
     }
 
     if (session.nextAction.kind === "confirm_preview") {
@@ -817,7 +880,7 @@ export class AgentRuntime {
           role: "assistant",
           content: `Preview is ready. Use the open button to launch ${preview.description.toLowerCase()}.`
         });
-        return true;
+        return { handled: true };
       }
 
       await this.sessionManager.updateSession(session.id, (draft) => {
@@ -827,10 +890,27 @@ export class AgentRuntime {
         role: "assistant",
         content: "Okay. I left the result in review mode without running the preview."
       });
-      return true;
+      return { handled: true };
     }
 
-    return false;
+    return { handled: false };
+  }
+
+  private async runOrchestratedTurn(
+    sessionId: string,
+    message: string,
+    projectMap: import("@orchcode/protocol").ProjectMap,
+    thinkFirst: boolean
+  ) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.orchestration ??= createEmptyOrchestration(draft);
+    });
+    const orchestratedRuntime = new OrchestratedRuntime(this.sessionManager);
+    return orchestratedRuntime.run(sessionId, message, {
+      projectMap,
+      delegationDecision: createSimpleDelegationDecision({ prompt: message, projectMap }),
+      thinkFirst
+    });
   }
 
   private async syncSessionOutcome(sessionId: string) {
@@ -874,6 +954,38 @@ export class AgentRuntime {
         setRunPhaseState(draft, "run_verification", "completed", verification.summary, verification.checks.length);
         setRunPhaseState(draft, "review_final_diff", "completed", "Run-to-green completed successfully.");
         setRunPhaseState(draft, "final_report", "completed", "Final run-to-green report is ready.");
+        return;
+      }
+
+      const noRunnableCommandOnly =
+        runToGreenStatus === "blocked"
+        && (draft.runToGreen?.currentAttempt ?? 0) === 0
+        && !draft.commandExecutions.length
+        && !draft.patchProposals.length;
+
+      if (noRunnableCommandOnly) {
+        draft.status = "completed";
+        draft.lifecycleStage = "DONE";
+        if (draft.moduleExecutionPlan) {
+          draft.moduleExecutionPlan.status = "completed";
+        }
+        setRunPhaseState(draft, "run_verification", "completed", verification.summary, verification.checks.length);
+        setRunPhaseState(
+          draft,
+          "review_final_diff",
+          "completed",
+          draft.previewRecommendation
+            ? "Preview is available even though no grounded run command was found."
+            : "No grounded run command was found for this workspace."
+        );
+        setRunPhaseState(
+          draft,
+          "final_report",
+          "completed",
+          draft.previewRecommendation
+            ? "The run finished with a preview recommendation."
+            : "The run finished without a runnable command."
+        );
         return;
       }
 
@@ -1016,8 +1128,10 @@ export class AgentRuntime {
           ? "completed"
           : draft.status === "failed"
             ? "failed"
-            : draft.status === "blocked" || draft.status === "needs_approval"
+            : draft.status === "blocked"
               ? "blocked"
+              : draft.status === "needs_approval"
+                ? "running"
               : agent.status;
       agent.lifecycleStage = draft.lifecycleStage;
       agent.currentAction = draft.runSummary?.summary ?? draft.runToGreen?.blockerReason ?? agent.currentAction;
@@ -1081,10 +1195,38 @@ function setRunPhaseState(
 }
 
 function createRealProvider(config: AgentRuntimeSession["providerConfig"]) {
-  if (!config?.isValid || config.providerType !== "ollama") {
-    throw new Error("real_provider requires a valid Ollama provider configuration.");
+  if (!config?.isValid) {
+    throw new Error("real_provider requires a valid provider configuration.");
   }
-  return new OllamaProvider(config.baseUrl, config.selectedModel);
+  if (config.providerType === "ollama") {
+    return new OllamaProvider(config.baseUrl, config.selectedModel);
+  }
+  if (config.providerType === "openai_compatible") {
+    return new OpenAIProvider(process.env.OPENAI_API_KEY, config.baseUrl, config.selectedModel);
+  }
+  throw new Error(`Unsupported provider type: ${config.providerType}`);
+}
+
+function formatCommandResultMessage(record: CommandExecutionRecord) {
+  const statusLine = typeof record.exitCode === "number"
+    ? `${record.status} (exit ${record.exitCode})`
+    : record.status;
+  const output = [record.message, record.stdout, record.stderr]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return [
+    `Command finished: \`${record.command}\``,
+    "",
+    `Status: ${statusLine}`,
+    output ? `\n${truncateCommandOutput(output)}` : undefined
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function truncateCommandOutput(output: string, max = 1800) {
+  return output.length > max ? `${output.slice(0, max)}\n...output truncated...` : output;
 }
 
 function buildRuntimeVerification(session: AgentRuntimeSession) {
@@ -1279,15 +1421,42 @@ function buildRuntimeVerification(session: AgentRuntimeSession) {
   } satisfies AgentRuntimeSession["verificationResult"];
 }
 
+function shouldConfirmSingleFilePygamePlan(message: string, requestedAgentCount: number) {
+  if (requestedAgentCount < 3) return false;
+  const normalized = message.toLowerCase();
+  return /\bpython\b/.test(normalized)
+    && /\bpy\s*game\b|\bpygame\b/.test(normalized)
+    && /\bone python code\b|\bsingle file\b|\bone file\b/.test(normalized);
+}
+
+function createEmptyOrchestration(session?: AgentRuntimeSession): NonNullable<AgentRuntimeSession["orchestration"]> {
+  return {
+    agentRuns: [],
+    workerOutputs: [],
+    securityReviews: [],
+    reviewerSummaries: [],
+    orchestrationEvents: [],
+    approvalDecisions: [],
+    safetySettings: session?.orchestration?.safetySettings ?? accessProfileDefaults(session?.accessProfile ?? "default_permissions"),
+    lockedFiles: {},
+    selectedWorkerAgents: [],
+    mandatoryGateAgents: [],
+    workOrders: [],
+    qualityGateResults: [],
+    retryCount: 0
+  };
+}
+
 function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonNullable<AgentRuntimeSession["verificationResult"]>): RunSummary {
-  const status: RunSummary["status"] =
+  const status = (
     session.status === "failed"
       ? "failed"
       : session.status === "blocked" || session.lifecycleStage === "BLOCKED"
         ? "blocked"
       : session.status === "completed"
         ? "completed"
-        : "blocked";
+        : "pending"
+  ) as RunSummary["status"];
   const nextAction =
     session.runToGreen?.status === "passed"
       ? "Selected run-to-green command passed."
@@ -1297,7 +1466,7 @@ function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonN
           ? session.nextAction?.message ?? "Review the pending runtime action."
           : session.status === "failed"
             ? "Inspect the recorded patch or command failure."
-            : "Review the applied change and verification result.";
+            : "Review the active run state and latest verification evidence.";
   return buildDiffAwareRunSummary(
     session,
     verification,

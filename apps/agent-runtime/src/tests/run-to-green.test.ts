@@ -27,7 +27,7 @@ test("run this project initializes run_to_green before provider task planning", 
     assert.equal(session?.runMode, "run_to_green");
     assert.equal(provider.structuredCalls, 0);
     assert.equal(session?.runToGreen?.status, "blocked");
-    assert.equal(session?.status, "blocked");
+    assert.equal(session?.status, "completed");
     assert.equal(session?.verificationResult?.status, "unavailable");
   } finally {
     await fixture.close();
@@ -74,7 +74,7 @@ test("run_to_green falls back to module verification commands", async () => {
   }
 });
 
-test("run_to_green blocks when no known command can be selected", async () => {
+test("run_to_green completes safely when no known command can be selected", async () => {
   const fixture = await createStaticFixture();
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
   try {
@@ -91,10 +91,12 @@ test("run_to_green blocks when no known command can be selected", async () => {
     assert.equal(session?.runToGreen?.finalStatus, "blocked");
     assert.match(session?.runToGreen?.blockerReason ?? "", /No grounded run command/i);
     assert.equal(session?.reviewGate?.runToGreen?.status, "blocked");
-    assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+    assert.equal(session?.reviewGate?.recommendation, "caution");
     assert.equal(session?.verificationResult?.status, "unavailable");
     assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
-    assert.equal(session?.runSummary?.status, "blocked");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.lifecycleStage, "DONE");
+    assert.equal(session?.runSummary?.status, "completed");
   } finally {
     await app.close();
     await fixture.close();
@@ -228,6 +230,50 @@ test("unknown error stays unknown and low confidence", async () => {
   } finally {
     await app.close();
     await fixture.close();
+  }
+});
+
+test("git status outside a repository keeps the diagnosis informative", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-run2g-git-status-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-run2g-git-status-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "# no git\n", "utf8");
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  try {
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "demo_mock",
+      userPrompt: "make it run with `git status`"
+    });
+    await runtime.runTurn(created.sessionId, "make it run with `git status`");
+    const request = runtime.getSession(created.sessionId)?.commandRequests[0];
+    assert.ok(request);
+
+    await runtime.reportCommandResult(created.sessionId, request.id, {
+      command: request.command,
+      cwd: request.cwd,
+      risk: request.risk,
+      status: "failed",
+      exitCode: 128,
+      stdout: "",
+      stderr: "fatal: not a git repository (or any of the parent directories): .git",
+      message: "This workspace is not a Git repository.",
+      diagnosis: {
+        category: "not_git_repository",
+        severity: "informative",
+        summary: "This workspace is not a Git repository.",
+        nextStep: "Initialize Git or open a Git workspace if you need Git status."
+      }
+    });
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(session?.runToGreen?.attempts[0]?.diagnosis?.category, "not_git_repository");
+    assert.equal(session?.runToGreen?.attempts[0]?.diagnosis?.reason, "This workspace is not a Git repository.");
+    assert.equal(session?.commandExecutions.at(-1)?.diagnosis?.category, "not_git_repository");
+  } finally {
+    await app.close();
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
   }
 });
 

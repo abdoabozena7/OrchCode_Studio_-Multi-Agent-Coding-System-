@@ -253,20 +253,24 @@ export function shouldTreatProjectAsExisting(projectKind: ProjectKind) {
 
 export function classifyRunIntent(message: string): ProjectRunIntent {
   const normalized = message.toLowerCase();
-  if (/\b(explain|inspect|analyze|summarize|map)\b/.test(normalized) && !/\b(change|edit|fix|add|implement)\b/.test(normalized)) {
+  const explainIntent = /\b(explain|inspect|analyze|summarize|map)\b/.test(normalized) || /(اشرح|حلل|افهم|لخص|راجع)/.test(normalized);
+  const editIntent = /\b(change|edit|fix|add|implement|update|write|create|make|build)\b/.test(normalized) || /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني)/.test(normalized);
+  const runIntent = /\b(run|launch|start|serve|open)\b/.test(normalized) || /(شغل|ابدأ|افتح|ثبت|نزل)/.test(normalized);
+  if (explainIntent && !editIntent) {
     return "inspect_only";
   }
   if (
     /\b(run to green|make it run|fix until it starts|fix until it runs|boot it|start it working)\b/.test(normalized) ||
     /\bfix\b.*\b(project|app|site|game)\b.*\buntil it (starts|runs)\b/.test(normalized) ||
-    /\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/.test(normalized)
+    /\b(run|launch|start|serve|open)\b.+\b(project|app|preview|site|game)\b/.test(normalized) ||
+    /(شغل|ثبت|نزل).*(المشروع|التطبيق|اللعبة|السيرفر|البروجكت|الأبلكيشن|الابلكيشن)/.test(normalized)
   ) {
     return "run_to_green";
   }
-  if (/\b(run|launch|start|serve|open)\b/.test(normalized)) {
+  if (runIntent) {
     return "run_once";
   }
-  if (/\b(add|edit|fix|implement|update|change|wire|build)\b/.test(normalized)) {
+  if (editIntent) {
     return "implement_module";
   }
   return "unknown";

@@ -6,7 +6,7 @@ import test from "node:test";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
-test("run this project blocks with a grounded reason for static module workspaces without scripts", async () => {
+test("run this project completes with a preview-ready result for static module workspaces without scripts", async () => {
   process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS = "1";
   const workspace = path.join(os.tmpdir(), `orchcode-run-static-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-run-static-storage-${Date.now()}`);
@@ -29,9 +29,9 @@ test("run this project blocks with a grounded reason for static module workspace
   const turn = await runtime.runTurn(created.sessionId, "run this project");
   const session = runtime.getSession(created.sessionId);
 
-  assert.equal(turn.status, "blocked");
-  assert.equal(session?.status, "blocked");
-  assert.equal(session?.lifecycleStage, "BLOCKED");
+  assert.equal(turn.status, "completed");
+  assert.equal(session?.status, "completed");
+  assert.equal(session?.lifecycleStage, "DONE");
   assert.equal(session?.runMode, "run_to_green");
   assert.equal(session?.patchProposals.length, 0);
   assert.equal(session?.commandRequests.length, 0);
@@ -40,9 +40,10 @@ test("run this project blocks with a grounded reason for static module workspace
   assert.match(session?.runToGreen?.blockerReason ?? "", /No grounded run command/i);
   assert.equal(session?.verificationResult?.status, "unavailable");
   assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
-  assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
-  assert.equal(session?.runSummary?.status, "blocked");
-  assert.equal(session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "blocked");
+  assert.equal(session?.reviewGate?.recommendation, "caution");
+  assert.equal(session?.runSummary?.status, "completed");
+  assert.equal(session?.nextAction?.kind, "preview_ready");
+  assert.equal(session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "completed");
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
@@ -105,6 +106,33 @@ test("explain this project stays in simple mode and emits ordered progress witho
   assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Workspace snapshot"));
   assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Plan"));
   assert.ok(session?.verificationResult);
+  assert.ok(session?.explainReport);
+  assert.equal(session?.commandRequests.length, 0);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("arabic explain requests stay inspect-only and answer in chat", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-arabic-explain-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-arabic-explain-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: "اشرح المشروع"
+  });
+  await runtime.runTurn(created.sessionId, "اشرح المشروع");
+  const session = runtime.getSession(created.sessionId);
+
+  assert.equal(session?.resolvedExecutionMode, "simple_mode");
+  assert.equal(session?.patchProposals.length, 0);
+  assert.ok(session?.explainReport);
+  assert.equal(session?.messages.some((message) => message.role === "assistant" && message.content.length > 0), true);
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

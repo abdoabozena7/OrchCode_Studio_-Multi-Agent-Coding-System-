@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AgentStatus,
+  AgentRuntimeSession,
   CommandResult,
   CreateSessionResponse,
   FileEntry,
@@ -13,7 +14,7 @@ import type {
   WorkspaceDiffSnapshot,
   WorkspaceInfo
 } from "@orchcode/protocol";
-import type { AgentRuntimeSession, AppEvent, SafetySettings } from "@orchcode/protocol";
+import type { AppEvent, SafetySettings } from "@orchcode/protocol";
 
 export type ModelProviderConfigInput = {
   id: string;
@@ -57,11 +58,21 @@ export function getGitDiff() {
   return invoke<string>("get_git_diff");
 }
 
-export function runWorkspaceCommand(command: string) {
-  return invoke<CommandResult>("run_workspace_command", { command });
+export function runWorkspaceCommand(command: string, safetySettings?: CommandSafetySettings) {
+  return invoke<CommandResult>("run_workspace_command", { command, safetySettings });
 }
 
-export function runApprovedWorkspaceCommand(command: string, safetySettings: Pick<SafetySettings, "blockDangerousCommands" | "redactSecrets" | "allowNetworkCommands">) {
+type CommandSafetySettings = Pick<
+  SafetySettings,
+  | "blockDangerousCommands"
+  | "redactSecrets"
+  | "allowNetworkCommands"
+  | "autoRunMediumCommands"
+  | "autoRunBackgroundCommands"
+  | "autoRunNetworkCommands"
+>;
+
+export function runApprovedWorkspaceCommand(command: string, safetySettings: CommandSafetySettings) {
   return invoke<CommandResult>("run_workspace_command", { command, safetySettings });
 }
 
@@ -70,9 +81,13 @@ export function executeApprovedCommand(
   requestId: string,
   command: string,
   autoRun: boolean,
-  safetySettings: Pick<SafetySettings, "blockDangerousCommands" | "redactSecrets" | "allowNetworkCommands">
+  safetySettings: CommandSafetySettings,
+  sessionToken?: string
 ) {
-  return invoke<CommandResult>("execute_approved_command", { sessionId, requestId, command, autoRun, safetySettings });
+  return invoke<{
+    result: CommandResult;
+    updatedSession: AgentRuntimeSession;
+  }>("execute_approved_command", { sessionId, requestId, command, autoRun, safetySettings, sessionToken });
 }
 
 export function createRuntimeRun(userPrompt: string, trustProfile: string) {
