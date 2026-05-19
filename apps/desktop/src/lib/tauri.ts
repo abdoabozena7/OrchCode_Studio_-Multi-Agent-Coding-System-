@@ -175,3 +175,7 @@ export function clearModelProviderConfig() {
 export function openExternalTarget(target: string) {
   return invoke<void>("open_external_target", { target });
 }
+
+export function restartWithLatestCode() {
+  return invoke<void>("restart_with_latest_code");
+}

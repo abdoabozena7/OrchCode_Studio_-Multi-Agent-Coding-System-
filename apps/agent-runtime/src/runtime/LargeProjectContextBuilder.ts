@@ -9,6 +9,12 @@ import type {
   ProjectMap
 } from "@orchcode/protocol";
 import { isSecretCandidate, resolveInsideWorkspace } from "../tools/security.js";
+import {
+  extractRequestedConcept,
+  matchingConceptEvidenceGroups,
+  textSupportsRequestedConcept,
+  type RequestedConcept
+} from "./ProjectQuestionGrounding.js";
 
 export type ProjectExplainSettings = {
   maxExplainFiles: number;
@@ -79,6 +85,7 @@ const IGNORED_DIRS = new Set([
   ".next",
   ".nox",
   ".nuxt",
+  ".playwright-cli",
   ".pytest_cache",
   ".ruff_cache",
   ".svelte-kit",
@@ -95,7 +102,12 @@ const IGNORED_DIRS = new Set([
   "htmlcov",
   "node_modules",
   "out",
+  "output",
+  "outputs",
+  "playwright-report",
+  "screenshots",
   "site-packages",
+  "test-results",
   "venv",
   "target"
 ]);
@@ -147,6 +159,10 @@ const MANIFEST_NAMES = new Set([
   "tauri.conf.json"
 ]);
 
+const DOMAIN_EVIDENCE_RE = /\b(sentiment|sentement|classifier|classification|model|pipeline|polarity|todo|task|analytics|dashboard|metrics|agent|runtime|orchestrat|llm|provider|frontend|backend|api|server)\b/i;
+const DATA_FLOW_EVIDENCE_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment)\b/i;
+const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
+
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
   const settings = { ...DEFAULT_EXPLAIN_SETTINGS, ...input.settings };
   const workspaceRoot = resolveInsideWorkspace(input.workspacePath);
@@ -166,7 +182,7 @@ export function buildLargeProjectExplainReport(input: BuildProjectExplainReportI
     ...input.projectMap.entryPoints,
     ...inventory.files.filter((file) => file.isEntryPoint).map((file) => file.path)
   ]).slice(0, 20);
-  const evidence = createReportEvidence(moduleMap, sampledFiles, importantFiles);
+  const evidence = createReportEvidence(moduleMap, sampledFiles, importantFiles, input.message);
   const howToRun = uniqueStrings([
     ...(input.intake?.buildCommands ?? []),
     ...(input.intake?.knownCommands ?? []),
@@ -218,193 +234,6 @@ export function buildLargeProjectExplainReport(input: BuildProjectExplainReportI
   };
 }
 
-export function formatProjectExplainReportForChat(
-  report: ProjectExplainReport,
-  message: string,
-  settings: Partial<ProjectExplainSettings> = {}
-) {
-  const maxChars = settings.maxFinalAnswerChars ?? DEFAULT_EXPLAIN_SETTINGS.maxFinalAnswerChars;
-  const arabic = containsArabic(message);
-  const sections = chooseSectionsForChat(report, message);
-  const sectionBlocks = sections.map((section) => formatExplainSection(section, arabic));
-  const flowLines = createFlowLines(report, arabic);
-  const importantFiles = report.importantFiles.slice(0, 12).map((file, index) => {
-    const section = report.sections.find((entry) => entry.filePath === file);
-    return section
-      ? formatImportantFileLine(section, index, arabic)
-      : `- ${file}`;
-  });
-  const risks = report.risksAndUnknowns.slice(0, 6).map((risk) => `- ${risk}`);
-  const nextQuestions = report.suggestedNextQuestions.slice(0, 4).map((question) => `- ${question}`);
-  const commands = report.howToRun.length
-    ? report.howToRun.slice(0, 8).map((command) => `- \`${command}\``)
-    : [arabic ? "- لم أقدر أثبت أمر تشغيل من الملفات المقروءة." : "- I could not prove a run command from the scanned files."];
-  const inventory = report.contextPack.inventory;
-  const body = arabic
-    ? [
-        createChatOverview(report, true),
-        "",
-        "## الفكرة العامة",
-        `ببساطة: أنا شايف إن نقطة الدخول الأساسية هي ${report.entryPoints.slice(0, 3).join(", ") || "مش واضحة قوي من أول قراءة"}، وبعدها المنطق بيتوزع على الملفات اللي تحت. هشرحها واحدة واحدة، وكل نقطة عليها لينك للسطر اللي جبت منه الكلام.`,
-        "",
-        "## يمشي إزاي؟",
-        ...flowLines,
-        "",
-        "## أهم الملفات واحدة واحدة",
-        ...importantFiles,
-        "",
-        "## شرح الكود بالسطر",
-        ...sectionBlocks,
-        "",
-        "## ملاحظات مهمة وأنا بقراه",
-        ...(risks.length ? risks : ["- لم تظهر مخاطر واضحة من القراءة الأولى."]),
-        "",
-        "## التشغيل",
-        ...commands,
-        "",
-        "## قرأت إيه بالظبط؟",
-        `غطيت ${inventory.scannedFiles} ملف من أصل ${inventory.totalFiles} ملف ظاهر في المشروع. تجاهلت folders مش مفيدة للشرح زي generated/vendor: ${inventory.ignoredDirectories.slice(0, 6).join(", ") || "لا يوجد"}.`,
-        "",
-        "## نكمل منين؟",
-        ...nextQuestions
-      ]
-    : [
-        createChatOverview(report, false),
-        "",
-        "## Overview",
-        `The strongest entry point is ${report.entryPoints.slice(0, 3).join(", ") || "not obvious from the first read"}. I will walk through the important files and ground each claim in a clickable file/line reference.`,
-        "",
-        "## How It Works",
-        ...flowLines,
-        "",
-        "## Key Files",
-        ...importantFiles,
-        "",
-        "## Code Walkthrough",
-        ...sectionBlocks,
-        "",
-        "## Risks And Unknowns",
-        ...(risks.length ? risks : ["- No clear risks appeared in the first read."]),
-        "",
-        "## How To Run",
-        ...commands,
-        "",
-        "## Evidence",
-        `Scanned ${inventory.scannedFiles} file(s) out of ${inventory.totalFiles}; ignored generated/vendor folders: ${inventory.ignoredDirectories.slice(0, 6).join(", ") || "none"}.`,
-        "",
-        "## Useful Follow-Up Questions",
-        ...nextQuestions
-      ];
-  const text = body.join("\n");
-  return text.length > maxChars
-    ? `${text.slice(0, maxChars - 180)}\n\n${arabic ? "تم اختصار الشرح لأن المشروع كبير. اسألني عن ملف أو module معين وأوسعه لك بنفس الأسلوب وبسطور أكتر." : "I shortened this explanation because the project is large. Ask about a file or module and I can expand it with more line evidence."}`
-    : text;
-}
-
-function chooseSectionsForChat(report: ProjectExplainReport, message: string) {
-  const normalized = message.toLowerCase();
-  const mentioned = report.sections.filter((section) =>
-    normalized.includes(section.filePath.toLowerCase()) ||
-    normalized.includes(path.basename(section.filePath).toLowerCase())
-  );
-  const pool = mentioned.length ? mentioned : report.sections;
-  return pool.slice(0, mentioned.length ? 10 : report.contextPack.inventory.scannedFiles <= 8 ? 14 : 8);
-}
-
-function createChatOverview(report: ProjectExplainReport, arabic: boolean) {
-  const languages = Object.entries(report.contextPack.inventory.languages)
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 4)
-    .map(([language]) => language)
-    .join(", ") || "mixed";
-  const moduleCount = report.moduleMap.length;
-  const fileCount = report.contextPack.inventory.scannedFiles;
-  if (arabic) {
-    return `المشروع ده عبارة عن workspace صغير/متوسط باين عليه ${languages}. قرأت ${fileCount} ملف وطلعت منه ${moduleCount} منطقة أساسية، والشرح الجاي مبني على سطور فعلية تقدر تدوس عليها وتفتحها.`;
-  }
-  return `This looks like a ${languages} workspace. I read ${fileCount} file(s), mapped ${moduleCount} main area(s), and grounded the walkthrough in clickable file/line evidence.`;
-}
-
-function formatImportantFileLine(section: ProjectExplainSection, index: number, arabic: boolean) {
-  const location = formatFileLineLink(section.filePath, section.lineStart);
-  const title = humanizeSectionTitle(section.title, arabic);
-  if (arabic) {
-    return `- ${index + 1}. ${location}: مهم لأنه هنا ظاهر ${title}. ${section.whyItMatters}`;
-  }
-  return `- ${index + 1}. ${location}: important because this shows ${title}. ${section.whyItMatters}`;
-}
-
-function formatExplainSection(section: ProjectExplainSection, arabic: boolean) {
-  const location = formatFileLineLink(section.filePath, section.lineStart);
-  const lineRange = section.lineEnd > section.lineStart ? `${section.lineStart}-${section.lineEnd}` : `${section.lineStart}`;
-  const language = section.language ?? languageForPath(section.filePath) ?? "text";
-  const title = humanizeSectionTitle(section.title, arabic);
-  return [
-    `### ${title}`,
-    arabic
-      ? `بص على ${location}، خصوصا السطور ${lineRange}. الحتة دي بتقول: ${section.explanation}`
-      : `Look at ${location}, especially line ${lineRange}. This part means: ${section.explanation}`,
-    "",
-    `\`\`\`${language.toLowerCase()}`,
-    section.snippet,
-    "```",
-    "",
-    arabic
-      ? `المعنى العملي: ${section.whyItMatters} يعني وإنت بتفهم المشروع، اعتبر السطر ده علامة طريق مش مجرد كود منفصل.`
-      : `Practical meaning: ${section.whyItMatters} Treat this as a navigation point, not an isolated line.`,
-    ""
-  ].join("\n");
-}
-
-function humanizeSectionTitle(title: string, arabic: boolean) {
-  if (!arabic) return title;
-  const map: Record<string, string> = {
-    "HTML loads the app script": "تحميل سكربت التطبيق من HTML",
-    "HTML mount point": "نقطة تركيب الواجهة",
-    "Dependency import": "اعتماد أو مكتبة داخلة في الملف",
-    "DOM wiring": "ربط JavaScript بعناصر الصفحة",
-    "User interaction handler": "تعامل مع تفاعل المستخدم",
-    "Render or update loop": "حلقة الرندر أو التحديث",
-    "Three.js scene setup": "تجهيز مشهد Three.js",
-    "Public export": "تصدير عام من الملف",
-    "Function or callback": "دالة أو callback مهم",
-    "CSS rule": "قاعدة CSS مؤثرة",
-    "Project scripts": "أوامر تشغيل المشروع",
-    "Project dependencies": "اعتمادات المشروع",
-    "Documentation heading": "عنوان توثيقي",
-    "Readable file sample": "عينة مقروءة من الملف"
-  };
-  return map[title] ?? title;
-}
-
-function createFlowLines(report: ProjectExplainReport, arabic: boolean) {
-  const html = report.sections.find((section) => /\.html$/i.test(section.filePath) && /script|entry|html|mount/i.test(section.title));
-  const js = report.sections.find((section) => /\.(js|jsx|ts|tsx)$/i.test(section.filePath) && /entry|import|dom|event|loop|render|three|export/i.test(section.title));
-  const css = report.sections.find((section) => /\.css$/i.test(section.filePath));
-  const lines: string[] = [];
-  if (html) {
-    lines.push(arabic
-      ? `- البداية من ${formatFileLineLink(html.filePath, html.lineStart)}: صفحة HTML بتجهز العناصر وتحمل السكربت الأساسي.`
-      : `- Starts at ${formatFileLineLink(html.filePath, html.lineStart)}: HTML prepares the page elements and loads the main script.`);
-  }
-  if (js) {
-    lines.push(arabic
-      ? `- المنطق الأساسي في ${formatFileLineLink(js.filePath, js.lineStart)}: JavaScript يمسك عناصر الصفحة ويشغل التفاعل/الرندر.`
-      : `- Core behavior lives in ${formatFileLineLink(js.filePath, js.lineStart)}: JavaScript wires page elements and interaction/rendering.`);
-  }
-  if (css) {
-    lines.push(arabic
-      ? `- الشكل والتخطيط في ${formatFileLineLink(css.filePath, css.lineStart)}: CSS يحدد شكل التجربة على الشاشة.`
-      : `- Styling and layout live in ${formatFileLineLink(css.filePath, css.lineStart)}: CSS defines the visible experience.`);
-  }
-  if (!lines.length) {
-    lines.push(arabic
-      ? `- أقوى نقاط البداية: ${report.entryPoints.slice(0, 5).join(", ") || "غير واضحة من القراءة الأولى"}.`
-      : `- Strongest entry points: ${report.entryPoints.slice(0, 5).join(", ") || "unclear from the first read"}.`);
-  }
-  return lines;
-}
-
 function createExplainSections(
   sampledFiles: SampledFile[],
   message: string,
@@ -418,7 +247,7 @@ function createExplainSections(
   });
   return anchors
     .sort((left, right) => scoreSection(right, normalized) - scoreSection(left, normalized) || left.filePath.localeCompare(right.filePath) || left.lineStart - right.lineStart)
-    .slice(0, smallProject ? Math.min(24, anchors.length) : Math.max(8, settings.maxModuleSamples));
+    .slice(0, smallProject ? Math.min(24, anchors.length) : Math.max(16, settings.maxModuleSamples * 2));
 }
 
 function scoreSection(section: ProjectExplainSection, normalizedMessage: string) {
@@ -426,13 +255,16 @@ function scoreSection(section: ProjectExplainSection, normalizedMessage: string)
   const pathText = section.filePath.toLowerCase();
   const title = section.title.toLowerCase();
   if (normalizedMessage.includes(path.basename(pathText))) score += 80;
-  if (/index\.html|main\.(js|ts)|app\.(tsx|jsx|ts|js)|server\.(ts|js)|lib\.rs/.test(pathText)) score += 40;
-  if (/entry|script|import|dom|event|loop|render|three|export|manifest|style/i.test(title)) score += 30;
+  if (/main\.py|routes\.py|server\.(ts|js|py)|pipeline|processor|orchestr|agent|service|retriev|repository|decision|action|classification|model|ingest|stream|consumer|producer|queue|event|schema/.test(pathText)) score += 70;
+  if (/index\.html|main\.(js|ts)|app\.(tsx|jsx|ts|js)|lib\.rs/.test(pathText)) score += 20;
+  if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|ingest|cluster|forecast|project scripts|test|requested concept/i.test(title)) score += 60;
+  if (/event|render|export|manifest/i.test(title)) score += 20;
+  if (/dom wiring|html loads|css rule|dependency import|readable file sample/i.test(title)) score -= 40;
   if (/agent_proposal|agent-proposal|proposal|orchcode/i.test(pathText)) score -= 100;
   return score;
 }
 
-function extractExplainAnchors(filePath: string, content: string): ProjectExplainSection[] {
+function extractExplainAnchors(filePath: string, content: string, requestedConcept?: RequestedConcept): ProjectExplainSection[] {
   const lines = content.split(/\r?\n/);
   const anchors: ProjectExplainSection[] = [];
   const add = (lineIndex: number, title: string, explanation: string, whyItMatters: string, symbol?: string) => {
@@ -453,6 +285,73 @@ function extractExplainAnchors(filePath: string, content: string): ProjectExplai
       anchors[anchors.length - 1]!.lineStart = lineStart;
     }
   };
+
+  if (/\.py$/i.test(filePath)) {
+    lines.forEach((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      const route = line.match(/^@(app|router)\.(get|post|put|delete|patch)\(["']([^"']+)["']/);
+      const cls = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+      const fn = line.match(/^(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\(/);
+      if (route) add(index, "API route", `هنا backend بيفتح endpoint \`${route[2].toUpperCase()} ${route[3]}\` لاستقبال طلب من المستخدم أو الواجهة.`, "ده يثبت boundary حقيقي في workflow المشروع.", `${route[2].toUpperCase()} ${route[3]}`);
+      else if (/FastAPI\(|APIRouter\(/.test(line)) add(index, "Python app setup", "هنا بيبدأ إعداد تطبيق أو router في backend.", "دي نقطة دخول لسلوك API وليست مجرد بداية ملف.", "app");
+      else if (cls) add(index, "Python domain class", `هنا تعريف \`${cls[1]}\` ككلاس بيجمع منطق أو حالة مرتبطة بالدومين.`, "الكلاسات دي غالبا هي مكان فهم workflow المشروع بدل تفاصيل الواجهة.", cls[1]);
+      else if (fn) add(index, "Python service function", `هنا تعريف \`${fn[2]}\` كدالة خدمة أو خطوة معالجة.`, "الدوال دي تثبت خطوات التنفيذ من input لحد output.", fn[2]);
+      else if (/\b(decision|action|dispatch|policy|evaluate|retrieve|classif|search|ingest|cluster|segment|forecast|drift|threshold|alert|stream|poll|dataset|sentiment)\b/i.test(line)) add(index, "Decision or action branch", "هنا الكود بيتعامل مع قرار أو action أو retrieval داخل workflow المشروع.", "دي نقطة logic مهمة لأنها بتحدد الخطوة التالية.", extractQuotedValue(line));
+    });
+  }
+
+  if (/\.(js|jsx|ts|tsx)$/i.test(filePath)) {
+    lines.forEach((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      if (/\b(fetch|axios\.|ky\.|request\()\b|\/api\/|POST|GET|PUT|DELETE/.test(line)) {
+        add(index, "HTTP/API call", "هنا الواجهة أو الخدمة بتكلم endpoint أو API بدل ما تشتغل محلي فقط.", "دي نقطة مهمة لأنها تثبت انتقال الطلب بين طبقات المشروع.", extractQuotedValue(line));
+      } else if (/\b(decision|action|dispatch|policy|evaluate|threshold|alert|status|state)\b/i.test(line)) {
+        add(index, "Decision or action branch", "هنا الكود بيتعامل مع قرار أو action في workflow المشروع.", "دي نقطة منطق أعلى من مجرد ربط عناصر، لأنها بتحدد الخطوة التالية للمستخدم أو للنظام.", extractQuotedValue(line));
+      }
+    });
+  }
+
+  if (requestedConcept?.specific) {
+    const conceptMatches: number[] = [];
+    lines.forEach((rawLine, index) => {
+      if (conceptMatches.length >= 6) return;
+      if (textSupportsRequestedConcept(`${filePath}\n${rawLine}`, requestedConcept)) {
+        conceptMatches.push(index);
+      }
+    });
+    const groupMatches = new Map<number, string[]>();
+    if (requestedConcept.evidenceGroups?.length) {
+      lines.forEach((rawLine, index) => {
+        if (groupMatches.size >= 10) return;
+        const matchedGroupIds = matchingConceptEvidenceGroups(`${filePath}\n${rawLine}`, requestedConcept);
+        if (matchedGroupIds.length) groupMatches.set(index, matchedGroupIds);
+      });
+    }
+    for (const [index, matchedGroupIds] of groupMatches) {
+      const labels = requestedConcept.evidenceGroups
+        ?.filter((group) => matchedGroupIds.includes(group.id))
+        .map((group) => group.label)
+        .join(", ") || "requested concept";
+      add(
+        index,
+        `Requested concept evidence: ${labels}`,
+        `This line matched ${labels} for the requested concept \`${requestedConcept.label}\`.`,
+        "This is direct current-workspace evidence for one required part of the concept-specific project question.",
+        requestedConcept.label
+      );
+    }
+    for (const index of conceptMatches) {
+      add(
+        index,
+        "Requested concept match",
+        `This line matched the requested concept \`${requestedConcept.label}\` during current-workspace evidence search.`,
+        "This is direct evidence for the concept-specific project question.",
+        requestedConcept.label
+      );
+    }
+  }
 
   lines.forEach((rawLine, index) => {
     const line = rawLine.trim();
@@ -637,6 +536,16 @@ function readSampledFiles(
   for (const file of input.intake?.knownEntryPoints ?? []) add(file, "entrypoint");
   for (const file of inventory.files.filter((entry) => entry.isEntryPoint)) add(file.path, "entrypoint");
 
+  const requestedConcept = extractRequestedConcept(input.message);
+  for (const entry of findProjectUnderstandingFiles(workspaceRoot, inventory, input, settings)) {
+    add(entry.file.path, entry.reason);
+  }
+  if (requestedConcept.specific) {
+    for (const file of findConceptMatchingFiles(workspaceRoot, inventory, requestedConcept, input, settings)) {
+      add(file.path, "requested-concept-match");
+    }
+  }
+
   for (const module of modules) {
     for (const file of rankFilesForModule(module.files).slice(0, settings.maxModuleSamples)) {
       add(file.path, `${module.root}-module-sample`);
@@ -649,7 +558,7 @@ function readSampledFiles(
     try {
       const absolutePath = path.join(workspaceRoot, filePath);
       const content = fs.readFileSync(absolutePath, "utf8").slice(0, settings.maxFileReadChars);
-      const anchors = extractExplainAnchors(filePath, content);
+      const anchors = extractExplainAnchors(filePath, content, requestedConcept);
       sampled.push({
         path: filePath,
         reason,
@@ -666,6 +575,109 @@ function readSampledFiles(
     }
   }
   return sampled;
+}
+
+function findConceptMatchingFiles(
+  workspaceRoot: string,
+  inventory: Inventory,
+  concept: RequestedConcept,
+  input: BuildProjectExplainReportInput,
+  settings: ProjectExplainSettings
+) {
+  const matches: Array<{ file: InventoryFile; score: number }> = [];
+  for (const file of inventory.files.filter((entry) => entry.readable)) {
+    if (!shouldIncludeAgentArtifact(file.path, input.message)) continue;
+    const pathGroups = matchingConceptEvidenceGroups(file.path, concept);
+    let score = textSupportsRequestedConcept(file.path, concept) ? 50 : 0;
+    if (pathGroups.length) score += pathGroups.length * 35;
+    try {
+      const content = fs.readFileSync(path.join(workspaceRoot, file.path), "utf8").slice(0, settings.maxFileReadChars);
+      const contentGroups = matchingConceptEvidenceGroups(content, concept);
+      if (textSupportsRequestedConcept(content, concept)) score += file.isDoc || file.isManifest ? 80 : 100;
+      if (contentGroups.length) score += contentGroups.length * (file.isDoc || file.isManifest ? 90 : 130);
+    } catch {
+      // Ignore unreadable files; inventory and other sampled files still provide context.
+    }
+    if (score > 0) {
+      if (file.isDoc) score += 10;
+      if (!file.isDoc && !file.isManifest) score += 25;
+      if (file.isEntryPoint) score += 10;
+      matches.push({ file, score });
+    }
+  }
+  return matches
+    .sort((left, right) => right.score - left.score || left.file.path.localeCompare(right.file.path))
+    .map((entry) => entry.file)
+    .slice(0, 20);
+}
+
+function findProjectUnderstandingFiles(
+  workspaceRoot: string,
+  inventory: Inventory,
+  input: BuildProjectExplainReportInput,
+  settings: ProjectExplainSettings
+) {
+  const scored: Array<{ file: InventoryFile; reason: string; domain: number; dataFlow: number; source: number; validation: number }> = [];
+  for (const file of inventory.files.filter((entry) => entry.readable)) {
+    if (!shouldIncludeAgentArtifact(file.path, input.message)) continue;
+    let content = "";
+    try {
+      content = fs.readFileSync(path.join(workspaceRoot, file.path), "utf8").slice(0, settings.maxFileReadChars);
+    } catch {
+      // Keep path-only signals when a readable file cannot be read here.
+    }
+    const text = `${file.path}\n${content}`;
+    const sourceFile = SOURCE_EVIDENCE_EXT_RE.test(file.path);
+    const domain = DOMAIN_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 130 : file.isDoc ? 85 : 60) + pathSignalBonus(file.path, DOMAIN_EVIDENCE_RE)
+      : 0;
+    const dataFlow = DATA_FLOW_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 130 : file.isDoc ? 90 : 70) + pathSignalBonus(file.path, DATA_FLOW_EVIDENCE_RE)
+      : 0;
+    const source = sourceFile
+      ? scoreSourceUnderstandingFile(file, text)
+      : 0;
+    const validation = Math.max(domain, dataFlow, source) + (file.isEntryPoint ? 25 : 0);
+    if (domain || dataFlow || source || validation > 40) {
+      const reason = [
+        domain ? "project-domain-evidence" : "",
+        dataFlow ? "project-data-flow-evidence" : "",
+        source ? "project-source-evidence" : "",
+        validation > 80 ? "project-validation-evidence" : ""
+      ].filter(Boolean).join("+") || "project-understanding-evidence";
+      scored.push({ file, reason, domain, dataFlow, source, validation });
+    }
+  }
+  return uniqueScoredFiles([
+    ...scored.sort((left, right) => right.domain - left.domain || left.file.path.localeCompare(right.file.path)).slice(0, 12),
+    ...scored.sort((left, right) => right.dataFlow - left.dataFlow || left.file.path.localeCompare(right.file.path)).slice(0, 16),
+    ...scored.sort((left, right) => right.source - left.source || left.file.path.localeCompare(right.file.path)).slice(0, 12),
+    ...scored.sort((left, right) => right.validation - left.validation || left.file.path.localeCompare(right.file.path)).slice(0, 12)
+  ]);
+}
+
+function scoreSourceUnderstandingFile(file: InventoryFile, text: string) {
+  let score = SOURCE_EVIDENCE_EXT_RE.test(file.path) ? 40 : 0;
+  if (file.isEntryPoint) score += 40;
+  if (/(\bclass\b|\bdef\b|\bfunction\b|=>|export\s+function|FastAPI|APIRouter)/.test(text)) score += 25;
+  if (DATA_FLOW_EVIDENCE_RE.test(text)) score += 45;
+  if (DOMAIN_EVIDENCE_RE.test(text)) score += 45;
+  if (/(pipeline|model|classifier|ingest|stream|service|api|route|app\.(jsx|tsx|js|ts)|main\.)/i.test(file.path)) score += 35;
+  if (file.isTest) score -= 30;
+  return score;
+}
+
+function pathSignalBonus(filePath: string, pattern: RegExp) {
+  pattern.lastIndex = 0;
+  return pattern.test(filePath) ? 35 : 0;
+}
+
+function uniqueScoredFiles<T extends { file: InventoryFile }>(entries: T[]) {
+  const byPath = new Map<string, T>();
+  for (const entry of entries) {
+    if (!byPath.has(entry.file.path)) byPath.set(entry.file.path, entry);
+  }
+  return [...byPath.values()];
 }
 
 function createExplainModule(
@@ -713,19 +725,26 @@ function createExplainModule(
 function createReportEvidence(
   moduleMap: ProjectExplainModule[],
   sampledFiles: SampledFile[],
-  importantFiles: string[]
+  importantFiles: string[],
+  message: string
 ): ProjectExplainEvidenceRef[] {
-  const sampledEvidence = sampledFiles.slice(0, 20).map((sample) => ({
-    type: evidenceTypeForPath(sample.path),
-    path: sample.path,
-    reason: sample.summary,
-    excerpt: sample.excerpt,
-    lineStart: sample.anchors[0]?.lineStart,
-    lineEnd: sample.anchors[0]?.lineEnd,
-    symbol: sample.anchors[0]?.symbol,
-    language: sample.language,
-    snippet: sample.anchors[0]?.snippet
-  }));
+  const requestedConcept = extractRequestedConcept(message);
+  const domainSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, DOMAIN_EVIDENCE_RE), 10);
+  const dataFlowSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, DATA_FLOW_EVIDENCE_RE), 12);
+  const conceptSamples = requestedConcept.specific
+    ? pickSamples(sampledFiles, (sample) => textSupportsRequestedConcept(sampleText(sample), requestedConcept), 12)
+    : [];
+  const sourceSamples = pickSamples(sampledFiles, (sample) => SOURCE_EVIDENCE_EXT_RE.test(sample.path) && sample.anchors.length > 0, 10);
+  const docSamples = pickSamples(sampledFiles, (sample) => isDocFile(sample.path) || isManifestFile(sample.path), 8);
+  const remainingSamples = sampledFiles.slice(0, 16);
+  const sampledEvidence = uniqueSamples([
+    ...domainSamples,
+    ...dataFlowSamples,
+    ...conceptSamples,
+    ...sourceSamples,
+    ...docSamples,
+    ...remainingSamples
+  ]).map(sampleToEvidence);
   const importantEvidence = importantFiles.slice(0, 10).map((file) => ({
     type: evidenceTypeForPath(file),
     path: file,
@@ -736,7 +755,57 @@ function createReportEvidence(
     path: module.root,
     reason: module.responsibility
   }));
-  return dedupeEvidence([...sampledEvidence, ...importantEvidence, ...moduleEvidence]).slice(0, 40);
+  return dedupeEvidence([...sampledEvidence, ...importantEvidence, ...moduleEvidence]).slice(0, 60);
+}
+
+function sampleToEvidence(sample: SampledFile): ProjectExplainEvidenceRef {
+  return {
+    type: evidenceTypeForPath(sample.path),
+    path: sample.path,
+    reason: sample.summary,
+    excerpt: sample.excerpt,
+    lineStart: sample.anchors[0]?.lineStart,
+    lineEnd: sample.anchors[0]?.lineEnd,
+    symbol: sample.anchors[0]?.symbol,
+    language: sample.language,
+    snippet: sample.anchors[0]?.snippet
+  };
+}
+
+function pickSamples(sampledFiles: SampledFile[], predicate: (sample: SampledFile) => boolean, limit: number) {
+  return sampledFiles
+    .filter(predicate)
+    .sort((left, right) => scoreSampleForEvidence(right) - scoreSampleForEvidence(left) || left.path.localeCompare(right.path))
+    .slice(0, limit);
+}
+
+function scoreSampleForEvidence(sample: SampledFile) {
+  let score = 0;
+  if (SOURCE_EVIDENCE_EXT_RE.test(sample.path)) score += 50;
+  if (sample.anchors.length) score += 35;
+  if (sample.reason.includes("project-domain")) score += 30;
+  if (sample.reason.includes("project-data-flow")) score += 30;
+  if (sample.reason.includes("requested-concept")) score += 25;
+  if (isDocFile(sample.path)) score += 10;
+  if (isManifestFile(sample.path)) score -= 20;
+  return score;
+}
+
+function sampleMatchesPattern(sample: SampledFile, pattern: RegExp) {
+  pattern.lastIndex = 0;
+  return pattern.test(sampleText(sample));
+}
+
+function sampleText(sample: SampledFile) {
+  return `${sample.path}\n${sample.reason}\n${sample.summary}\n${sample.excerpt}\n${sample.anchors.map((anchor) => anchor.snippet).join("\n")}`;
+}
+
+function uniqueSamples(samples: SampledFile[]) {
+  const byPath = new Map<string, SampledFile>();
+  for (const sample of samples) {
+    if (!byPath.has(sample.path)) byPath.set(sample.path, sample);
+  }
+  return [...byPath.values()];
 }
 
 function createOverview(input: BuildProjectExplainReportInput, inventory: Inventory, modules: ProjectExplainModule[]) {
@@ -833,6 +902,10 @@ function selectModuleRoot(filePath: string) {
   if (parts[0] === "app" && parts[1] && parts.length >= 3) {
     return `${parts[0]}/${parts[1]}`;
   }
+  if (parts[0] === "project" && parts[1] && parts.length >= 3) {
+    if (parts[1] === "backend" && parts[2] === "services" && parts[3]) return "project/backend/services";
+    return `${parts[0]}/${parts[1]}`;
+  }
   return parts[0] || ".";
 }
 
@@ -909,7 +982,7 @@ function summarizeFile(filePath: string, content: string) {
   }
   if (/README|ARCHITECTURE|CONTRIBUTING|CHANGELOG|\.md$/i.test(filePath)) {
     const heading = content.split(/\r?\n/).find((line) => /^#/.test(line.trim()))?.replace(/^#+\s*/, "");
-    return heading ? `Documentation: ${heading}.` : `Documentation sample: ${compact.slice(0, 120)}.`;
+    return heading ? `Documentation: ${heading}. ${compact.slice(0, 260)}.` : `Documentation sample: ${compact.slice(0, 180)}.`;
   }
   const declarations = content
     .split(/\r?\n/)
@@ -938,13 +1011,16 @@ function inferDependencies(filePath: string, text: string) {
 }
 
 function inferResponsibility(root: string, files: InventoryFile[], samples: SampledFile[]) {
-  const joined = `${root} ${files.map((file) => file.path).slice(0, 20).join(" ")}`.toLowerCase();
-  if (/protocol|schema|types?/.test(joined)) return "Shared contracts, protocol types, or schema definitions.";
-  if (/runtime|agent|orchestrat/.test(joined)) return "Agent runtime, orchestration, or execution behavior.";
-  if (/desktop|tauri|electron/.test(joined)) return "Desktop shell, native bridge, or app host behavior.";
-  if (/app|ui|component|frontend|web/.test(joined)) return "User-facing application or UI surface.";
-  if (/test|spec/.test(joined)) return "Test coverage and behavior verification.";
-  if (/docs|readme|architecture/.test(joined)) return "Documentation and project guidance.";
+  const pathJoined = `${root} ${files.map((file) => file.path).slice(0, 20).join(" ")}`.toLowerCase();
+  const joined = `${pathJoined} ${samples.map((sample) => `${sample.summary} ${sample.excerpt}`).join(" ")}`.toLowerCase();
+  if (/test|spec/.test(pathJoined)) return "Test coverage and behavior verification.";
+  if (/frontend|app|ui|component|web|index\.html|styles\.css/.test(pathJoined)) return "User-facing application or interface surface.";
+  if (/backend|routes|fastapi|api/.test(pathJoined)) return "Backend API routes and service orchestration.";
+  if (/data|dataset|pipeline|clean|transform|ingest|stream|consumer|producer|queue|alert|model|classification|forecast|cluster|retriev|vector/.test(joined)) return "Data loading, transformation, model/service processing, or emitted results.";
+  if (/protocol|schema|types?/.test(pathJoined)) return "Shared contracts, protocol types, or schema definitions.";
+  if (/runtime|agent|orchestrat/.test(pathJoined)) return "Agent runtime, orchestration, or execution behavior.";
+  if (/desktop|tauri|electron/.test(pathJoined)) return "Desktop shell, native bridge, or app host behavior.";
+  if (/docs|readme|architecture/.test(pathJoined)) return "Documentation and project guidance.";
   const summary = samples[0]?.summary;
   return summary ? `Inferred from samples: ${summary}` : "General project module inferred from its directory and file names.";
 }
@@ -1000,8 +1076,4 @@ function shouldIncludeAgentArtifact(filePath: string, message: string) {
     return true;
   }
   return /\b(agent|proposal|orchcode|journal|decision)\b/i.test(normalizedMessage) || /(اقتراح|اورك|أورك|وكيل|اجينت)/.test(normalizedMessage);
-}
-
-function containsArabic(value: string) {
-  return /[\u0600-\u06ff]/.test(value);
 }

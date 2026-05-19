@@ -11,6 +11,7 @@ export const ignoredDirectories = new Set([
   ".next",
   ".nox",
   ".nuxt",
+  ".playwright-cli",
   ".pytest_cache",
   ".ruff_cache",
   ".svelte-kit",
@@ -27,8 +28,13 @@ export const ignoredDirectories = new Set([
   "htmlcov",
   "node_modules",
   "out",
+  "output",
+  "outputs",
+  "playwright-report",
+  "screenshots",
   "site-packages",
   "target",
+  "test-results",
   "venv"
 ]);
 

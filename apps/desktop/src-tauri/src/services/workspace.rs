@@ -134,6 +134,7 @@ fn should_skip_path(path: &Path) -> bool {
                 | ".next"
                 | ".nox"
                 | ".nuxt"
+                | ".playwright-cli"
                 | ".pytest_cache"
                 | ".ruff_cache"
                 | ".svelte-kit"
@@ -150,8 +151,13 @@ fn should_skip_path(path: &Path) -> bool {
                 | "htmlcov"
                 | "node_modules"
                 | "out"
+                | "output"
+                | "outputs"
+                | "playwright-report"
+                | "screenshots"
                 | "site-packages"
                 | "target"
+                | "test-results"
                 | "venv"
         )
     })

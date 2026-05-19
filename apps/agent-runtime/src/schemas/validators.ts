@@ -68,6 +68,8 @@ export function validateStructuredOutput(value: unknown, schema: unknown): Valid
       return validateRunPatchIntentShape(value);
     case "run-verification":
       return validateRunVerificationShape(value);
+    case "project-explain":
+      return validateProjectExplainShape(value);
     case "worker-output":
       return validateWorkerOutput(value as WorkerOutput);
     case "review":
@@ -201,6 +203,28 @@ function validateRunVerificationShape(value: unknown): ValidationResult {
         return;
       }
       errors.push(...requiredStrings(check, ["name", "status", "detail"]).map((error) => `checks[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateProjectExplainShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["project-explain must be an object"] };
+  errors.push(...requiredStrings(value, ["answerMarkdown"]));
+  errors.push(...requiredArrays(value, ["usedEvidenceRefs", "unsupportedOrUnclearParts"]));
+  if (Array.isArray(value.usedEvidenceRefs)) {
+    value.usedEvidenceRefs.forEach((ref, index) => {
+      if (typeof ref !== "string" || !ref.trim()) {
+        errors.push(`usedEvidenceRefs[${index}] must be a non-empty string`);
+      }
+    });
+  }
+  if (Array.isArray(value.unsupportedOrUnclearParts)) {
+    value.unsupportedOrUnclearParts.forEach((entry, index) => {
+      if (typeof entry !== "string") {
+        errors.push(`unsupportedOrUnclearParts[${index}] must be a string`);
+      }
     });
   }
   return { valid: errors.length === 0, errors };

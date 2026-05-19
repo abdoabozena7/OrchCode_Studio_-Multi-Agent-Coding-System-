@@ -139,6 +139,42 @@ test("arabic explain requests stay inspect-only and answer in chat", async () =>
   await rm(storageDir, { recursive: true, force: true });
 });
 
+test("mixed Arabic dataset realtime question is inspect-only and does not create a patch proposal", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-arabic-dataset-realtime-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `orchcode-arabic-dataset-realtime-storage-${Date.now()}`);
+  await mkdir(path.join(workspace, "services"), { recursive: true });
+  await mkdir(path.join(workspace, "dashboard_ui", "src"), { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "# Big data dashboard\n\nReads a CSV dataset and renders snapshots.\n", "utf8");
+  await writeFile(path.join(workspace, "services", "cleaning.py"), "def normalize_dataset_row(row):\n    return row\n", "utf8");
+  await writeFile(
+    path.join(workspace, "dashboard_ui", "src", "App.jsx"),
+    "useEffect(() => {\n  const load = () => fetch('/api/snapshot').then(r => r.json());\n  const timer = setInterval(load, 5000);\n  return () => clearInterval(timer);\n}, []);\n",
+    "utf8"
+  );
+  const prompt = "اشرح المشروع دا ل طفل ازاي بيقدر يجيب الداتا من داتا سيت كانها realtime";
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: prompt
+  });
+  await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+  assert.equal(session?.status, "completed");
+  assert.equal(session?.runMode, "inspect_only");
+  assert.equal(session?.patchProposals.length, 0);
+  assert.ok(session?.explainReport);
+  assert.match(assistantMessage, /dataset realtime behavior|dataset|داتا|realtime/i);
+  assert.doesNotMatch(assistantMessage, /could not find .*طفل|طفل بيقدر|بيقدر يجيب/i);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
 test("modify requests still go through patch proposal flow with ordered reasoning", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-modify-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-modify-storage-${Date.now()}`);

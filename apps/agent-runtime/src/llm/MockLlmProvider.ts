@@ -23,6 +23,17 @@ export class MockLlmProvider implements LlmProvider {
         checks: [{ name: "Mock verification", status: "pending", detail: "Waiting for approved apply." }]
       } as T;
     }
+    if (schemaName === "project-explain") {
+      return {
+        answerMarkdown: [
+          "Mock mode cannot produce a production project explanation because it does not actually reason over the workspace.",
+          "",
+          "The read-only project evidence report was still created. Switch to a configured real provider for an LLM-grounded explanation."
+        ].join("\n"),
+        usedEvidenceRefs: [],
+        unsupportedOrUnclearParts: ["Mock mode intentionally avoids pretending to understand the project."]
+      } as T;
+    }
     return {} as T;
   }
 

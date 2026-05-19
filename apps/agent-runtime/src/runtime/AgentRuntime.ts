@@ -89,9 +89,30 @@ export class AgentRuntime {
       return { sessionId, status: this.requireSession(sessionId).status };
     }
     const promptForExecution = pendingAction.resumePrompt ?? message;
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "running";
+      draft.lifecycleStage = "INTAKE";
+      draft.nextAction = undefined;
+    });
+    if (!pendingAction.resumePrompt && shouldAnswerExplainEvidenceQuestion(message, session)) {
+      const lastMessage = session.messages.at(-1);
+      if (lastMessage?.role !== "user" || lastMessage.content !== message) {
+        await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
+      }
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: formatExplainEvidenceAnswer(session, message)
+      });
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.status = "completed";
+        draft.lifecycleStage = "DONE";
+        draft.nextAction = undefined;
+      });
+      return { sessionId, status: this.requireSession(sessionId).status };
+    }
 
-    const provider = this.getProvider(session);
     try {
+      const provider = this.getProvider(session);
       const tools = new ToolRegistry(session.workspacePath);
       const projectSummary = tools.workspace.getProjectSummary();
       const projectMap = {
@@ -171,10 +192,32 @@ export class AgentRuntime {
       });
       return { sessionId, status: updated.status };
     } catch (error) {
+      const failureMessage = formatRunTurnFailureMessage(promptForExecution, error);
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = "failed";
-        draft.reasoningSummaries.push(String(error));
+        draft.lifecycleStage = "FAILED";
+        draft.reasoningSummaries.push(formatRuntimeError(error));
+        draft.runSummary = {
+          status: "failed",
+          summary: failureMessage.slice(0, 500),
+          filesChanged: [],
+          appliedPatchIds: [],
+          proposedPatchIds: draft.patchProposals.map((proposal) => proposal.id),
+          commandResults: draft.commandExecutions.map((command) => command.command).slice(-5),
+          gates: [{
+            name: "Runtime turn",
+            status: "failed",
+            notes: [formatRuntimeError(error)]
+          }],
+          nextAction: "Fix the reported runtime/provider issue, then retry the request.",
+          createdAt: new Date().toISOString()
+        };
       });
+      const failedSession = this.requireSession(sessionId);
+      const lastAssistantMessage = failedSession.messages.filter((entry) => entry.role === "assistant").at(-1);
+      if (lastAssistantMessage?.content !== failureMessage) {
+        await this.sessionManager.addMessage(sessionId, { role: "assistant", content: failureMessage });
+      }
       return { sessionId, status: "failed" };
     }
   }
@@ -1536,6 +1579,81 @@ function shouldConfirmSingleFilePygamePlan(message: string, requestedAgentCount:
   return /\bpython\b/.test(normalized)
     && /\bpy\s*game\b|\bpygame\b/.test(normalized)
     && /\bone python code\b|\bsingle file\b|\bone file\b/.test(normalized);
+}
+
+function shouldAnswerExplainEvidenceQuestion(message: string, session: AgentRuntimeSession) {
+  if (!session.explainReport) return false;
+  const normalized = message.toLowerCase();
+  const english = /\b(where|source|sources|evidence|links?|references?|files?|came from|why these)\b/i.test(message)
+    && /\b(file|files|link|links|reference|references|source|sources|evidence|came from)\b/i.test(message);
+  const arabic = /(جبت|جاب|فين|منين|مصدر|مصادر|دليل|أدلة|ادلة|روابط|لينكات|ملفات|الملفات|اللينكات|الروابط)/.test(normalized)
+    && /(ملف|ملفات|رابط|روابط|لينك|لينكات|مصدر|مصادر|دليل|أدلة|ادلة|جبت|منين)/.test(normalized);
+  return english || arabic;
+}
+
+function formatExplainEvidenceAnswer(session: AgentRuntimeSession, message: string) {
+  const report = session.explainReport!;
+  const arabic = /[\u0600-\u06ff]/.test(message);
+  const evidence = report.evidence
+    .filter((entry) => entry.type !== "directory")
+    .slice(0, 8)
+    .map((entry) => {
+      const line = entry.lineStart ?? 1;
+      const label = `${entry.path}:${line}`;
+      return `- [${label}](orchcode-file:${encodeURIComponent(entry.path)}:${line}): ${entry.reason}`;
+    });
+  const ignored = report.contextPack.inventory.ignoredDirectories.slice(0, 6).join(", ") || "none";
+  if (arabic) {
+    return [
+      "الملفات والروابط دي جاية من تقرير القراءة لنفس الـ workspace المفتوح في الجلسة، مش من بحث خارجي ولا من مشروع تاني.",
+      "",
+      `- Workspace: \`${session.workspacePath}\``,
+      `- اتفحص ${report.contextPack.inventory.scannedFiles} ملف قابل للقراءة، واتجاهلت generated/vendor زي: ${ignored}.`,
+      "- الروابط `orchcode-file:` هي مراجع نسبية داخل نفس الـ workspace، والسطر جنب كل رابط هو السطر اللي اتاخد كدليل.",
+      "",
+      "أهم الأدلة المستخدمة:",
+      ...(evidence.length ? evidence : ["- مفيش evidence file refs محفوظة في التقرير السابق."]),
+      "",
+      "لو عنوان المشروع أو الدومين كان مختلف عن الأدلة، فده معناه bug في استنتاج الدومين، مش إن الروابط دليل على مشروع تاني."
+    ].join("\n");
+  }
+  return [
+    "Those files and links came from the read-only explain report for this session's workspace, not from an external search or a different project.",
+    "",
+    `- Workspace: \`${session.workspacePath}\``,
+    `- Scanned ${report.contextPack.inventory.scannedFiles} readable file(s); ignored generated/vendor folders such as: ${ignored}.`,
+    "- `orchcode-file:` links are relative references inside that workspace, with the linked line used as evidence.",
+    "",
+    "Main evidence refs:",
+    ...(evidence.length ? evidence : ["- No file evidence refs were stored on the previous report."]),
+    "",
+    "If the project title/domain disagreed with those refs, that is a domain-inference bug, not proof that the files came from another workspace."
+  ].join("\n");
+}
+
+function formatRunTurnFailureMessage(prompt: string, error: unknown) {
+  const detail = formatRuntimeError(error);
+  if (/[\u0600-\u06ff]/.test(prompt)) {
+    return [
+      "الـ run وقع قبل ما أقدر أكمل الرد.",
+      "",
+      `السبب: ${detail}`,
+      "",
+      "ماخمنتش إجابة من غير دليل. جرّب الطلب تاني بعد ما تصلح سبب الخطأ، أو استخدم Restart Latest لو كنت شغال في development mode."
+    ].join("\n");
+  }
+  return [
+    "The run failed before I could finish the response.",
+    "",
+    `Reason: ${detail}`,
+    "",
+    "I did not guess an answer without evidence. Fix the reported issue and retry, or use Restart Latest while developing."
+  ].join("\n");
+}
+
+function formatRuntimeError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 function createEmptyOrchestration(session?: AgentRuntimeSession): NonNullable<AgentRuntimeSession["orchestration"]> {

@@ -35,3 +35,7 @@ export const runPatchIntentSchema = {
 export const runVerificationSchema = {
   name: "run-verification"
 } as const;
+
+export const projectExplainSchema = {
+  name: "project-explain"
+} as const;

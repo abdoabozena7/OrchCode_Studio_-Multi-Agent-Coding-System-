@@ -922,6 +922,7 @@ export type ArtifactType =
   | "file_tree"
   | "project_intake"
   | "project_explain_report"
+  | "project_explain_answer"
   | "context_pack"
   | "module_plan"
   | "module_execution_summary"

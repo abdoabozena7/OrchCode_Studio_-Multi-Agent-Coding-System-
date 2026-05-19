@@ -41,12 +41,14 @@ html,
 body,
 #root {
   height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 body {
   margin: 0;
-  min-width: 1180px;
-  min-height: 760px;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background:
     radial-gradient(circle at top right, rgba(73, 182, 229, 0.06), transparent 30%),
@@ -133,6 +135,9 @@ pre {
   display: grid;
   grid-template-rows: 44px 1fr;
   height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: transparent;
 }
 
@@ -144,6 +149,7 @@ pre {
   padding: 0 10px;
   border-bottom: 1px solid var(--line);
   background: rgba(26, 26, 26, 0.95);
+  min-width: 0;
 }
 
 .frame-bar-left,
@@ -158,6 +164,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .app-brand-mark {
@@ -212,6 +219,9 @@ pre {
 .shell-layout {
   display: grid;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .project-sidebar,
@@ -222,12 +232,13 @@ pre {
 }
 
 .project-sidebar {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
   padding: 12px 10px;
   background: rgba(28, 28, 28, 0.94);
   overflow: hidden;
+  min-width: 0;
 }
 
 .sidebar-resizer {
@@ -263,6 +274,12 @@ body.resizing-sidebar * {
 .drawer-section {
   display: grid;
   gap: 8px;
+}
+
+.sidebar-section {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-top {
@@ -366,9 +383,12 @@ body.resizing-sidebar * {
 .project-groups {
   display: grid;
   gap: 10px;
-  max-height: min(62vh, 100%);
-  overflow: auto;
-  padding-right: 2px;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
 }
 
 .project-group {
@@ -378,15 +398,18 @@ body.resizing-sidebar * {
 
 .project-group-header {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .project-group-main {
   flex: 1 1 auto;
   min-width: 0;
+  width: 100%;
+  overflow: hidden;
   border: 0;
   background: transparent;
   color: inherit;
@@ -402,14 +425,22 @@ body.resizing-sidebar * {
 .project-group-actions {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  flex: 0 0 auto;
+  gap: 2px;
   opacity: 0;
   transition: opacity 120ms ease;
 }
 
 .project-group:hover .project-group-actions,
-.project-group:focus-within .project-group-actions {
+.project-group:focus-within .project-group-actions,
+.active-project-group .project-group-actions {
   opacity: 1;
+}
+
+.project-group-actions .frame-icon-button {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
 }
 
 .project-group-main:hover:not(:disabled),
@@ -420,6 +451,7 @@ body.resizing-sidebar * {
 .project-group-title {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 8px;
   min-width: 0;
 }
@@ -479,6 +511,10 @@ body.resizing-sidebar * {
   color: var(--muted);
   font-size: 12px;
   flex: 0 0 auto;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding-inline-start: 10px;
 }
 
@@ -489,7 +525,9 @@ body.resizing-sidebar * {
 }
 
 .sidebar-settings {
-  margin-top: auto;
+  align-self: end;
+  margin-top: 0;
+  min-width: 0;
 }
 
 .sidebar-collapsed .project-sidebar {
@@ -504,7 +542,8 @@ body.resizing-sidebar * {
 }
 
 .sidebar-collapsed .project-sidebar {
-  align-items: center;
+  align-items: stretch;
+  justify-items: center;
 }
 
 .sidebar-collapsed .sidebar-top {
@@ -916,6 +955,16 @@ body.resizing-sidebar * {
 .animated-markdown {
   display: grid;
   gap: 6px;
+}
+
+.streaming-message-body {
+  min-width: 0;
+}
+
+.streaming-message-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .message-typing-cursor {

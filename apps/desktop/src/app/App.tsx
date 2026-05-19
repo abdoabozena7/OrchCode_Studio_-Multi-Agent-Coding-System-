@@ -77,6 +77,7 @@ import {
   openExternalTarget,
   pickWorkspaceDirectory,
   readWorkspaceFile,
+  restartWithLatestCode,
   runWorkspaceCommand,
   upsertAgentRun,
   upsertOrchestrationRun,
@@ -247,7 +248,6 @@ export function App() {
   const lastPreviewTargetRef = useRef("");
   const suppressPreviewOpenRef = useRef(false);
   const startupWorkspaceRestoreRef = useRef(false);
-  const initialRecentWorkspacesRef = useRef<RecentWorkspaceEntry[]>([]);
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -258,6 +258,7 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [runtimeSession, setRuntimeSession] = useState<AgentRuntimeSession | null>(null);
   const [runtimeSessionToken, setRuntimeSessionToken] = useState("");
+  const [restartingApp, setRestartingApp] = useState(false);
   const [thinkFirst, setThinkFirst] = useState(false);
   const [accessProfile, setAccessProfile] = useState<AccessProfile>("full_access");
   const [accessMenuOpen, setAccessMenuOpen] = useState(false);
@@ -312,7 +313,6 @@ export function App() {
       const storedSessionTokens = pruneExpiredSessionTokens(readStoredJson<Record<string, StoredSessionToken>>(SESSION_TOKENS_KEY, {}));
       const storedCollapsedProjects = readStoredJson<string[]>(COLLAPSED_PROJECTS_KEY, []);
       const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
-      initialRecentWorkspacesRef.current = storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) }));
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
@@ -579,16 +579,21 @@ export function App() {
 
   useEffect(() => {
     if (!workspace) return;
+    const matchingSessionId =
+      runtimeSession && normalizeWorkspacePath(runtimeSession.workspacePath) === normalizeWorkspacePath(workspace.path)
+        ? runtimeSession.id
+        : undefined;
     setRecentWorkspaces((current) => {
-      const next = upsertRecentWorkspace(current, workspace, runtimeSession?.id);
+      const next = upsertRecentWorkspace(current, workspace, matchingSessionId);
       persistRecentWorkspaces(next);
       return next;
     });
     localStorage.setItem(LAST_WORKSPACE_KEY, workspace.path);
-  }, [workspace, runtimeSession?.id]);
+  }, [workspace, runtimeSession?.id, runtimeSession?.workspacePath]);
 
   useEffect(() => {
     if (!runtimeSession || !workspace) return;
+    if (normalizeWorkspacePath(runtimeSession.workspacePath) !== normalizeWorkspacePath(workspace.path)) return;
     setRecentSessions((current) => {
       const next = upsertRecentSession(current, runtimeSession, workspace);
       persistRecentSessions(next);
@@ -610,7 +615,7 @@ export function App() {
   const showRightPanel = activityOpen;
   const effectiveSidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : clampSidebarWidth(sidebarWidth);
   const shellLayoutStyle: CSSProperties = {
-    gridTemplateColumns: `${effectiveSidebarWidth}px ${sidebarCollapsed ? "0px" : "10px"} minmax(0, 1fr) ${showRightPanel ? "390px" : "0px"}`
+    gridTemplateColumns: `${effectiveSidebarWidth}px ${sidebarCollapsed ? "0px" : "10px"} minmax(0, 1fr) ${showRightPanel ? "minmax(0, 390px)" : "0px"}`
   };
   const sidebarProjects = buildSidebarProjects({
     workspace,
@@ -671,6 +676,7 @@ export function App() {
     runtimeEventUnsubscribeRef.current?.();
     runtimeEventUnsubscribeRef.current = null;
     setRuntimeSession(null);
+    setRuntimeSessionToken("");
     setRuntimeConnectionState("connected");
     const nextWorkspace = await openWorkspace(normalizedPath);
     setWorkspacePath(normalizedPath);
@@ -699,9 +705,8 @@ export function App() {
     if (!bootstrapped || workspace || !workspacePath || startupWorkspaceRestoreRef.current) return;
     startupWorkspaceRestoreRef.current = true;
     void activateWorkspace(workspacePath, {
-      restoreSession: true,
-      silent: true,
-      recentWorkspaceEntries: initialRecentWorkspacesRef.current
+      restoreSession: false,
+      silent: true
     }).catch(() => {
       startupWorkspaceRestoreRef.current = false;
     });
@@ -709,7 +714,7 @@ export function App() {
 
   async function handleOpenWorkspace() {
     try {
-      await activateWorkspace(workspacePath, { restoreSession: true });
+      await activateWorkspace(workspacePath, { restoreSession: false });
     } catch (error) {
       setMessage(String(error));
     }
@@ -722,8 +727,20 @@ export function App() {
         setMessage("Workspace selection canceled.");
         return;
       }
-      await activateWorkspace(selected, { restoreSession: true });
+      await activateWorkspace(selected, { restoreSession: false });
     } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleRestartWithLatestCode() {
+    if (restartingApp) return;
+    setRestartingApp(true);
+    setMessage("Restarting OrchCode with the latest local code...");
+    try {
+      await restartWithLatestCode();
+    } catch (error) {
+      setRestartingApp(false);
       setMessage(String(error));
     }
   }
@@ -786,7 +803,7 @@ export function App() {
 
   async function handleSelectRecentWorkspace(entry: RecentWorkspaceEntry) {
     try {
-      await activateWorkspace(entry.path, { restoreSession: true });
+      await activateWorkspace(entry.path, { restoreSession: false });
       expandProjectPath(entry.path);
       setSidebarCollapsed(false);
     } catch (error) {
@@ -858,7 +875,7 @@ export function App() {
       const canReuseSession =
         runtimeSession &&
         workspace &&
-        runtimeSession.workspacePath === workspace.path &&
+        normalizeWorkspacePath(runtimeSession.workspacePath) === normalizeWorkspacePath(workspace.path) &&
         Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token);
       let sessionToken = runtimeSession
         ? runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token
@@ -1384,6 +1401,10 @@ export function App() {
         </div>
 
         <div className="frame-bar-right">
+          <button className="toolbar-button" onClick={handleRestartWithLatestCode} disabled={restartingApp} title="Restart the app and dev servers with the latest local code">
+            <RefreshCw size={15} className={restartingApp ? "spin-icon" : undefined} />
+            <span>{restartingApp ? "Restarting..." : "Restart Latest"}</span>
+          </button>
           <button className="toolbar-button" onClick={() => setSettingsOpen(true)}>
             <Settings size={15} />
             <span>Settings</span>
@@ -1394,7 +1415,7 @@ export function App() {
       <div className="shell-layout" style={shellLayoutStyle}>
         <aside className="project-sidebar">
           <div className="sidebar-top">
-            <button className="sidebar-link" onClick={handleNewChat}>
+            <button className="sidebar-link" onClick={handleNewChat} title="Start a new chat" type="button">
               <MessageSquarePlus size={17} />
               <span>New chat</span>
             </button>
@@ -1510,7 +1531,7 @@ export function App() {
             )}
           </section>
 
-          <button className="sidebar-settings" onClick={() => setSettingsOpen(true)}>
+          <button className="sidebar-settings" onClick={() => setSettingsOpen(true)} title="Settings" type="button">
             <Settings size={16} />
             <span>Settings</span>
           </button>
@@ -2241,7 +2262,13 @@ function AnimatedMessageMarkdown({
 
   return (
     <div className={`animated-markdown ${stillTyping ? "is-streaming" : ""}`}>
-      <MessageMarkdown text={displayText} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} />
+      {stillTyping ? (
+        <div className="thread-entry-body markdown-message streaming-message-body">
+          <div className="streaming-message-text">{displayText}</div>
+        </div>
+      ) : (
+        <MessageMarkdown text={text} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} />
+      )}
       {stillTyping ? <span className="message-typing-cursor" aria-hidden="true" /> : null}
     </div>
   );
@@ -4703,10 +4730,10 @@ function deriveDisplaySessionTitle(session: AgentRuntimeSession, fallbackTitle?:
     .map((line) => normalizeSessionTitleCandidate(line))
     .find((line) => line.length > 0 && !isLowSignalSessionTitleCandidate(line));
   const candidates = [
-    fallbackTitle,
     assistantLine,
     session.runSummary?.summary,
-    session.plan?.summary
+    session.plan?.summary,
+    fallbackTitle
   ]
     .map((value) => normalizeSessionTitleCandidate(value))
     .filter(Boolean);
@@ -4747,7 +4774,10 @@ function isLowSignalSessionTitleCandidate(value: string) {
     /^i (inspected|selected|prepared|could not)\b/i,
     /^select a workspace\b/i,
     /^workspace open\b/i,
-    /^full access\b/i
+    /^full access\b/i,
+    /\bappears to be a\b.*\bworkspace\b/i,
+    /\bworkspace with \d+ scanned file\(s\)\b/i,
+    /\bmain areas:\b/i
   ].some((pattern) => pattern.test(value));
 }
 

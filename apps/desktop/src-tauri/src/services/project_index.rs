@@ -66,7 +66,17 @@ fn should_skip(path: &Path) -> bool {
         let value = component.as_os_str().to_string_lossy();
         matches!(
             value.as_ref(),
-            "node_modules" | "target" | "dist" | "build" | ".git"
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | ".git"
+                | ".playwright-cli"
+                | "playwright-report"
+                | "test-results"
+                | "output"
+                | "outputs"
+                | "screenshots"
         )
     })
 }

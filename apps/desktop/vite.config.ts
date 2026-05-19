@@ -7,7 +7,16 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: "127.0.0.1"
+    host: "127.0.0.1",
+    hmr: {
+      host: "127.0.0.1",
+      protocol: "ws",
+      port: 1420
+    },
+    watch: {
+      usePolling: true,
+      interval: 250
+    }
   },
   envPrefix: ["VITE_", "TAURI_"]
 });
