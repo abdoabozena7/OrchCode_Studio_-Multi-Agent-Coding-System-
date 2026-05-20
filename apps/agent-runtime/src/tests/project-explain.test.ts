@@ -50,6 +50,9 @@ class ThrowingExplainProvider implements LlmProvider {
 }
 
 const ARABIC_DATASET_REALTIME_PROMPT = "اشرح المشروع دا ل طفل ازاي بيقدر يجيب الداتا من داتا سيت كانها realtime prompt :";
+const ARABIC_THRESHOLD_PROMPT = "\u0647\u0627\u062a\u0644\u064a \u0643\u0644 \u0627\u0644threshlods \u0627\u0644\u064a \u0628\u0642\u0627\u0631\u0646 \u0628\u064a\u0647\u0627 \u0641 \u0627\u0644\u0633\u064a\u0633\u062a\u0645\u0643 \u064a\u0639\u0646\u064a \u0627\u0646\u0627 \u0639\u0631\u0641\u062a \u0627\u0644\u0645\u0639\u0627\u062f\u0647 \u0628\u0633 \u0645\u0639\u0631\u0641\u062a\u0634 \u0628\u0642\u0627\u0631\u0646 \u0628 \u0643\u0627\u0627\u0645 \u0641\u0639\u0644\u064a\u0627 \u062c\u0648\u0627 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u062f\u0627 \u0641 \u0647\u0627\u062a\u0644\u064a\u0628 \u0643\u0644 \u0627\u0644\u0627\u0631\u0642\u0627\u0645 \u062f\u064a \u0628 \u0643\u0644 \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0641\u0639\u0644\u0627 \u0628\u0627\u0644\u0630\u0627\u062a \u0641 \u0635\u0641\u062d\u0647\u0639 \u0627\u0644 agents";
+const ARABIC_FORECASTING_PROMPT = "\u0627\u064a\u0647 \u0646\u0648\u0639 \u0627\u0644 forecasting \u0647\u0646\u0627 \u0648\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u064a customer \u0648\u0627\u062d\u062f \u0648\u0644\u0627 \u0627\u064a\u0647 \u061f";
+const MOJIBAKE_PATTERN = /ط§ظ|ظپظ|ط¨ط|ظ…ط/;
 
 type ConceptExtractionRegressionCase = {
   name: string;
@@ -120,6 +123,22 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"]
+  },
+  {
+    name: "Arabic threshold inventory typo prompt",
+    prompt: ARABIC_THRESHOLD_PROMPT,
+    expectedStyle: "default",
+    expectedConceptLabel: "threshold inventory",
+    expectedSpecific: true,
+    expectedEvidenceGroupIds: ["threshold_fact"]
+  },
+  {
+    name: "Arabic forecasting type and customer scope prompt",
+    prompt: ARABIC_FORECASTING_PROMPT,
+    expectedStyle: "default",
+    expectedConceptLabel: "forecasting type and scope",
+    expectedSpecific: true,
+    expectedEvidenceGroupIds: ["forecasting_fact"]
   }
 ];
 
@@ -766,6 +785,101 @@ test("unsupported project identity claims are rejected even with valid current-w
   }
 });
 
+test("Arabic threshold inventory prompt returns useful grounded numbers when provider fails", async () => {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
+    const provider = new ThrowingExplainProvider();
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+
+    assert.equal(provider.requestCount, 1);
+    assert.equal(result.grounding.concept.label, "threshold inventory");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /0\.32/);
+    assert.match(result.answerMarkdown, /0\.55/);
+    assert.match(result.answerMarkdown, /0\.82/);
+    assert.match(result.answerMarkdown, /0\.60/);
+    assert.match(result.answerMarkdown, /0\.18/);
+    assert.match(result.answerMarkdown, /0\.52/);
+    assert.match(result.answerMarkdown, /orchestrator\.py|agents\.py|routes\.py|arima_model\.py/);
+    assert.match(result.answerMarkdown, /\| Signal \|/);
+    assert.doesNotMatch(result.answerMarkdown, /I could not find|could not safely produce/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("threshold provider answer citing only generic package evidence is rejected and synthesized", async () => {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
+    const genericEvidence = report.evidence.find((entry) => /README\.md|package\.json/.test(entry.path) && entry.type !== "directory");
+    assert.ok(genericEvidence, "expected generic README/package evidence");
+    const genericRef = `${genericEvidence.path}:${genericEvidence.lineStart ?? 1}`;
+    const badAnswer = `BAD_THRESHOLD_SENTINEL All thresholds are 999 and the agents page decides everything. ${linkForRef(genericRef)}`;
+    const provider = new CapturingExplainProvider([
+      { answerMarkdown: badAnswer, usedEvidenceRefs: [genericRef], unsupportedOrUnclearParts: [] },
+      { answerMarkdown: badAnswer, usedEvidenceRefs: [genericRef], unsupportedOrUnclearParts: [] }
+    ]);
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+
+    assert.equal(provider.requests.length, 2);
+    assert.match(result.unsupportedOrUnclearParts.join(" "), /threshold|evidence/i);
+    assert.doesNotMatch(result.answerMarkdown, /BAD_THRESHOLD_SENTINEL|999/);
+    assert.match(result.answerMarkdown, /0\.32|0\.82|orchestrator\.py/);
+    assert.doesNotMatch(result.answerMarkdown, /could not safely produce/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Arabic forecasting prompt identifies type and customer scope from evidence", async () => {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_FORECASTING_PROMPT, projectMap });
+    const provider = new ThrowingExplainProvider();
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_FORECASTING_PROMPT, report });
+
+    assert.equal(provider.requestCount, 1);
+    assert.equal(result.grounding.concept.label, "forecasting type and scope");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /SARIMA|ARIMA/);
+    assert.match(result.answerMarkdown, /per-customer|customer/i);
+    assert.match(result.answerMarkdown, /arima_model\.py/);
+    assert.match(result.answerMarkdown, /0\.015|0\.03|0\.06/);
+    assert.doesNotMatch(result.answerMarkdown, /I could not find|could not safely produce/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("threshold concept absent returns not-found for threshold inventory, not typo filler", async () => {
+  const { beta, projectMapB, cleanup } = await createAlphaBetaWorkspaces();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: beta, message: ARABIC_THRESHOLD_PROMPT, projectMap: projectMapB });
+    const provider = new CapturingExplainProvider([]);
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+
+    assert.equal(provider.requests.length, 0);
+    assert.equal(result.grounding.decision, "concept_not_found");
+    assert.match(result.answerMarkdown, /threshold inventory/i);
+    assert.doesNotMatch(result.answerMarkdown, /\u0627\u0644threshlods/);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("runtime inspect-only stores evidence and does not fake a project explanation in demo mock mode", async () => {
   const workspace = path.join(os.tmpdir(), `orchcode-runtime-explain-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `orchcode-runtime-explain-storage-${Date.now()}`);
@@ -799,8 +913,10 @@ test("runtime inspect-only stores evidence and does not fake a project explanati
       assert.ok(session?.explainReport);
       assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_report"));
       assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_answer"));
-      assert.match(assistantMessage, /مش هطلع شرح تخميني|could not safely produce/i);
+      assert.match(assistantMessage, /current workspace evidence|workspace|orchcode-file/i);
       assert.match(assistantMessage, /orchcode-file:/);
+      assert.doesNotMatch(assistantMessage, /could not safely produce/i);
+      assert.doesNotMatch(assistantMessage, MOJIBAKE_PATTERN);
       assert.doesNotMatch(assistantMessage, /Agentic AI E-Commerce|shopping\/search request|checkout/i);
 
       await runtime.runTurn(created.sessionId, "انت جبت الملفات دي منين؟");
@@ -815,6 +931,151 @@ test("runtime inspect-only stores evidence and does not fake a project explanati
     await rm(storageDir, { recursive: true, force: true });
   }
 });
+
+async function createDecisionThresholdWorkspace() {
+  const workspace = path.join(os.tmpdir(), `orchcode-decision-thresholds-${Date.now()}`);
+  await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
+  await mkdir(path.join(workspace, "frontend"), { recursive: true });
+  await writeFile(
+    path.join(workspace, "README.md"),
+    [
+      "# AMARS",
+      "",
+      "Adaptive multi-agent retention system with forecasting, agents, and rule-based routing."
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "package.json"),
+    JSON.stringify({ name: "amars-threshold-fixture", scripts: { test: "node --test" } }, null, 2),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "orchestrator.py"),
+    [
+      "class ReActOrchestrator:",
+      "    minimum_score = 0.32",
+      "    borderline_low = 0.55",
+      "    direct_dispatch_score = 0.82",
+      "    high_cosine = 0.82",
+      "    low_cosine = 0.60",
+      "    low_gap = 0.18",
+      "",
+      "    def choose_route(self, score, shap_cosine, gap, drift_detected, membership_signal, trend_multiplier, class_severity):",
+      "        if score < self.minimum_score:",
+      "            return 'Human Review'",
+      "        elif drift_detected and membership_signal < 0.52:",
+      "            return 'Re-cluster'",
+      "        elif gap < self.low_gap:",
+      "            return 'Human Review'",
+      "        elif score >= self.direct_dispatch_score and shap_cosine >= self.high_cosine:",
+      "            return 'Strong Offer' if class_severity >= 0.75 else 'Offer'",
+      "        elif shap_cosine < self.low_cosine:",
+      "            return 'SHAP Re-check'",
+      "        elif self.borderline_low <= score < self.direct_dispatch_score and trend_multiplier >= 1.0:",
+      "            return 'RAG supported dispatch'",
+      "        return 'Do Nothing' if class_severity < 0.45 else 'Offer'"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "agents.py"),
+    [
+      "class ReliabilityAgent:",
+      "    weight = 1.1",
+      "    def recommend(self, shap_cosine, gap):",
+      "        if shap_cosine < 0.60 or gap < 0.18:",
+      "            return 'Human Review'",
+      "        return 'Offer'",
+      "",
+      "class ForecastAgent:",
+      "    weight = 1.0",
+      "    def recommend(self, trend_multiplier, class_severity):",
+      "        if trend_multiplier < 1.0:",
+      "            return 'Human Review'",
+      "        if class_severity >= 0.75:",
+      "            return 'Strong Offer'",
+      "        return 'Offer'",
+      "",
+      "class ClusterHealthAgent:",
+      "    weight = 1.0",
+      "    def recommend(self, drift_detected, membership_signal):",
+      "        if drift_detected and membership_signal < 0.52:",
+      "            return 'Re-cluster'",
+      "        return 'Offer'"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "routes.py"),
+    [
+      "def calculate_intelligent_score(class_severity, gap, membership_signal, shap_cosine, trend_multiplier):",
+      "    normalized_trend = max(0.1, min(1.25, trend_multiplier)) / 1.25",
+      "    score = (class_severity * gap * membership_signal * shap_cosine) ** 0.25 * normalized_trend",
+      "    score = max(0.0, min(1.2, score))",
+      "    return score",
+      "",
+      "def outer_loop_guardrail(last_8_gaps, baseline_gap, centroid_movement, new_f1, previous_f1):",
+      "    average_gap = sum(last_8_gaps) / 8",
+      "    gap_signal = average_gap < baseline_gap * 0.75",
+      "    movement_signal = centroid_movement > 1.1",
+      "    trigger_outer_loop = gap_signal and movement_signal",
+      "    accepted = new_f1 >= max(0.42, previous_f1 - 0.01)",
+      "    return trigger_outer_loop, accepted"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "arima_model.py"),
+    [
+      "class CustomerSarimaForecaster:",
+      "    model_type = 'SARIMA'",
+      "    def forecast_customer_risk(self, customer_id, customer_history):",
+      "        forecast_last = customer_history[-1] + 0.02",
+      "        current_last = customer_history[-1]",
+      "        delta = forecast_last - current_last",
+      "        if delta > 0.015:",
+      "            trend_multiplier = 1.15",
+      "        elif delta < -0.015:",
+      "            trend_multiplier = 0.88",
+      "        else:",
+      "            trend_multiplier = 1.0",
+      "        deviation = abs(delta)",
+      "        drift_detected = deviation > 0.03",
+      "        massive_drift = deviation > 0.06",
+      "        return {'customer_id': customer_id, 'trend_multiplier': trend_multiplier, 'drift_detected': drift_detected, 'massive_drift': massive_drift}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "frontend", "index.html"),
+    [
+      "<!doctype html>",
+      "<html>",
+      "<body>",
+      "  <section id=\"agents-page\">Agents page renders orchestrator threshold snapshots.</section>",
+      "</body>",
+      "</html>"
+    ].join("\n"),
+    "utf8"
+  );
+  const projectMap: ProjectMap = {
+    stack: ["Python", "HTML"],
+    packageManagers: ["npm"],
+    testCommands: [],
+    entryPoints: ["backend/routes.py", "frontend/index.html"],
+    importantFiles: [
+      "README.md",
+      "package.json",
+      "backend/services/orchestrator.py",
+      "backend/services/agents.py",
+      "backend/routes.py",
+      "backend/services/arima_model.py",
+      "frontend/index.html"
+    ]
+  };
+  return { workspace, projectMap };
+}
 
 async function createBigDataSentimentWorkspace() {
   const workspace = path.join(os.tmpdir(), `orchcode-bigdata-sentiment-${Date.now()}`);

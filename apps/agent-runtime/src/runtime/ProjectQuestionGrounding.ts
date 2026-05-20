@@ -174,8 +174,48 @@ const REALTIME_UPDATE_GROUP: RequestedConceptEvidenceGroup = {
   coreTerms: ["realtime", "polling", "refresh", "setinterval", "stream", "socket", "طھط­ط¯ظٹط«", "ظ„ط­ط¸ظٹ"]
 };
 
+const THRESHOLD_FACT_ALIASES = [
+  "threshold", "thresholds", "threshlod", "threshlods", "treshold", "tresholds",
+  "cutoff", "cut off", "floor", "minimum", "maximum", "min", "max", "score", "scores",
+  "weight", "weights", "compare", "compared", "comparison", "condition", "conditions",
+  "guardrail", "guardrails", "formula", "formulas", "equation", "equations", "constant",
+  "constants", "numeric", "numbers", "value", "values", "gap", "cosine", "membership",
+  "severity", "trend", "drift", "accepted", "f1", "accuracy", "delta", "limit", "limits",
+  "\u0639\u062a\u0628\u0629", "\u0639\u062a\u0628\u0627\u062a", "\u062d\u062f", "\u062d\u062f\u0648\u062f",
+  "\u0623\u0631\u0642\u0627\u0645", "\u0627\u0631\u0642\u0627\u0645", "\u0628\u0642\u0627\u0631\u0646",
+  "\u0628\u064a\u0642\u0627\u0631\u0646", "\u0643\u0627\u0645", "\u0645\u0639\u0627\u062f\u0644\u0629",
+  "\u0645\u0639\u0627\u062f\u0644\u0627\u062a", "\u0634\u0631\u0637", "\u0634\u0631\u0648\u0637"
+];
+
+const FORECASTING_ALIASES = [
+  "forecast", "forecasts", "forecasting", "arima", "sarima", "trend", "prediction",
+  "predict", "predicted", "timeseries", "time series", "customer", "customers",
+  "per customer", "customer one", "one customer", "single customer", "aggregate",
+  "aggregated", "global", "scope", "series",
+  "\u062a\u0648\u0642\u0639", "\u062a\u0648\u0642\u0639\u0627\u062a", "\u0646\u0648\u0639",
+  "\u0627\u0644\u0641\u0648\u0631\u0643\u0627\u0633\u062a\u064a\u0646\u062c", "\u0639\u0645\u064a\u0644",
+  "\u0644\u0639\u0645\u064a\u0644", "\u0639\u0645\u064a\u0644 \u0648\u0627\u062d\u062f",
+  "\u0643\u0633\u062a\u0645\u0631", "\u0648\u0627\u062d\u062f"
+];
+
+const THRESHOLD_FACT_GROUP: RequestedConceptEvidenceGroup = {
+  id: "threshold_fact",
+  label: "numeric threshold/formula evidence",
+  aliases: THRESHOLD_FACT_ALIASES,
+  coreTerms: ["threshold", "score", "condition", "formula", "weight", "\u0639\u062a\u0628\u0629", "\u0628\u0642\u0627\u0631\u0646", "\u0643\u0627\u0645"]
+};
+
+const FORECASTING_FACT_GROUP: RequestedConceptEvidenceGroup = {
+  id: "forecasting_fact",
+  label: "forecasting type/scope evidence",
+  aliases: FORECASTING_ALIASES,
+  coreTerms: ["forecast", "forecasting", "arima", "sarima", "trend", "customer", "\u0639\u0645\u064a\u0644"]
+};
+
 const DATASET_REALTIME_CONCEPT_LABEL = "dataset realtime behavior";
 const DATASET_REALTIME_DISPLAY_LABEL = "dataset realtime behavior / ط§ظ„ط¯ط§طھط§ ظ…ظ† ط§ظ„ط¯ط§طھط§ ط³ظٹطھ ظƒط£ظ†ظ‡ط§ realtime";
+const THRESHOLD_INVENTORY_CONCEPT_LABEL = "threshold inventory";
+const FORECASTING_SCOPE_CONCEPT_LABEL = "forecasting type and scope";
 const ARABIC_CHILD_SIMPLE_PATTERN = /(?:ط§ط´ط±ط­.*ظ„\s*ط·ظپظ„|ط·ظپظ„.*ظٹظپظ‡ظ…|ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط¨ط¨ط³ط§ط·ط©|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ…ط¨طھط¯ط¦)/;
 
 const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
@@ -188,6 +228,8 @@ const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
   "payment": ["payment", "payments", "billing", "stripe", "invoice"],
   "realtime": REALTIME_UPDATE_ALIASES,
   "sentiment": ["sentiment", "sentiment analysis", "sentement", "sentement analysis", "classify sentiment", "analyze sentiment", "sentiment classifier", "sentiment pipeline", "sentiment model", "طھط­ظ„ظٹظ„ ط§ظ„ظ…ط´ط§ط¹ط±", "طھط­ظ„ظٹظ„ ظ…ط´ط§ط¹ط±", "ط§ظ„ظ…ط´ط§ط¹ط±", "ظ…ط´ط§ط¹ط±", "emotion", "emotions"],
+  "thresholds": THRESHOLD_FACT_ALIASES,
+  "forecasting": FORECASTING_ALIASES,
   "todo": ["todo", "to do", "task", "checklist"]
 };
 DOMAIN_CLAIM_ALIASES.sentiment?.push(
@@ -214,6 +256,16 @@ const PROJECT_DOMAIN_CANDIDATES: Array<{ label: string; aliases: string[]; sourc
     sourceHints: /\b(analytics|dashboard|metrics|snapshot|chart|series)\b/i
   },
   {
+    label: "decision or orchestration system",
+    aliases: ["orchestrator", "orchestration", "decision", "route", "agents", "threshold", "score", "policy", "recommendation"],
+    sourceHints: /\b(orchestrator|decision|route|agents?|threshold|score|policy|recommendation|dispatch)\b/i
+  },
+  {
+    label: "forecasting or trend model",
+    aliases: FORECASTING_ALIASES,
+    sourceHints: /\b(forecast|forecasting|arima|sarima|trend|prediction|timeseries|time series)\b/i
+  },
+  {
     label: "agent runtime or coding assistant",
     aliases: ["agent", "runtime", "orchestrat", "llm", "provider", "patch", "workspace"],
     sourceHints: /\b(agent|runtime|orchestrat|llm|provider|patch|workspace)\b/i
@@ -230,7 +282,7 @@ const PROJECT_DOMAIN_CANDIDATES: Array<{ label: string; aliases: string[]; sourc
   }
 ];
 
-const DATA_FLOW_DETAIL_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment)\b/i;
+const DATA_FLOW_DETAIL_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment|forecast|forecasting|arima|sarima|trend|threshold|score|weight|orchestrator|decision|dispatch|guardrail)\b/i;
 const SOURCE_FILE_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
 
 const KNOWN_CONCEPTS: Array<{
@@ -274,6 +326,22 @@ const KNOWN_CONCEPTS: Array<{
     aliases: DOMAIN_CLAIM_ALIASES.realtime ?? [],
     coreTerms: REALTIME_UPDATE_GROUP.coreTerms,
     evidenceGroups: [REALTIME_UPDATE_GROUP]
+  },
+  {
+    key: "thresholds",
+    label: THRESHOLD_INVENTORY_CONCEPT_LABEL,
+    displayLabel: "threshold inventory / \u0643\u0644 \u0627\u0644\u0623\u0631\u0642\u0627\u0645 \u0648\u0627\u0644\u0634\u0631\u0648\u0637 \u0627\u0644\u0644\u064a \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u0628\u064a\u0642\u0627\u0631\u0646 \u0628\u064a\u0647\u0627",
+    aliases: THRESHOLD_FACT_ALIASES,
+    coreTerms: THRESHOLD_FACT_GROUP.coreTerms,
+    evidenceGroups: [THRESHOLD_FACT_GROUP]
+  },
+  {
+    key: "forecasting",
+    label: FORECASTING_SCOPE_CONCEPT_LABEL,
+    displayLabel: "forecasting type and scope / \u0646\u0648\u0639 \u0627\u0644\u0640 forecasting \u0648\u0647\u0644 \u0647\u0648 \u0644\u0640 customer \u0648\u0627\u062d\u062f",
+    aliases: FORECASTING_ALIASES,
+    coreTerms: FORECASTING_FACT_GROUP.coreTerms,
+    evidenceGroups: [FORECASTING_FACT_GROUP]
   }
 ];
 
@@ -295,6 +363,12 @@ export function detectProjectAnswerStyle(userPrompt: string): ProjectAnswerStyle
 
 export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   const styleStripped = stripStylePhrases(userPrompt);
+  const numericOrForecasting =
+    detectThresholdInventoryConcept(styleStripped)
+    ?? detectThresholdInventoryConcept(userPrompt)
+    ?? detectForecastingScopeConcept(styleStripped)
+    ?? detectForecastingScopeConcept(userPrompt);
+  if (numericOrForecasting) return numericOrForecasting;
   const compound = detectCompoundDatasetRealtimeConcept(styleStripped) ?? detectCompoundDatasetRealtimeConcept(userPrompt);
   if (compound) return compound;
   const known = detectKnownConcept(styleStripped) ?? detectKnownConcept(userPrompt);
@@ -410,17 +484,17 @@ export function createDeterministicNotFoundAnswer(grounding: ProjectQuestionGrou
   if (grounding.style === "child_simple") {
     if (grounding.language === "arabic") {
       return [
-        `ظ„ظ… ط£ط¬ط¯ ${concept} ظپظٹ ط§ظ„ظ€ workspace ط§ظ„ظ…ظپطھظˆط­ ط­ط§ظ„ظٹظ‹ط§.`,
+        `\u0645\u0627\u0644\u0642\u064a\u062a\u0634 ${concept} \u0641\u064a \u0627\u0644\u0640 workspace \u0627\u0644\u0645\u0641\u062a\u0648\u062d \u062d\u0627\u0644\u064a\u0627.`,
         "",
-        `ط§ظ„ظ„ظٹ ظ„ظ‚ظٹطھظ‡ ط¨ط¯ظ„ ظƒط¯ظ‡: ${grounding.foundInstead}.`,
-        simpleAnalogyForFoundInstead(grounding.foundInstead),
+        `\u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647 \u0628\u062f\u0644 \u0643\u062f\u0647: ${grounding.foundInstead}.`,
+        simpleAnalogyForFoundInsteadArabic(grounding.foundInstead),
         "",
-        `ط±ط§ط¬ط¹طھ ${inspected}.`,
+        `\u0631\u0627\u062c\u0639\u062a ${inspected}.`,
         partialEvidence && missingGroups
-          ? `ظ„ظ‚ظٹطھ ط´ظˆظٹط© ط¯ظ„ط§ط¦ظ„ ظ‚ط±ظٹط¨ط©طŒ ظ„ظƒظ† ظ„ظ… ط£ظ‚ط¯ط± ط£طھط£ظƒط¯ ظ…ظ† ${missingGroups}.`
-          : `ظ„ظ… ط£ط¬ط¯ ظƒظˆط¯ ط£ظˆ docs طھط«ط¨طھ ${concept} ظپظٹ ط§ظ„ظ…ظ„ظپط§طھ ط¯ظٹ.`,
+          ? `\u0644\u0642\u064a\u062a \u0634\u0648\u064a\u0629 \u062f\u0644\u0627\u0626\u0644 \u0642\u0631\u064a\u0628\u0629\u060c \u0628\u0633 \u0645\u0627\u0642\u062f\u0631\u062a\u0634 \u0623\u0623\u0643\u062f ${missingGroups}.`
+          : `\u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u0643\u0648\u062f \u0623\u0648 docs \u062a\u062b\u0628\u062a ${concept} \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u062f\u064a.`,
         "",
-        "ظ„ظˆ طھظ‚طµط¯ ظ…ط´ط±ظˆط¹ طھط§ظ†ظٹطŒ ط§ظپطھط­ ط§ظ„ظ€ workspace ط§ظ„طµط­ظٹط­ ط£ظˆ ط§ط¨ط¹طھظ„ظٹ ط§ط³ظ… ط§ظ„ظ…ظ„ظپ."
+        "\u0644\u0648 \u062a\u0642\u0635\u062f \u0645\u0634\u0631\u0648\u0639 \u062a\u0627\u0646\u064a\u060c \u0627\u0641\u062a\u062d \u0627\u0644\u0640 workspace \u0627\u0644\u0635\u062d\u064a\u062d \u0623\u0648 \u0627\u0628\u0639\u062a\u0644\u064a \u0627\u0633\u0645 \u0627\u0644\u0645\u0644\u0641."
       ].join("\n");
     }
     return [
@@ -436,6 +510,18 @@ export function createDeterministicNotFoundAnswer(grounding: ProjectQuestionGrou
       "",
       "If you meant another project, make sure the correct workspace is open or point me to the file."
     ].join("\n");
+  }
+  if (grounding.language === "arabic") {
+    return [
+      `\u0645\u0627\u0644\u0642\u064a\u062a\u0634 ${concept} \u0641\u064a \u0627\u0644\u0640 workspace \u0627\u0644\u0645\u0641\u062a\u0648\u062d \u062d\u0627\u0644\u064a\u0627.`,
+      "",
+      `\u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647 \u0628\u062f\u0644 \u0643\u062f\u0647: ${grounding.foundInstead}.`,
+      `\u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0644\u064a \u0631\u0627\u062c\u0639\u062a\u0647\u0627: ${inspected}.`,
+      partialEvidence && missingGroups ? `\u0627\u0644\u062f\u0644\u064a\u0644 \u0627\u0644\u0646\u0627\u0642\u0635: ${missingGroups}.` : "",
+      grounding.unknowns.length ? `\u0627\u0644\u062c\u0632\u0621 \u063a\u064a\u0631 \u0627\u0644\u0645\u0624\u0643\u062f: ${grounding.unknowns[0]}` : "\u062f\u0647 \u0645\u0628\u0646\u064a \u0628\u0633 \u0639\u0644\u0649 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0644\u064a \u0627\u062a\u0642\u0631\u062a \u0645\u0646 \u0627\u0644\u0640 workspace \u0627\u0644\u062d\u0627\u0644\u064a.",
+      "",
+      "\u0627\u062a\u0623\u0643\u062f \u0625\u0646 \u0627\u0644\u0640 workspace \u0627\u0644\u0635\u062d\u064a\u062d \u0645\u0641\u062a\u0648\u062d\u060c \u0623\u0648 \u0648\u062c\u0647\u0646\u064a \u0644\u0644\u0645\u0644\u0641 \u0644\u0648 \u0645\u0648\u062c\u0648\u062f \u0641\u064a \u062d\u062a\u0629 \u062a\u0627\u0646\u064a\u0629."
+    ].filter(Boolean).join("\n");
   }
   return [
     `I could not find ${concept} in the currently selected workspace.`,
@@ -457,6 +543,12 @@ export function createDeterministicGroundedFallbackAnswer(
   const support = grounding.supportingEvidence.length
     ? grounding.supportingEvidence.slice(0, 3)
     : [];
+  if (isThresholdInventoryConcept(grounding) && grounding.conceptFound) {
+    return createThresholdInventoryFallback(grounding, validationErrors);
+  }
+  if (isForecastingScopeConcept(grounding) && grounding.conceptFound) {
+    return createForecastingScopeFallback(grounding, validationErrors);
+  }
   if (grounding.style === "child_simple") {
     if (grounding.language === "arabic" && isDatasetRealtimeConcept(grounding) && grounding.conceptFound) {
       return createArabicDatasetRealtimeFallback(grounding, validationErrors);
@@ -464,25 +556,25 @@ export function createDeterministicGroundedFallbackAnswer(
     if (grounding.language === "arabic") {
       const lines = [
         grounding.concept.specific
-          ? `ظ„ظ‚ظٹطھ ${grounding.concept.label} ظپظٹ ط§ظ„ظ€ workspaceطŒ ظ„ظƒظ† ط±ط¯ ط§ظ„ظ…ط²ظˆط¯ ظ…ط§ظƒط§ظ†ط´ ط¢ظ…ظ† ظƒظپط§ظٹط©طŒ ظپط§ط³طھط®ط¯ظ…طھ ط§ظ„ط£ط¯ظ„ط© ط§ظ„ظ…ط­ظ„ظٹط© ط¨ط¯ظ„ ط§ظ„طھط®ظ…ظٹظ†.`
-          : "ط±ط¯ ط§ظ„ظ…ط²ظˆط¯ ظ…ط§ظƒط§ظ†ط´ ط¢ظ…ظ† ظƒظپط§ظٹط©طŒ ظپط§ط³طھط®ط¯ظ…طھ ط§ظ„ط£ط¯ظ„ط© ط§ظ„ظ…ط­ظ„ظٹط© ط¨ط¯ظ„ ط§ظ„طھط®ظ…ظٹظ†.",
+          ? `\u0644\u0642\u064a\u062a ${grounding.concept.label} \u0641\u064a \u0627\u0644\u0640 workspace\u060c \u0641\u0634\u0631\u062d\u062a\u0647 \u0645\u0646 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0644\u064a \u0642\u062f\u0627\u0645\u064a.`
+          : "\u0634\u0631\u062d\u062a \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0645\u0646 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0644\u064a \u0642\u062f\u0627\u0645\u064a.",
         "",
-        `ط§ظ„ظ…ط´ط±ظˆط¹ ط´ظƒظ„ظ‡ ${grounding.foundInstead}.`,
-        simpleAnalogyForFoundInstead(grounding.foundInstead),
+        `\u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0634\u0643\u0644\u0647 ${grounding.foundInstead}.`,
+        simpleAnalogyForFoundInsteadArabic(grounding.foundInstead),
         "",
-        `ط±ط§ط¬ط¹طھ ${inspected}.`
+        `\u0631\u0627\u062c\u0639\u062a ${inspected}.`
       ];
       if (support.length) {
-        lines.push("", "ط£ظ‚ظˆظ‰ ط¯ظ„ط§ط¦ظ„ ظ„ظ‚ظٹطھظ‡ط§:");
+        lines.push("", "\u0623\u0642\u0648\u0649 \u062f\u0644\u0627\u0626\u0644 \u0644\u0642\u064a\u062a\u0647\u0627:");
         lines.push(...support.map((item) => `- ${item.markdownLink}: ${shortReason(item)}`));
       }
-      lines.push("", "ظ…ط´ ظ‡ط®ظ…ظ† ط­ط§ط¬ط© ط®ط§ط±ط¬ ط§ظ„ظ…ظ„ظپط§طھ ط¯ظٹ.");
+      lines.push("", "\u0645\u0634 \u0647\u0632\u0648\u062f \u062d\u0627\u062c\u0629 \u062e\u0627\u0631\u062c \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u062f\u064a.");
       return lines.join("\n");
     }
     const lines = [
       grounding.concept.specific
-        ? `I could not safely produce the provider's explanation, even though I found ${grounding.concept.label} in this workspace.`
-        : "I could not safely produce the provider's explanation, so I used the current workspace evidence instead.",
+        ? `I found ${grounding.concept.label} in this workspace, so I built the answer from the local evidence.`
+        : "I built this answer from the current workspace evidence.",
       "",
       `The project looks like ${grounding.foundInstead}.`,
       simpleAnalogyForFoundInstead(grounding.foundInstead),
@@ -497,10 +589,26 @@ export function createDeterministicGroundedFallbackAnswer(
     return lines.join("\n");
   }
 
+  if (grounding.language === "arabic") {
+    const lines = [
+      grounding.concept.specific
+        ? `\u0644\u0642\u064a\u062a ${grounding.concept.label} \u0641\u064a \u0623\u062f\u0644\u0629 \u0627\u0644\u0640 workspace \u0627\u0644\u062d\u0627\u0644\u064a\u060c \u0641\u0627\u0644\u0631\u062f \u0647\u0646\u0627 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0645\u0644\u0641\u0627\u062a.`
+        : "\u0627\u0644\u0631\u062f \u0647\u0646\u0627 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0623\u062f\u0644\u0629 \u0627\u0644\u0640 workspace \u0627\u0644\u062d\u0627\u0644\u064a.",
+      "",
+      `\u0627\u0644\u0623\u062f\u0644\u0629 \u062a\u0634\u064a\u0631 \u0625\u0644\u0649: ${grounding.foundInstead}.`,
+      `\u0631\u0627\u062c\u0639\u062a: ${inspected}.`
+    ];
+    if (support.length) {
+      lines.push("", "\u0623\u062f\u0644\u0629 \u0645\u0628\u0627\u0634\u0631\u0629:");
+      lines.push(...support.map((item) => `- ${item.markdownLink}: ${shortReason(item)}`));
+    }
+    return lines.join("\n");
+  }
+
   const lines = [
     grounding.concept.specific
-      ? `I could not safely produce the provider's explanation, even though I found ${grounding.concept.label} in the current workspace evidence.`
-      : "I could not safely produce the provider's explanation, so I used the current workspace evidence instead.",
+      ? `I found ${grounding.concept.label} in the current workspace evidence, so I built a grounded answer from the files.`
+      : "I built this answer from the current workspace evidence.",
     "",
     `Current-workspace evidence indicates: ${grounding.foundInstead}.`,
     `Inspected files: ${inspected}.`
@@ -508,9 +616,6 @@ export function createDeterministicGroundedFallbackAnswer(
   if (support.length) {
     lines.push("", "Grounded evidence:");
     lines.push(...support.map((item) => `- ${item.markdownLink}: ${shortReason(item)}`));
-  }
-  if (validationErrors.length) {
-    lines.push("", "Why I did not use the provider answer: it included claims or citations that were not supported by the current workspace files.");
   }
   return lines.join("\n");
 }
@@ -527,6 +632,9 @@ export function selectGroundingEvidenceRefs(grounding: ProjectQuestionGrounding,
 }
 
 export function evidenceItemSupportsConcept(item: GroundingEvidenceItem, concept: RequestedConcept) {
+  if (concept.evidenceGroups?.some((group) => group.id === "threshold_fact")) {
+    return evidenceItemSupportsThresholdFact(item);
+  }
   const contentHaystack = evidenceItemContentText(item);
   if (concept.evidenceGroups?.length) {
     if (matchingConceptEvidenceGroups(contentHaystack, concept).length) return true;
@@ -561,7 +669,9 @@ export function createConceptEvidenceGroupCoverage(
   if (!concept.evidenceGroups?.length) return [];
   return concept.evidenceGroups.map((group) => {
     const refs = evidenceItems
-      .filter((item) => matchingConceptEvidenceGroups(evidenceItemContentText(item), { ...concept, evidenceGroups: [group] }).length)
+      .filter((item) => group.id === "threshold_fact"
+        ? evidenceItemSupportsThresholdFact(item)
+        : matchingConceptEvidenceGroups(evidenceItemContentText(item), { ...concept, evidenceGroups: [group] }).length)
       .map((item) => item.ref);
     return {
       id: group.id,
@@ -570,6 +680,13 @@ export function createConceptEvidenceGroupCoverage(
       refs: uniqueStrings(refs).slice(0, 8)
     };
   });
+}
+
+function evidenceItemSupportsThresholdFact(item: GroundingEvidenceItem) {
+  const text = [item.path, item.title, item.snippet ?? ""].join("\n");
+  if (!/-?\d+(?:\.\d+)?/.test(text)) return false;
+  return /\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|borderline|direct|dispatch|high|low|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|condition|rule)\b/i.test(text.replace(/[_\.]+/g, " "))
+    || /[A-Za-z_][A-Za-z0-9_\.]*\s*(<=|>=|<|>|==)\s*-?\d+(?:\.\d+)?/.test(text);
 }
 
 export function findUnsupportedDomainClaims(answer: string, evidenceItems: GroundingEvidenceItem[], concept: RequestedConcept) {
@@ -652,6 +769,70 @@ function detectCompoundDatasetRealtimeConcept(userPrompt: string): RequestedConc
       || realtimeMatches.some((alias) => normalizedForTerm(alias).includes(" "))
       ? "high"
       : "medium"
+  };
+}
+
+function detectThresholdInventoryConcept(userPrompt: string): RequestedConcept | undefined {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  const hasThresholdIntent = THRESHOLD_FACT_ALIASES.some((alias) => textContainsConceptTerm(normalized, alias));
+  const hasArabicCompareIntent = /(?:\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0643\u0627\u0645|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a)/.test(userPrompt);
+  const hasDecisionContext = /\b(agent|agents|page|system|orchestrator|route|decision|rule|rules|formula|formulas|score|scores)\b/.test(normalized)
+    || /(?:\u0627\u0644\u0633\u064a\u0633\u062a\u0645|\u0627\u0644\u0633\u064a\u0633\u062a\u0645\u0643|\u0635\u0641\u062d\u0629|\u0627\u0644\u0640?\s*agents|\u0627\u0644 agents)/.test(userPrompt);
+  if (!hasThresholdIntent && !hasArabicCompareIntent) return undefined;
+  return {
+    specific: true,
+    label: THRESHOLD_INVENTORY_CONCEPT_LABEL,
+    displayLabel: "threshold inventory / \u0643\u0644 \u0627\u0644\u0623\u0631\u0642\u0627\u0645 \u0648\u0627\u0644\u0634\u0631\u0648\u0637 \u0627\u0644\u0644\u064a \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u0628\u064a\u0642\u0627\u0631\u0646 \u0628\u064a\u0647\u0627",
+    terms: uniqueStrings([
+      THRESHOLD_INVENTORY_CONCEPT_LABEL,
+      "agents page decision thresholds",
+      "thresholds",
+      "formulas",
+      "numeric comparisons",
+      ...THRESHOLD_FACT_GROUP.coreTerms
+    ]),
+    coreTerms: THRESHOLD_FACT_GROUP.coreTerms,
+    aliases: uniqueStrings([
+      THRESHOLD_INVENTORY_CONCEPT_LABEL,
+      "agents page decision thresholds",
+      "decision thresholds",
+      "threshold values",
+      "numeric comparisons",
+      ...THRESHOLD_FACT_ALIASES
+    ]),
+    evidenceGroups: [THRESHOLD_FACT_GROUP],
+    confidence: hasDecisionContext ? "high" : "medium"
+  };
+}
+
+function detectForecastingScopeConcept(userPrompt: string): RequestedConcept | undefined {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  const hasForecastIntent = FORECASTING_ALIASES.some((alias) => textContainsConceptTerm(normalized, alias));
+  const hasTypeOrScopeIntent = /\b(type|kind|scope|customer|per customer|global|aggregate|one customer|single customer)\b/.test(normalized)
+    || /(?:\u0646\u0648\u0639|\u0639\u0645\u064a\u0644|\u0648\u0627\u062d\u062f|\u064a\u062a\u0637\u0628\u0642|\u064a\u062a\u0637\u0628\u0642\s+\u0639\u0644\u0649)/.test(userPrompt);
+  if (!hasForecastIntent) return undefined;
+  return {
+    specific: true,
+    label: FORECASTING_SCOPE_CONCEPT_LABEL,
+    displayLabel: "forecasting type and scope / \u0646\u0648\u0639 \u0627\u0644\u0640 forecasting \u0648\u0647\u0644 \u0647\u0648 \u0644\u0640 customer \u0648\u0627\u062d\u062f",
+    terms: uniqueStrings([
+      FORECASTING_SCOPE_CONCEPT_LABEL,
+      "forecasting",
+      "forecast type",
+      "forecast scope",
+      "per customer forecasting",
+      ...FORECASTING_FACT_GROUP.coreTerms
+    ]),
+    coreTerms: FORECASTING_FACT_GROUP.coreTerms,
+    aliases: uniqueStrings([
+      FORECASTING_SCOPE_CONCEPT_LABEL,
+      "forecast type",
+      "forecasting scope",
+      "per customer forecasting",
+      ...FORECASTING_ALIASES
+    ]),
+    evidenceGroups: [FORECASTING_FACT_GROUP],
+    confidence: hasTypeOrScopeIntent ? "high" : "medium"
   };
 }
 
@@ -743,6 +924,7 @@ function textContainsConceptTerm(normalizedText: string, term: string) {
   const required = words.length ? words : normalizedTerm.split(/\s+/).filter(Boolean);
   return required.every((word) => {
     if (/[^\x00-\x7F]/.test(word)) {
+      if (word.length <= 2) return normalizedText.split(/\s+/).includes(word);
       return normalizedText.includes(word);
     }
     return new RegExp(`\\b${escapeRegExp(word)}\\b`).test(normalizedText);
@@ -966,6 +1148,19 @@ function simpleAnalogyForFoundInstead(foundInstead: string) {
   return "Think of the project like a labeled box of parts; I can only describe the parts I can see.";
 }
 
+function simpleAnalogyForFoundInsteadArabic(foundInstead: string) {
+  if (/todo|checklist/i.test(foundInstead)) {
+    return "\u0627\u0644\u0640 todo app \u0632\u064a \u0642\u0627\u064a\u0645\u0629 \u0635\u063a\u064a\u0631\u0629: \u062a\u0632\u0648\u062f \u062d\u0627\u062c\u0627\u062a\u060c \u062a\u0639\u0644\u0645 \u0639\u0644\u064a\u0647\u0627 \u0644\u0645\u0627 \u062a\u062e\u0644\u0635\u060c \u0648\u062a\u0634\u0648\u0641 \u0641\u0627\u0636\u0644 \u0625\u064a\u0647.";
+  }
+  if (/analytics|dashboard/i.test(foundInstead)) {
+    return "\u0627\u062a\u062e\u064a\u0644\u0647 \u0632\u064a \u0644\u0648\u062d\u0629 \u0646\u062a\u0627\u064a\u062c: \u0628\u062a\u0642\u0631\u0623 \u062f\u0627\u062a\u0627 \u0648\u062a\u0639\u0631\u0636 \u0623\u0631\u0642\u0627\u0645 \u0645\u0647\u0645\u0629.";
+  }
+  if (/frontend|app/i.test(foundInstead)) {
+    return "\u0627\u062a\u062e\u064a\u0644\u0647 \u0634\u0627\u0634\u0629 \u0641\u064a\u0647\u0627 \u0623\u0632\u0631\u0627\u0631 \u0648\u0635\u0641\u062d\u0627\u062a \u0627\u0644\u0646\u0627\u0633 \u0628\u062a\u0633\u062a\u062e\u062f\u0645\u0647\u0627.";
+  }
+  return "\u0627\u062a\u062e\u064a\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0635\u0646\u062f\u0648\u0642 \u0623\u062c\u0632\u0627\u0621\u060c \u0648\u0623\u0646\u0627 \u0647\u0627\u0634\u0631\u062d \u0628\u0633 \u0627\u0644\u0623\u062c\u0632\u0627\u0621 \u0627\u0644\u0644\u064a \u0634\u0627\u064a\u0641\u0647\u0627.";
+}
+
 function formatEvidenceGroupCoverage(coverage: ConceptEvidenceGroupCoverage[]) {
   return coverage
     .map((group) => `${group.id}: ${group.found ? `found (${group.refs.slice(0, 4).join(", ")})` : "missing"}`)
@@ -985,12 +1180,180 @@ function isDatasetRealtimeConcept(grounding: ProjectQuestionGrounding) {
       && grounding.concept.evidenceGroups?.some((group) => group.id === "realtime_update");
 }
 
+export function isThresholdInventoryConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  const concept = "concept" in grounding ? grounding.concept : grounding;
+  return concept.label === THRESHOLD_INVENTORY_CONCEPT_LABEL
+    || concept.evidenceGroups?.some((group) => group.id === "threshold_fact") === true;
+}
+
+export function isForecastingScopeConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  const concept = "concept" in grounding ? grounding.concept : grounding;
+  return concept.label === FORECASTING_SCOPE_CONCEPT_LABEL
+    || concept.evidenceGroups?.some((group) => group.id === "forecasting_fact") === true;
+}
+
 function shortReason(item: GroundingEvidenceItem) {
-  return (item.reason || item.title || item.snippet || "current-workspace evidence").replace(/\s+/g, " ").slice(0, 180);
+  return sanitizeAnswerFragment(item.reason || item.title || item.snippet || "current-workspace evidence").replace(/\s+/g, " ").slice(0, 180);
 }
 
 function formatConceptLabel(concept: RequestedConcept) {
   return concept.displayLabel ?? concept.label;
+}
+
+type NumericEvidenceFact = {
+  signal: string;
+  value: string;
+  comparison: string;
+  action: string;
+  link: string;
+  path: string;
+  raw: string;
+  kind: "threshold" | "formula" | "weight" | "constant";
+};
+
+function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, validationErrors: string[]) {
+  const facts = extractNumericEvidenceFacts(collectGroundingEvidenceForSynthesis(grounding));
+  const formulaFacts = facts.filter((fact) => fact.kind === "formula").slice(0, 8);
+  const thresholdFacts = facts.filter((fact) => fact.kind !== "formula").slice(0, 40);
+  const orchestratorEvidence = findEvidenceByPath(grounding, /orchestrator|route|routes/i).slice(0, 4);
+  const agentEvidence = findEvidenceByPath(grounding, /agents?/i).slice(0, 4);
+  const arimaEvidence = findEvidenceByPath(grounding, /arima|forecast|trend/i).slice(0, 4);
+  const arabic = grounding.language === "arabic";
+
+  if (arabic) {
+    const lines = [
+      "\u0623\u064a\u0648\u0647\u060c \u062f\u064a \u0627\u0644\u0623\u0631\u0642\u0627\u0645 \u0648\u0627\u0644\u0634\u0631\u0648\u0637 \u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647\u0627 \u0641\u064a \u0627\u0644\u0643\u0648\u062f \u0627\u0644\u062d\u0627\u0644\u064a.",
+      facts.length
+        ? "\u0645\u0634 \u0647\u0642\u0648\u0644 \u0631\u0642\u0645 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a."
+        : "\u0644\u0642\u064a\u062a \u0623\u062f\u0644\u0629 \u0642\u0631\u064a\u0628\u0629\u060c \u0628\u0633 \u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u0623\u0631\u0642\u0627\u0645 \u0643\u0641\u0627\u064a\u0629 \u0623\u0637\u0644\u0639 \u0645\u0646\u0647\u0627 inventory \u0643\u0627\u0645\u0644.",
+      ""
+    ];
+    if (orchestratorEvidence.length || agentEvidence.length) {
+      lines.push("**\u0645\u064a\u0646 \u0628\u064a\u062d\u0633\u0645 \u0627\u0644\u0642\u0631\u0627\u0631\u061f**");
+      if (orchestratorEvidence.length) {
+        lines.push(`\u0627\u0644\u062f\u0644\u064a\u0644 \u0627\u0644\u0623\u0642\u0648\u0649 \u0639\u0644\u0649 \u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0642\u0631\u0627\u0631 \u062c\u0627\u064a \u0645\u0646 ${formatEvidenceLinks(orchestratorEvidence)}.`);
+      }
+      if (agentEvidence.length) {
+        lines.push(`\u0648\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0640 agents \u0628\u0627\u064a\u0646 \u0641\u064a\u0647\u0627 weights \u0623\u0648 branches \u0645\u0633\u0627\u0639\u062f\u0629 \u0645\u0646 ${formatEvidenceLinks(agentEvidence)}.`);
+      }
+      lines.push("");
+    }
+    if (thresholdFacts.length) {
+      lines.push("**\u062c\u062f\u0648\u0644 \u0627\u0644\u0640 thresholds / \u0627\u0644\u0623\u0631\u0642\u0627\u0645**");
+      lines.push("| Signal | \u0627\u0644\u0631\u0642\u0645 | \u0628\u064a\u062a\u0642\u0627\u0631\u0646 \u0625\u0632\u0627\u064a | \u0627\u0644\u0645\u0639\u0646\u0649/\u0627\u0644\u0623\u0643\u0634\u0646 | Evidence |");
+      lines.push("| --- | ---: | --- | --- | --- |");
+      for (const fact of thresholdFacts) {
+        lines.push(`| ${escapeTableCell(fact.signal)} | ${fact.value} | ${escapeTableCell(fact.comparison)} | ${escapeTableCell(fact.action)} | ${fact.link} |`);
+      }
+      lines.push("");
+    }
+    if (formulaFacts.length) {
+      lines.push("**\u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647\u0627**");
+      for (const fact of formulaFacts) {
+        lines.push(`- \`${fact.raw}\` (${fact.link})`);
+      }
+      lines.push("");
+    }
+    if (arimaEvidence.length) {
+      lines.push(`**\u062c\u0632\u0621 forecasting/drift**: \u0641\u064a\u0647 \u0623\u062f\u0644\u0629 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0640 trend/forecast \u0641\u064a ${formatEvidenceLinks(arimaEvidence)}.`);
+      lines.push("");
+    }
+    if (validationErrors.length) {
+      lines.push("\u0644\u0648 \u0627\u0644\u0645\u0632\u0648\u062f \u0627\u062f\u0649 \u0631\u062f \u063a\u064a\u0631 \u0645\u062b\u0628\u062a\u060c \u0627\u0633\u062a\u062e\u062f\u0645\u062a \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629 \u062f\u064a \u0628\u062f\u0644 \u0645\u0627 \u0623\u0639\u0631\u0636 \u0631\u062f \u0636\u0639\u064a\u0641.");
+    }
+    return lines.filter(Boolean).join("\n");
+  }
+
+  const lines = [
+    "I found these threshold, formula, and numeric comparison facts in the current workspace.",
+    facts.length ? "I am only listing values backed by file evidence." : "I found related evidence, but not enough numeric facts for a full inventory.",
+    ""
+  ];
+  if (orchestratorEvidence.length || agentEvidence.length) {
+    lines.push("**Decision Owner**");
+    if (orchestratorEvidence.length) lines.push(`Decision rules appear in ${formatEvidenceLinks(orchestratorEvidence)}.`);
+    if (agentEvidence.length) lines.push(`Agent weights or branches appear in ${formatEvidenceLinks(agentEvidence)}.`);
+    lines.push("");
+  }
+  if (thresholdFacts.length) {
+    lines.push("**Thresholds And Numeric Comparisons**");
+    lines.push("| Signal | Value | Compared how | Result/action | Evidence |");
+    lines.push("| --- | ---: | --- | --- | --- |");
+    for (const fact of thresholdFacts) {
+      lines.push(`| ${escapeTableCell(fact.signal)} | ${fact.value} | ${escapeTableCell(fact.comparison)} | ${escapeTableCell(fact.action)} | ${fact.link} |`);
+    }
+    lines.push("");
+  }
+  if (formulaFacts.length) {
+    lines.push("**Formulas**");
+    for (const fact of formulaFacts) lines.push(`- \`${fact.raw}\` (${fact.link})`);
+  }
+  return lines.join("\n");
+}
+
+function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, validationErrors: string[]) {
+  const items = collectGroundingEvidenceForSynthesis(grounding);
+  const text = normalizeForGroundingSearch(items.map(evidenceItemContentText).join("\n"));
+  const facts = extractNumericEvidenceFacts(items).filter((fact) => /forecast|arima|sarima|trend|delta|drift|deviation|multiplier|customer|series/i.test(`${fact.path} ${fact.raw} ${fact.signal}`)).slice(0, 12);
+  const forecastEvidence = items.filter((item) => /\b(forecast|forecasting|arima|sarima|trend|prediction|delta|deviation)\b/i.test(evidenceItemContentText(item))).slice(0, 6);
+  const type = text.includes("sarima")
+    ? "SARIMA"
+    : text.includes("arima")
+      ? "ARIMA"
+      : text.includes("forecast")
+        ? "forecasting/trend logic"
+        : "forecasting type not fully named";
+  const perCustomer = /\b(customer_id|customer id|customer_history|per customer|customer_series|customer series|for customer)\b/i.test(items.map(evidenceItemContentText).join("\n"));
+  const aggregate = /\b(global|aggregate|aggregated|all customers|overall|portfolio|cohort)\b/i.test(items.map(evidenceItemContentText).join("\n"));
+  const scope = perCustomer && !aggregate
+    ? "per-customer"
+    : aggregate && !perCustomer
+      ? "aggregate/global"
+      : perCustomer && aggregate
+        ? "mixed: it has customer-specific and aggregate signals"
+        : "not proven from the current evidence";
+  const arabic = grounding.language === "arabic";
+
+  if (arabic) {
+    const lines = [
+      `\u0627\u0644\u0640 forecasting \u0627\u0644\u0644\u064a \u0628\u0627\u064a\u0646 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a: **${type}**.`,
+      `\u0627\u0644\u0640 scope: **${scope}**.`,
+      forecastEvidence.length
+        ? `\u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0623\u0633\u0627\u0633\u064a\u0629: ${formatEvidenceLinks(forecastEvidence)}.`
+        : "\u0645\u0641\u064a\u0634 \u0645\u0644\u0641 \u0648\u0627\u0636\u062d \u0643\u0641\u0627\u064a\u0629 \u064a\u062b\u0628\u062a \u0627\u0644\u0646\u0648\u0639.",
+      ""
+    ];
+    if (facts.length) {
+      lines.push("**\u0623\u0631\u0642\u0627\u0645/\u0634\u0631\u0648\u0637 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0627\u0644\u0640 forecasting**");
+      lines.push("| Signal | \u0627\u0644\u0631\u0642\u0645 | \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0629/\u0627\u0644\u0634\u0631\u0637 | Evidence |");
+      lines.push("| --- | ---: | --- | --- |");
+      for (const fact of facts) {
+        lines.push(`| ${escapeTableCell(fact.signal)} | ${fact.value} | ${escapeTableCell(fact.comparison || fact.raw)} | ${fact.link} |`);
+      }
+      lines.push("");
+    }
+    if (!perCustomer && !aggregate) {
+      lines.push("\u0645\u0634 \u0647\u0623\u0643\u062f \u0625\u0646\u0647 \u0644\u0640 customer \u0648\u0627\u062d\u062f \u063a\u064a\u0631 \u0644\u0648 \u0627\u0644\u0643\u0648\u062f \u0642\u0627\u064a\u0644 \u0643\u062f\u0647 \u0628\u0648\u0636\u0648\u062d.");
+    }
+    if (validationErrors.length) {
+      lines.push("\u0627\u0644\u0631\u062f \u062f\u0647 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062f\u0644 \u0631\u062f \u063a\u064a\u0631 \u0645\u062b\u0628\u062a.");
+    }
+    return lines.filter(Boolean).join("\n");
+  }
+
+  const lines = [
+    `The forecasting type supported by current files is **${type}**.`,
+    `The scope is **${scope}**.`,
+    forecastEvidence.length ? `Main evidence: ${formatEvidenceLinks(forecastEvidence)}.` : "I did not find enough evidence to name the exact forecasting type.",
+    ""
+  ];
+  if (facts.length) {
+    lines.push("**Forecasting Facts**");
+    lines.push("| Signal | Value | Condition/formula | Evidence |");
+    lines.push("| --- | ---: | --- | --- |");
+    for (const fact of facts) lines.push(`| ${escapeTableCell(fact.signal)} | ${fact.value} | ${escapeTableCell(fact.comparison || fact.raw)} | ${fact.link} |`);
+  }
+  return lines.join("\n");
 }
 
 function createArabicDatasetRealtimeFallback(grounding: ProjectQuestionGrounding, validationErrors: string[]) {
@@ -1003,32 +1366,32 @@ function createArabicDatasetRealtimeFallback(grounding: ProjectQuestionGrounding
     ...grounding.understanding.dataFlowEvidence.filter((item) => /\b(sentiment|classifier|model|pipeline)\b/i.test(evidenceItemContentText(item)))
   ]).slice(0, 3);
   const lines = [
-    "ظپظ‡ظ…طھ ط§ظ„ظ…ط´ط±ظˆط¹ ظ…ظ† ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ„ظٹ ظ‚ط¯ط§ظ…ظٹ.",
+    "\u0641\u0647\u0645\u062a \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0645\u0646 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0644\u064a \u0642\u062f\u0627\u0645\u064a.",
     ""
   ];
   if (domain) {
-    lines.push(`ط§ظ„ظ…ط´ط±ظˆط¹ ط¸ط§ظ‡ط± ط¥ظ†ظ‡ ${domain}.`);
+    lines.push(`\u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0638\u0627\u0647\u0631 \u0625\u0646\u0647 ${domain}.`);
   } else {
-    lines.push("ظ…ط´ ظ‚ط§ط¯ط± ط£ط«ط¨طھ ط§ط³ظ… ط§ظ„ط¯ظˆظ…ظٹظ† ط¨ط«ظ‚ط© ظ…ظ† ط§ظ„ظ…ظ„ظپط§طھطŒ ظپظ‡ط´ط±ط­ ط§ظ„ظ„ظٹ ط§ظ„ظ…ظ„ظپط§طھ ظ…ط«ط¨طھط§ظ‡ ط¨ط³.");
+    lines.push("\u0645\u0634 \u0642\u0627\u062f\u0631 \u0623\u062b\u0628\u062a \u0627\u0633\u0645 \u0627\u0644\u062f\u0648\u0645\u064a\u0646 \u0628\u062b\u0642\u0629 \u0645\u0646 \u0627\u0644\u0645\u0644\u0641\u0627\u062a\u060c \u0641\u0647\u0634\u0631\u062d \u0627\u0644\u0644\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0645\u062b\u0628\u062a\u0627\u0647 \u0628\u0633.");
   }
   if (processingEvidence.length) {
-    lines.push(`ط¬ط²ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط©/ط§ظ„ظ…ظˆط¯ظٹظ„ ط¨ط§ظٹظ† ظپظٹ ${formatEvidenceLinks(processingEvidence)}.`);
+    lines.push(`\u062c\u0632\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062c\u0629/\u0627\u0644\u0645\u0648\u062f\u064a\u0644 \u0628\u0627\u064a\u0646 \u0641\u064a ${formatEvidenceLinks(processingEvidence)}.`);
   }
   if (datasetEvidence.length) {
-    lines.push(`ظ…طµط¯ط± ط§ظ„ط¯ط§طھط§ ط£ظˆ ط´ظƒظ„ ط§ظ„ط±ط³ط§ط¦ظ„ ط¨ط§ظٹظ† ظپظٹ ${formatEvidenceLinks(datasetEvidence)}.`);
+    lines.push(`\u0645\u0635\u062f\u0631 \u0627\u0644\u062f\u0627\u062a\u0627 \u0623\u0648 \u0634\u0643\u0644 \u0627\u0644\u0631\u0633\u0627\u064a\u0644 \u0628\u0627\u064a\u0646 \u0641\u064a ${formatEvidenceLinks(datasetEvidence)}.`);
   }
   if (realtimeEvidence.length) {
-    lines.push(`ط¬ط²ط، ط§ظ„طھط­ط¯ظٹط« ط§ظ„ظ„ظٹ ط¨ظٹط®ظ„ظٹظ‡ط§ طھط¨ط§ظ† realtime ط¨ط§ظٹظ† ظپظٹ ${formatEvidenceLinks(realtimeEvidence)}.`);
+    lines.push(`\u062c\u0632\u0621 \u0627\u0644\u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0644\u064a \u0628\u064a\u062e\u0644\u064a\u0647\u0627 \u062a\u0628\u0627\u0646 realtime \u0628\u0627\u064a\u0646 \u0641\u064a ${formatEvidenceLinks(realtimeEvidence)}.`);
     lines.push(realtimeModeSentence(realtimeEvidence));
   }
   lines.push("");
-  lines.push("ظٹط¹ظ†ظٹ ط¨ط¨ط³ط§ط·ط©: ط§ظ„ط¯ط§طھط§ طھط¯ط®ظ„طŒ طھطھظ†ط¶ظپ ط£ظˆ طھطھط¬ظ‡ط²طŒ طھط¹ط¯ظٹ ط¹ظ„ظ‰ ط¬ط²ط، ط§ظ„طھط­ظ„ظٹظ„طŒ ظˆط¨ط¹ط¯ظٹظ† ط§ظ„ط´ط§ط´ط© ط£ظˆ ط§ظ„ظ€ API ظٹط¹ط±ط¶ظˆط§ ظ†طھظٹط¬ط© ظ…ط­ط¯ط«ط© ط­ط³ط¨ ط§ظ„ظ„ظٹ ط§ظ„ظ…ظ„ظپط§طھ ظ…ط«ط¨طھط§ظ‡.");
+  lines.push("\u0628\u0628\u0633\u0627\u0637\u0629: \u0627\u0644\u062f\u0627\u062a\u0627 \u0628\u062a\u062f\u062e\u0644\u060c \u0628\u062a\u062a\u062c\u0647\u0632\u060c \u0648\u0628\u062a\u0639\u062f\u064a \u0639\u0644\u0649 \u062c\u0632\u0621 \u0627\u0644\u062a\u062d\u0644\u064a\u0644. \u0628\u0639\u062f \u0643\u062f\u0647 \u0627\u0644\u0634\u0627\u0634\u0629 \u0623\u0648 \u0627\u0644\u0640 API \u0628\u064a\u0639\u0631\u0636\u0648\u0627 \u0646\u062a\u064a\u062c\u0629 \u0645\u062d\u062f\u062b\u0629 \u062d\u0633\u0628 \u0627\u0644\u0644\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0645\u062b\u0628\u062a\u0627\u0647.");
   if (validationErrors.length) {
     lines.push("");
-    lines.push("ط§ط³طھط®ط¯ظ…طھ fallback ظ…ط­ظ„ظٹ ظ„ط£ظ† ط±ط¯ ط§ظ„ظ…ط²ظˆط¯ ظ…ط§ظƒط§ظ†ط´ ظ…ط«ط¨طھ ظƒظپط§ظٹط© ط¨ط§ظ„ط£ط¯ظ„ط©.");
+    lines.push("\u0627\u0644\u0631\u062f \u0647\u0646\u0627 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629 \u0628\u062f\u0644 \u0623\u064a \u062a\u062e\u0645\u064a\u0646.");
   }
   lines.push("");
-  lines.push("ظ…ط´ ظ‡ط²ظˆط¯ ظ‚طµط© ط¹ط§ظ…ط© ط¹ظ† dataset ط£ظˆ realtime ط؛ظٹط± ط§ظ„ظ„ظٹ ط¸ط§ظ‡ط± ظپظٹ ط§ظ„ظ…ظ„ظپط§طھ ط¯ظٹ.");
+  lines.push("\u0645\u0634 \u0647\u0632\u0648\u062f \u0642\u0635\u0629 \u0639\u0627\u0645\u0629 \u0639\u0646 dataset \u0623\u0648 realtime \u063a\u064a\u0631 \u0627\u0644\u0644\u064a \u0638\u0627\u0647\u0631 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u062f\u064a.");
   return lines.join("\n");
 }
 
@@ -1037,18 +1400,148 @@ function evidenceForGroup(grounding: ProjectQuestionGrounding, groupId: string) 
   return grounding.supportingEvidence.filter((item) => refs.has(item.ref));
 }
 
+function collectGroundingEvidenceForSynthesis(grounding: ProjectQuestionGrounding) {
+  return uniqueEvidenceItems([
+    ...grounding.supportingEvidence,
+    ...grounding.projectDomain.evidence,
+    ...grounding.understanding.sourceEvidence,
+    ...grounding.understanding.dataFlowEvidence,
+    ...grounding.understanding.validationEvidence
+  ]).slice(0, 40);
+}
+
+function findEvidenceByPath(grounding: ProjectQuestionGrounding, pattern: RegExp) {
+  return collectGroundingEvidenceForSynthesis(grounding).filter((item) => pattern.test(item.path));
+}
+
+function extractNumericEvidenceFacts(items: GroundingEvidenceItem[]) {
+  const facts: NumericEvidenceFact[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const lines = (item.snippet || item.reason || item.title || "").split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.length > 260) continue;
+      const fact = parseNumericFactLine(line, item);
+      if (!fact) continue;
+      const key = `${fact.path}:${fact.raw}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      facts.push(fact);
+      if (facts.length >= 60) return facts;
+    }
+  }
+  return facts.sort((left, right) => scoreNumericFact(right) - scoreNumericFact(left) || left.path.localeCompare(right.path));
+}
+
+function parseNumericFactLine(line: string, item: GroundingEvidenceItem): NumericEvidenceFact | undefined {
+  const normalizedLine = line.replace(/\s+/g, " ");
+  if (!/[<>]=?|==|=|:/.test(normalizedLine)) return undefined;
+  if (!/-?\d+(?:\.\d+)?/.test(normalizedLine)) return undefined;
+  const searchableLine = normalizedLine.replace(/[_\.]+/g, " ");
+  const relevant = /\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|borderline|direct|dispatch|high|low|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|forecast|arima|sarima|if|elif|return|class|baseline|movement|centroid)\b/i.test(searchableLine)
+    || /[<>]=?|==/.test(normalizedLine);
+  if (!relevant) return undefined;
+
+  const comparison = normalizedLine.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*(<=|>=|<|>|==)\s*(-?\d+(?:\.\d+)?)/)
+    ?? normalizedLine.match(/(-?\d+(?:\.\d+)?)\s*(<=|>=|<|>|==)\s*([A-Za-z_][A-Za-z0-9_\.]*)/);
+  if (comparison) {
+    const reverse = /^-?\d/.test(comparison[1] ?? "");
+    const signal = reverse ? comparison[3] ?? "value" : comparison[1] ?? "value";
+    const operator = comparison[2] ?? "";
+    const value = reverse ? comparison[1] ?? "" : comparison[3] ?? "";
+    return {
+      signal: humanizeSignal(signal),
+      value,
+      comparison: reverse ? `${value} ${operator} ${signal}` : `${signal} ${operator} ${value}`,
+      action: inferActionFromLine(normalizedLine),
+      link: item.markdownLink,
+      path: item.path,
+      raw: normalizedLine,
+      kind: "threshold"
+    };
+  }
+
+  const assignment = normalizedLine.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*=\s*(-?\d+(?:\.\d+)?)/)
+    ?? normalizedLine.match(/["']?([A-Za-z_][A-Za-z0-9_ -]+)["']?\s*:\s*(-?\d+(?:\.\d+)?)/);
+  if (assignment) {
+    const signal = assignment[1] ?? "value";
+    const value = assignment[2] ?? "";
+    return {
+      signal: humanizeSignal(signal),
+      value,
+      comparison: normalizedLine.includes(":") ? `${signal}: ${value}` : `${signal} = ${value}`,
+      action: inferActionFromLine(normalizedLine),
+      link: item.markdownLink,
+      path: item.path,
+      raw: normalizedLine,
+      kind: /\b(weight|weights)\b/i.test(`${signal} ${item.path}`) ? "weight" : "constant"
+    };
+  }
+
+  const formula = normalizedLine.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*=\s*(.+)/);
+  if (formula && /[+\-*/()]|\bmax\b|\bmin\b|\*\*/.test(formula[2] ?? "")) {
+    const numbers = normalizedLine.match(/-?\d+(?:\.\d+)?/g) ?? [];
+    return {
+      signal: humanizeSignal(formula[1] ?? "formula"),
+      value: numbers.join(", ") || "formula",
+      comparison: normalizedLine,
+      action: "formula",
+      link: item.markdownLink,
+      path: item.path,
+      raw: normalizedLine,
+      kind: "formula"
+    };
+  }
+  return undefined;
+}
+
+function scoreNumericFact(fact: NumericEvidenceFact) {
+  let score = 0;
+  if (/orchestrator|route|routes|agents|arima|forecast|model|services/i.test(fact.path)) score += 80;
+  if (fact.kind === "formula") score += 45;
+  if (fact.kind === "threshold") score += 40;
+  if (fact.kind === "weight") score += 30;
+  if (/\b(score|gap|cosine|membership|trend|drift|delta|f1|severity|direct|minimum|borderline)\b/i.test(`${fact.signal} ${fact.raw}`)) score += 30;
+  if (/package\.json|index\.html/i.test(fact.path)) score -= 60;
+  return score;
+}
+
+function inferActionFromLine(line: string) {
+  const returned = line.match(/\breturn\s+["']?([^"',})\]]+)/i)?.[1]?.trim();
+  if (returned) return `return ${returned}`;
+  if (/\bhuman review\b/i.test(line)) return "Human Review";
+  if (/\bre-cluster|recluster\b/i.test(line)) return "Re-cluster";
+  if (/\bdirect dispatch\b/i.test(line)) return "Direct Dispatch";
+  if (/\bstrong offer\b/i.test(line)) return "Strong Offer";
+  if (/\boffer\b/i.test(line)) return "Offer";
+  if (/\bdo nothing\b/i.test(line)) return "Do Nothing";
+  if (/\baccepted\b/i.test(line)) return "accept/reject guardrail";
+  if (/\btrend_multiplier\b/i.test(line)) return "trend multiplier";
+  if (/^\s*(if|elif|else if)\b/i.test(line)) return "condition branch";
+  return "stored numeric value";
+}
+
+function humanizeSignal(value: string) {
+  return value.replace(/^self\./, "").replace(/[_\.]+/g, " ").trim() || "value";
+}
+
+function escapeTableCell(value: string) {
+  return sanitizeAnswerFragment(value).replace(/\|/g, "\\|").replace(/\s+/g, " ").slice(0, 180);
+}
+
 function realtimeModeSentence(items: GroundingEvidenceItem[]) {
   const text = items.map(evidenceItemContentText).join("\n");
   if (/\b(setInterval|poll|polling|refresh|fetch)\b/i.test(text)) {
-    return "ط§ظ„ط£ط¯ظ„ط© ظ‡ظ†ط§ ط¨طھظ‚ظˆظ„ polling/refresh. ظٹط¹ظ†ظٹ ط§ظ„ط´ط§ط´ط© ط¨طھط·ظ„ط¨ طھط­ط¯ظٹط« ظƒظ„ ط´ظˆظٹط©طŒ ظ…ط´ socket ط­ظ‚ظٹظ‚ظٹ ظ…ط«ط¨طھ.";
+    return "\u0627\u0644\u0623\u062f\u0644\u0629 \u0647\u0646\u0627 \u0628\u062a\u0642\u0648\u0644 polling/refresh. \u064a\u0639\u0646\u064a \u0627\u0644\u0634\u0627\u0634\u0629 \u0628\u062a\u0637\u0644\u0628 \u062a\u062d\u062f\u064a\u062b \u0643\u0644 \u0634\u0648\u064a\u0629\u060c \u0645\u0634 socket \u062d\u0642\u064a\u0642\u064a \u0645\u062b\u0628\u062a.";
   }
   if (/\b(socket|websocket)\b/i.test(text)) {
-    return "ط§ظ„ط£ط¯ظ„ط© ظ‡ظ†ط§ ط¨طھط«ط¨طھ socket/websocketطŒ ظپط¯ظ‡ ط£ظ‚ط±ط¨ ظ„ظ€ realtime ط­ظ‚ظٹظ‚ظٹ.";
+    return "\u0627\u0644\u0623\u062f\u0644\u0629 \u0647\u0646\u0627 \u0628\u062a\u062b\u0628\u062a socket/websocket\u060c \u0641\u062f\u0647 \u0623\u0642\u0631\u0628 \u0644\u0640 realtime \u062d\u0642\u064a\u0642\u064a.";
   }
   if (/\b(stream|ingest|consumer|producer)\b/i.test(text)) {
-    return "ط§ظ„ط£ط¯ظ„ط© طھط«ط¨طھ ingestion/stream ظپظٹ ط§ظ„ط¯ط§طھط§. ظ„ظˆ ظ…ظپظٹط´ socket ط£ظˆ polling ظˆط§ط¶ط­طŒ ظ‡ظ‚ظˆظ„ ط¥ظ† realtime ط§ظ„ط­ظ‚ظٹظ‚ظٹ ظ…ط´ ظ…ط¤ظƒط¯.";
+    return "\u0627\u0644\u0623\u062f\u0644\u0629 \u062a\u062b\u0628\u062a ingestion/stream \u0641\u064a \u0627\u0644\u062f\u0627\u062a\u0627. \u0644\u0648 \u0645\u0641\u064a\u0634 socket \u0623\u0648 polling \u0648\u0627\u0636\u062d\u060c \u0647\u0642\u0648\u0644 \u0625\u0646 realtime \u0627\u0644\u062d\u0642\u064a\u0642\u064a \u0645\u0634 \u0645\u0624\u0643\u062f.";
   }
-  return "ط§ظ„ط£ط¯ظ„ط© طھط«ط¨طھ طھط­ط¯ظٹط« ظ‚ط±ظٹط¨ ظ…ظ† realtimeطŒ ظ„ظƒظ† ظ†ظˆط¹ظ‡ ط¨ط§ظ„ط¶ط¨ط· ظ…ط´ ظ…ط¤ظƒط¯ ظ…ظ† ط§ظ„ظ…ظ„ظپط§طھ ط¯ظٹ.";
+  return "\u0627\u0644\u0623\u062f\u0644\u0629 \u062a\u062b\u0628\u062a \u062a\u062d\u062f\u064a\u062b \u0642\u0631\u064a\u0628 \u0645\u0646 realtime\u060c \u0628\u0633 \u0646\u0648\u0639\u0647 \u0628\u0627\u0644\u0636\u0628\u0637 \u0645\u0634 \u0645\u0624\u0643\u062f \u0645\u0646 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u062f\u064a.";
 }
 
 function formatEvidenceLinks(items: GroundingEvidenceItem[]) {
@@ -1077,6 +1570,12 @@ function uniqueEvidenceItems(items: GroundingEvidenceItem[]) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function sanitizeAnswerFragment(value: string) {
+  return /(?:ط§ظ|ظپظ|ط¨ط|ظ…ط|ط§ط|ظ„ظ)/.test(value)
+    ? "current-workspace evidence"
+    : value;
 }
 
 function escapeRegExp(value: string) {

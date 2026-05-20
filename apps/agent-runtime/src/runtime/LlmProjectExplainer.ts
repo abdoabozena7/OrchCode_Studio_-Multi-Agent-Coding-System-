@@ -11,6 +11,8 @@ import {
   createStyleInstruction,
   evidenceItemSupportsConcept,
   findUnsupportedDomainClaims,
+  isForecastingScopeConcept,
+  isThresholdInventoryConcept,
   selectGroundingEvidenceRefs,
   type GroundingEvidenceItem,
   type ProjectQuestionGrounding
@@ -192,6 +194,12 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
     grounding.concept.specific
       ? `Requested concept: ${grounding.concept.label}. Only explain this concept using the listed concept-supporting refs.`
       : "This is a general project explanation. Do not invent project name, users, business purpose, or domain unless the evidence states it.",
+    isThresholdInventoryConcept(grounding)
+      ? "For threshold, formula, or numeric comparison questions: extract the concrete numbers, comparisons, formulas, branches, and actions into a useful table. Every number must have a cited ref."
+      : "",
+    isForecastingScopeConcept(grounding)
+      ? "For forecasting questions: identify the proven forecasting type, inputs, outputs, and whether the scope is per-customer or aggregate/global. Say 'not proven' for scope if refs do not show it."
+      : "",
     "For realtime claims, distinguish true realtime streams/sockets/consumers from polling/timers/repeated refresh. Say 'not proven' when the evidence does not prove either.",
     "Every factual claim about code behavior must be grounded in one of the provided refs.",
     "If a concept or project identity is not proven by the current workspace evidence, say you cannot confirm it instead of guessing.",
@@ -334,6 +342,22 @@ function validateProjectExplainResponse(
         errors.push(`answer citations must cover requested evidence group(s): ${missingGroups.join(", ")}`);
       }
     }
+    if (isThresholdInventoryConcept(grounding)) {
+      const citedItems = citedRefs
+        .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
+        .filter((item): item is EvidenceItem => Boolean(item));
+      if (!citedItems.some(citationHasNumericSupport)) {
+        errors.push("threshold answers must cite current-workspace lines that contain numeric comparisons, constants, weights, or formulas.");
+      }
+    }
+    if (isForecastingScopeConcept(grounding)) {
+      const citedItems = citedRefs
+        .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
+        .filter((item): item is EvidenceItem => Boolean(item));
+      if (!citedItems.some((item) => /\b(forecast|forecasting|arima|sarima|trend|prediction|delta|deviation)\b/i.test(evidenceItemText(item)))) {
+        errors.push("forecasting answers must cite current-workspace lines that support the forecasting type or trend logic.");
+      }
+    }
     for (const ref of citedRefs.filter(Boolean)) {
       const item = evidenceItems.find((candidate) => candidate.ref === ref);
       if (item && !evidenceItemSupportsConcept(item, grounding.concept) && answerMentionsRequestedConcept(response.answerMarkdown ?? "", grounding)) {
@@ -431,6 +455,16 @@ function answerMentionsProjectDomain(answer: string, grounding: ProjectQuestionG
   return [domain.label, ...domain.aliases]
     .filter((term) => term.trim().length > 2)
     .some((term) => answerLower.includes(term.toLowerCase()));
+}
+
+function citationHasNumericSupport(item: EvidenceItem) {
+  return /-?\d+(?:\.\d+)?/.test(evidenceItemText(item))
+    && (/\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|dispatch|condition|rule)\b/i.test(evidenceItemText(item))
+      || /[<>]=?|==/.test(evidenceItemText(item)));
+}
+
+function evidenceItemText(item: EvidenceItem) {
+  return [item.path, item.title, item.reason, item.snippet ?? ""].join("\n");
 }
 
 function meaningfulTerms(text: string) {

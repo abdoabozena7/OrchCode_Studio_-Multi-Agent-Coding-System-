@@ -159,8 +159,10 @@ const MANIFEST_NAMES = new Set([
   "tauri.conf.json"
 ]);
 
-const DOMAIN_EVIDENCE_RE = /\b(sentiment|sentement|classifier|classification|model|pipeline|polarity|todo|task|analytics|dashboard|metrics|agent|runtime|orchestrat|llm|provider|frontend|backend|api|server)\b/i;
-const DATA_FLOW_EVIDENCE_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment)\b/i;
+const DOMAIN_EVIDENCE_RE = /\b(sentiment|sentement|classifier|classification|model|pipeline|polarity|todo|task|analytics|dashboard|metrics|agent|agents|runtime|orchestrat|llm|provider|frontend|backend|api|server|forecast|forecasting|arima|sarima|threshold|score|decision|dispatch)\b/i;
+const DATA_FLOW_EVIDENCE_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment|forecast|forecasting|arima|sarima|trend|threshold|score|weight|orchestrator|decision|dispatch|drift)\b/i;
+const NUMERIC_FACT_EVIDENCE_RE = /\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|borderline|direct|dispatch|high|low|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|condition|rule)\b/i;
+const FORECAST_EVIDENCE_RE = /\b(forecast|forecasting|arima|sarima|trend|prediction|timeseries|time series|customer|aggregate|global|delta|deviation|drift)\b/i;
 const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
 
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
@@ -240,14 +242,19 @@ function createExplainSections(
   settings: ProjectExplainSettings
 ): ProjectExplainSection[] {
   const normalized = message.toLowerCase();
+  const requestedConcept = extractRequestedConcept(message);
+  const factHeavyQuestion = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact") ?? false;
   const smallProject = sampledFiles.length <= 8;
   const anchors = sampledFiles.flatMap((sample) => {
-    const perFileLimit = smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
+    const perFileLimit = factHeavyQuestion ? 12 : smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
     return sample.anchors.slice(0, perFileLimit);
   });
+  const maxSections = factHeavyQuestion
+    ? Math.max(48, settings.maxModuleSamples * 4)
+    : smallProject ? Math.min(24, anchors.length) : Math.max(16, settings.maxModuleSamples * 2);
   return anchors
     .sort((left, right) => scoreSection(right, normalized) - scoreSection(left, normalized) || left.filePath.localeCompare(right.filePath) || left.lineStart - right.lineStart)
-    .slice(0, smallProject ? Math.min(24, anchors.length) : Math.max(16, settings.maxModuleSamples * 2));
+    .slice(0, maxSections);
 }
 
 function scoreSection(section: ProjectExplainSection, normalizedMessage: string) {
@@ -257,7 +264,7 @@ function scoreSection(section: ProjectExplainSection, normalizedMessage: string)
   if (normalizedMessage.includes(path.basename(pathText))) score += 80;
   if (/main\.py|routes\.py|server\.(ts|js|py)|pipeline|processor|orchestr|agent|service|retriev|repository|decision|action|classification|model|ingest|stream|consumer|producer|queue|event|schema/.test(pathText)) score += 70;
   if (/index\.html|main\.(js|ts)|app\.(tsx|jsx|ts|js)|lib\.rs/.test(pathText)) score += 20;
-  if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|ingest|cluster|forecast|project scripts|test|requested concept/i.test(title)) score += 60;
+  if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|ingest|cluster|forecast|formula|numeric threshold|agent weight|project scripts|test|requested concept/i.test(title)) score += 60;
   if (/event|render|export|manifest/i.test(title)) score += 20;
   if (/dom wiring|html loads|css rule|dependency import|readable file sample/i.test(title)) score -= 40;
   if (/agent_proposal|agent-proposal|proposal|orchcode/i.test(pathText)) score -= 100;
@@ -290,6 +297,10 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
     lines.forEach((rawLine, index) => {
       const line = rawLine.trim();
       if (!line) return;
+      const numericAnchor = numericFactAnchor(line, filePath);
+      if (numericAnchor) {
+        add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
+      }
       const route = line.match(/^@(app|router)\.(get|post|put|delete|patch)\(["']([^"']+)["']/);
       const cls = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
       const fn = line.match(/^(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\(/);
@@ -305,6 +316,10 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
     lines.forEach((rawLine, index) => {
       const line = rawLine.trim();
       if (!line) return;
+      const numericAnchor = numericFactAnchor(line, filePath);
+      if (numericAnchor) {
+        add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
+      }
       if (/\b(fetch|axios\.|ky\.|request\()\b|\/api\/|POST|GET|PUT|DELETE/.test(line)) {
         add(index, "HTTP/API call", "هنا الواجهة أو الخدمة بتكلم endpoint أو API بدل ما تشتغل محلي فقط.", "دي نقطة مهمة لأنها تثبت انتقال الطلب بين طبقات المشروع.", extractQuotedValue(line));
       } else if (/\b(decision|action|dispatch|policy|evaluate|threshold|alert|status|state)\b/i.test(line)) {
@@ -356,6 +371,10 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
   lines.forEach((rawLine, index) => {
     const line = rawLine.trim();
     if (!line) return;
+    const numericAnchor = numericFactAnchor(line, filePath);
+    if (numericAnchor) {
+      add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
+    }
     if (/\.html$/i.test(filePath)) {
       if (/<script\b/i.test(line)) add(index, "HTML loads the app script", "السطر ده بيربط صفحة HTML بملف JavaScript المسؤول عن السلوك.", "من غير الربط ده الصفحة هتبقى هيكل ثابت من غير منطق التطبيق.", "script");
       else if (/<canvas\b|id=["']scene["']|id=["']app["']|id=["']root["']/i.test(line)) add(index, "HTML mount point", "ده العنصر اللي JavaScript غالبا بيرسم أو يركب عليه التجربة.", "بيعرفك نقطة اتصال الواجهة بالكود.", "mount");
@@ -387,7 +406,34 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
     add(firstMeaningful, "Readable file sample", "ده أول جزء مقروء من الملف ويستخدم كدليل عام.", "لما الملف مفيهوش anchors واضحة، بناخد بداية مقروءة بدل ما نخمن.");
   }
 
-  return dedupeSections(anchors).slice(0, 8);
+  const anchorLimit = requestedConcept?.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact")
+    ? 16
+    : 8;
+  return dedupeSections(anchors).slice(0, anchorLimit);
+}
+
+function numericFactAnchor(line: string, filePath: string) {
+  if (/^\s*</.test(line)) return undefined;
+  if (!NUMERIC_FACT_EVIDENCE_RE.test(`${filePath}\n${line}`)) return undefined;
+  if (!/-?\d+(?:\.\d+)?/.test(line)) return undefined;
+  if (!/[<>]=?|==|=|:/.test(line)) return undefined;
+  const compact = line.replace(/\s+/g, " ").slice(0, 180);
+  const comparison = compact.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*(<=|>=|<|>|==)\s*(-?\d+(?:\.\d+)?)/);
+  const assignment = compact.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*=\s*(-?\d+(?:\.\d+)?)/)
+    ?? compact.match(/["']?([A-Za-z_][A-Za-z0-9_ -]+)["']?\s*:\s*(-?\d+(?:\.\d+)?)/);
+  const formula = compact.match(/([A-Za-z_][A-Za-z0-9_\.]*)\s*=\s*(.+)/);
+  const symbol = comparison?.[1] ?? assignment?.[1] ?? formula?.[1] ?? "numeric fact";
+  const title = formula && !assignment && /[+\-*/()]|\bmax\b|\bmin\b|\*\*/.test(formula[2] ?? "")
+    ? "Formula or score calculation"
+    : /\b(weight|weights)\b/i.test(`${symbol} ${filePath}`)
+      ? "Agent weight or numeric constant"
+      : "Numeric threshold or condition";
+  return {
+    title,
+    explanation: `Current-workspace code contains the numeric fact \`${compact}\`.`,
+    whyItMatters: "This supports threshold, formula, forecasting, or decision-rule project questions with concrete file evidence.",
+    symbol
+  };
 }
 
 function snippetAround(lines: string[], lineIndex: number, radius: number) {
@@ -585,16 +631,22 @@ function findConceptMatchingFiles(
   settings: ProjectExplainSettings
 ) {
   const matches: Array<{ file: InventoryFile; score: number }> = [];
+  const wantsThresholdFacts = concept.evidenceGroups?.some((group) => group.id === "threshold_fact") ?? false;
+  const wantsForecastingFacts = concept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
   for (const file of inventory.files.filter((entry) => entry.readable)) {
     if (!shouldIncludeAgentArtifact(file.path, input.message)) continue;
     const pathGroups = matchingConceptEvidenceGroups(file.path, concept);
     let score = textSupportsRequestedConcept(file.path, concept) ? 50 : 0;
     if (pathGroups.length) score += pathGroups.length * 35;
+    if (wantsThresholdFacts && /orchestrator|agents?|routes?|arima|forecast|model|services|decision|policy/i.test(file.path)) score += 45;
+    if (wantsForecastingFacts && /arima|forecast|trend|model|routes?|services/i.test(file.path)) score += 55;
     try {
       const content = fs.readFileSync(path.join(workspaceRoot, file.path), "utf8").slice(0, settings.maxFileReadChars);
       const contentGroups = matchingConceptEvidenceGroups(content, concept);
       if (textSupportsRequestedConcept(content, concept)) score += file.isDoc || file.isManifest ? 80 : 100;
       if (contentGroups.length) score += contentGroups.length * (file.isDoc || file.isManifest ? 90 : 130);
+      if (wantsThresholdFacts && NUMERIC_FACT_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 60 : 150;
+      if (wantsForecastingFacts && FORECAST_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 70 : 150;
     } catch {
       // Ignore unreadable files; inventory and other sampled files still provide context.
     }
@@ -634,18 +686,26 @@ function findProjectUnderstandingFiles(
     const dataFlow = DATA_FLOW_EVIDENCE_RE.test(text)
       ? (sourceFile ? 130 : file.isDoc ? 90 : 70) + pathSignalBonus(file.path, DATA_FLOW_EVIDENCE_RE)
       : 0;
+    const numeric = NUMERIC_FACT_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 150 : file.isDoc ? 80 : 55) + pathSignalBonus(file.path, NUMERIC_FACT_EVIDENCE_RE)
+      : 0;
+    const forecasting = FORECAST_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 145 : file.isDoc ? 85 : 60) + pathSignalBonus(file.path, FORECAST_EVIDENCE_RE)
+      : 0;
     const source = sourceFile
       ? scoreSourceUnderstandingFile(file, text)
       : 0;
-    const validation = Math.max(domain, dataFlow, source) + (file.isEntryPoint ? 25 : 0);
-    if (domain || dataFlow || source || validation > 40) {
+    const validation = Math.max(domain, dataFlow, numeric, forecasting, source) + (file.isEntryPoint ? 25 : 0);
+    if (domain || dataFlow || numeric || forecasting || source || validation > 40) {
       const reason = [
         domain ? "project-domain-evidence" : "",
         dataFlow ? "project-data-flow-evidence" : "",
+        numeric ? "numeric-threshold-evidence" : "",
+        forecasting ? "forecasting-evidence" : "",
         source ? "project-source-evidence" : "",
         validation > 80 ? "project-validation-evidence" : ""
       ].filter(Boolean).join("+") || "project-understanding-evidence";
-      scored.push({ file, reason, domain, dataFlow, source, validation });
+      scored.push({ file, reason, domain: Math.max(domain, forecasting), dataFlow: Math.max(dataFlow, numeric, forecasting), source: Math.max(source, numeric), validation });
     }
   }
   return uniqueScoredFiles([
@@ -662,7 +722,9 @@ function scoreSourceUnderstandingFile(file: InventoryFile, text: string) {
   if (/(\bclass\b|\bdef\b|\bfunction\b|=>|export\s+function|FastAPI|APIRouter)/.test(text)) score += 25;
   if (DATA_FLOW_EVIDENCE_RE.test(text)) score += 45;
   if (DOMAIN_EVIDENCE_RE.test(text)) score += 45;
-  if (/(pipeline|model|classifier|ingest|stream|service|api|route|app\.(jsx|tsx|js|ts)|main\.)/i.test(file.path)) score += 35;
+  if (NUMERIC_FACT_EVIDENCE_RE.test(text)) score += 55;
+  if (FORECAST_EVIDENCE_RE.test(text)) score += 50;
+  if (/(pipeline|model|classifier|ingest|stream|service|api|route|app\.(jsx|tsx|js|ts)|main\.|orchestrator|agents?|arima|forecast)/i.test(file.path)) score += 35;
   if (file.isTest) score -= 30;
   return score;
 }
@@ -731,6 +793,8 @@ function createReportEvidence(
   const requestedConcept = extractRequestedConcept(message);
   const domainSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, DOMAIN_EVIDENCE_RE), 10);
   const dataFlowSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, DATA_FLOW_EVIDENCE_RE), 12);
+  const numericSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, NUMERIC_FACT_EVIDENCE_RE), 14);
+  const forecastSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, FORECAST_EVIDENCE_RE), 10);
   const conceptSamples = requestedConcept.specific
     ? pickSamples(sampledFiles, (sample) => textSupportsRequestedConcept(sampleText(sample), requestedConcept), 12)
     : [];
@@ -740,6 +804,8 @@ function createReportEvidence(
   const sampledEvidence = uniqueSamples([
     ...domainSamples,
     ...dataFlowSamples,
+    ...numericSamples,
+    ...forecastSamples,
     ...conceptSamples,
     ...sourceSamples,
     ...docSamples,
