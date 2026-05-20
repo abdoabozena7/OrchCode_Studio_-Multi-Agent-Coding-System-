@@ -1,6 +1,7 @@
 ﻿import type { ProjectExplainReport } from "@orchcode/protocol";
 
 export type ProjectAnswerStyle = "child_simple" | "technical" | "concise" | "detailed" | "default";
+export type ProjectAnswerShape = "inventory_table" | "concise_explanation" | "detailed_walkthrough";
 
 export type RequestedConcept = {
   specific: boolean;
@@ -61,6 +62,7 @@ export type GroundingEvidenceItem = {
 export type ProjectQuestionGrounding = {
   language: "arabic" | "english";
   style: ProjectAnswerStyle;
+  answerShape: ProjectAnswerShape;
   concept: RequestedConcept;
   projectContextRequired: boolean;
   projectDomain: ProjectDomainGrounding;
@@ -191,7 +193,10 @@ const FORECASTING_ALIASES = [
   "forecast", "forecasts", "forecasting", "arima", "sarima", "trend", "prediction",
   "predict", "predicted", "timeseries", "time series", "customer", "customers",
   "per customer", "customer one", "one customer", "single customer", "aggregate",
-  "aggregated", "global", "scope", "series",
+  "aggregated", "global", "scope", "series", "cluster", "clusters", "segment",
+  "segments", "cluster-level", "per-cluster", "cluster_forecasts", "cluster_series",
+  "fit_cluster_models", "get_cluster_state", "predicted_cluster", "train_offline_artifacts",
+  "retrain", "retraining", "auto_retrain",
   "\u062a\u0648\u0642\u0639", "\u062a\u0648\u0642\u0639\u0627\u062a", "\u0646\u0648\u0639",
   "\u0627\u0644\u0641\u0648\u0631\u0643\u0627\u0633\u062a\u064a\u0646\u062c", "\u0639\u0645\u064a\u0644",
   "\u0644\u0639\u0645\u064a\u0644", "\u0639\u0645\u064a\u0644 \u0648\u0627\u062d\u062f",
@@ -209,7 +214,7 @@ const FORECASTING_FACT_GROUP: RequestedConceptEvidenceGroup = {
   id: "forecasting_fact",
   label: "forecasting type/scope evidence",
   aliases: FORECASTING_ALIASES,
-  coreTerms: ["forecast", "forecasting", "arima", "sarima", "trend", "customer", "\u0639\u0645\u064a\u0644"]
+  coreTerms: ["forecast", "forecasting", "arima", "sarima", "trend", "customer", "cluster", "\u0639\u0645\u064a\u0644"]
 };
 
 const DATASET_REALTIME_CONCEPT_LABEL = "dataset realtime behavior";
@@ -361,6 +366,23 @@ export function detectProjectAnswerStyle(userPrompt: string): ProjectAnswerStyle
   return "default";
 }
 
+export function detectProjectAnswerShape(userPrompt: string): ProjectAnswerShape {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  const rawPrompt = userPrompt.toLowerCase();
+  const asksForInventory =
+    /\b(all|every|list|inventory|table|values?|numbers?|thresholds?|formulas?|comparisons?|cutoffs?|conditions?)\b/.test(normalized)
+    || /(?:\u0643\u0644|\u0647\u0627\u062a\u0644\u064a|\u062c\u062f\u0648\u0644|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644\u0627\u062a|\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0643\u0627\u0645)/.test(rawPrompt);
+  const asksForNumericSweep =
+    /\b(threshold|thresholds|threshlod|threshlods|score|weight|compare|comparison|formula|formulas|condition|conditions)\b/.test(normalized)
+    || /(?:threshold|threshlod|\u0639\u062a\u0628\u0629|\u062d\u062f|\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a)/.test(rawPrompt);
+  if (asksForInventory && asksForNumericSweep) return "inventory_table";
+  if (/\b(detailed|thorough|step by step|walkthrough|full flow|architecture|deep dive)\b/.test(normalized)
+    || /(?:\u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644|\u062e\u0637\u0648\u0629|\u0643\u0644\s+\u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644|\u0641\u0644\u0648|\u0627\u0644\u0641\u0644\u0648)/.test(rawPrompt)) {
+    return "detailed_walkthrough";
+  }
+  return "concise_explanation";
+}
+
 export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   const styleStripped = stripStylePhrases(userPrompt);
   const numericOrForecasting =
@@ -399,6 +421,7 @@ export function analyzeProjectQuestionGrounding(
 ): ProjectQuestionGrounding {
   const language = /[\u0600-\u06ff]/.test(userPrompt) ? "arabic" : "english";
   const style = detectProjectAnswerStyle(userPrompt);
+  const answerShape = detectProjectAnswerShape(userPrompt);
   const concept = extractRequestedConcept(userPrompt);
   const projectContextRequired = detectProjectContextRequired(userPrompt);
   const projectDomain = inferProjectDomain(report, evidenceItems);
@@ -419,6 +442,7 @@ export function analyzeProjectQuestionGrounding(
   return {
     language,
     style,
+    answerShape,
     concept,
     projectContextRequired,
     projectDomain,
@@ -466,6 +490,7 @@ export function createGroundingPackText(grounding: ProjectQuestionGrounding) {
     `Concept found in current workspace evidence: ${grounding.concept.specific ? grounding.conceptFound ? "yes" : "no" : "not concept-specific"}`,
     grounding.evidenceGroupCoverage.length ? `Evidence groups: ${formatEvidenceGroupCoverage(grounding.evidenceGroupCoverage)}` : "",
     `Answer style: ${grounding.style}`,
+    `Answer shape: ${grounding.answerShape}`,
     `Style instruction: ${createStyleInstruction(grounding.style)}`,
     `Inspected files: ${grounding.inspectedFiles.slice(0, 12).join(", ") || "none"}`,
     grounding.concept.specific && grounding.conceptFound
@@ -1229,7 +1254,7 @@ function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, v
       ""
     ];
     if (orchestratorEvidence.length || agentEvidence.length) {
-      lines.push("**\u0645\u064a\u0646 \u0628\u064a\u062d\u0633\u0645 \u0627\u0644\u0642\u0631\u0627\u0631\u061f**");
+      lines.push("\u0645\u064a\u0646 \u0628\u064a\u062d\u0633\u0645 \u0627\u0644\u0642\u0631\u0627\u0631\u061f");
       if (orchestratorEvidence.length) {
         lines.push(`\u0627\u0644\u062f\u0644\u064a\u0644 \u0627\u0644\u0623\u0642\u0648\u0649 \u0639\u0644\u0649 \u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0642\u0631\u0627\u0631 \u062c\u0627\u064a \u0645\u0646 ${formatEvidenceLinks(orchestratorEvidence)}.`);
       }
@@ -1239,7 +1264,7 @@ function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, v
       lines.push("");
     }
     if (thresholdFacts.length) {
-      lines.push("**\u062c\u062f\u0648\u0644 \u0627\u0644\u0640 thresholds / \u0627\u0644\u0623\u0631\u0642\u0627\u0645**");
+      lines.push("\u062c\u062f\u0648\u0644 \u0627\u0644\u0640 thresholds / \u0627\u0644\u0623\u0631\u0642\u0627\u0645");
       lines.push("| Signal | \u0627\u0644\u0631\u0642\u0645 | \u0628\u064a\u062a\u0642\u0627\u0631\u0646 \u0625\u0632\u0627\u064a | \u0627\u0644\u0645\u0639\u0646\u0649/\u0627\u0644\u0623\u0643\u0634\u0646 | Evidence |");
       lines.push("| --- | ---: | --- | --- | --- |");
       for (const fact of thresholdFacts) {
@@ -1248,14 +1273,14 @@ function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, v
       lines.push("");
     }
     if (formulaFacts.length) {
-      lines.push("**\u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647\u0627**");
+      lines.push("\u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647\u0627");
       for (const fact of formulaFacts) {
         lines.push(`- \`${fact.raw}\` (${fact.link})`);
       }
       lines.push("");
     }
     if (arimaEvidence.length) {
-      lines.push(`**\u062c\u0632\u0621 forecasting/drift**: \u0641\u064a\u0647 \u0623\u062f\u0644\u0629 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0640 trend/forecast \u0641\u064a ${formatEvidenceLinks(arimaEvidence)}.`);
+      lines.push(`\u062c\u0632\u0621 forecasting/drift: \u0641\u064a\u0647 \u0623\u062f\u0644\u0629 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0640 trend/forecast \u0641\u064a ${formatEvidenceLinks(arimaEvidence)}.`);
       lines.push("");
     }
     if (validationErrors.length) {
@@ -1270,13 +1295,13 @@ function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, v
     ""
   ];
   if (orchestratorEvidence.length || agentEvidence.length) {
-    lines.push("**Decision Owner**");
+    lines.push("Decision Owner");
     if (orchestratorEvidence.length) lines.push(`Decision rules appear in ${formatEvidenceLinks(orchestratorEvidence)}.`);
     if (agentEvidence.length) lines.push(`Agent weights or branches appear in ${formatEvidenceLinks(agentEvidence)}.`);
     lines.push("");
   }
   if (thresholdFacts.length) {
-    lines.push("**Thresholds And Numeric Comparisons**");
+    lines.push("Thresholds And Numeric Comparisons");
     lines.push("| Signal | Value | Compared how | Result/action | Evidence |");
     lines.push("| --- | ---: | --- | --- | --- |");
     for (const fact of thresholdFacts) {
@@ -1285,7 +1310,7 @@ function createThresholdInventoryFallback(grounding: ProjectQuestionGrounding, v
     lines.push("");
   }
   if (formulaFacts.length) {
-    lines.push("**Formulas**");
+    lines.push("Formulas");
     for (const fact of formulaFacts) lines.push(`- \`${fact.raw}\` (${fact.link})`);
   }
   return lines.join("\n");
@@ -1303,28 +1328,41 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
       : text.includes("forecast")
         ? "forecasting/trend logic"
         : "forecasting type not fully named";
-  const perCustomer = /\b(customer_id|customer id|customer_history|per customer|customer_series|customer series|for customer)\b/i.test(items.map(evidenceItemContentText).join("\n"));
-  const aggregate = /\b(global|aggregate|aggregated|all customers|overall|portfolio|cohort)\b/i.test(items.map(evidenceItemContentText).join("\n"));
-  const scope = perCustomer && !aggregate
-    ? "per-customer"
-    : aggregate && !perCustomer
-      ? "aggregate/global"
-      : perCustomer && aggregate
-        ? "mixed: it has customer-specific and aggregate signals"
-        : "not proven from the current evidence";
+  const scopeEvidence = items
+    .filter((item) => /\b(forecast_customer_risk|customer_history|customer_series|per customer|cluster_forecasts|cluster_series|cluster_label|cluster_id|fit_cluster_models|get_cluster_state|predicted_cluster|per-cluster|cluster-level|global_history|all customers|aggregate|overall)\b/i.test(evidenceItemContentText(item)))
+    .slice(0, 5);
+  const scope = inferForecastingScope(items);
   const arabic = grounding.language === "arabic";
+  const cadence = summarizeForecastingCadence(items, arabic);
+  const shouldUseTable = grounding.answerShape === "inventory_table";
+  const highSignalForecastEvidence = items
+    .filter((item) => {
+      const content = evidenceItemContentText(item);
+      return /arima_model|routes\.py/i.test(item.path)
+        && /\b(SARIMA|cluster_forecasts|cluster_series|fit_cluster_models|get_cluster_state|predicted_cluster|train_offline_artifacts|retrain_with_rollback|AUTO_RETRAIN_CUSTOMER_INTERVAL|auto_retrain_every_customers|customer interactions?)\b/i.test(content);
+    })
+    .slice(0, 6);
+  const mainEvidence = uniqueEvidenceItems([
+    ...highSignalForecastEvidence,
+    ...(cadence?.evidence ?? []),
+    ...forecastEvidence.filter((item) => /arima|sarima|forecast/i.test(item.path)),
+    ...scopeEvidence,
+    ...forecastEvidence
+  ]).slice(0, 5);
 
   if (arabic) {
     const lines = [
-      `\u0627\u0644\u0640 forecasting \u0627\u0644\u0644\u064a \u0628\u0627\u064a\u0646 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a: **${type}**.`,
-      `\u0627\u0644\u0640 scope: **${scope}**.`,
-      forecastEvidence.length
-        ? `\u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0623\u0633\u0627\u0633\u064a\u0629: ${formatEvidenceLinks(forecastEvidence)}.`
+      `\u0627\u0644\u0640 forecasting \u0627\u0644\u0644\u064a \u0628\u0627\u064a\u0646 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a هو ${type}.`,
+      `\u0627\u0644\u0640 scope \u0627\u0644\u0644\u064a \u0642\u062f\u0631\u062a \u0623\u062b\u0628\u062a\u0647: ${scope.label}.`,
+      scope.arabicExplanation,
+      cadence?.sentence ?? "\u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u062f\u0644\u064a\u0644 \u0643\u0627\u0641\u064a \u064a\u0642\u0648\u0644 \u0625\u0645\u062a\u0649 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0623\u0648 \u0628\u064a\u062a\u062c\u062f\u062f.",
+      mainEvidence.length
+        ? `\u0627\u0644\u0623\u062f\u0644\u0629: ${formatEvidenceLinks(mainEvidence)}.`
         : "\u0645\u0641\u064a\u0634 \u0645\u0644\u0641 \u0648\u0627\u0636\u062d \u0643\u0641\u0627\u064a\u0629 \u064a\u062b\u0628\u062a \u0627\u0644\u0646\u0648\u0639.",
       ""
     ];
-    if (facts.length) {
-      lines.push("**\u0623\u0631\u0642\u0627\u0645/\u0634\u0631\u0648\u0637 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0627\u0644\u0640 forecasting**");
+    if (shouldUseTable && facts.length) {
+      lines.push("\u0623\u0631\u0642\u0627\u0645/\u0634\u0631\u0648\u0637 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0627\u0644\u0640 forecasting");
       lines.push("| Signal | \u0627\u0644\u0631\u0642\u0645 | \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0629/\u0627\u0644\u0634\u0631\u0637 | Evidence |");
       lines.push("| --- | ---: | --- | --- |");
       for (const fact of facts) {
@@ -1332,28 +1370,129 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
       }
       lines.push("");
     }
-    if (!perCustomer && !aggregate) {
+    if (scope.kind === "unknown") {
       lines.push("\u0645\u0634 \u0647\u0623\u0643\u062f \u0625\u0646\u0647 \u0644\u0640 customer \u0648\u0627\u062d\u062f \u063a\u064a\u0631 \u0644\u0648 \u0627\u0644\u0643\u0648\u062f \u0642\u0627\u064a\u0644 \u0643\u062f\u0647 \u0628\u0648\u0636\u0648\u062d.");
     }
     if (validationErrors.length) {
-      lines.push("\u0627\u0644\u0631\u062f \u062f\u0647 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062f\u0644 \u0631\u062f \u063a\u064a\u0631 \u0645\u062b\u0628\u062a.");
+      lines.push("\u0627\u0644\u0631\u062f \u062f\u0647 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.");
     }
     return lines.filter(Boolean).join("\n");
   }
 
   const lines = [
-    `The forecasting type supported by current files is **${type}**.`,
-    `The scope is **${scope}**.`,
-    forecastEvidence.length ? `Main evidence: ${formatEvidenceLinks(forecastEvidence)}.` : "I did not find enough evidence to name the exact forecasting type.",
+    `The forecasting type supported by current files is ${type}.`,
+    `The supported scope is ${scope.label}.`,
+    scope.englishExplanation,
+    cadence?.sentence ?? "I did not find enough evidence to say when the forecast is recomputed or refreshed.",
+    mainEvidence.length ? `Main evidence: ${formatEvidenceLinks(mainEvidence)}.` : "I did not find enough evidence to name the exact forecasting type.",
     ""
   ];
-  if (facts.length) {
-    lines.push("**Forecasting Facts**");
+  if (shouldUseTable && facts.length) {
+    lines.push("Forecasting Facts");
     lines.push("| Signal | Value | Condition/formula | Evidence |");
     lines.push("| --- | ---: | --- | --- |");
     for (const fact of facts) lines.push(`| ${escapeTableCell(fact.signal)} | ${fact.value} | ${escapeTableCell(fact.comparison || fact.raw)} | ${fact.link} |`);
   }
   return lines.join("\n");
+}
+
+function inferForecastingScope(items: GroundingEvidenceItem[]) {
+  const text = items.map(evidenceItemContentText).join("\n");
+  const clusterScoped = /\b(cluster_forecasts|cluster_series|cluster_drifts|cluster_trend_multipliers|cluster_label|cluster_id|fit_cluster_models|get_cluster_state|predicted_cluster|per-cluster|cluster-level)\b/i.test(text);
+  const perCustomer = /\b(forecast_customer_risk|customer_history|customer_series|per customer|customer-specific forecast|for customer)\b/i.test(text);
+  const aggregate = /\b(global_history|get_global_history_series|global training history|aggregate|aggregated|all customers|overall|portfolio|cohort)\b/i.test(text);
+  if (clusterScoped) {
+    return {
+      kind: "cluster" as const,
+      label: "cluster-level / per-segment, not one SARIMA model per customer",
+      arabicExplanation: "\u064a\u0639\u0646\u064a \u0645\u0634 SARIMA \u062c\u062f\u064a\u062f \u0644\u0643\u0644 customer. \u0627\u0644\u0643\u0648\u062f \u0628\u064a\u0628\u0646\u064a forecast \u0644\u0643\u0644 cluster/segment\u060c \u0648\u0644\u0645\u0627 customer \u064a\u062a\u0639\u0627\u0644\u062c \u0628\u064a\u0633\u062a\u062e\u062f\u0645 predicted_cluster \u0639\u0634\u0627\u0646 \u064a\u062c\u064a\u0628 forecast \u0627\u0644\u0640 cluster \u0628\u062a\u0627\u0639\u0647.",
+      englishExplanation: "It is not a fresh SARIMA model for every customer. The code builds forecasts per cluster/segment, then each processed customer uses the forecast for its predicted_cluster."
+    };
+  }
+  if (perCustomer && !aggregate) {
+    return {
+      kind: "per_customer" as const,
+      label: "per-customer",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0631\u062a\u0628\u0637 \u0628\u0640 customer/customer_history \u0646\u0641\u0633\u0647.",
+      englishExplanation: "The evidence ties the forecast to a specific customer or customer_history."
+    };
+  }
+  if (aggregate && !perCustomer) {
+    return {
+      kind: "aggregate" as const,
+      label: "aggregate/global",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0628\u0646\u064a \u0639\u0644\u0649 history \u0645\u062c\u0645\u0639\u0629 \u0623\u0648 global \u0645\u0634 customer \u0648\u0627\u062d\u062f.",
+      englishExplanation: "The evidence points to aggregate/global history rather than one customer."
+    };
+  }
+  if (perCustomer && aggregate) {
+    return {
+      kind: "mixed" as const,
+      label: "mixed: customer-specific and aggregate signals",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0641\u064a\u0647\u0627 \u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 customer \u0648\u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 aggregate history\u060c \u0641\u0645\u0634 \u0647\u062e\u062a\u0632\u0644\u0647\u0627 \u0641\u064a \u0648\u0627\u062d\u062f \u0628\u0633.",
+      englishExplanation: "The evidence contains both customer-specific and aggregate-history signals."
+    };
+  }
+  return {
+    kind: "unknown" as const,
+    label: "not proven from the current evidence",
+    arabicExplanation: "\u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0644\u064a \u0627\u062a\u0642\u0631\u062a \u0645\u0627\u0642\u0627\u0644\u062a\u0634 \u0628\u0648\u0636\u0648\u062d \u0627\u0644\u0640 scope.",
+    englishExplanation: "The sampled files did not clearly prove the forecasting scope."
+  };
+}
+
+function summarizeForecastingCadence(items: GroundingEvidenceItem[], arabic: boolean): { sentence: string; evidence: GroundingEvidenceItem[] } | undefined {
+  const cadenceEvidence = items
+    .filter((item) => {
+      const text = evidenceItemContentText(item);
+      const trainingOrCadence = /\b(train|training|retrain|retraining|fit_cluster_models|save_state|auto_retrain|auto_retrain_every_customers|AUTO_RETRAIN_CUSTOMER_INTERVAL|processed|customer|customers|interactions?)\b/i.test(text);
+      const forecastOrCadence = /\b(forecast|forecasting|arima|sarima|trend|train|retrain|fit_cluster_models|save_state|auto_retrain|AUTO_RETRAIN_CUSTOMER_INTERVAL|customer interactions?)\b/i.test(text);
+      return trainingOrCadence && forecastOrCadence;
+    })
+    .slice(0, 4);
+  if (!cadenceEvidence.length) return undefined;
+  const text = cadenceEvidence.map(evidenceItemContentText).join("\n");
+  const hasTraining = /\b(train_offline_artifacts|fit_cluster_models|save_state|training|retrain|retraining)\b/i.test(text);
+  const hasFiftyCustomerCadence = /\b50\b/.test(text) && /\b(customer|customers|processed|auto_retrain|retrain)\b/i.test(text);
+  if (arabic) {
+    if (hasTraining && hasFiftyCustomerCadence) {
+      return {
+        sentence: "\u0628\u0627\u064a\u0646 \u0625\u0646 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0645\u0639 \u0627\u0644\u0640 training/retraining\u060c \u0648\u0641\u064a\u0647 \u062f\u0644\u064a\u0644 \u0639\u0644\u0649 cadence \u0643\u0644 50 customer.",
+        evidence: cadenceEvidence
+      };
+    }
+    if (hasTraining) {
+      return {
+        sentence: "\u0628\u0627\u064a\u0646 \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0631\u062a\u0628\u0637 \u0628\u0627\u0644\u0640 training \u0623\u0648 \u0627\u0644\u0640 retraining\u060c \u0628\u0633 \u0645\u0627\u0644\u0642\u064a\u062a\u0634 cadence \u0631\u0642\u0645\u064a \u0645\u0624\u0643\u062f.",
+        evidence: cadenceEvidence
+      };
+    }
+    if (hasFiftyCustomerCadence) {
+      return {
+        sentence: "\u0641\u064a\u0647 \u062f\u0644\u064a\u0644 \u0639\u0644\u0649 cadence \u0645\u0631\u062a\u0628\u0637 \u0628\u0640 50 customer\u060c \u0628\u0633 \u0631\u0628\u0637\u0647 \u0628\u0627\u0644\u0640 forecast \u0646\u0641\u0633\u0647 \u0645\u062d\u062a\u0627\u062c \u062f\u0644\u064a\u0644 \u0623\u0648\u0636\u062d.",
+        evidence: cadenceEvidence
+      };
+    }
+  }
+  if (hasTraining && hasFiftyCustomerCadence) {
+    return {
+      sentence: "The forecast appears to be recomputed with training/retraining, with evidence for a 50-customer cadence.",
+      evidence: cadenceEvidence
+    };
+  }
+  if (hasTraining) {
+    return {
+      sentence: "The forecast appears tied to training or retraining, but I did not find a proven numeric cadence.",
+      evidence: cadenceEvidence
+    };
+  }
+  if (hasFiftyCustomerCadence) {
+    return {
+      sentence: "I found evidence of a 50-customer cadence, but not enough to tie it directly to forecast recomputation.",
+      evidence: cadenceEvidence
+    };
+  }
+  return undefined;
 }
 
 function createArabicDatasetRealtimeFallback(grounding: ProjectQuestionGrounding, validationErrors: string[]) {
@@ -1401,13 +1540,14 @@ function evidenceForGroup(grounding: ProjectQuestionGrounding, groupId: string) 
 }
 
 function collectGroundingEvidenceForSynthesis(grounding: ProjectQuestionGrounding) {
+  const limit = isThresholdInventoryConcept(grounding) || isForecastingScopeConcept(grounding) ? 120 : 40;
   return uniqueEvidenceItems([
     ...grounding.supportingEvidence,
     ...grounding.projectDomain.evidence,
     ...grounding.understanding.sourceEvidence,
     ...grounding.understanding.dataFlowEvidence,
     ...grounding.understanding.validationEvidence
-  ]).slice(0, 40);
+  ]).slice(0, limit);
 }
 
 function findEvidenceByPath(grounding: ProjectQuestionGrounding, pattern: RegExp) {
@@ -1428,7 +1568,7 @@ function extractNumericEvidenceFacts(items: GroundingEvidenceItem[]) {
       if (seen.has(key)) continue;
       seen.add(key);
       facts.push(fact);
-      if (facts.length >= 60) return facts;
+      if (facts.length >= 120) return facts;
     }
   }
   return facts.sort((left, right) => scoreNumericFact(right) - scoreNumericFact(left) || left.path.localeCompare(right.path));

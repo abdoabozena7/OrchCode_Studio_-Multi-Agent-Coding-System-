@@ -78,6 +78,8 @@ const DEFAULT_EXPLAIN_SETTINGS: ProjectExplainSettings = {
   maxFinalAnswerChars: 12_000
 };
 
+const MAX_FACT_HEAVY_ANCHOR_CHARS = 160_000;
+
 const IGNORED_DIRS = new Set([
   ".cache",
   ".git",
@@ -162,7 +164,8 @@ const MANIFEST_NAMES = new Set([
 const DOMAIN_EVIDENCE_RE = /\b(sentiment|sentement|classifier|classification|model|pipeline|polarity|todo|task|analytics|dashboard|metrics|agent|agents|runtime|orchestrat|llm|provider|frontend|backend|api|server|forecast|forecasting|arima|sarima|threshold|score|decision|dispatch)\b/i;
 const DATA_FLOW_EVIDENCE_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ingestion|stream|consumer|producer|fetch|setinterval|set interval|poll|polling|refresh|socket|websocket|api\/|snapshot|timestamp|schema|message|pipeline|classifier|model|sentiment|forecast|forecasting|arima|sarima|trend|threshold|score|weight|orchestrator|decision|dispatch|drift)\b/i;
 const NUMERIC_FACT_EVIDENCE_RE = /\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|borderline|direct|dispatch|high|low|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|condition|rule)\b/i;
-const FORECAST_EVIDENCE_RE = /\b(forecast|forecasting|arima|sarima|trend|prediction|timeseries|time series|customer|aggregate|global|delta|deviation|drift)\b/i;
+const FORECAST_EVIDENCE_RE = /\b(forecast|forecasting|arima|sarima|trend|prediction|timeseries|time series|customer|aggregate|global|cluster|segment|cluster_forecasts|cluster_series|fit_cluster_models|get_cluster_state|predicted_cluster|train_offline_artifacts|retrain|retraining|auto_retrain|customer interactions?|delta|deviation|drift)\b/i;
+const FOCUSED_FORECAST_EVIDENCE_RE = /\b(SARIMAForecastingService|cluster_forecasts|cluster_series|fit_cluster_models|get_cluster_state|train_offline_artifacts|retrain_with_rollback|AUTO_RETRAIN_CUSTOMER_INTERVAL|auto_retrain_every_customers|customer interactions?)\b/i;
 const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
 
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
@@ -243,7 +246,7 @@ function createExplainSections(
 ): ProjectExplainSection[] {
   const normalized = message.toLowerCase();
   const requestedConcept = extractRequestedConcept(message);
-  const factHeavyQuestion = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact") ?? false;
+  const factHeavyQuestion = isFactHeavyConcept(requestedConcept);
   const smallProject = sampledFiles.length <= 8;
   const anchors = sampledFiles.flatMap((sample) => {
     const perFileLimit = factHeavyQuestion ? 12 : smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
@@ -329,9 +332,26 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
   }
 
   if (requestedConcept?.specific) {
+    const factHeavyQuestion = isFactHeavyConcept(requestedConcept);
+    const wantsForecastingFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
+    const conceptMatchLimit = factHeavyQuestion ? 120 : 6;
+    const groupMatchLimit = factHeavyQuestion ? 200 : 10;
+    if (wantsForecastingFacts) {
+      lines.forEach((rawLine, index) => {
+        if (FOCUSED_FORECAST_EVIDENCE_RE.test(`${filePath}\n${rawLine}`)) {
+          add(
+            index,
+            "Focused forecasting evidence",
+            "This line names a forecasting training, refresh, cluster, or lookup operation for the requested question.",
+            "This is stronger than a generic customer/cluster mention because it identifies how the forecast is built or used.",
+            requestedConcept.label
+          );
+        }
+      });
+    }
     const conceptMatches: number[] = [];
     lines.forEach((rawLine, index) => {
-      if (conceptMatches.length >= 6) return;
+      if (conceptMatches.length >= conceptMatchLimit) return;
       if (textSupportsRequestedConcept(`${filePath}\n${rawLine}`, requestedConcept)) {
         conceptMatches.push(index);
       }
@@ -339,7 +359,7 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
     const groupMatches = new Map<number, string[]>();
     if (requestedConcept.evidenceGroups?.length) {
       lines.forEach((rawLine, index) => {
-        if (groupMatches.size >= 10) return;
+        if (groupMatches.size >= groupMatchLimit) return;
         const matchedGroupIds = matchingConceptEvidenceGroups(`${filePath}\n${rawLine}`, requestedConcept);
         if (matchedGroupIds.length) groupMatches.set(index, matchedGroupIds);
       });
@@ -409,7 +429,49 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
   const anchorLimit = requestedConcept?.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact")
     ? 16
     : 8;
-  return dedupeSections(anchors).slice(0, anchorLimit);
+  const deduped = dedupeSections(anchors);
+  if (isFactHeavyConcept(requestedConcept)) {
+    return deduped
+      .sort((left, right) => scoreAnchorForRequestedConcept(right, requestedConcept) - scoreAnchorForRequestedConcept(left, requestedConcept) || left.lineStart - right.lineStart)
+      .slice(0, anchorLimit);
+  }
+  return deduped.slice(0, anchorLimit);
+}
+
+function isFactHeavyConcept(requestedConcept?: RequestedConcept) {
+  return requestedConcept?.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact") ?? false;
+}
+
+function scoreAnchorForRequestedConcept(section: ProjectExplainSection, requestedConcept?: RequestedConcept) {
+  if (!requestedConcept) return 0;
+  let score = 0;
+  const pathText = section.filePath.toLowerCase();
+  const text = `${section.filePath}\n${section.title}\n${section.explanation}\n${section.whyItMatters}\n${section.symbol ?? ""}\n${section.snippet}`;
+  if (textSupportsRequestedConcept(text, requestedConcept)) score += 80;
+  score += matchingConceptEvidenceGroups(text, requestedConcept).length * 120;
+
+  const wantsThresholdFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact") ?? false;
+  const wantsForecastingFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
+  if (wantsThresholdFacts) {
+    if (NUMERIC_FACT_EVIDENCE_RE.test(text)) score += 80;
+    if (/numeric threshold|agent weight|formula or score/i.test(section.title)) score += 100;
+    if (/[<>]=?|==|=\s*-?\d|:\s*-?\d/.test(section.snippet)) score += 50;
+    if (/\b(membership_signal|membership)\b/i.test(text)) score += 60;
+    if (/orchestr|agent|routes|action|arima|forecast/.test(pathText)) score += 35;
+    if (/requested concept (match|evidence)/i.test(section.title)) score -= 80;
+  }
+  if (wantsForecastingFacts) {
+    if (FORECAST_EVIDENCE_RE.test(text)) score += 80;
+    if (/focused forecasting evidence/i.test(section.title)) score += 180;
+    if (/\b(fit_cluster_models|get_cluster_state|predicted_cluster|cluster_forecasts|cluster_series|cluster_label|cluster_id|train_offline_artifacts|retrain_with_rollback|AUTO_RETRAIN_CUSTOMER_INTERVAL|auto_retrain_every_customers|customer interactions?)\b/i.test(text)) {
+      score += 150;
+    }
+    if (/\b(cluster|segment|per-cluster|cluster-level)\b/i.test(text)) score += 70;
+    if (/\b50\b/.test(text) && /\b(customer|customers|retrain|auto_retrain|cadence|processed)\b/i.test(text)) score += 70;
+    if (/arima|forecast|routes|service|model/.test(pathText)) score += 35;
+  }
+  if (/package\.json|requirements\.txt|index\.html/.test(pathText)) score -= 80;
+  return score;
 }
 
 function numericFactAnchor(line: string, filePath: string) {
@@ -603,17 +665,21 @@ function readSampledFiles(
   for (const [filePath, reason] of [...selected.entries()].slice(0, maxSamples)) {
     try {
       const absolutePath = path.join(workspaceRoot, filePath);
-      const content = fs.readFileSync(absolutePath, "utf8").slice(0, settings.maxFileReadChars);
-      const anchors = extractExplainAnchors(filePath, content, requestedConcept);
+      const rawContent = fs.readFileSync(absolutePath, "utf8");
+      const content = rawContent.slice(0, settings.maxFileReadChars);
+      const anchorContent = isFactHeavyConcept(requestedConcept)
+        ? rawContent.slice(0, Math.max(settings.maxFileReadChars, MAX_FACT_HEAVY_ANCHOR_CHARS))
+        : content;
+      const anchors = extractExplainAnchors(filePath, anchorContent, requestedConcept);
       sampled.push({
         path: filePath,
         reason,
-        charsRead: content.length,
+        charsRead: anchorContent.length,
         summary: summarizeFile(filePath, content),
         excerpt: compactText(content).slice(0, 280),
         dependencies: inferDependencies(filePath, content),
         language: languageForPath(filePath),
-        lineCount: content.split(/\r?\n/).length,
+        lineCount: rawContent.split(/\r?\n/).length,
         anchors
       });
     } catch {
@@ -640,6 +706,7 @@ function findConceptMatchingFiles(
     if (pathGroups.length) score += pathGroups.length * 35;
     if (wantsThresholdFacts && /orchestrator|agents?|routes?|arima|forecast|model|services|decision|policy/i.test(file.path)) score += 45;
     if (wantsForecastingFacts && /arima|forecast|trend|model|routes?|services/i.test(file.path)) score += 55;
+    if (wantsForecastingFacts && /arima|forecast|trend|model/i.test(file.path)) score += 80;
     try {
       const content = fs.readFileSync(path.join(workspaceRoot, file.path), "utf8").slice(0, settings.maxFileReadChars);
       const contentGroups = matchingConceptEvidenceGroups(content, concept);
@@ -852,6 +919,7 @@ function scoreSampleForEvidence(sample: SampledFile) {
   if (sample.reason.includes("project-domain")) score += 30;
   if (sample.reason.includes("project-data-flow")) score += 30;
   if (sample.reason.includes("requested-concept")) score += 25;
+  if (/arima|forecast|trend|model/i.test(sample.path) && FORECAST_EVIDENCE_RE.test(sampleText(sample))) score += 45;
   if (isDocFile(sample.path)) score += 10;
   if (isManifestFile(sample.path)) score -= 20;
   return score;

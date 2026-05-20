@@ -13,7 +13,9 @@ import {
 } from "../runtime/LlmProjectExplainer.js";
 import {
   detectProjectAnswerStyle,
+  detectProjectAnswerShape,
   extractRequestedConcept,
+  type ProjectAnswerShape,
   type ProjectAnswerStyle
 } from "../runtime/ProjectQuestionGrounding.js";
 import { buildServer } from "../server.js";
@@ -60,6 +62,7 @@ type ConceptExtractionRegressionCase = {
   expectedStyle: ProjectAnswerStyle;
   expectedConceptLabel: string;
   expectedSpecific: boolean;
+  expectedAnswerShape?: ProjectAnswerShape;
   expectedEvidenceGroupIds?: string[];
   forbiddenConceptPattern?: RegExp;
 };
@@ -70,6 +73,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic child style plus dataset realtime concept",
     prompt: ARABIC_DATASET_REALTIME_PROMPT,
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"],
@@ -79,6 +83,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Actual Arabic child style plus dataset realtime concept",
     prompt: "اشرح المشروع دا ل طفل ازاي بيقدر يجيب الداتا من داتا سيت كانها realtime prompt :",
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"],
@@ -88,6 +93,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic style plus English sentiment concept",
     prompt: "اشرحلي sentiment analysis هنا لطفل يقدر يفهم",
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
     forbiddenConceptPattern: /طفل|يقدر|يفهم/i
@@ -96,6 +102,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic sentiment concept plus child style",
     prompt: "إزاي تحليل المشاعر بيشتغل هنا؟ اشرحه لطفل",
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
     forbiddenConceptPattern: /طفل/i
@@ -104,6 +111,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Sentement typo plus simple style",
     prompt: "اشرح sentement analysis هنا ببساطة",
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
     forbiddenConceptPattern: /ببساطة/i
@@ -112,6 +120,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic style-only project explanation",
     prompt: "اشرح المشروع ده لطفل",
     expectedStyle: "child_simple",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "this project",
     expectedSpecific: false,
     forbiddenConceptPattern: /طفل/i
@@ -120,6 +129,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "English dataset realtime concept",
     prompt: "explain how the dataset looks realtime",
     expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"]
@@ -128,6 +138,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic threshold inventory typo prompt",
     prompt: ARABIC_THRESHOLD_PROMPT,
     expectedStyle: "default",
+    expectedAnswerShape: "inventory_table",
     expectedConceptLabel: "threshold inventory",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["threshold_fact"]
@@ -136,6 +147,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     name: "Arabic forecasting type and customer scope prompt",
     prompt: ARABIC_FORECASTING_PROMPT,
     expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "forecasting type and scope",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["forecasting_fact"]
@@ -146,6 +158,7 @@ test("concept extraction regressions preserve concept, style, and evidence group
   for (const entry of CONCEPT_EXTRACTION_REGRESSIONS) {
     const concept = extractRequestedConcept(entry.prompt);
     const style = detectProjectAnswerStyle(entry.prompt);
+    const answerShape = detectProjectAnswerShape(entry.prompt);
     const aggregateConceptText = [
       concept.label,
       concept.displayLabel ?? "",
@@ -154,6 +167,7 @@ test("concept extraction regressions preserve concept, style, and evidence group
     ].join(" ");
 
     assert.equal(style, entry.expectedStyle, entry.name);
+    assert.equal(answerShape, entry.expectedAnswerShape ?? "concise_explanation", entry.name);
     assert.equal(concept.label, entry.expectedConceptLabel, entry.name);
     assert.equal(concept.specific, entry.expectedSpecific, entry.name);
 
@@ -796,6 +810,7 @@ test("Arabic threshold inventory prompt returns useful grounded numbers when pro
 
     assert.equal(provider.requestCount, 1);
     assert.equal(result.grounding.concept.label, "threshold inventory");
+    assert.equal(result.grounding.answerShape, "inventory_table");
     assert.equal(result.grounding.conceptFound, true);
     assert.match(result.answerMarkdown, /0\.32/);
     assert.match(result.answerMarkdown, /0\.55/);
@@ -805,6 +820,7 @@ test("Arabic threshold inventory prompt returns useful grounded numbers when pro
     assert.match(result.answerMarkdown, /0\.52/);
     assert.match(result.answerMarkdown, /orchestrator\.py|agents\.py|routes\.py|arima_model\.py/);
     assert.match(result.answerMarkdown, /\| Signal \|/);
+    assert.doesNotMatch(result.answerMarkdown, /\*\*[^ \d]/);
     assert.doesNotMatch(result.answerMarkdown, /I could not find|could not safely produce/i);
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
@@ -849,11 +865,15 @@ test("Arabic forecasting prompt identifies type and customer scope from evidence
 
     assert.equal(provider.requestCount, 1);
     assert.equal(result.grounding.concept.label, "forecasting type and scope");
+    assert.equal(result.grounding.answerShape, "concise_explanation");
     assert.equal(result.grounding.conceptFound, true);
     assert.match(result.answerMarkdown, /SARIMA|ARIMA/);
-    assert.match(result.answerMarkdown, /per-customer|customer/i);
+    assert.match(result.answerMarkdown, /cluster-level|per-segment|predicted_cluster|not one SARIMA/i);
+    assert.doesNotMatch(result.answerMarkdown, /scope.*not proven|not proven.*scope/i);
     assert.match(result.answerMarkdown, /arima_model\.py/);
-    assert.match(result.answerMarkdown, /0\.015|0\.03|0\.06/);
+    assert.match(result.answerMarkdown, /training|retraining|50|cadence/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \|/);
+    assert.doesNotMatch(result.answerMarkdown, /\*\*[^ \d]/);
     assert.doesNotMatch(result.answerMarkdown, /I could not find|could not safely produce/i);
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
@@ -1009,6 +1029,20 @@ async function createDecisionThresholdWorkspace() {
   await writeFile(
     path.join(workspace, "backend", "routes.py"),
     [
+      "AUTO_RETRAIN_EVERY_CUSTOMERS = 50",
+      "",
+      "def train_offline_artifacts(customers_processed):",
+      "    sarima_service = SARIMAForecastingService()",
+      "    sarima_service.fit_cluster_models(clean_df, training_y)",
+      "    sarima_service.save_state()",
+      "    should_auto_retrain = customers_processed >= AUTO_RETRAIN_EVERY_CUSTOMERS",
+      "    return should_auto_retrain",
+      "",
+      "def process_customer(customer_frame, predicted_cluster):",
+      "    sarima_service = SARIMAForecastingService().load_state()",
+      "    forecast_state = sarima_service.get_cluster_state(predicted_cluster)",
+      "    return forecast_state",
+      "",
       "def calculate_intelligent_score(class_severity, gap, membership_signal, shap_cosine, trend_multiplier):",
       "    normalized_trend = max(0.1, min(1.25, trend_multiplier)) / 1.25",
       "    score = (class_severity * gap * membership_signal * shap_cosine) ** 0.25 * normalized_trend",
@@ -1028,11 +1062,24 @@ async function createDecisionThresholdWorkspace() {
   await writeFile(
     path.join(workspace, "backend", "services", "arima_model.py"),
     [
-      "class CustomerSarimaForecaster:",
+      "class SARIMAForecastingService:",
       "    model_type = 'SARIMA'",
-      "    def forecast_customer_risk(self, customer_id, customer_history):",
-      "        forecast_last = customer_history[-1] + 0.02",
-      "        current_last = customer_history[-1]",
+      "    def __init__(self):",
+      "        self.cluster_series = {}",
+      "        self.cluster_forecasts = {}",
+      "        self.cluster_trend_multipliers = {}",
+      "        self.global_history = None",
+      "",
+      "    def fit_cluster_models(self, df, cluster_labels):",
+      "        self.cluster_forecasts = {}",
+      "        for cluster_id, series in self.build_cluster_series(df, cluster_labels).items():",
+      "            summary = self._fit_forecast_for_series(series)",
+      "            self.cluster_forecasts[cluster_id] = summary",
+      "        return self.cluster_forecasts",
+      "",
+      "    def _fit_forecast_for_series(self, series):",
+      "        forecast_last = series[-1] + 0.02",
+      "        current_last = series[-1]",
       "        delta = forecast_last - current_last",
       "        if delta > 0.015:",
       "            trend_multiplier = 1.15",
@@ -1043,7 +1090,10 @@ async function createDecisionThresholdWorkspace() {
       "        deviation = abs(delta)",
       "        drift_detected = deviation > 0.03",
       "        massive_drift = deviation > 0.06",
-      "        return {'customer_id': customer_id, 'trend_multiplier': trend_multiplier, 'drift_detected': drift_detected, 'massive_drift': massive_drift}"
+      "        return {'trend_multiplier': trend_multiplier, 'drift_detected': drift_detected, 'massive_drift': massive_drift}",
+      "",
+      "    def get_cluster_state(self, cluster_id):",
+      "        return {'cluster_label': int(cluster_id), 'forecast': self.cluster_forecasts.get(cluster_id, {}), 'trend_multiplier': 1.0}"
     ].join("\n"),
     "utf8"
   );

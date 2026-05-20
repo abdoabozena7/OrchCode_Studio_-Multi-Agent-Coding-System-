@@ -2110,6 +2110,24 @@ function ThreadFeed({
   const latestAssistantMessageId =
     lastAssistantMessageIndex >= 0 ? session.messages[lastAssistantMessageIndex]?.id ?? "" : "";
   const waitingForAssistant = agentBusy && lastUserMessageIndex > lastAssistantMessageIndex;
+  const animatedAssistantMessageIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const currentIds = new Set(session.messages.map((message) => message.id));
+    for (const id of animatedAssistantMessageIdsRef.current) {
+      if (!currentIds.has(id)) animatedAssistantMessageIdsRef.current.delete(id);
+    }
+    for (const message of session.messages) {
+      if (message.role !== "assistant") continue;
+      const isLatestFreshAssistant =
+        message.id === latestAssistantMessageId
+        && agentBusy
+        && isFreshMessage(message.createdAt);
+      if (!isLatestFreshAssistant) {
+        animatedAssistantMessageIdsRef.current.add(message.id);
+      }
+    }
+  }, [agentBusy, latestAssistantMessageId, session.id, session.messages]);
 
   return (
     <div className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
@@ -2118,7 +2136,9 @@ function ThreadFeed({
         const shouldAnimateAssistantMessage =
           message.role === "assistant"
           && message.id === latestAssistantMessageId
-          && (agentBusy || isFreshMessage(message.createdAt));
+          && agentBusy
+          && isFreshMessage(message.createdAt)
+          && !animatedAssistantMessageIdsRef.current.has(message.id);
         return (
           <div key={message.id} className={`thread-entry ${message.role}`}>
             {!isUserMessage ? (
@@ -2137,6 +2157,9 @@ function ThreadFeed({
                 workspacePath={session.workspacePath}
                 onOpenFileReference={onOpenFileReference}
                 animate={shouldAnimateAssistantMessage}
+                onAnimationComplete={() => {
+                  animatedAssistantMessageIdsRef.current.add(message.id);
+                }}
               />
             )}
             {isUserMessage ? (
@@ -2215,12 +2238,14 @@ function AnimatedMessageMarkdown({
   text,
   workspacePath,
   onOpenFileReference,
-  animate
+  animate,
+  onAnimationComplete
 }: {
   text: string;
   workspacePath: string;
   onOpenFileReference: (reference: FileReference) => void | Promise<void>;
   animate: boolean;
+  onAnimationComplete?: () => void;
 }) {
   const [displayText, setDisplayText] = useState(animate ? "" : text);
 
@@ -2260,11 +2285,17 @@ function AnimatedMessageMarkdown({
 
   const stillTyping = animate && displayText !== text;
 
+  useEffect(() => {
+    if (animate && text && displayText === text) {
+      onAnimationComplete?.();
+    }
+  }, [animate, displayText, text]);
+
   return (
     <div className={`animated-markdown ${stillTyping ? "is-streaming" : ""}`}>
       {stillTyping ? (
         <div className="thread-entry-body markdown-message streaming-message-body">
-          <div className="streaming-message-text">{displayText}</div>
+          <div className="streaming-message-text">{sanitizeStreamingMarkdownText(displayText)}</div>
         </div>
       ) : (
         <MessageMarkdown text={text} workspacePath={workspacePath} onOpenFileReference={onOpenFileReference} />
@@ -2293,6 +2324,10 @@ function revealBatchSize(cursor: number, total: number) {
   if (remaining > 240) return 6;
   if (remaining > 120) return 4;
   return 2;
+}
+
+function sanitizeStreamingMarkdownText(text: string) {
+  return text.replace(/\*\*([^*\n]+)\*\*/g, "$1");
 }
 
 function MessageMarkdown({
@@ -2427,7 +2462,7 @@ function renderInlineMarkdown(
   onOpenFileReference: (reference: FileReference) => void | Promise<void>
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\[((?:[A-Za-z]:)?[^:[\]\n]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\])/g;
+  const pattern = /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\[((?:[A-Za-z]:)?[^:[\]\n]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\]|\*\*([^*\n]+)\*\*)/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index === undefined) continue;
@@ -2449,6 +2484,8 @@ function renderInlineMarkdown(
           key={`file-ref-${match.index}`}
         />
       );
+    } else if (match[8]) {
+      nodes.push(<strong key={`strong-${match.index}`}>{match[8]}</strong>);
     } else {
       const label = match[2] ?? "";
       const href = match[3] ?? "";
@@ -4286,7 +4323,7 @@ function buildAgentTraceEntries(
 }
 
 function isCoordinatorLikeAgent(name: string, role: string) {
-  return /local codex run|coordinator|product orchestrator|business orchestrator|engineering orchestrator/i.test(name)
+  return /local run|coordinator|product orchestrator|business orchestrator|engineering orchestrator/i.test(name)
     || /senior coding agent|coordinator|product orchestrator|business orchestrator|engineering orchestrator/i.test(role);
 }
 

@@ -194,7 +194,8 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
     grounding.concept.specific
       ? `Requested concept: ${grounding.concept.label}. Only explain this concept using the listed concept-supporting refs.`
       : "This is a general project explanation. Do not invent project name, users, business purpose, or domain unless the evidence states it.",
-    isThresholdInventoryConcept(grounding)
+    `Requested answer shape: ${grounding.answerShape}. ${createAnswerShapeInstruction(grounding.answerShape)}`,
+    isThresholdInventoryConcept(grounding) && grounding.answerShape === "inventory_table"
       ? "For threshold, formula, or numeric comparison questions: extract the concrete numbers, comparisons, formulas, branches, and actions into a useful table. Every number must have a cited ref."
       : "",
     isForecastingScopeConcept(grounding)
@@ -207,6 +208,16 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
     "If evidence conflicts with the user's project name or idea, explain the conflict instead of forcing a label.",
     "Return strict JSON only. Do not wrap it in markdown."
   ].join("\n");
+}
+
+function createAnswerShapeInstruction(shape: ProjectQuestionGrounding["answerShape"]) {
+  if (shape === "inventory_table") {
+    return "Use a compact table when it helps list many values, comparisons, formulas, or conditions.";
+  }
+  if (shape === "detailed_walkthrough") {
+    return "Use a structured walkthrough, but keep it grounded and avoid unrelated architecture dumps.";
+  }
+  return "Use concise prose. Do not add a table unless the user explicitly asked for an inventory, comparison, formulas, or many numbers.";
 }
 
 function createEvidencePackText(report: ProjectExplainReport, evidenceItems: EvidenceItem[], grounding: ProjectQuestionGrounding) {
@@ -249,7 +260,11 @@ function createEvidencePackText(report: ProjectExplainReport, evidenceItems: Evi
 
 function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
   const byRef = new Map<string, EvidenceItem>();
+  const sectionCountsByFile = new Map<string, number>();
   const addSection = (section: ProjectExplainSection) => {
+    const sectionCount = sectionCountsByFile.get(section.filePath) ?? 0;
+    if (sectionCount >= 10) return;
+    sectionCountsByFile.set(section.filePath, sectionCount + 1);
     const ref = normalizeRef(section.filePath, section.lineStart);
     if (byRef.has(ref)) return;
     byRef.set(ref, {
@@ -277,6 +292,11 @@ function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
       snippet: evidence.snippet ?? evidence.excerpt
     });
   };
+  for (const evidence of report.evidence) {
+    if (/arima|forecast|trend|model|orchestrator|agents?|routes?|services/i.test(evidence.path)) {
+      addEvidence(evidence);
+    }
+  }
   for (const section of report.sections) addSection(section);
   for (const evidence of report.evidence) addEvidence(evidence);
   for (const module of report.moduleMap) {
