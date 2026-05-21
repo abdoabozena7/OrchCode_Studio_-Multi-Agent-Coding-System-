@@ -12,12 +12,15 @@ import {
   type ProjectExplainLlmResponse
 } from "../runtime/LlmProjectExplainer.js";
 import {
+  analyzeProjectQuestionGrounding,
+  detectProjectQuestionKind,
   detectProjectAnswerStyle,
   detectProjectAnswerShape,
   extractRequestedConcept,
   type ProjectAnswerShape,
   type ProjectAnswerStyle
 } from "../runtime/ProjectQuestionGrounding.js";
+import { inferWorkspaceIntent } from "../runtime/WorkspaceReasoningPipeline.js";
 import { buildServer } from "../server.js";
 
 class CapturingExplainProvider implements LlmProvider {
@@ -54,7 +57,11 @@ class ThrowingExplainProvider implements LlmProvider {
 const ARABIC_DATASET_REALTIME_PROMPT = "اشرح المشروع دا ل طفل ازاي بيقدر يجيب الداتا من داتا سيت كانها realtime prompt :";
 const ARABIC_THRESHOLD_PROMPT = "\u0647\u0627\u062a\u0644\u064a \u0643\u0644 \u0627\u0644threshlods \u0627\u0644\u064a \u0628\u0642\u0627\u0631\u0646 \u0628\u064a\u0647\u0627 \u0641 \u0627\u0644\u0633\u064a\u0633\u062a\u0645\u0643 \u064a\u0639\u0646\u064a \u0627\u0646\u0627 \u0639\u0631\u0641\u062a \u0627\u0644\u0645\u0639\u0627\u062f\u0647 \u0628\u0633 \u0645\u0639\u0631\u0641\u062a\u0634 \u0628\u0642\u0627\u0631\u0646 \u0628 \u0643\u0627\u0627\u0645 \u0641\u0639\u0644\u064a\u0627 \u062c\u0648\u0627 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u062f\u0627 \u0641 \u0647\u0627\u062a\u0644\u064a\u0628 \u0643\u0644 \u0627\u0644\u0627\u0631\u0642\u0627\u0645 \u062f\u064a \u0628 \u0643\u0644 \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0641\u0639\u0644\u0627 \u0628\u0627\u0644\u0630\u0627\u062a \u0641 \u0635\u0641\u062d\u0647\u0639 \u0627\u0644 agents";
 const ARABIC_FORECASTING_PROMPT = "\u0627\u064a\u0647 \u0646\u0648\u0639 \u0627\u0644 forecasting \u0647\u0646\u0627 \u0648\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u064a customer \u0648\u0627\u062d\u062f \u0648\u0644\u0627 \u0627\u064a\u0647 \u061f";
+const ARABIC_ALGORITHMS_PROMPT = "\u0639\u0646\u062f\u0646\u0627 \u0643\u0627\u0645 algorithm \u0647\u0646\u0627\u061f \u0648\u0627\u0634\u0631\u062d\u0647\u0645 \u0648\u0627\u062d\u062f\u0647 \u0648\u0627\u062d\u062f\u0647.";
 const MOJIBAKE_PATTERN = /ط§ظ|ظپظ|ط¨ط|ظ…ط/;
+
+const ARABIC_SVM_DETAIL_PROMPT = "\u0625\u0632\u0627\u064a \u0627\u0644 SVM \u0628\u064a\u062a\u0637\u0628\u0642 \u0647\u0646\u0627\u061f \u0627\u0634\u0631\u062d \u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644.";
+const ARABIC_PAGE_INVENTORY_PROMPT = "\u0639\u0646\u062f\u064a \u0647\u0646\u0627 \u0643\u0627\u0645 \u0635\u0641\u062d\u0647 \u0641 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u062f\u0627 \u0648\u0643\u0644 \u0648\u0627\u062d\u062f\u0647 \u0628\u062a\u0639\u0645\u0644 \u0627\u064a\u0647 \u061f";
 
 type ConceptExtractionRegressionCase = {
   name: string;
@@ -62,6 +69,7 @@ type ConceptExtractionRegressionCase = {
   expectedStyle: ProjectAnswerStyle;
   expectedConceptLabel: string;
   expectedSpecific: boolean;
+  expectedQuestionKind?: string;
   expectedAnswerShape?: ProjectAnswerShape;
   expectedEvidenceGroupIds?: string[];
   forbiddenConceptPattern?: RegExp;
@@ -150,7 +158,39 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "forecasting type and scope",
     expectedSpecific: true,
+    expectedQuestionKind: "forecasting_scope",
     expectedEvidenceGroupIds: ["forecasting_fact"]
+  },
+  {
+    name: "Arabic page inventory prompt is not threshold inventory",
+    prompt: ARABIC_PAGE_INVENTORY_PROMPT,
+    expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
+    expectedConceptLabel: "page/screen inventory",
+    expectedSpecific: true,
+    expectedQuestionKind: "page_inventory",
+    expectedEvidenceGroupIds: ["page_structure"],
+    forbiddenConceptPattern: /threshold|threshlod|forecast/i
+  },
+  {
+    name: "Arabic algorithm count prompt is not threshold inventory",
+    prompt: ARABIC_ALGORITHMS_PROMPT,
+    expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
+    expectedConceptLabel: "algorithms/models inventory",
+    expectedSpecific: true,
+    expectedEvidenceGroupIds: ["algorithms_models"],
+    forbiddenConceptPattern: /threshold inventory|threshlod|membership|cosine/i
+  },
+  {
+    name: "Arabic detailed SVM prompt is an algorithm/model explanation",
+    prompt: ARABIC_SVM_DETAIL_PROMPT,
+    expectedStyle: "detailed",
+    expectedAnswerShape: "detailed_walkthrough",
+    expectedConceptLabel: "algorithms/models inventory",
+    expectedSpecific: true,
+    expectedEvidenceGroupIds: ["algorithms_models"],
+    forbiddenConceptPattern: /threshold inventory|threshlod|membership|cosine/i
   }
 ];
 
@@ -159,6 +199,7 @@ test("concept extraction regressions preserve concept, style, and evidence group
     const concept = extractRequestedConcept(entry.prompt);
     const style = detectProjectAnswerStyle(entry.prompt);
     const answerShape = detectProjectAnswerShape(entry.prompt);
+    const questionKind = detectProjectQuestionKind(entry.prompt);
     const aggregateConceptText = [
       concept.label,
       concept.displayLabel ?? "",
@@ -170,6 +211,24 @@ test("concept extraction regressions preserve concept, style, and evidence group
     assert.equal(answerShape, entry.expectedAnswerShape ?? "concise_explanation", entry.name);
     assert.equal(concept.label, entry.expectedConceptLabel, entry.name);
     assert.equal(concept.specific, entry.expectedSpecific, entry.name);
+    if (entry.expectedQuestionKind) assert.equal(questionKind, entry.expectedQuestionKind, entry.name);
+    if (entry.prompt === ARABIC_ALGORITHMS_PROMPT) {
+      const intent = inferWorkspaceIntent(entry.prompt);
+      assert.equal(intent.actionMode, "answer_only");
+      assert.equal(intent.answerGoal, "count");
+      assert.equal(intent.outputShape, "bullets");
+      assert.ok(intent.requiredFacets.includes("algorithms_models"));
+      assert.equal(intent.requiredFacets.includes("numeric_logic"), false);
+    }
+    if (entry.prompt === ARABIC_SVM_DETAIL_PROMPT) {
+      const intent = inferWorkspaceIntent(entry.prompt);
+      assert.equal(intent.actionMode, "answer_only");
+      assert.equal(intent.answerGoal, "trace_flow");
+      assert.equal(intent.outputShape, "walkthrough");
+      assert.ok(intent.topicTerms.includes("svm"));
+      assert.ok(intent.requiredFacets.includes("algorithms_models"));
+      assert.equal(intent.requiredFacets.includes("numeric_logic"), false);
+    }
 
     if (entry.expectedEvidenceGroupIds) {
       assert.deepEqual(
@@ -881,6 +940,336 @@ test("Arabic forecasting prompt identifies type and customer scope from evidence
   }
 });
 
+test("Arabic algorithm inventory prompt uses algorithm/model evidence instead of threshold fallback", async () => {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_ALGORITHMS_PROMPT, projectMap });
+    const provider = new ThrowingExplainProvider();
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_ALGORITHMS_PROMPT, report });
+
+    assert.equal(result.grounding.workspaceReasoning.intent.actionMode, "answer_only");
+    assert.equal(result.grounding.workspaceReasoning.intent.answerGoal, "count");
+    assert.equal(result.grounding.workspaceReasoning.intent.requiredFacets.includes("algorithms_models"), true);
+    assert.equal(result.grounding.workspaceReasoning.intent.requiredFacets.includes("numeric_logic"), false);
+    assert.equal(result.grounding.concept.label, "algorithms/models inventory");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /SVM|KMeans|Random Forest|SARIMA|DBSCAN|Fuzzy C-Means|SHAP/i);
+    assert.match(result.answerMarkdown, /ml_models\.py|arima_model\.py|clustering\.py|svm_model\.py|shap_explainer\.py/);
+    assert.doesNotMatch(result.answerMarkdown, /Customer Clustering Service|SARIMAForecasting Service/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|membership signal|shap cosine|0\.82/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Arabic detailed SVM prompt synthesizes implementation flow instead of dumping snippets", async () => {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_SVM_DETAIL_PROMPT, projectMap });
+    const provider = new ThrowingExplainProvider();
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_SVM_DETAIL_PROMPT, report });
+
+    assert.equal(result.grounding.workspaceReasoning.intent.answerGoal, "trace_flow");
+    assert.equal(result.grounding.workspaceReasoning.intent.outputShape, "walkthrough");
+    assert.equal(result.grounding.workspaceReasoning.intent.requiredFacets.includes("algorithms_models"), true);
+    assert.match(result.answerMarkdown, /SVM/);
+    assert.match(result.answerMarkdown, /features|labels|FCM|clustering|state/i);
+    assert.match(result.answerMarkdown, /predict|predict_proba|classification|classifier/i);
+    assert.match(result.answerMarkdown, /SHAP|shap_explainer\.py/i);
+    assert.match(result.answerMarkdown, /svm_model\.py|clustering\.py/);
+    assert.doesNotMatch(result.answerMarkdown, /الفلو اللي قدرت أثبته|The flow I could prove|"""|raw snippets/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|membership signal|0\.82/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("algorithm question stays turn-scoped after threshold and page questions", async () => {
+  const { workspace, projectMap } = await createPageInventoryWorkspace();
+
+  try {
+    const thresholdReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
+    const pageReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const algorithmReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_ALGORITHMS_PROMPT, projectMap });
+
+    const thresholdResult = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
+    const pageResult = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
+    const algorithmResult = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_ALGORITHMS_PROMPT, report: algorithmReport });
+
+    assert.equal(thresholdResult.grounding.workspaceReasoning.intent.requiredFacets.includes("numeric_logic"), true);
+    assert.equal(pageResult.grounding.workspaceReasoning.intent.requiredFacets.includes("ui_structure"), true);
+    assert.equal(algorithmResult.grounding.workspaceReasoning.intent.requiredFacets.includes("algorithms_models"), true);
+    assert.equal(algorithmResult.grounding.workspaceReasoning.intent.requiredFacets.includes("numeric_logic"), false);
+    assert.match(algorithmResult.answerMarkdown, /SVM|KMeans|Random Forest|SARIMA/i);
+    assert.doesNotMatch(algorithmResult.answerMarkdown, /\| Signal \||threshold inventory|0\.82|Overview|Customers|Agents page/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Arabic page inventory prompt returns pages instead of threshold inventory", async () => {
+  const { workspace, projectMap } = await createPageInventoryWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const provider = new ThrowingExplainProvider();
+    const grounding = analyzeProjectQuestionGrounding(ARABIC_PAGE_INVENTORY_PROMPT, report, []);
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.concept.label, "page/screen inventory");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /Agents|Customers|Overview|صفحات|شاشات|views/i);
+    assert.match(result.answerMarkdown, /frontend\/app\.js|frontend\/index\.html|src\/App\.jsx/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||minimum_score|0\.82|threshold inventory|threshlod/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("page inventory ignores CSS and title-only evidence instead of counting fake pages", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-css-only-pages-${Date.now()}`);
+  await mkdir(path.join(workspace, "frontend"), { recursive: true });
+
+  try {
+    await writeFile(
+      path.join(workspace, "frontend", "index.html"),
+      [
+        "<!doctype html>",
+        "<html>",
+        "<head>",
+        "  <title>AMARS Pipeline Atlas</title>",
+        "  <link rel=\"stylesheet\" href=\"./styles.css\">",
+        "</head>",
+        "<body>",
+        "  <div id=\"root\"></div>",
+        "</body>",
+        "</html>"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace, "frontend", "styles.css"),
+      [
+        ":root { --bg: #101214; }",
+        ".overview-section { display: grid; }",
+        ".agents-screen { padding: 24px; }",
+        ".customers-page { min-height: 100vh; }"
+      ].join("\n"),
+      "utf8"
+    );
+    const projectMap: ProjectMap = {
+      stack: ["HTML", "CSS"],
+      packageManagers: [],
+      testCommands: [],
+      entryPoints: ["frontend/index.html"],
+      importantFiles: ["frontend/index.html", "frontend/styles.css"]
+    };
+
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const result = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(result.grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.conceptFound, false);
+    assert.match(result.answerMarkdown, /لا أقدر أؤكد|could not confirm/i);
+    assert.doesNotMatch(result.answerMarkdown, /لقيت\s+\d+\s+(route|screen|section|tab|view|صفحة)/i);
+    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
+    assert.doesNotMatch(result.answerMarkdown, /AMARS Pipeline Atlas.*(?:صفحة|screen|view|section|page)/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("page inventory reports SPA sections with functions and dedupes duplicate stylesheets", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-spa-pages-${Date.now()}`);
+  await mkdir(path.join(workspace, "frontend", "frontend"), { recursive: true });
+
+  try {
+    await writeFile(
+      path.join(workspace, "frontend", "index.html"),
+      [
+        "<!doctype html>",
+        "<html>",
+        "<body>",
+        "  <nav>",
+        "    <a href=\"#overview\">Overview</a>",
+        "    <a href=\"#customers\">Customers</a>",
+        "    <a href=\"#agents\">Agents</a>",
+        "  </nav>",
+        "  <section id=\"overview\">Overview shows the retention summary and KPI cards.</section>",
+        "  <section id=\"customers\">Customers lists customer risk and churn details.</section>",
+        "  <section id=\"agents\">Agents explains agent recommendations and route decisions.</section>",
+        "  <script type=\"module\" src=\"./app.js\"></script>",
+        "</body>",
+        "</html>"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace, "frontend", "app.js"),
+      [
+        "export const CHAPTERS = [",
+        "  { id: 'overview', title: 'Overview', description: 'Shows the retention summary and KPI cards.' },",
+        "  { id: 'customers', title: 'Customers', description: 'Lists customer risk and churn details.' },",
+        "  { id: 'agents', title: 'Agents', description: 'Explains agent recommendations and route decisions.' }",
+        "];"
+      ].join("\n"),
+      "utf8"
+    );
+    const css = [
+      ":root { --bg: #101214; }",
+      ".overview-section { display: grid; }",
+      ".customers-page { display: grid; }",
+      ".agents-screen { display: grid; }"
+    ].join("\n");
+    await writeFile(path.join(workspace, "frontend", "styles.css"), css, "utf8");
+    await writeFile(path.join(workspace, "frontend", "frontend", "styles.css"), css, "utf8");
+
+    const projectMap: ProjectMap = {
+      stack: ["HTML", "JavaScript", "CSS"],
+      packageManagers: [],
+      testCommands: [],
+      entryPoints: ["frontend/index.html", "frontend/app.js"],
+      importantFiles: ["frontend/index.html", "frontend/app.js", "frontend/styles.css", "frontend/frontend/styles.css"]
+    };
+
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const result = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(result.grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /single-page|واجهة أقرب لـ single-page|section\/tab/i);
+    assert.match(result.answerMarkdown, /\|\s*الاسم\s*\|\s*النوع\s*\|\s*بتعمل إيه\s*\|/);
+    assert.match(result.answerMarkdown, /Overview.*retention summary|overview.*KPI/i);
+    assert.match(result.answerMarkdown, /Customers.*customer risk|customers.*churn/i);
+    assert.match(result.answerMarkdown, /Agents.*recommendations|agents.*route decisions/i);
+    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
+    assert.doesNotMatch(result.answerMarkdown, /:root|--bg|overview-section|customers-page|agents-screen/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("page inventory can use JSX className sections from real UI source", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-jsx-sections-${Date.now()}`);
+  await mkdir(path.join(workspace, "apps", "desktop", "src", "app"), { recursive: true });
+
+  try {
+    await writeFile(
+      path.join(workspace, "apps", "desktop", "src", "app", "App.tsx"),
+      [
+        "export function App() {",
+        "  return <main className=\"workspace-canvas\">",
+        "    <section className=\"dashboard-screen\">Dashboard shows KPI cards and project status.</section>",
+        "    <section className=\"activity-panel\">Activity panel lists running jobs and history.</section>",
+        "    <aside className=\"settings-drawer\">Settings drawer edits model and workspace options.</aside>",
+        "  </main>;",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    const projectMap: ProjectMap = {
+      stack: ["TypeScript", "React"],
+      packageManagers: ["npm"],
+      testCommands: [],
+      entryPoints: ["apps/desktop/src/app/App.tsx"],
+      importantFiles: ["apps/desktop/src/app/App.tsx"]
+    };
+
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const result = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(result.grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.conceptFound, true);
+    assert.match(result.answerMarkdown, /dashboard screen|activity panel|settings drawer/i);
+    assert.match(result.answerMarkdown, /KPI cards|running jobs|workspace options/i);
+    assert.match(result.answerMarkdown, /App\.tsx/);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("page inventory validation rejects stale threshold answer and synthesizes pages", async () => {
+  const { workspace, projectMap } = await createPageInventoryWorkspace();
+
+  try {
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const pageRef = requireRef(report, /frontend\/app\.js|frontend\/index\.html/);
+    const staleThresholdAnswer = [
+      "BAD_STALE_THRESHOLDS",
+      `جدول الـ thresholds: score >= 0.82 and membership < 0.52. ${linkForRef(pageRef)}`
+    ].join(" ");
+    const provider = new CapturingExplainProvider([
+      { answerMarkdown: staleThresholdAnswer, usedEvidenceRefs: [pageRef], unsupportedOrUnclearParts: [] },
+      { answerMarkdown: staleThresholdAnswer, usedEvidenceRefs: [pageRef], unsupportedOrUnclearParts: [] }
+    ]);
+
+    const result = await explainProjectWithLlm({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(provider.requests.length, 2);
+    assert.match(result.unsupportedOrUnclearParts.join(" "), /page inventory|thresholds|unrelated numeric/i);
+    assert.doesNotMatch(result.answerMarkdown, /BAD_STALE_THRESHOLDS|0\.82|membership < 0\.52/i);
+    assert.match(result.answerMarkdown, /Agents|Customers|Overview|صفحات|شاشات|views/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("page inventory question stays turn-scoped after a threshold question", async () => {
+  const { workspace, projectMap } = await createPageInventoryWorkspace();
+
+  try {
+    const thresholdReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
+    const pageReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const thresholdResult = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
+    const pageResult = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
+
+    assert.equal(thresholdResult.grounding.questionKind, "threshold_inventory");
+    assert.equal(pageResult.grounding.questionKind, "page_inventory");
+    assert.match(thresholdResult.answerMarkdown, /\| Signal \||0\.82|threshold/i);
+    assert.doesNotMatch(pageResult.answerMarkdown, /\| Signal \||minimum_score|0\.82|threshold inventory/i);
+    assert.match(pageResult.answerMarkdown, /Agents|Customers|Overview|frontend\/app\.js/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("backend-only page inventory reports no confirmed frontend pages", async () => {
+  const workspace = path.join(os.tmpdir(), `orchcode-backend-only-pages-${Date.now()}`);
+  await mkdir(path.join(workspace, "backend"), { recursive: true });
+  try {
+    await writeFile(path.join(workspace, "backend", "main.py"), "@app.get('/customers')\ndef customers():\n    return []\n", "utf8");
+    const projectMap: ProjectMap = {
+      stack: ["Python"],
+      packageManagers: [],
+      testCommands: [],
+      entryPoints: ["backend/main.py"],
+      importantFiles: ["backend/main.py"]
+    };
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
+    const result = await explainProjectWithLlm({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+
+    assert.equal(result.grounding.questionKind, "page_inventory");
+    assert.equal(result.grounding.conceptFound, false);
+    assert.match(result.answerMarkdown, /ماقدرتش|frontend|backend\/API|endpoint/i);
+    assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("threshold concept absent returns not-found for threshold inventory, not typo filler", async () => {
   const { beta, projectMapB, cleanup } = await createAlphaBetaWorkspaces();
 
@@ -1043,6 +1432,11 @@ async function createDecisionThresholdWorkspace() {
       "    forecast_state = sarima_service.get_cluster_state(predicted_cluster)",
       "    return forecast_state",
       "",
+      "def score_customer_with_svm(customer_features):",
+      "    predicted_state, confidence = predict_customer_state(customer_features)",
+      "    model_context = {'predicted_state': predicted_state, 'svm_confidence': confidence}",
+      "    return model_context",
+      "",
       "def calculate_intelligent_score(class_severity, gap, membership_signal, shap_cosine, trend_multiplier):",
       "    normalized_trend = max(0.1, min(1.25, trend_multiplier)) / 1.25",
       "    score = (class_severity * gap * membership_signal * shap_cosine) ** 0.25 * normalized_trend",
@@ -1098,6 +1492,72 @@ async function createDecisionThresholdWorkspace() {
     "utf8"
   );
   await writeFile(
+    path.join(workspace, "backend", "services", "clustering.py"),
+    [
+      "\"\"\"Customer clustering pipeline using DBSCAN followed by Fuzzy C-Means.\"\"\"",
+      "from sklearn.cluster import DBSCAN",
+      "import skfuzzy as fuzz",
+      "",
+      "def build_customer_segments(features):",
+      "    density_clusters = DBSCAN(eps=0.35, min_samples=5).fit_predict(features)",
+      "    centers, memberships, *_ = fuzz.cluster.cmeans(features.T, c=4, m=2.0, error=0.005, maxiter=1000)",
+      "    fcm_labels = memberships.argmax(axis=0)",
+      "    return density_clusters, fcm_labels, memberships"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "svm_model.py"),
+    [
+      "\"\"\"SVM state detector trained on FCM-generated labels.\"\"\"",
+      "from sklearn.svm import SVC",
+      "import joblib",
+      "",
+      "def train_svm_state_detector(features, fcm_labels):",
+      "    svm = SVC(probability=True, kernel='rbf')",
+      "    svm.fit(features, fcm_labels)",
+      "    joblib.dump(svm, 'artifacts/svm_state_detector.joblib')",
+      "    return svm",
+      "",
+      "def predict_customer_state(features):",
+      "    svm = joblib.load('artifacts/svm_state_detector.joblib')",
+      "    predicted_state = svm.predict(features)",
+      "    confidence = svm.predict_proba(features).max(axis=1)",
+      "    return predicted_state, confidence"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "shap_explainer.py"),
+    [
+      "import shap",
+      "",
+      "def explain_svm_prediction(svm, background, customer_features):",
+      "    explainer = shap.KernelExplainer(svm.predict_proba, background)",
+      "    shap_values = explainer.shap_values(customer_features)",
+      "    return shap_values"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "ml_models.py"),
+    [
+      "from sklearn.svm import SVC",
+      "from sklearn.cluster import KMeans",
+      "from sklearn.ensemble import RandomForestClassifier",
+      "",
+      "def train_churn_models(features, labels):",
+      "    svm_classifier = SVC(probability=True)",
+      "    cluster_model = KMeans(n_clusters=4)",
+      "    retention_forest = RandomForestClassifier(n_estimators=50)",
+      "    svm_classifier.fit(features, labels)",
+      "    cluster_model.fit(features)",
+      "    retention_forest.fit(features, labels)",
+      "    return svm_classifier, cluster_model, retention_forest"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
     path.join(workspace, "frontend", "index.html"),
     [
       "<!doctype html>",
@@ -1121,10 +1581,80 @@ async function createDecisionThresholdWorkspace() {
       "backend/services/agents.py",
       "backend/routes.py",
       "backend/services/arima_model.py",
+      "backend/services/clustering.py",
+      "backend/services/svm_model.py",
+      "backend/services/shap_explainer.py",
+      "backend/services/ml_models.py",
       "frontend/index.html"
     ]
   };
   return { workspace, projectMap };
+}
+
+async function createPageInventoryWorkspace() {
+  const { workspace, projectMap } = await createDecisionThresholdWorkspace();
+  await writeFile(
+    path.join(workspace, "frontend", "app.js"),
+    [
+      "export const CHAPTERS = [",
+      "  { id: 'overview', title: 'Overview', description: 'Shows the main retention summary.' },",
+      "  { id: 'customers', title: 'Customers', description: 'Lists customer risk and churn details.' },",
+      "  { id: 'agents', title: 'Agents', description: 'Shows agent recommendations and decision support.' }",
+      "];",
+      "",
+      "export function renderChapter(id) {",
+      "  return CHAPTERS.find((chapter) => chapter.id === id);",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "frontend", "index.html"),
+    [
+      "<!doctype html>",
+      "<html>",
+      "<body>",
+      "  <nav>",
+      "    <a href=\"#overview\">Overview</a>",
+      "    <a href=\"#customers\">Customers</a>",
+      "    <a href=\"#agents\">Agents</a>",
+      "  </nav>",
+      "  <section id=\"overview\">Overview page shows the main retention summary.</section>",
+      "  <section id=\"customers\">Customers page lists customer risk details.</section>",
+      "  <section id=\"agents\">Agents page renders orchestrator decision snapshots.</section>",
+      "  <script type=\"module\" src=\"./app.js\"></script>",
+      "</body>",
+      "</html>"
+    ].join("\n"),
+    "utf8"
+  );
+  await mkdir(path.join(workspace, "dashboard_ui", "src"), { recursive: true });
+  await writeFile(
+    path.join(workspace, "dashboard_ui", "src", "App.jsx"),
+    [
+      "import { BrowserRouter, Routes, Route } from 'react-router-dom';",
+      "export function App() {",
+      "  return <BrowserRouter><Routes>",
+      "    <Route path=\"/\" element={<Overview />} />",
+      "    <Route path=\"/customers\" element={<Customers />} />",
+      "    <Route path=\"/agents\" element={<Agents />} />",
+      "  </Routes></BrowserRouter>;",
+      "}",
+      "function Overview() { return <main>Overview</main>; }",
+      "function Customers() { return <main>Customers</main>; }",
+      "function Agents() { return <main>Agents</main>; }"
+    ].join("\n"),
+    "utf8"
+  );
+  return {
+    workspace,
+    projectMap: {
+      ...projectMap,
+      stack: ["Python", "HTML", "JavaScript", "React"],
+      entryPoints: [...projectMap.entryPoints, "frontend/app.js", "dashboard_ui/src/App.jsx"],
+      importantFiles: [...projectMap.importantFiles, "frontend/app.js", "dashboard_ui/src/App.jsx"]
+    }
+  };
 }
 
 async function createBigDataSentimentWorkspace() {

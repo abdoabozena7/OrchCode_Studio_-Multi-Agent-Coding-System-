@@ -55,6 +55,7 @@ import {
   buildLargeProjectExplainReport
 } from "./LargeProjectContextBuilder.js";
 import { explainProjectWithLlm } from "./LlmProjectExplainer.js";
+import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 
 type RunPlanTask = {
   id?: string;
@@ -109,7 +110,7 @@ export class RunEngine {
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "running";
       draft.resolvedExecutionMode = options.resolvedMode;
-      draft.agentName = "Local Codex Run";
+      draft.agentName = "Local Run";
       draft.runMode = runMode;
       draft.orchestration ??= createEmptyOrchestration(draft);
       draft.runPhases = createInitialRunPhases(runMode);
@@ -117,7 +118,7 @@ export class RunEngine {
       upsertAgentRunRecord(draft, {
         id: "agent_local_codex",
         sessionId,
-        agentName: "Local Codex Run",
+        agentName: "Local Run",
         displayName: "Coordinator",
         role: "Senior Coding Agent",
         roleTitle: "Coordinator",
@@ -195,7 +196,7 @@ export class RunEngine {
       rationaleSummary: snapshot.summary,
       evidenceRefs: createSnapshotEvidenceRefs(snapshot),
       linkedFiles: snapshot.importantFiles.slice(0, 6),
-      createdByAgent: "Local Codex Run",
+      createdByAgent: "Local Run",
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: ["agent_local_codex"]
     });
@@ -211,7 +212,7 @@ export class RunEngine {
       evidenceRefs: createProjectIntakeEvidenceRefs(intake),
       linkedFiles: intake.importantFiles.slice(0, 8),
       uncertainty: createProjectIntakeWarnings(intake)[0],
-      createdByAgent: "Local Codex Run",
+      createdByAgent: "Local Run",
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: ["agent_local_codex"]
     });
@@ -265,7 +266,7 @@ export class RunEngine {
         rationaleSummary: runToGreenPlan.reasoningSummary,
         evidenceRefs: createProjectIntakeEvidenceRefs(intake),
         linkedFiles: intake.importantFiles.slice(0, 6),
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -360,7 +361,7 @@ export class RunEngine {
         evidenceRefs: createProjectIntakeEvidenceRefs(intake),
         linkedFiles: intake.importantFiles.slice(0, 4),
         uncertainty: !commandRequests.length ? runToGreen.blockerReason : undefined,
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -461,7 +462,7 @@ export class RunEngine {
         evidenceRefs: [],
         linkedFiles: snapshot.importantFiles.slice(0, 4),
         uncertainty: plan.fallbackWarning,
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -489,7 +490,7 @@ export class RunEngine {
         })),
         linkedFiles: modulePlan.relevantFiles,
         uncertainty: modulePlan.unknowns[0],
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
       });
@@ -510,7 +511,7 @@ export class RunEngine {
       ),
       linkedFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []).slice(0, 8),
       uncertainty: plan.risks[0],
-      createdByAgent: "Local Codex Run",
+      createdByAgent: "Local Run",
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
     });
@@ -532,7 +533,7 @@ export class RunEngine {
         evidenceRefs: [],
         linkedFiles: [],
         uncertainty: risk,
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -567,7 +568,7 @@ export class RunEngine {
         evidenceRefs: [],
         linkedFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []).slice(0, 4),
         uncertainty: "A single-file merge may create overlapping edits or regressions without operator confirmation.",
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
       });
@@ -646,7 +647,7 @@ export class RunEngine {
           })),
         linkedFiles: explainReport.importantFiles.slice(0, 8),
         uncertainty: explainReport.risksAndUnknowns[0],
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -686,7 +687,7 @@ export class RunEngine {
         }),
         linkedFiles: explainResult.grounding.inspectedFiles.slice(0, 8),
         uncertainty: explainResult.grounding.unknowns[0],
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -793,7 +794,7 @@ export class RunEngine {
         evidenceRefs: [],
         linkedFiles: patchIntentModel.intents.map((intent) => intent.path).slice(0, 4),
         uncertainty: patchIntentModel.fallbackWarning,
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -846,7 +847,7 @@ export class RunEngine {
       })).slice(0, 8),
       linkedFiles: patch.filesChanged.map((file) => file.path),
       uncertainty: patch.riskLevel === "high" ? "High-risk patch proposal; verify carefully before apply." : undefined,
-      createdByAgent: "Local Codex Run",
+      createdByAgent: "Local Run",
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: uniqueStrings(["agent_local_codex", ...patch.filesChanged.map((file) => findOwningAgentId(this.requireSession(sessionId), file.path)).filter(Boolean) as string[]])
     });
@@ -869,7 +870,7 @@ export class RunEngine {
         })),
         linkedFiles: patch.filesChanged.map((file) => file.path),
         uncertainty: scopeValidation.reasons[1],
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"]
       });
@@ -995,6 +996,7 @@ export class RunEngine {
       "Return JSON with: summary, reasoningSummary, mode(create_project|edit_project|inspect_only), tasks, acceptanceCriteria, risks, suggestedCommands.",
       `Runtime preset: ${resolvedMode}`,
       `User request: ${message}`,
+      `Unified intent understanding: ${JSON.stringify(snapshot.intentUnderstanding)}`,
       `Workspace snapshot: ${JSON.stringify(snapshot)}`,
       `Project intake: ${JSON.stringify(snapshot.intake)}`,
       `Context pack: ${JSON.stringify(snapshot.contextPack)}`
@@ -1059,6 +1061,7 @@ export class RunEngine {
       "When using replace_range, choose a preimageText snippet that appears exactly once in the current file excerpt.",
       "Respect the scoped module plan. Do not introduce broad edits, duplicate systems, or out-of-scope files.",
       `User request: ${message}`,
+      `Unified intent understanding: ${JSON.stringify(snapshot.intentUnderstanding)}`,
       `Plan: ${JSON.stringify(plan)}`,
       `Workspace snapshot: ${JSON.stringify(snapshot)}`,
       `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`,
@@ -1238,7 +1241,7 @@ export class RunEngine {
       stage: progressStage,
       status,
       agentName: "RunEngine",
-      role: "Local Codex",
+      role: "Local Run",
       taskTitle,
       summary,
       targetFiles: [],
@@ -1279,6 +1282,7 @@ export class RunEngine {
 
 type RepoSnapshot = {
   summary: string;
+  intentUnderstanding?: ReturnType<typeof inferWorkspaceIntent>;
   stack: string[];
   packageManagers: string[];
   testCommands: string[];
@@ -1297,6 +1301,7 @@ function createSnapshot(
   message: string,
   intake?: AgentRuntimeSession["projectIntake"]
 ): RepoSnapshot {
+  const intentUnderstanding = inferWorkspaceIntent(message);
   const files = tools.workspace.listFiles(260);
   const candidateFiles = files
     .filter((file) => !file.isDir && !file.isSecretCandidate)
@@ -1325,7 +1330,8 @@ function createSnapshot(
   });
   const stack = projectMap.stack.length ? projectMap.stack : ["Unknown"];
   return {
-    summary: `${stack.join(", ")} workspace with ${candidateFiles.length} candidate source/config file(s), ${searchResults.length} search hit(s), and ${fileSamples.length} file sample(s).${intake ? ` Intake classified it as ${intake.projectKind.replaceAll("_", " ")}.` : ""}`,
+    summary: `${stack.join(", ")} workspace with ${candidateFiles.length} candidate source/config file(s), ${searchResults.length} search hit(s), and ${fileSamples.length} file sample(s). Intent: ${intentUnderstanding.actionMode}/${intentUnderstanding.answerGoal} for ${intentUnderstanding.topicPhrase}.${intake ? ` Intake classified it as ${intake.projectKind.replaceAll("_", " ")}.` : ""}`,
+    intentUnderstanding,
     stack,
     packageManagers: projectMap.packageManagers,
     testCommands: projectMap.testCommands,
@@ -2536,6 +2542,10 @@ function inferTargetFiles(message: string, snapshot: RepoSnapshot, mode: RunPlan
 }
 
 function inferSearchQuery(message: string) {
+  const intent = inferWorkspaceIntent(message);
+  if (intent.topicTerms.length) {
+    return intent.topicTerms.slice(0, 5).join(" ");
+  }
   return message
     .toLowerCase()
     .replace(/[^a-z0-9_\-\s]/g, " ")

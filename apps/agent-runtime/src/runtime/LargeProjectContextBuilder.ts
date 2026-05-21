@@ -15,6 +15,9 @@ import {
   textSupportsRequestedConcept,
   type RequestedConcept
 } from "./ProjectQuestionGrounding.js";
+import {
+  inferWorkspaceIntent
+} from "./WorkspaceReasoningPipeline.js";
 
 export type ProjectExplainSettings = {
   maxExplainFiles: number;
@@ -166,6 +169,10 @@ const DATA_FLOW_EVIDENCE_RE = /\b(dataset|data set|records?|rows?|csv|ingest|ing
 const NUMERIC_FACT_EVIDENCE_RE = /\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|borderline|direct|dispatch|high|low|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|condition|rule)\b/i;
 const FORECAST_EVIDENCE_RE = /\b(forecast|forecasting|arima|sarima|trend|prediction|timeseries|time series|customer|aggregate|global|cluster|segment|cluster_forecasts|cluster_series|fit_cluster_models|get_cluster_state|predicted_cluster|train_offline_artifacts|retrain|retraining|auto_retrain|customer interactions?|delta|deviation|drift)\b/i;
 const FOCUSED_FORECAST_EVIDENCE_RE = /\b(SARIMAForecastingService|cluster_forecasts|cluster_series|fit_cluster_models|get_cluster_state|train_offline_artifacts|retrain_with_rollback|AUTO_RETRAIN_CUSTOMER_INTERVAL|auto_retrain_every_customers|customer interactions?)\b/i;
+const ALGORITHM_MODEL_EVIDENCE_RE = /\b(algorithm|model|classifier|classification|regression|cluster|clustering|forecast|forecasting|arima|sarima|svm|svc|kmeans|k-means|randomforest|logisticregression|isolationforest|shap|fuzzy|cmeans|fit\(|predict\(|fit_predict|transform\(|train|training|sklearn|scikit|statsmodels|scipy|numpy|pandas)\b/i;
+const PAGE_STRUCTURE_EVIDENCE_RE = /\b(BrowserRouter|createBrowserRouter|Routes|Route|router|path\s*:|href=|data-view|data-page|CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|<\s*(nav|section|aside|main|a|button)\b/i;
+const PAGE_STRUCTURE_SOURCE_EXT_RE = /\.(html|jsx|tsx|js|ts|mjs)$/i;
+const PAGE_STYLESHEET_EXT_RE = /\.(css|scss|sass|less)$/i;
 const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
 
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
@@ -246,14 +253,19 @@ function createExplainSections(
 ): ProjectExplainSection[] {
   const normalized = message.toLowerCase();
   const requestedConcept = extractRequestedConcept(message);
+  const workspaceIntent = inferWorkspaceIntent(message);
   const factHeavyQuestion = isFactHeavyConcept(requestedConcept);
+  const pageInventoryQuestion = requestedConcept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
+  const algorithmQuestion = workspaceIntent.requiredFacets.includes("algorithms_models");
   const smallProject = sampledFiles.length <= 8;
   const anchors = sampledFiles.flatMap((sample) => {
-    const perFileLimit = factHeavyQuestion ? 12 : smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
+    const perFileLimit = factHeavyQuestion || algorithmQuestion ? 12 : pageInventoryQuestion ? 8 : smallProject || normalized.includes(path.basename(sample.path).toLowerCase()) ? 4 : 2;
     return sample.anchors.slice(0, perFileLimit);
   });
   const maxSections = factHeavyQuestion
-    ? Math.max(48, settings.maxModuleSamples * 4)
+    ? Math.max(96, settings.maxModuleSamples * 6)
+    : algorithmQuestion ? Math.max(40, settings.maxModuleSamples * 4)
+    : pageInventoryQuestion ? Math.max(40, settings.maxModuleSamples * 4)
     : smallProject ? Math.min(24, anchors.length) : Math.max(16, settings.maxModuleSamples * 2);
   return anchors
     .sort((left, right) => scoreSection(right, normalized) - scoreSection(left, normalized) || left.filePath.localeCompare(right.filePath) || left.lineStart - right.lineStart)
@@ -266,8 +278,9 @@ function scoreSection(section: ProjectExplainSection, normalizedMessage: string)
   const title = section.title.toLowerCase();
   if (normalizedMessage.includes(path.basename(pathText))) score += 80;
   if (/main\.py|routes\.py|server\.(ts|js|py)|pipeline|processor|orchestr|agent|service|retriev|repository|decision|action|classification|model|ingest|stream|consumer|producer|queue|event|schema/.test(pathText)) score += 70;
+  if (/model|models|classifier|classification|cluster|clustering|forecast|arima|sarima|shap|pipeline|analytics|ml|ai/.test(pathText)) score += 70;
   if (/index\.html|main\.(js|ts)|app\.(tsx|jsx|ts|js)|lib\.rs/.test(pathText)) score += 20;
-  if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|ingest|cluster|forecast|formula|numeric threshold|agent weight|project scripts|test|requested concept/i.test(title)) score += 60;
+  if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|algorithm|ingest|cluster|forecast|formula|numeric threshold|agent weight|project scripts|test|requested concept|react route|ui view collection|navigation item|static page section/i.test(title)) score += 60;
   if (/event|render|export|manifest/i.test(title)) score += 20;
   if (/dom wiring|html loads|css rule|dependency import|readable file sample/i.test(title)) score -= 40;
   if (/agent_proposal|agent-proposal|proposal|orchcode/i.test(pathText)) score -= 100;
@@ -277,6 +290,7 @@ function scoreSection(section: ProjectExplainSection, normalizedMessage: string)
 function extractExplainAnchors(filePath: string, content: string, requestedConcept?: RequestedConcept): ProjectExplainSection[] {
   const lines = content.split(/\r?\n/);
   const anchors: ProjectExplainSection[] = [];
+  const pageInventorySource = isPageInventorySourceFile(filePath);
   const add = (lineIndex: number, title: string, explanation: string, whyItMatters: string, symbol?: string) => {
     const lineStart = lineIndex + 1;
     const snippetWindow = snippetAround(lines, lineIndex, symbol ? 2 : 1);
@@ -304,6 +318,9 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
       if (numericAnchor) {
         add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
       }
+      if (ALGORITHM_MODEL_EVIDENCE_RE.test(line)) {
+        add(index, "Algorithm/model evidence", "This line contains model, classifier, clustering, forecasting, fit/predict, or ML/statistics evidence.", "This supports algorithm/model inventory questions without turning them into threshold questions.", extractQuotedValue(line));
+      }
       const route = line.match(/^@(app|router)\.(get|post|put|delete|patch)\(["']([^"']+)["']/);
       const cls = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
       const fn = line.match(/^(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\(/);
@@ -323,6 +340,9 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
       if (numericAnchor) {
         add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
       }
+      if (ALGORITHM_MODEL_EVIDENCE_RE.test(line)) {
+        add(index, "Algorithm/model evidence", "This line contains model, classifier, clustering, forecasting, fit/predict, or ML/statistics evidence.", "This supports algorithm/model inventory questions without turning them into threshold questions.", extractQuotedValue(line));
+      }
       if (/\b(fetch|axios\.|ky\.|request\()\b|\/api\/|POST|GET|PUT|DELETE/.test(line)) {
         add(index, "HTTP/API call", "هنا الواجهة أو الخدمة بتكلم endpoint أو API بدل ما تشتغل محلي فقط.", "دي نقطة مهمة لأنها تثبت انتقال الطلب بين طبقات المشروع.", extractQuotedValue(line));
       } else if (/\b(decision|action|dispatch|policy|evaluate|threshold|alert|status|state)\b/i.test(line)) {
@@ -334,8 +354,13 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
   if (requestedConcept?.specific) {
     const factHeavyQuestion = isFactHeavyConcept(requestedConcept);
     const wantsForecastingFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
-    const conceptMatchLimit = factHeavyQuestion ? 120 : 6;
-    const groupMatchLimit = factHeavyQuestion ? 200 : 10;
+    const wantsPageInventory = requestedConcept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
+    const wantsAlgorithmModels = requestedConcept.evidenceGroups?.some((group) => group.id === "algorithms_models") ?? false;
+    const conceptMatchLimit = factHeavyQuestion || wantsAlgorithmModels ? 120 : wantsPageInventory ? 40 : 6;
+    const groupMatchLimit = factHeavyQuestion || wantsAlgorithmModels ? 200 : wantsPageInventory ? 80 : 10;
+    if (wantsPageInventory && !pageInventorySource) {
+      return anchors.length ? dedupeSections(anchors).slice(0, 8) : [];
+    }
     if (wantsForecastingFacts) {
       lines.forEach((rawLine, index) => {
         if (FOCUSED_FORECAST_EVIDENCE_RE.test(`${filePath}\n${rawLine}`)) {
@@ -396,12 +421,17 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
       add(index, numericAnchor.title, numericAnchor.explanation, numericAnchor.whyItMatters, numericAnchor.symbol);
     }
     if (/\.html$/i.test(filePath)) {
+      if (/<(nav|a|button)\b|data-view=|data-page=/i.test(line)) add(index, "Navigation item", "This line defines navigation or a clickable UI view entry.", "This is direct evidence for page/screen inventory questions.", extractQuotedValue(line) ?? "navigation");
+      else if (/<(section|main|div)\b[^>]*(id|data-view|data-page)=/i.test(line)) add(index, "Static page section", "This line defines a page-like section or screen in HTML.", "This helps count and describe views even when the app is a single HTML page.", extractQuotedValue(line) ?? "section");
       if (/<script\b/i.test(line)) add(index, "HTML loads the app script", "السطر ده بيربط صفحة HTML بملف JavaScript المسؤول عن السلوك.", "من غير الربط ده الصفحة هتبقى هيكل ثابت من غير منطق التطبيق.", "script");
       else if (/<canvas\b|id=["']scene["']|id=["']app["']|id=["']root["']/i.test(line)) add(index, "HTML mount point", "ده العنصر اللي JavaScript غالبا بيرسم أو يركب عليه التجربة.", "بيعرفك نقطة اتصال الواجهة بالكود.", "mount");
     } else if (/\.(js|jsx|ts|tsx)$/i.test(filePath)) {
       const imported = line.match(/^import\s+(.+?)\s+from\s+["'](.+?)["']/);
       const exported = line.match(/^export\s+(class|function|const|let|type|interface)\s+([A-Za-z0-9_$]+)/);
       const fn = line.match(/^(export\s+)?(async\s+)?function\s+([A-Za-z0-9_$]+)/) ?? line.match(/^(const|let)\s+([A-Za-z0-9_$]+)\s*=\s*(async\s*)?\(/);
+      if (/<Route\b[^>]*\bpath=|createBrowserRouter|BrowserRouter|\bRoutes\b/.test(line)) add(index, "React route", "This line defines or wires a frontend route/screen.", "This is direct evidence for page/screen inventory questions.", extractQuotedValue(line) ?? "route");
+      if (/<(section|main|aside)\b[^>]*(className=|aria-label=)/i.test(line)) add(index, "Static page section", "This line defines a named page-like section or layout area in JSX.", "This is source evidence for page/screen inventory questions; it is stronger than CSS because it is rendered markup.", extractQuotedValue(line) ?? "section");
+      if (/\b(const|let|var)\s+(CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\s*=/.test(line)) add(index, "UI view collection", "This line starts a collection of UI pages, tabs, views, or chapters.", "This helps count and describe screen-like views even when they are not separate routes.", extractQuotedValue(line) ?? "views");
       if (imported) add(index, "Dependency import", `السطر ده يدخل اعتماد مهم: \`${imported[2]}\`.`, "الـ imports بتوضح المكتبات أو modules اللي الملف مبني عليها.", imported[2]);
       else if (/document\.getElementById|querySelector/.test(line)) add(index, "DOM wiring", "هنا الكود بيمسك عنصر من الصفحة عشان يقرأ منه أو يحدثه.", "دي نقطة الربط بين HTML والـ JavaScript.", extractQuotedValue(line));
       else if (/addEventListener|onkeydown|onclick|pointer|mouse|touch/i.test(line)) add(index, "User interaction handler", "هنا بيتسجل تفاعل المستخدم أو إدخال من لوحة المفاتيح/الماوس.", "دي السطور اللي بتفسر إزاي المستخدم بيأثر في التطبيق.", "event");
@@ -428,9 +458,11 @@ function extractExplainAnchors(filePath: string, content: string, requestedConce
 
   const anchorLimit = requestedConcept?.evidenceGroups?.some((group) => group.id === "threshold_fact" || group.id === "forecasting_fact")
     ? 16
-    : 8;
+    : requestedConcept?.evidenceGroups?.some((group) => group.id === "page_structure")
+      ? 32
+      : 8;
   const deduped = dedupeSections(anchors);
-  if (isFactHeavyConcept(requestedConcept)) {
+  if (isFactHeavyConcept(requestedConcept) || requestedConcept?.evidenceGroups?.some((group) => group.id === "page_structure")) {
     return deduped
       .sort((left, right) => scoreAnchorForRequestedConcept(right, requestedConcept) - scoreAnchorForRequestedConcept(left, requestedConcept) || left.lineStart - right.lineStart)
       .slice(0, anchorLimit);
@@ -452,6 +484,7 @@ function scoreAnchorForRequestedConcept(section: ProjectExplainSection, requeste
 
   const wantsThresholdFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact") ?? false;
   const wantsForecastingFacts = requestedConcept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
+  const wantsPageInventory = requestedConcept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
   if (wantsThresholdFacts) {
     if (NUMERIC_FACT_EVIDENCE_RE.test(text)) score += 80;
     if (/numeric threshold|agent weight|formula or score/i.test(section.title)) score += 100;
@@ -470,7 +503,15 @@ function scoreAnchorForRequestedConcept(section: ProjectExplainSection, requeste
     if (/\b50\b/.test(text) && /\b(customer|customers|retrain|auto_retrain|cadence|processed)\b/i.test(text)) score += 70;
     if (/arima|forecast|routes|service|model/.test(pathText)) score += 35;
   }
-  if (/package\.json|requirements\.txt|index\.html/.test(pathText)) score -= 80;
+  if (wantsPageInventory) {
+    if (!isPageInventorySourceFile(section.filePath)) score -= 220;
+    if (isPageInventorySourceFile(section.filePath) && PAGE_STRUCTURE_EVIDENCE_RE.test(text)) score += 120;
+    if (/React route|UI view collection|Navigation item|Static page section/i.test(section.title)) score += 180;
+    if (/Requested concept evidence|Requested concept match/i.test(section.title)) score -= 120;
+    if (/(^|\/)(frontend|src|dashboard_ui|pages|screens|views|routes)\//.test(pathText) || /app\.(jsx|tsx|js|ts)$|index\.html$/.test(pathText)) score += 70;
+    if (/package\.json|requirements\.txt|readme\.md|backend\/services|orchestrator|arima|agents\.py|\.css$/.test(pathText)) score -= 120;
+  }
+  if (/package\.json|requirements\.txt/.test(pathText) || (!wantsPageInventory && /index\.html/.test(pathText))) score -= 80;
   return score;
 }
 
@@ -638,20 +679,36 @@ function readSampledFiles(
     if (!selected.has(file.path)) selected.set(file.path, reason);
   };
 
-  for (const file of inventory.files.filter((entry) => entry.isManifest || entry.isDoc)) add(file.path, file.isManifest ? "manifest" : "documentation");
-  for (const file of input.projectMap.importantFiles) add(file, "project-map-important-file");
-  for (const file of input.intake?.importantFiles ?? []) add(file, "project-intake-important-file");
-  for (const file of input.intake?.knownEntryPoints ?? []) add(file, "entrypoint");
-  for (const file of inventory.files.filter((entry) => entry.isEntryPoint)) add(file.path, "entrypoint");
-
   const requestedConcept = extractRequestedConcept(input.message);
-  for (const entry of findProjectUnderstandingFiles(workspaceRoot, inventory, input, settings)) {
-    add(entry.file.path, entry.reason);
-  }
-  if (requestedConcept.specific) {
-    for (const file of findConceptMatchingFiles(workspaceRoot, inventory, requestedConcept, input, settings)) {
-      add(file.path, "requested-concept-match");
+  const wantsPageInventory = requestedConcept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
+  const addDocsAndManifests = () => {
+    for (const file of inventory.files.filter((entry) => entry.isManifest || entry.isDoc)) add(file.path, file.isManifest ? "manifest" : "documentation");
+  };
+  const addKnownImportantFiles = () => {
+    for (const file of input.projectMap.importantFiles) add(file, "project-map-important-file");
+    for (const file of input.intake?.importantFiles ?? []) add(file, "project-intake-important-file");
+    for (const file of input.intake?.knownEntryPoints ?? []) add(file, "entrypoint");
+    for (const file of inventory.files.filter((entry) => entry.isEntryPoint)) add(file.path, "entrypoint");
+  };
+  const addUnderstandingAndConceptFiles = () => {
+    for (const entry of findProjectUnderstandingFiles(workspaceRoot, inventory, input, settings)) {
+      add(entry.file.path, entry.reason);
     }
+    if (requestedConcept.specific) {
+      for (const file of findConceptMatchingFiles(workspaceRoot, inventory, requestedConcept, input, settings)) {
+        add(file.path, "requested-concept-match");
+      }
+    }
+  };
+
+  if (wantsPageInventory) {
+    addKnownImportantFiles();
+    addUnderstandingAndConceptFiles();
+    addDocsAndManifests();
+  } else {
+    addDocsAndManifests();
+    addKnownImportantFiles();
+    addUnderstandingAndConceptFiles();
   }
 
   for (const module of modules) {
@@ -667,7 +724,7 @@ function readSampledFiles(
       const absolutePath = path.join(workspaceRoot, filePath);
       const rawContent = fs.readFileSync(absolutePath, "utf8");
       const content = rawContent.slice(0, settings.maxFileReadChars);
-      const anchorContent = isFactHeavyConcept(requestedConcept)
+      const anchorContent = isFactHeavyConcept(requestedConcept) || wantsPageInventory
         ? rawContent.slice(0, Math.max(settings.maxFileReadChars, MAX_FACT_HEAVY_ANCHOR_CHARS))
         : content;
       const anchors = extractExplainAnchors(filePath, anchorContent, requestedConcept);
@@ -699,6 +756,8 @@ function findConceptMatchingFiles(
   const matches: Array<{ file: InventoryFile; score: number }> = [];
   const wantsThresholdFacts = concept.evidenceGroups?.some((group) => group.id === "threshold_fact") ?? false;
   const wantsForecastingFacts = concept.evidenceGroups?.some((group) => group.id === "forecasting_fact") ?? false;
+  const wantsPageInventory = concept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
+  const wantsAlgorithmModels = concept.evidenceGroups?.some((group) => group.id === "algorithms_models") ?? false;
   for (const file of inventory.files.filter((entry) => entry.readable)) {
     if (!shouldIncludeAgentArtifact(file.path, input.message)) continue;
     const pathGroups = matchingConceptEvidenceGroups(file.path, concept);
@@ -707,6 +766,10 @@ function findConceptMatchingFiles(
     if (wantsThresholdFacts && /orchestrator|agents?|routes?|arima|forecast|model|services|decision|policy/i.test(file.path)) score += 45;
     if (wantsForecastingFacts && /arima|forecast|trend|model|routes?|services/i.test(file.path)) score += 55;
     if (wantsForecastingFacts && /arima|forecast|trend|model/i.test(file.path)) score += 80;
+    if (wantsAlgorithmModels && /model|models|classifier|classification|cluster|clustering|forecast|arima|sarima|shap|pipeline|analytics|ml|services/i.test(file.path)) score += 100;
+    if (wantsPageInventory && !isPageInventorySourceFile(file.path)) score -= PAGE_STYLESHEET_EXT_RE.test(file.path) ? 160 : 70;
+    if (wantsPageInventory && isPageInventorySourceFile(file.path) && /(^|\/)(frontend|src|dashboard_ui|pages|screens|views|routes)\//i.test(file.path)) score += 90;
+    if (wantsPageInventory && isPageInventorySourceFile(file.path) && /app\.(jsx|tsx|js|ts)$|index\.html$/i.test(file.path)) score += 120;
     try {
       const content = fs.readFileSync(path.join(workspaceRoot, file.path), "utf8").slice(0, settings.maxFileReadChars);
       const contentGroups = matchingConceptEvidenceGroups(content, concept);
@@ -714,6 +777,8 @@ function findConceptMatchingFiles(
       if (contentGroups.length) score += contentGroups.length * (file.isDoc || file.isManifest ? 90 : 130);
       if (wantsThresholdFacts && NUMERIC_FACT_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 60 : 150;
       if (wantsForecastingFacts && FORECAST_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 70 : 150;
+      if (wantsAlgorithmModels && ALGORITHM_MODEL_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 70 : 180;
+      if (wantsPageInventory && isPageInventorySourceFile(file.path) && PAGE_STRUCTURE_EVIDENCE_RE.test(`${file.path}\n${content}`)) score += file.isDoc || file.isManifest ? 30 : 190;
     } catch {
       // Ignore unreadable files; inventory and other sampled files still provide context.
     }
@@ -721,6 +786,7 @@ function findConceptMatchingFiles(
       if (file.isDoc) score += 10;
       if (!file.isDoc && !file.isManifest) score += 25;
       if (file.isEntryPoint) score += 10;
+      if (wantsPageInventory && (file.isDoc || file.isManifest || PAGE_STYLESHEET_EXT_RE.test(file.path) || /backend\/services|orchestrator|arima|agents\.py/i.test(file.path))) score -= 90;
       matches.push({ file, score });
     }
   }
@@ -759,20 +825,28 @@ function findProjectUnderstandingFiles(
     const forecasting = FORECAST_EVIDENCE_RE.test(text)
       ? (sourceFile ? 145 : file.isDoc ? 85 : 60) + pathSignalBonus(file.path, FORECAST_EVIDENCE_RE)
       : 0;
+    const algorithmModel = ALGORITHM_MODEL_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 150 : file.isDoc ? 85 : 60) + pathSignalBonus(file.path, ALGORITHM_MODEL_EVIDENCE_RE)
+      : 0;
+    const pageStructure = isPageInventorySourceFile(file.path) && PAGE_STRUCTURE_EVIDENCE_RE.test(text)
+      ? (sourceFile ? 140 : file.ext === ".html" ? 145 : file.isDoc ? 45 : 65) + pathSignalBonus(file.path, PAGE_STRUCTURE_EVIDENCE_RE)
+      : 0;
     const source = sourceFile
       ? scoreSourceUnderstandingFile(file, text)
       : 0;
-    const validation = Math.max(domain, dataFlow, numeric, forecasting, source) + (file.isEntryPoint ? 25 : 0);
-    if (domain || dataFlow || numeric || forecasting || source || validation > 40) {
+    const validation = Math.max(domain, dataFlow, numeric, forecasting, algorithmModel, pageStructure, source) + (file.isEntryPoint ? 25 : 0);
+    if (domain || dataFlow || numeric || forecasting || algorithmModel || pageStructure || source || validation > 40) {
       const reason = [
         domain ? "project-domain-evidence" : "",
         dataFlow ? "project-data-flow-evidence" : "",
         numeric ? "numeric-threshold-evidence" : "",
         forecasting ? "forecasting-evidence" : "",
+        algorithmModel ? "algorithm-model-evidence" : "",
+        pageStructure ? "page-structure-evidence" : "",
         source ? "project-source-evidence" : "",
         validation > 80 ? "project-validation-evidence" : ""
       ].filter(Boolean).join("+") || "project-understanding-evidence";
-      scored.push({ file, reason, domain: Math.max(domain, forecasting), dataFlow: Math.max(dataFlow, numeric, forecasting), source: Math.max(source, numeric), validation });
+      scored.push({ file, reason, domain: Math.max(domain, forecasting, algorithmModel), dataFlow: Math.max(dataFlow, numeric, forecasting, algorithmModel), source: Math.max(source, numeric, algorithmModel), validation });
     }
   }
   return uniqueScoredFiles([
@@ -791,6 +865,8 @@ function scoreSourceUnderstandingFile(file: InventoryFile, text: string) {
   if (DOMAIN_EVIDENCE_RE.test(text)) score += 45;
   if (NUMERIC_FACT_EVIDENCE_RE.test(text)) score += 55;
   if (FORECAST_EVIDENCE_RE.test(text)) score += 50;
+  if (ALGORITHM_MODEL_EVIDENCE_RE.test(text)) score += 60;
+  if (isPageInventorySourceFile(file.path) && PAGE_STRUCTURE_EVIDENCE_RE.test(text)) score += 55;
   if (/(pipeline|model|classifier|ingest|stream|service|api|route|app\.(jsx|tsx|js|ts)|main\.|orchestrator|agents?|arima|forecast)/i.test(file.path)) score += 35;
   if (file.isTest) score -= 30;
   return score;
@@ -799,6 +875,17 @@ function scoreSourceUnderstandingFile(file: InventoryFile, text: string) {
 function pathSignalBonus(filePath: string, pattern: RegExp) {
   pattern.lastIndex = 0;
   return pattern.test(filePath) ? 35 : 0;
+}
+
+function isPageInventorySourceFile(filePath: string) {
+  const normalizedPath = filePath.replaceAll("\\", "/").toLowerCase();
+  if (PAGE_STYLESHEET_EXT_RE.test(normalizedPath)) return false;
+  if (/package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|readme\.md$/i.test(normalizedPath)) return false;
+  if (!PAGE_STRUCTURE_SOURCE_EXT_RE.test(normalizedPath)) return false;
+  return /(^|\/)(frontend|dashboard_ui|ui|web|client|pages|screens|views|routes|components)\//i.test(normalizedPath)
+    || /(^|\/)src\/app\//i.test(normalizedPath)
+    || /(^|\/)(app|main|index)\.(jsx|tsx|js|ts|mjs)$/i.test(normalizedPath)
+    || /(^|\/)index\.html$/i.test(normalizedPath);
 }
 
 function uniqueScoredFiles<T extends { file: InventoryFile }>(entries: T[]) {
@@ -862,17 +949,27 @@ function createReportEvidence(
   const dataFlowSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, DATA_FLOW_EVIDENCE_RE), 12);
   const numericSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, NUMERIC_FACT_EVIDENCE_RE), 14);
   const forecastSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, FORECAST_EVIDENCE_RE), 10);
+  const algorithmSamples = pickSamples(sampledFiles, (sample) => sampleMatchesPattern(sample, ALGORITHM_MODEL_EVIDENCE_RE), 14);
+  const pageSamples = pickSamples(sampledFiles, (sample) => isPageInventorySourceFile(sample.path) && sampleMatchesPattern(sample, PAGE_STRUCTURE_EVIDENCE_RE), 14);
   const conceptSamples = requestedConcept.specific
     ? pickSamples(sampledFiles, (sample) => textSupportsRequestedConcept(sampleText(sample), requestedConcept), 12)
     : [];
   const sourceSamples = pickSamples(sampledFiles, (sample) => SOURCE_EVIDENCE_EXT_RE.test(sample.path) && sample.anchors.length > 0, 10);
   const docSamples = pickSamples(sampledFiles, (sample) => isDocFile(sample.path) || isManifestFile(sample.path), 8);
   const remainingSamples = sampledFiles.slice(0, 16);
+  const numericAnchorEvidence = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact")
+    ? numericSamples.flatMap((sample) => sample.anchors
+      .filter((anchor) => NUMERIC_FACT_EVIDENCE_RE.test(`${anchor.title}\n${anchor.snippet}`) || /-?\d+(?:\.\d+)?/.test(anchor.snippet))
+      .slice(0, 10)
+      .map((anchor) => sectionToEvidence(anchor, sample.language)))
+    : [];
   const sampledEvidence = uniqueSamples([
     ...domainSamples,
     ...dataFlowSamples,
     ...numericSamples,
     ...forecastSamples,
+    ...algorithmSamples,
+    ...pageSamples,
     ...conceptSamples,
     ...sourceSamples,
     ...docSamples,
@@ -888,7 +985,7 @@ function createReportEvidence(
     path: module.root,
     reason: module.responsibility
   }));
-  return dedupeEvidence([...sampledEvidence, ...importantEvidence, ...moduleEvidence]).slice(0, 60);
+  return dedupeEvidence([...numericAnchorEvidence, ...sampledEvidence, ...importantEvidence, ...moduleEvidence]).slice(0, 80);
 }
 
 function sampleToEvidence(sample: SampledFile): ProjectExplainEvidenceRef {
@@ -905,6 +1002,20 @@ function sampleToEvidence(sample: SampledFile): ProjectExplainEvidenceRef {
   };
 }
 
+function sectionToEvidence(section: ProjectExplainSection, language?: string): ProjectExplainEvidenceRef {
+  return {
+    type: evidenceTypeForPath(section.filePath),
+    path: section.filePath,
+    reason: section.whyItMatters || section.explanation,
+    excerpt: section.snippet,
+    lineStart: section.lineStart,
+    lineEnd: section.lineEnd,
+    symbol: section.symbol,
+    language: section.language ?? language,
+    snippet: section.snippet
+  };
+}
+
 function pickSamples(sampledFiles: SampledFile[], predicate: (sample: SampledFile) => boolean, limit: number) {
   return sampledFiles
     .filter(predicate)
@@ -918,8 +1029,11 @@ function scoreSampleForEvidence(sample: SampledFile) {
   if (sample.anchors.length) score += 35;
   if (sample.reason.includes("project-domain")) score += 30;
   if (sample.reason.includes("project-data-flow")) score += 30;
+  if (sample.reason.includes("page-structure")) score += 45;
   if (sample.reason.includes("requested-concept")) score += 25;
   if (/arima|forecast|trend|model/i.test(sample.path) && FORECAST_EVIDENCE_RE.test(sampleText(sample))) score += 45;
+  if (/model|classifier|cluster|forecast|arima|sarima|pipeline|analytics|shap/i.test(sample.path) && ALGORITHM_MODEL_EVIDENCE_RE.test(sampleText(sample))) score += 60;
+  if (isPageInventorySourceFile(sample.path) && /frontend|dashboard_ui|src|pages|screens|views|routes|app\.(jsx|tsx|js|ts)|index\.html/i.test(sample.path) && PAGE_STRUCTURE_EVIDENCE_RE.test(sampleText(sample))) score += 55;
   if (isDocFile(sample.path)) score += 10;
   if (isManifestFile(sample.path)) score -= 20;
   return score;

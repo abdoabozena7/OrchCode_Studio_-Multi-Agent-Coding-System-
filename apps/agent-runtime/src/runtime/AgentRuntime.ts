@@ -890,7 +890,7 @@ export class AgentRuntime {
         }],
         linkedFiles: diagnosis?.evidence.filePath ? [diagnosis.evidence.filePath] : [],
         uncertainty: diagnosis?.confidence === "low" || diagnosis?.confidence === "unknown" ? diagnosis.reason : undefined,
-        createdByAgent: "Local Codex Run",
+        createdByAgent: "Local Run",
         createdByAgentId: "agent_local_codex",
         linkedAgentIds: ["agent_local_codex"],
         createdAt: new Date().toISOString()

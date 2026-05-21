@@ -10,13 +10,20 @@ import {
   createGroundingPackText,
   createStyleInstruction,
   evidenceItemSupportsConcept,
+  evidenceItemSupportsPageInventory,
   findUnsupportedDomainClaims,
   isForecastingScopeConcept,
+  isPageInventoryConcept,
   isThresholdInventoryConcept,
   selectGroundingEvidenceRefs,
   type GroundingEvidenceItem,
   type ProjectQuestionGrounding
 } from "./ProjectQuestionGrounding.js";
+import {
+  createWorkspaceReasoningPrompt,
+  evidenceItemsForWorkspaceReasoning,
+  responseLooksOffIntent
+} from "./WorkspaceReasoningPipeline.js";
 
 export type ProjectExplainLlmResponse = {
   answerMarkdown: string;
@@ -40,7 +47,7 @@ type EvidenceItem = GroundingEvidenceItem & {
   snippet?: string;
 };
 
-const MAX_EVIDENCE_ITEMS = 60;
+const MAX_EVIDENCE_ITEMS = 120;
 const MAX_SNIPPET_CHARS = 700;
 
 export async function explainProjectWithLlm(input: {
@@ -135,6 +142,8 @@ function createExplainRequest(
       "Grounding gate:",
       createGroundingPackText(grounding),
       "",
+      createWorkspaceReasoningPrompt(grounding.workspaceReasoning),
+      "",
       "Project evidence pack:",
       createEvidencePackText(report, evidenceItems, grounding),
       "",
@@ -170,6 +179,8 @@ function createRevisionRequest(
       "Grounding gate:",
       createGroundingPackText(grounding),
       "",
+      createWorkspaceReasoningPrompt(grounding.workspaceReasoning),
+      "",
       "Previous response:",
       JSON.stringify(previous, null, 2),
       "",
@@ -184,8 +195,12 @@ function createRevisionRequest(
 function createSystemPrompt(grounding: ProjectQuestionGrounding) {
   return [
     "You are the only reasoning layer for a production project explanation feature.",
+    "Use the unified workspace intent and evidence facets as the primary request understanding.",
     "Do not use memorized project categories, canned domain labels, or template stories.",
     "Infer what the project does only from the supplied evidence pack and the user's exact prompt.",
+    `Question kind: ${grounding.questionKind}. Do not answer using a different specialized flow from an earlier turn.`,
+    `Unified intent: actionMode=${grounding.workspaceReasoning.intent.actionMode}, answerGoal=${grounding.workspaceReasoning.intent.answerGoal}, topicPhrase=${grounding.workspaceReasoning.intent.topicPhrase}, outputShape=${grounding.workspaceReasoning.intent.outputShape}.`,
+    `Required evidence facets: ${grounding.workspaceReasoning.intent.requiredFacets.join(", ") || "none"}.`,
     grounding.projectContextRequired
       ? "The user is asking about how something works inside this project. First state what the current project appears to be from project-domain refs, then answer the exact requested concept."
       : "Answer the user's specific question first. Do not default to a broad project overview unless the user asked for one.",
@@ -200,6 +215,12 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
       : "",
     isForecastingScopeConcept(grounding)
       ? "For forecasting questions: identify the proven forecasting type, inputs, outputs, and whether the scope is per-customer or aggregate/global. Say 'not proven' for scope if refs do not show it."
+      : "",
+    isPageInventoryConcept(grounding)
+      ? "For page/screen inventory questions: inspect UI entrypoints, routes, nav/sidebar, sections, tabs, and rendered components first. Classify each item as route/page/section/tab/component. CSS or page titles are styling/context only and must never be counted as pages. Include what each item does, confidence, and UI evidence refs. Do not give threshold, formula, or forecasting tables unless the user asked for those."
+      : "",
+    grounding.workspaceReasoning.intent.requiredFacets.includes("algorithms_models")
+      ? "For algorithm/model questions: distinguish actual algorithms/models from service wrappers, managers, and UI labels. If the user asks how one algorithm works, synthesize role, inputs, labels/training, prediction/use site, and related explainability from code refs instead of dumping snippets."
       : "",
     "For realtime claims, distinguish true realtime streams/sockets/consumers from polling/timers/repeated refresh. Say 'not proven' when the evidence does not prove either.",
     "Every factual claim about code behavior must be grounded in one of the provided refs.",
@@ -266,7 +287,13 @@ function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
     if (sectionCount >= 10) return;
     sectionCountsByFile.set(section.filePath, sectionCount + 1);
     const ref = normalizeRef(section.filePath, section.lineStart);
-    if (byRef.has(ref)) return;
+    const existing = byRef.get(ref);
+    if (existing) {
+      if (!existing.snippet && section.snippet) existing.snippet = section.snippet;
+      if (!existing.reason && (section.whyItMatters || section.explanation)) existing.reason = section.whyItMatters || section.explanation;
+      if (!existing.title && section.title) existing.title = section.title;
+      return;
+    }
     byRef.set(ref, {
       ref,
       markdownLink: formatFileLineLink(section.filePath, section.lineStart),
@@ -281,7 +308,13 @@ function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
     if (evidence.type === "directory") return;
     const line = evidence.lineStart ?? 1;
     const ref = normalizeRef(evidence.path, line);
-    if (byRef.has(ref)) return;
+    const existing = byRef.get(ref);
+    if (existing) {
+      if (!existing.snippet && (evidence.snippet ?? evidence.excerpt)) existing.snippet = evidence.snippet ?? evidence.excerpt;
+      if (!existing.reason && evidence.reason) existing.reason = evidence.reason;
+      if (!existing.title && evidence.symbol) existing.title = evidence.symbol;
+      return;
+    }
     byRef.set(ref, {
       ref,
       markdownLink: formatFileLineLink(evidence.path, line),
@@ -293,7 +326,7 @@ function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
     });
   };
   for (const evidence of report.evidence) {
-    if (/arima|forecast|trend|model|orchestrator|agents?|routes?|services/i.test(evidence.path)) {
+    if (/arima|forecast|trend|model|models|classifier|classification|cluster|clustering|algorithm|analytics|pipeline|shap|svm|kmeans|orchestrator|agents?|routes?|services|frontend|dashboard_ui|(^|\/)src\/app\/|pages|screens|views|components|app\.(jsx|tsx|js|ts)|index\.html/i.test(evidence.path)) {
       addEvidence(evidence);
     }
   }
@@ -346,36 +379,55 @@ function validateProjectExplainResponse(
     ...linkedRefs,
     ...(Array.isArray(response.usedEvidenceRefs) ? response.usedEvidenceRefs.map((ref) => typeof ref === "string" ? normalizeRefString(ref) : "") : [])
   ]);
+  if (responseLooksOffIntent(response.answerMarkdown ?? "", grounding.workspaceReasoning)) {
+    errors.push(`answer appears to follow the wrong flow for topic: ${grounding.workspaceReasoning.intent.topicPhrase}`);
+  }
+  const primaryEvidenceRefs = new Set(evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning).map((item) => item.ref));
+  if (grounding.workspaceReasoning.intent.requiredFacets.length && citedRefs.length && !citedRefs.some((ref) => primaryEvidenceRefs.has(ref))) {
+    warnings.push(`answer did not cite the top unified workspace evidence for topic: ${grounding.workspaceReasoning.intent.topicPhrase}`);
+  }
   if (grounding.concept.specific) {
+    const citedItems = citedRefs
+      .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
+      .filter((item): item is EvidenceItem => Boolean(item));
+    const expandedCitedItems = expandCitedEvidenceItems(citedItems, evidenceItems);
     if (!grounding.conceptFound) {
       errors.push(`requested concept was not found in the current workspace evidence: ${grounding.concept.label}`);
-    } else if (!citedRefs.some((ref) => conceptSupportingRefs.has(ref))) {
+    } else if (!expandedCitedItems.some((item) => conceptSupportingRefs.has(item.ref))) {
       errors.push(`answer must cite evidence that directly supports the requested concept: ${grounding.concept.label}`);
     }
     if (grounding.concept.evidenceGroups?.length) {
-      const citedItems = citedRefs
-        .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
-        .filter((item): item is EvidenceItem => Boolean(item));
-      const citedCoverage = createConceptEvidenceGroupCoverage(grounding.concept, citedItems);
+      const citedCoverage = createConceptEvidenceGroupCoverage(grounding.concept, expandedCitedItems);
       const missingGroups = citedCoverage.filter((group) => !group.found).map((group) => group.label);
       if (missingGroups.length) {
         errors.push(`answer citations must cover requested evidence group(s): ${missingGroups.join(", ")}`);
       }
     }
     if (isThresholdInventoryConcept(grounding)) {
-      const citedItems = citedRefs
-        .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
-        .filter((item): item is EvidenceItem => Boolean(item));
-      if (!citedItems.some(citationHasNumericSupport)) {
+      if (!expandedCitedItems.some(citationHasNumericSupport)) {
         errors.push("threshold answers must cite current-workspace lines that contain numeric comparisons, constants, weights, or formulas.");
       }
     }
     if (isForecastingScopeConcept(grounding)) {
-      const citedItems = citedRefs
-        .map((ref) => evidenceItems.find((candidate) => candidate.ref === ref))
-        .filter((item): item is EvidenceItem => Boolean(item));
-      if (!citedItems.some((item) => /\b(forecast|forecasting|arima|sarima|trend|prediction|delta|deviation)\b/i.test(evidenceItemText(item)))) {
+      if (!expandedCitedItems.some((item) => /\b(forecast|forecasting|arima|sarima|trend|prediction|delta|deviation)\b/i.test(evidenceItemText(item)))) {
         errors.push("forecasting answers must cite current-workspace lines that support the forecasting type or trend logic.");
+      }
+    }
+    if (isPageInventoryConcept(grounding)) {
+      if (!expandedCitedItems.some((item) => evidenceItemSupportsPageInventory(item))) {
+        errors.push("page inventory answers must cite current-workspace UI route, navigation, view, or section evidence.");
+      }
+      if (!answerMentionsPageInventory(response.answerMarkdown ?? "")) {
+        errors.push("page inventory answers must actually discuss pages, screens, views, routes, or sections.");
+      }
+      if (!answerExplainsPageFunctions(response.answerMarkdown ?? "")) {
+        errors.push("page inventory answers must describe what each page, screen, view, route, or section does.");
+      }
+      if (answerLooksLikeWrongSpecializedFlow(response.answerMarkdown ?? "", "page_inventory")) {
+        errors.push("page inventory answers must not answer with thresholds, formulas, forecasting, or unrelated numeric inventories.");
+      }
+      if (citedItems.length && !expandedCitedItems.some((item) => pageInventoryCitationHasStructuralSupport(item))) {
+        errors.push("page inventory citations must include real route, nav, tab, or section structure, not only CSS, titles, package files, or generic docs.");
       }
     }
     for (const ref of citedRefs.filter(Boolean)) {
@@ -436,6 +488,22 @@ function createUnableToSafelyExplainMessage(userPrompt: string, report: ProjectE
     .map((entry) => `- ${formatFileLineLink(entry.path, entry.lineStart ?? 1)}: ${entry.reason}`);
   if (arabic) {
     return [
+      "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0631\u062f \u0627\u0644\u0645\u0632\u0648\u062f \u0645\u0627\u0639\u062f\u0627\u0634 \u062a\u062d\u0642\u0642 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.",
+      "",
+      "\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u062a\u062e\u0632\u0646 \u0648\u0641\u064a\u0647 \u0627\u0644\u0623\u062f\u0644\u0629 \u062f\u064a \u0643\u0628\u062f\u0627\u064a\u0629:",
+      ...(evidence.length ? evidence : ["- \u0645\u0641\u064a\u0634 \u0623\u062f\u0644\u0629 \u0643\u0641\u0627\u064a\u0629 \u0645\u062d\u0641\u0648\u0638\u0629 \u0641\u064a \u0627\u0644\u062a\u0642\u0631\u064a\u0631."]),
+      "",
+      "\u062c\u0631\u0628 \u062a\u0633\u0623\u0644 \u0639\u0646 \u0645\u0644\u0641 \u0645\u062d\u062f\u062f \u0623\u0648 \u0634\u063a\u0644 \u0645\u0632\u0648\u062f \u0623\u0642\u0648\u0649 \u0644\u0648 \u0645\u062d\u062a\u0627\u062c \u062a\u0641\u0635\u064a\u0644 \u0623\u0643\u0628\u0631."
+    ].join("\n");
+    return [
+      "مش هطلع شرح تخميني للمشروع لأن رد المزود ماعداش تحقق الأدلة المحلية.",
+      "",
+      "تقرير القراءة اتخزن وفيه الأدلة دي كبداية:",
+      ...(evidence.length ? evidence : ["- مفيش أدلة كفاية محفوظة في التقرير."]),
+      "",
+      "جرب تسأل عن ملف محدد أو شغل مزود أقوى لو محتاج تفصيل أكبر."
+    ].join("\n");
+    return [
       "مش هطلع شرح تخميني للمشروع لأن رد الـ LLM ماعدّاش تحقق الأدلة المحلي.",
       "",
       "تقرير القراءة اتخزن وفيه الأدلة دي كبداية:",
@@ -477,10 +545,47 @@ function answerMentionsProjectDomain(answer: string, grounding: ProjectQuestionG
     .some((term) => answerLower.includes(term.toLowerCase()));
 }
 
+function answerLooksLikeWrongSpecializedFlow(answer: string, expected: ProjectQuestionGrounding["questionKind"]) {
+  const normalized = answer.toLowerCase();
+  if (expected === "page_inventory") {
+    const pageMentions = /\b(page|pages|screen|screens|view|views|route|routes|nav|navigation|section|sections)\b|(?:\u0635\u0641\u062d|\u0634\u0627\u0634|\u0648\u0627\u062c\u0647)/i.test(answer);
+    const thresholdMentions = /\b(threshold|thresholds|threshlod|score|formula|weight|cosine|membership|orchestrator|dispatch)\b|(?:\u0628\u0642\u0627\u0631\u0646|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644)/i.test(answer);
+    return thresholdMentions && !pageMentions && (normalized.includes("| signal |") || normalized.includes("threshold"));
+  }
+  return false;
+}
+
+function answerMentionsPageInventory(answer: string) {
+  return /\b(page|pages|screen|screens|view|views|route|routes|nav|navigation|section|sections)\b|(?:\u0635\u0641\u062d|\u0634\u0627\u0634|\u0648\u0627\u062c\u0647)/i.test(answer);
+}
+
+function answerExplainsPageFunctions(answer: string) {
+  return /\b(does|shows|lists|renders|opens|handles|displays|contains|what it does)\b|(?:\u0628\u062a\u0639\u0645\u0644|\u0628\u064a\u0639\u0631\u0636|\u062a\u0639\u0631\u0636|\u0628\u064a\u0641\u062a\u062d|\u0628\u062a\u0641\u062a\u062d|\u0648\u0638\u064a\u0641|\u0627\u0644\u0648\u0638\u064a\u0641\u0629)/i.test(answer);
+}
+
+function pageInventoryCitationHasStructuralSupport(item: EvidenceItem) {
+  const path = item.path.replaceAll("\\", "/").toLowerCase();
+  if (/\.(css|scss|sass|less)$/i.test(path)) return false;
+  if (/package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|readme\.md$/i.test(path)) return false;
+  return /\b(BrowserRouter|createBrowserRouter|Routes|Route|router|path\s*:|href=|data-view|data-page|CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|<\s*(nav|section|aside|main|a|button)\b/i.test(item.snippet ?? "");
+}
+
 function citationHasNumericSupport(item: EvidenceItem) {
   return /-?\d+(?:\.\d+)?/.test(evidenceItemText(item))
     && (/\b(threshold|threshlod|cutoff|floor|min|max|minimum|maximum|score|weight|gap|cosine|membership|severity|trend|drift|accepted|f1|accuracy|delta|deviation|multiplier|guardrail|forecast|arima|sarima|orchestrator|dispatch|condition|rule)\b/i.test(evidenceItemText(item))
       || /[<>]=?|==/.test(evidenceItemText(item)));
+}
+
+function expandCitedEvidenceItems(citedItems: EvidenceItem[], evidenceItems: EvidenceItem[]) {
+  const citedRefs = new Set(citedItems.map((item) => item.ref));
+  const citedPaths = new Set(citedItems.map((item) => item.path.replaceAll("\\", "/").toLowerCase()));
+  const nearby = evidenceItems.filter((item) => {
+    if (citedRefs.has(item.ref)) return true;
+    const normalizedPath = item.path.replaceAll("\\", "/").toLowerCase();
+    if (!citedPaths.has(normalizedPath)) return false;
+    return citedItems.some((cited) => Math.abs(cited.line - item.line) <= 4);
+  });
+  return uniqueEvidenceItems([...citedItems, ...nearby]);
 }
 
 function evidenceItemText(item: EvidenceItem) {
@@ -539,4 +644,12 @@ function indent(value: string, prefix: string) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function uniqueEvidenceItems<T extends EvidenceItem>(items: T[]) {
+  const byRef = new Map<string, T>();
+  for (const item of items) {
+    if (!byRef.has(item.ref)) byRef.set(item.ref, item);
+  }
+  return [...byRef.values()];
 }

@@ -44,7 +44,8 @@ export function resolveInsideWorkspace(workspacePath: string, requestedPath = ".
     ? requestedPath
     : path.join(workspace, requestedPath);
   const normalized = path.resolve(candidate);
-  if (!normalized.startsWith(workspace)) {
+  const relative = path.relative(workspace, normalized);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Path is outside the active workspace");
   }
   return normalized;

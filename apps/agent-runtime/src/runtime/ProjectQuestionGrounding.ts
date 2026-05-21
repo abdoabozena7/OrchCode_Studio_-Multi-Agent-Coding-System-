@@ -1,7 +1,19 @@
 ﻿import type { ProjectExplainReport } from "@orchcode/protocol";
 
+import {
+  analyzeWorkspaceReasoning,
+  createEvidenceBasedAnswerFallback,
+  type WorkspaceReasoning
+} from "./WorkspaceReasoningPipeline.js";
+
 export type ProjectAnswerStyle = "child_simple" | "technical" | "concise" | "detailed" | "default";
 export type ProjectAnswerShape = "inventory_table" | "concise_explanation" | "detailed_walkthrough";
+export type ProjectQuestionKind =
+  | "threshold_inventory"
+  | "forecasting_scope"
+  | "dataset_realtime"
+  | "page_inventory"
+  | "general_project";
 
 export type RequestedConcept = {
   specific: boolean;
@@ -63,6 +75,7 @@ export type ProjectQuestionGrounding = {
   language: "arabic" | "english";
   style: ProjectAnswerStyle;
   answerShape: ProjectAnswerShape;
+  questionKind: ProjectQuestionKind;
   concept: RequestedConcept;
   projectContextRequired: boolean;
   projectDomain: ProjectDomainGrounding;
@@ -77,6 +90,7 @@ export type ProjectQuestionGrounding = {
   evidenceGroupCoverage: ConceptEvidenceGroupCoverage[];
   foundInstead: string;
   unknowns: string[];
+  workspaceReasoning: WorkspaceReasoning;
 };
 
 const QUESTION_STOP_WORDS = new Set([
@@ -217,10 +231,51 @@ const FORECASTING_FACT_GROUP: RequestedConceptEvidenceGroup = {
   coreTerms: ["forecast", "forecasting", "arima", "sarima", "trend", "customer", "cluster", "\u0639\u0645\u064a\u0644"]
 };
 
+const PAGE_STRUCTURE_ALIASES = [
+  "page", "pages", "screen", "screens", "view", "views", "route", "routes", "router",
+  "navigation", "nav", "sidebar", "menu", "tab", "tabs", "section", "sections",
+  "chapter", "chapters", "CHAPTERS", "PAGES", "ROUTES", "VIEWS", "TABS",
+  "\u0635\u0641\u062d\u0629", "\u0635\u0641\u062d\u0647", "\u0635\u0641\u062d\u0627\u062a",
+  "\u0634\u0627\u0634\u0629", "\u0634\u0627\u0634\u0647", "\u0634\u0627\u0634\u0627\u062a",
+  "\u0648\u0627\u062c\u0647\u0629", "\u0648\u0627\u062c\u0647\u0627\u062a"
+];
+
+const PAGE_STRUCTURE_GROUP: RequestedConceptEvidenceGroup = {
+  id: "page_structure",
+  label: "page/screen/route evidence",
+  aliases: PAGE_STRUCTURE_ALIASES,
+  coreTerms: ["page", "screen", "view", "route", "section", "\u0635\u0641\u062d\u0629", "\u0634\u0627\u0634\u0629"]
+};
+
+const ALGORITHM_MODEL_ALIASES = [
+  "algorithm", "algorithms", "algo", "model", "models", "classifier", "classifiers",
+  "classification", "regression", "cluster", "clustering", "forecast", "forecasting",
+  "arima", "sarima", "svm", "svc", "kmeans", "k-means", "randomforest",
+  "logisticregression", "isolationforest", "shap", "fuzzy", "cmeans", "fit",
+  "predict", "fit_predict", "transform", "train", "training", "sklearn", "scikit",
+  "statsmodels", "scipy", "\u0627\u0644\u062c\u0648\u0631\u064a\u062b\u0645",
+  "\u0627\u0644\u062c\u0648\u0631\u064a\u0632\u0645", "\u0627\u0644\u062c\u0648\u0631\u064a\u062a\u0645",
+  "\u062e\u0648\u0627\u0631\u0632\u0645\u064a\u0629", "\u062e\u0648\u0627\u0631\u0632\u0645\u064a\u0627\u062a",
+  "\u0645\u0648\u062f\u064a\u0644", "\u0645\u0648\u062f\u064a\u0644\u0627\u062a"
+];
+
+const ALGORITHM_MODEL_GROUP: RequestedConceptEvidenceGroup = {
+  id: "algorithms_models",
+  label: "algorithm/model evidence",
+  aliases: ALGORITHM_MODEL_ALIASES,
+  coreTerms: ["algorithm", "model", "classifier", "cluster", "forecast", "fit", "predict", "\u062e\u0648\u0627\u0631\u0632\u0645\u064a\u0629"]
+};
+const PAGE_STRUCTURE_SOURCE_EXT_RE = /\.(html|jsx|tsx|js|ts|mjs)$/i;
+const PAGE_STYLESHEET_EXT_RE = /\.(css|scss|sass|less)$/i;
+const PAGE_STRUCTURE_CONTENT_RE = /\b(BrowserRouter|createBrowserRouter|Routes|Route|router|path\s*:|href=|data-view|data-page|CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|<\s*(nav|section|aside|main|a|button)\b/i;
+const STRONG_PAGE_STRUCTURE_CONTENT_RE = PAGE_STRUCTURE_CONTENT_RE;
+const GENERATED_PAGE_ANCHOR_RE = /\b(Requested concept evidence|Requested concept match|screen inventory|page\/screen inventory)\b/i;
+
 const DATASET_REALTIME_CONCEPT_LABEL = "dataset realtime behavior";
 const DATASET_REALTIME_DISPLAY_LABEL = "dataset realtime behavior / ط§ظ„ط¯ط§طھط§ ظ…ظ† ط§ظ„ط¯ط§طھط§ ط³ظٹطھ ظƒط£ظ†ظ‡ط§ realtime";
 const THRESHOLD_INVENTORY_CONCEPT_LABEL = "threshold inventory";
 const FORECASTING_SCOPE_CONCEPT_LABEL = "forecasting type and scope";
+const PAGE_INVENTORY_CONCEPT_LABEL = "page/screen inventory";
 const ARABIC_CHILD_SIMPLE_PATTERN = /(?:ط§ط´ط±ط­.*ظ„\s*ط·ظپظ„|ط·ظپظ„.*ظٹظپظ‡ظ…|ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط¨ط¨ط³ط§ط·ط©|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ…ط¨طھط¯ط¦)/;
 
 const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
@@ -235,6 +290,8 @@ const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
   "sentiment": ["sentiment", "sentiment analysis", "sentement", "sentement analysis", "classify sentiment", "analyze sentiment", "sentiment classifier", "sentiment pipeline", "sentiment model", "طھط­ظ„ظٹظ„ ط§ظ„ظ…ط´ط§ط¹ط±", "طھط­ظ„ظٹظ„ ظ…ط´ط§ط¹ط±", "ط§ظ„ظ…ط´ط§ط¹ط±", "ظ…ط´ط§ط¹ط±", "emotion", "emotions"],
   "thresholds": THRESHOLD_FACT_ALIASES,
   "forecasting": FORECASTING_ALIASES,
+  "algorithms": ALGORITHM_MODEL_ALIASES,
+  "pages": PAGE_STRUCTURE_ALIASES,
   "todo": ["todo", "to do", "task", "checklist"]
 };
 DOMAIN_CLAIM_ALIASES.sentiment?.push(
@@ -347,6 +404,14 @@ const KNOWN_CONCEPTS: Array<{
     aliases: FORECASTING_ALIASES,
     coreTerms: FORECASTING_FACT_GROUP.coreTerms,
     evidenceGroups: [FORECASTING_FACT_GROUP]
+  },
+  {
+    key: "algorithms",
+    label: "algorithms/models inventory",
+    displayLabel: "algorithms/models inventory / \u0627\u0644\u062e\u0648\u0627\u0631\u0632\u0645\u064a\u0627\u062a \u0648\u0627\u0644\u0645\u0648\u062f\u064a\u0644\u0627\u062a",
+    aliases: ALGORITHM_MODEL_ALIASES,
+    coreTerms: ALGORITHM_MODEL_GROUP.coreTerms,
+    evidenceGroups: [ALGORITHM_MODEL_GROUP]
   }
 ];
 
@@ -362,11 +427,13 @@ export function detectProjectAnswerStyle(userPrompt: string): ProjectAnswerStyle
   if (/\b(concise|brief|short|quick)\b/.test(normalized)) return "concise";
   if (/(ظ…ط®طھطµط±|ط¨ط§ط®طھطµط§ط±)/.test(normalized)) return "concise";
   if (/\b(detailed|thorough|step by step|full)\b/.test(normalized)) return "detailed";
+  if (/(?:\u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644|\u062e\u0637\u0648\u0629\s+\u0628\u062e\u0637\u0648\u0629|\u0628\u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644)/.test(rawPrompt)) return "detailed";
   if (/(ط¨ط§ظ„طھظپطµظٹظ„|ط®ط·ظˆط© ط¨ط®ط·ظˆط©)/.test(normalized)) return "detailed";
   return "default";
 }
 
 export function detectProjectAnswerShape(userPrompt: string): ProjectAnswerShape {
+  if (detectPageInventoryConcept(userPrompt)) return "concise_explanation";
   const normalized = normalizeForGroundingSearch(userPrompt);
   const rawPrompt = userPrompt.toLowerCase();
   const asksForInventory =
@@ -374,7 +441,7 @@ export function detectProjectAnswerShape(userPrompt: string): ProjectAnswerShape
     || /(?:\u0643\u0644|\u0647\u0627\u062a\u0644\u064a|\u062c\u062f\u0648\u0644|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644\u0627\u062a|\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0643\u0627\u0645)/.test(rawPrompt);
   const asksForNumericSweep =
     /\b(threshold|thresholds|threshlod|threshlods|score|weight|compare|comparison|formula|formulas|condition|conditions)\b/.test(normalized)
-    || /(?:threshold|threshlod|\u0639\u062a\u0628\u0629|\u062d\u062f|\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a)/.test(rawPrompt);
+    || /(?:threshold|threshlod|\u0639\u062a\u0628\u0629|\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a)|(?:^|\s)\u062d\u062f(?:\s|$)/.test(rawPrompt);
   if (asksForInventory && asksForNumericSweep) return "inventory_table";
   if (/\b(detailed|thorough|step by step|walkthrough|full flow|architecture|deep dive)\b/.test(normalized)
     || /(?:\u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644|\u062e\u0637\u0648\u0629|\u0643\u0644\s+\u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644|\u0641\u0644\u0648|\u0627\u0644\u0641\u0644\u0648)/.test(rawPrompt)) {
@@ -385,6 +452,8 @@ export function detectProjectAnswerShape(userPrompt: string): ProjectAnswerShape
 
 export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   const styleStripped = stripStylePhrases(userPrompt);
+  const pageInventory = detectPageInventoryConcept(styleStripped) ?? detectPageInventoryConcept(userPrompt);
+  if (pageInventory) return pageInventory;
   const numericOrForecasting =
     detectThresholdInventoryConcept(styleStripped)
     ?? detectThresholdInventoryConcept(userPrompt)
@@ -414,6 +483,19 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   };
 }
 
+export function detectProjectQuestionKind(userPrompt: string): ProjectQuestionKind {
+  const concept = extractRequestedConcept(userPrompt);
+  if (isPageInventoryConcept(concept)) return "page_inventory";
+  if (isThresholdInventoryConcept(concept)) return "threshold_inventory";
+  if (isForecastingScopeConcept(concept)) return "forecasting_scope";
+  if (concept.label === DATASET_REALTIME_CONCEPT_LABEL
+    || concept.evidenceGroups?.some((group) => group.id === "dataset_source")
+      && concept.evidenceGroups?.some((group) => group.id === "realtime_update")) {
+    return "dataset_realtime";
+  }
+  return "general_project";
+}
+
 export function analyzeProjectQuestionGrounding(
   userPrompt: string,
   report: ProjectExplainReport,
@@ -423,9 +505,11 @@ export function analyzeProjectQuestionGrounding(
   const style = detectProjectAnswerStyle(userPrompt);
   const answerShape = detectProjectAnswerShape(userPrompt);
   const concept = extractRequestedConcept(userPrompt);
+  const questionKind = detectProjectQuestionKind(userPrompt);
   const projectContextRequired = detectProjectContextRequired(userPrompt);
   const projectDomain = inferProjectDomain(report, evidenceItems);
   const understanding = createProjectUnderstanding(report, evidenceItems, projectContextRequired, projectDomain);
+  const workspaceReasoning = analyzeWorkspaceReasoning({ userPrompt, report, evidenceItems, actionModeHint: "answer_only" });
   const inspectedFileSummaries = createInspectedFileSummaries(report, evidenceItems);
   const inspectedFiles = inspectedFileSummaries.map((entry) => entry.path);
   const supportingEvidence = concept.specific
@@ -443,6 +527,7 @@ export function analyzeProjectQuestionGrounding(
     language,
     style,
     answerShape,
+    questionKind,
     concept,
     projectContextRequired,
     projectDomain,
@@ -456,7 +541,8 @@ export function analyzeProjectQuestionGrounding(
     supportingEvidence,
     evidenceGroupCoverage,
     foundInstead,
-    unknowns: createGroundingUnknowns(report, concept, conceptFound, evidenceGroupCoverage)
+    unknowns: createGroundingUnknowns(report, concept, conceptFound, evidenceGroupCoverage),
+    workspaceReasoning
   };
 }
 
@@ -478,6 +564,7 @@ export function createStyleInstruction(style: ProjectAnswerStyle) {
 
 export function createGroundingPackText(grounding: ProjectQuestionGrounding) {
   return [
+    `Question kind: ${grounding.questionKind}`,
     `Project context required: ${grounding.projectContextRequired ? "yes" : "no"}`,
     `Project domain: ${grounding.projectDomain.label} (${grounding.projectDomain.confidence})`,
     grounding.projectDomain.evidenceRefs.length ? `Project domain refs: ${grounding.projectDomain.evidenceRefs.join(", ")}` : "",
@@ -489,6 +576,10 @@ export function createGroundingPackText(grounding: ProjectQuestionGrounding) {
     `Requested concept confidence: ${grounding.concept.confidence}`,
     `Concept found in current workspace evidence: ${grounding.concept.specific ? grounding.conceptFound ? "yes" : "no" : "not concept-specific"}`,
     grounding.evidenceGroupCoverage.length ? `Evidence groups: ${formatEvidenceGroupCoverage(grounding.evidenceGroupCoverage)}` : "",
+    `Unified intent: actionMode=${grounding.workspaceReasoning.intent.actionMode}; answerGoal=${grounding.workspaceReasoning.intent.answerGoal}; topicPhrase=${grounding.workspaceReasoning.intent.topicPhrase}; facets=${grounding.workspaceReasoning.intent.requiredFacets.join(", ") || "none"}`,
+    grounding.workspaceReasoning.evidencePack.missingRequiredFacets.length
+      ? `Missing unified evidence facets: ${grounding.workspaceReasoning.evidencePack.missingRequiredFacets.join(", ")}`
+      : "",
     `Answer style: ${grounding.style}`,
     `Answer shape: ${grounding.answerShape}`,
     `Style instruction: ${createStyleInstruction(grounding.style)}`,
@@ -502,6 +593,13 @@ export function createGroundingPackText(grounding: ProjectQuestionGrounding) {
 }
 
 export function createDeterministicNotFoundAnswer(grounding: ProjectQuestionGrounding) {
+  if (shouldUseUnifiedFallback(grounding)) {
+    const genericAnswer = createEvidenceBasedAnswerFallback(grounding.workspaceReasoning, ["Requested evidence was not found in the current workspace."]);
+    if (genericAnswer) return genericAnswer;
+  }
+  if (isPageInventoryConcept(grounding)) {
+    return createPageInventoryFallback(grounding, ["No frontend page/screen evidence was found in the current workspace evidence."]);
+  }
   const concept = formatConceptLabel(grounding.concept);
   const inspected = formatInspectedFiles(grounding);
   const missingGroups = formatMissingEvidenceGroups(grounding);
@@ -564,10 +662,17 @@ export function createDeterministicGroundedFallbackAnswer(
   grounding: ProjectQuestionGrounding,
   validationErrors: string[]
 ) {
+  if (shouldUseUnifiedFallback(grounding)) {
+    const genericAnswer = createEvidenceBasedAnswerFallback(grounding.workspaceReasoning, validationErrors);
+    if (genericAnswer) return genericAnswer;
+  }
   const inspected = formatInspectedFiles(grounding);
   const support = grounding.supportingEvidence.length
     ? grounding.supportingEvidence.slice(0, 3)
     : [];
+  if (isPageInventoryConcept(grounding)) {
+    return createPageInventoryFallback(grounding, validationErrors);
+  }
   if (isThresholdInventoryConcept(grounding) && grounding.conceptFound) {
     return createThresholdInventoryFallback(grounding, validationErrors);
   }
@@ -645,6 +750,11 @@ export function createDeterministicGroundedFallbackAnswer(
   return lines.join("\n");
 }
 
+function shouldUseUnifiedFallback(grounding: ProjectQuestionGrounding) {
+  return grounding.concept.evidenceGroups?.some((group) => group.id === "algorithms_models") === true
+    || grounding.concept.label === "algorithms/models inventory";
+}
+
 export function selectGroundingEvidenceRefs(grounding: ProjectQuestionGrounding, evidenceItems: GroundingEvidenceItem[]) {
   const refs = [
     ...grounding.projectDomain.sourceEvidenceRefs,
@@ -657,6 +767,9 @@ export function selectGroundingEvidenceRefs(grounding: ProjectQuestionGrounding,
 }
 
 export function evidenceItemSupportsConcept(item: GroundingEvidenceItem, concept: RequestedConcept) {
+  if (concept.evidenceGroups?.some((group) => group.id === "page_structure")) {
+    return evidenceItemSupportsPageInventory(item);
+  }
   if (concept.evidenceGroups?.some((group) => group.id === "threshold_fact")) {
     return evidenceItemSupportsThresholdFact(item);
   }
@@ -694,9 +807,11 @@ export function createConceptEvidenceGroupCoverage(
   if (!concept.evidenceGroups?.length) return [];
   return concept.evidenceGroups.map((group) => {
     const refs = evidenceItems
-      .filter((item) => group.id === "threshold_fact"
-        ? evidenceItemSupportsThresholdFact(item)
-        : matchingConceptEvidenceGroups(evidenceItemContentText(item), { ...concept, evidenceGroups: [group] }).length)
+      .filter((item) => group.id === "page_structure"
+        ? evidenceItemSupportsPageInventory(item)
+        : group.id === "threshold_fact"
+          ? evidenceItemSupportsThresholdFact(item)
+          : matchingConceptEvidenceGroups(evidenceItemContentText(item), { ...concept, evidenceGroups: [group] }).length)
       .map((item) => item.ref);
     return {
       id: group.id,
@@ -714,11 +829,29 @@ function evidenceItemSupportsThresholdFact(item: GroundingEvidenceItem) {
     || /[A-Za-z_][A-Za-z0-9_\.]*\s*(<=|>=|<|>|==)\s*-?\d+(?:\.\d+)?/.test(text);
 }
 
+export function evidenceItemSupportsPageInventory(item: GroundingEvidenceItem) {
+  const text = [item.path, item.title, item.reason, item.snippet ?? ""].join("\n");
+  const authoredText = [item.path, item.snippet ?? ""].join("\n");
+  const normalizedPath = item.path.replaceAll("\\", "/").toLowerCase();
+  if (!isPageInventorySourcePath(normalizedPath)) {
+    return false;
+  }
+  if (GENERATED_PAGE_ANCHOR_RE.test(text) && !STRONG_PAGE_STRUCTURE_CONTENT_RE.test(authoredText)) {
+    return false;
+  }
+  if (/((^|\/)(pages|screens|views|routes)\/|(^|\/)(frontend|src|dashboard_ui)\/|app\.(jsx|tsx|js|ts)$|index\.html$)/i.test(normalizedPath)
+    && STRONG_PAGE_STRUCTURE_CONTENT_RE.test(authoredText)) {
+    return true;
+  }
+  return STRONG_PAGE_STRUCTURE_CONTENT_RE.test(authoredText);
+}
+
 export function findUnsupportedDomainClaims(answer: string, evidenceItems: GroundingEvidenceItem[], concept: RequestedConcept) {
   const normalizedAnswer = normalizeForGroundingSearch(answer);
   const evidenceText = normalizeForGroundingSearch(evidenceItems.map((item) => [item.path, item.title, item.reason, item.snippet ?? ""].join(" ")).join(" "));
   const unsupported: string[] = [];
   for (const [claim, aliases] of Object.entries(DOMAIN_CLAIM_ALIASES)) {
+    if (claim === "pages" && !concept.evidenceGroups?.some((group) => group.id === "page_structure")) continue;
     const answerMentions = aliases.some((alias) => textContainsConceptTerm(normalizedAnswer, alias));
     if (!answerMentions) continue;
     const evidenceMentions = aliases.some((alias) => textContainsConceptTerm(evidenceText, alias));
@@ -797,10 +930,51 @@ function detectCompoundDatasetRealtimeConcept(userPrompt: string): RequestedConc
   };
 }
 
+function detectPageInventoryConcept(userPrompt: string): RequestedConcept | undefined {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  const rawPrompt = userPrompt.toLowerCase();
+  const hasEnglishPageIntent =
+    /\b(?:how many|what|which|list|show|explain)\b.{0,40}\b(?:pages?|screens?|views?|routes?)\b/.test(normalized)
+    || /\b(?:pages?|screens?|views?|routes?)\b.{0,80}\b(?:do|does|for|purpose|work|works|mean|each)\b/.test(normalized)
+    || /\b(?:each|every)\b.{0,30}\b(?:page|screen|view|route)\b/.test(normalized);
+  const hasArabicPageIntent =
+    /(?:\u0643\u0627\u0645\s+(?:\u0635\u0641\u062d\u0629|\u0635\u0641\u062d\u0647|\u0635\u0641\u062d\u0627\u062a|\u0634\u0627\u0634\u0629|\u0634\u0627\u0634\u0647|\u0634\u0627\u0634\u0627\u062a))/.test(rawPrompt)
+    || /(?:(?:\u0635\u0641\u062d\u0629|\u0635\u0641\u062d\u0647|\u0635\u0641\u062d\u0627\u062a|\u0634\u0627\u0634\u0629|\u0634\u0627\u0634\u0647|\u0634\u0627\u0634\u0627\u062a).{0,80}(?:\u0628\u062a\u0639\u0645\u0644|\u062a\u0639\u0645\u0644|\u0648\u0638\u064a\u0641|\u0627\u064a\u0647|\u0625\u064a\u0647|\u0627\u064a\u0647))/.test(rawPrompt)
+    || /(?:\u0627\u0644\u0633\u064a\u0633\u062a\u0645|\u0633\u064a\u0633\u062a\u0645).{0,80}(?:\u0643\u0627\u0645).{0,80}(?:\u0635\u0641\u062d\u0629|\u0635\u0641\u062d\u0647|\u0635\u0641\u062d\u0627\u062a|\u0634\u0627\u0634\u0629|\u0634\u0627\u0634\u0647|\u0634\u0627\u0634\u0627\u062a)/.test(rawPrompt)
+    || /(?:\u0643\u0644\s+\u0648\u0627\u062d\u062f\u0629|\u0643\u0644\s+\u0648\u0627\u062d\u062f\u0647).{0,80}(?:\u0628\u062a\u0639\u0645\u0644|\u062a\u0639\u0645\u0644|\u0627\u064a\u0647|\u0625\u064a\u0647)/.test(rawPrompt);
+  if (!hasEnglishPageIntent && !hasArabicPageIntent) return undefined;
+  return {
+    specific: true,
+    label: PAGE_INVENTORY_CONCEPT_LABEL,
+    displayLabel: "page/screen inventory / \u0635\u0641\u062d\u0627\u062a \u0648\u0634\u0627\u0634\u0627\u062a \u0627\u0644\u0633\u064a\u0633\u062a\u0645",
+    terms: uniqueStrings([
+      PAGE_INVENTORY_CONCEPT_LABEL,
+      "pages",
+      "screens",
+      "views",
+      "routes",
+      ...PAGE_STRUCTURE_GROUP.coreTerms
+    ]),
+    coreTerms: PAGE_STRUCTURE_GROUP.coreTerms,
+    aliases: uniqueStrings([
+      PAGE_INVENTORY_CONCEPT_LABEL,
+      "page inventory",
+      "screen inventory",
+      "route inventory",
+      "pages and screens",
+      "what each page does",
+      ...PAGE_STRUCTURE_ALIASES
+    ]),
+    evidenceGroups: [PAGE_STRUCTURE_GROUP],
+    confidence: "high"
+  };
+}
+
 function detectThresholdInventoryConcept(userPrompt: string): RequestedConcept | undefined {
   const normalized = normalizeForGroundingSearch(userPrompt);
-  const hasThresholdIntent = THRESHOLD_FACT_ALIASES.some((alias) => textContainsConceptTerm(normalized, alias));
-  const hasArabicCompareIntent = /(?:\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0643\u0627\u0645|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a)/.test(userPrompt);
+  const thresholdTopicAliases = THRESHOLD_FACT_ALIASES.filter((alias) => !/^(?:kam|\u0643\u0627\u0645|numbers?|values?)$/i.test(alias));
+  const hasThresholdIntent = thresholdTopicAliases.some((alias) => textContainsConceptTerm(normalized, alias));
+  const hasArabicCompareIntent = /(?:\u0628\u0642\u0627\u0631\u0646|\u0628\u064a\u0642\u0627\u0631\u0646|\u0639\u062a\u0628\u0629|\u0639\u062a\u0628\u0627\u062a|\u062d\u062f\u0648\u062f|\u0623\u0631\u0642\u0627\u0645|\u0627\u0631\u0642\u0627\u0645|\u0645\u0639\u0627\u062f\u0644\u0629|\u0645\u0639\u0627\u062f\u0644\u0627\u062a|\u0634\u0631\u0637|\u0634\u0631\u0648\u0637)|(?:^|\s)\u062d\u062f(?:\s|$)/.test(userPrompt);
   const hasDecisionContext = /\b(agent|agents|page|system|orchestrator|route|decision|rule|rules|formula|formulas|score|scores)\b/.test(normalized)
     || /(?:\u0627\u0644\u0633\u064a\u0633\u062a\u0645|\u0627\u0644\u0633\u064a\u0633\u062a\u0645\u0643|\u0635\u0641\u062d\u0629|\u0627\u0644\u0640?\s*agents|\u0627\u0644 agents)/.test(userPrompt);
   if (!hasThresholdIntent && !hasArabicCompareIntent) return undefined;
@@ -832,7 +1006,8 @@ function detectThresholdInventoryConcept(userPrompt: string): RequestedConcept |
 
 function detectForecastingScopeConcept(userPrompt: string): RequestedConcept | undefined {
   const normalized = normalizeForGroundingSearch(userPrompt);
-  const hasForecastIntent = FORECASTING_ALIASES.some((alias) => textContainsConceptTerm(normalized, alias));
+  const forecastTopicAliases = FORECASTING_ALIASES.filter((alias) => !/^(?:customer|customers|per customer|customer one|one customer|single customer|aggregate|aggregated|global|scope|cluster|clusters|segment|segments|\u0639\u0645\u064a\u0644|\u0644\u0639\u0645\u064a\u0644|\u0639\u0645\u064a\u0644 \u0648\u0627\u062d\u062f|\u0643\u0633\u062a\u0645\u0631|\u0648\u0627\u062d\u062f|\u0646\u0648\u0639)$/i.test(alias));
+  const hasForecastIntent = forecastTopicAliases.some((alias) => textContainsConceptTerm(normalized, alias));
   const hasTypeOrScopeIntent = /\b(type|kind|scope|customer|per customer|global|aggregate|one customer|single customer)\b/.test(normalized)
     || /(?:\u0646\u0648\u0639|\u0639\u0645\u064a\u0644|\u0648\u0627\u062d\u062f|\u064a\u062a\u0637\u0628\u0642|\u064a\u062a\u0637\u0628\u0642\s+\u0639\u0644\u0649)/.test(userPrompt);
   if (!hasForecastIntent) return undefined;
@@ -1160,6 +1335,14 @@ function formatInspectedFiles(grounding: ProjectQuestionGrounding) {
   return entries.length ? entries.join(", ") : "the sampled workspace files";
 }
 
+function formatPageInventoryInspectedFiles(grounding: ProjectQuestionGrounding) {
+  const files = uniqueStrings([
+    ...grounding.supportingEvidence.map((item) => item.path),
+    ...grounding.inspectedFiles
+  ]).slice(0, 8);
+  return files.length ? files.join(", ") : "the sampled workspace files";
+}
+
 function simpleAnalogyForFoundInstead(foundInstead: string) {
   if (/todo|checklist/i.test(foundInstead)) {
     return "A todo app is like a checklist: you add jobs, mark them done, and keep track of what is left.";
@@ -1206,15 +1389,24 @@ function isDatasetRealtimeConcept(grounding: ProjectQuestionGrounding) {
 }
 
 export function isThresholdInventoryConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  if ("questionKind" in grounding && grounding.questionKind !== "threshold_inventory") return false;
   const concept = "concept" in grounding ? grounding.concept : grounding;
   return concept.label === THRESHOLD_INVENTORY_CONCEPT_LABEL
     || concept.evidenceGroups?.some((group) => group.id === "threshold_fact") === true;
 }
 
 export function isForecastingScopeConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  if ("questionKind" in grounding && grounding.questionKind !== "forecasting_scope") return false;
   const concept = "concept" in grounding ? grounding.concept : grounding;
   return concept.label === FORECASTING_SCOPE_CONCEPT_LABEL
     || concept.evidenceGroups?.some((group) => group.id === "forecasting_fact") === true;
+}
+
+export function isPageInventoryConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  if ("questionKind" in grounding && grounding.questionKind === "page_inventory") return true;
+  const concept = "concept" in grounding ? grounding.concept : grounding;
+  return concept.label === PAGE_INVENTORY_CONCEPT_LABEL
+    || concept.evidenceGroups?.some((group) => group.id === "page_structure") === true;
 }
 
 function shortReason(item: GroundingEvidenceItem) {
@@ -1223,6 +1415,374 @@ function shortReason(item: GroundingEvidenceItem) {
 
 function formatConceptLabel(concept: RequestedConcept) {
   return concept.displayLabel ?? concept.label;
+}
+
+type PageEvidenceFact = {
+  name: string;
+  type: "route" | "html_page" | "section" | "tab" | "component" | "api_endpoint" | "stylesheet_support";
+  functionSummary: string;
+  links: string[];
+  path: string;
+  raw: string;
+  confidence: "high" | "medium" | "low";
+};
+
+function createPageInventoryFallback(grounding: ProjectQuestionGrounding, validationErrors: string[]) {
+  void validationErrors;
+  const items = collectGroundingEvidenceForSynthesis(grounding);
+  const candidates = extractPageEvidenceFacts(items);
+  const pageFacts = candidates.filter((fact) => isCountablePageCandidate(fact)).slice(0, 30);
+  const endpointFacts = candidates.filter((fact) => fact.type === "api_endpoint").slice(0, 12);
+  const stylesheetFacts = candidates.filter((fact) => fact.type === "stylesheet_support");
+  const hasRealRoutes = pageFacts.some((fact) => fact.type === "route");
+  const hasSectionsOrTabs = pageFacts.some((fact) => fact.type === "section" || fact.type === "tab" || fact.type === "html_page");
+  const arabic = grounding.language === "arabic";
+
+  if (arabic) {
+    const lines: string[] = [];
+    if (pageFacts.length) {
+      if (hasRealRoutes) {
+        lines.push(`لقيت ${pageFacts.length} route/page مؤكدة من كود الواجهة.`);
+      } else if (hasSectionsOrTabs) {
+        lines.push(`واضح إن الواجهة أقرب لـ single-page app، ولقيت ${pageFacts.length} section/tab أو view جوهها.`);
+      } else {
+        lines.push(`لقيت ${pageFacts.length} candidate من كود الواجهة، بس نوعهم محتاج تأكيد.`);
+      }
+      lines.push("");
+      lines.push("| الاسم | النوع | بتعمل إيه | الدليل | الثقة |");
+      lines.push("| --- | --- | --- | --- | --- |");
+      for (const fact of pageFacts) {
+        lines.push(`| ${escapeTableCell(fact.name)} | ${formatArabicPageFactType(fact)} | ${escapeTableCell(formatArabicPageFactDescription(fact))} | ${formatPageFactLinks(fact)} | ${formatArabicConfidence(fact.confidence)} |`);
+      }
+      if (stylesheetFacts.length) lines.push("\nملفات CSS لو ظهرت في الأدلة فهي محسوبة كستايل فقط، مش كصفحات.");
+    } else {
+      lines.push("لا أقدر أؤكد عدد صفحات frontend من الأدلة الحالية.");
+      if (stylesheetFacts.length) {
+        lines.push("لقيت CSS أو styling، لكنه لا يكفي يتعد كصفحة أو screen.");
+      }
+      if (endpointFacts.length) {
+        lines.push("اللي ظهر بدل كده backend/API endpoints، ودي مش صفحات واجهة مؤكدة:");
+        for (const fact of endpointFacts) {
+          lines.push(`- ${fact.name}: ${formatArabicPageFactDescription(fact)} ${formatPageFactLinks(fact)}`);
+        }
+      } else {
+        lines.push(`راجعت: ${formatPageInventoryInspectedFiles(grounding)}.`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  const lines: string[] = [];
+  if (pageFacts.length) {
+    if (hasRealRoutes) {
+      lines.push(`I found ${pageFacts.length} confirmed route/page item(s) in the frontend code.`);
+    } else if (hasSectionsOrTabs) {
+      lines.push(`This looks like a single-page frontend with ${pageFacts.length} section/tab or view item(s).`);
+    } else {
+      lines.push(`I found ${pageFacts.length} frontend candidate item(s), but their page type is low-confidence.`);
+    }
+    lines.push("");
+    lines.push("| Name | Type | What it does | Evidence | Confidence |");
+    lines.push("| --- | --- | --- | --- | --- |");
+    for (const fact of pageFacts) {
+      lines.push(`| ${escapeTableCell(fact.name)} | ${fact.type} | ${escapeTableCell(formatEnglishPageFactDescription(fact))} | ${formatPageFactLinks(fact)} | ${fact.confidence} |`);
+    }
+    if (stylesheetFacts.length) lines.push("\nCSS evidence was treated as styling support only, not counted as pages.");
+  } else {
+    lines.push("I could not confirm frontend pages from the inspected current-workspace files.");
+    if (stylesheetFacts.length) {
+      lines.push("I found CSS/styling evidence, but CSS is not enough to count a page or screen.");
+    }
+    if (endpointFacts.length) {
+      lines.push("I found backend/API endpoints instead:");
+      for (const fact of endpointFacts) {
+        lines.push(`- ${fact.name}: ${formatEnglishPageFactDescription(fact)} ${formatPageFactLinks(fact)}`);
+      }
+    } else {
+      lines.push(`Inspected files: ${formatPageInventoryInspectedFiles(grounding)}.`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function extractPageEvidenceFacts(items: GroundingEvidenceItem[]) {
+  const facts: PageEvidenceFact[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const text = [item.title, item.reason, item.snippet ?? ""].join("\n");
+    if (!evidenceItemSupportsPageInventory(item) && !/\bAPI route\b/i.test(text) && !PAGE_STYLESHEET_EXT_RE.test(item.path)) continue;
+    for (const fact of parsePageFactsFromEvidence(item)) {
+      const key = canonicalPageCandidateKey(fact);
+      const existingIndex = facts.findIndex((candidate) => canonicalPageCandidateKey(candidate) === key);
+      if (existingIndex >= 0) {
+        facts[existingIndex] = mergePageCandidates(facts[existingIndex]!, fact);
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      facts.push(fact);
+      if (facts.length >= 60) return sortPageFacts(facts);
+    }
+  }
+  return sortPageFacts(facts);
+}
+
+function parsePageFactsFromEvidence(item: GroundingEvidenceItem): PageEvidenceFact[] {
+  const facts: PageEvidenceFact[] = [];
+  const normalizedPath = item.path.replaceAll("\\", "/").toLowerCase();
+  if (PAGE_STYLESHEET_EXT_RE.test(normalizedPath)) {
+    return [{
+      name: item.path.split(/[\\/]/).pop() ?? item.path,
+      type: "stylesheet_support",
+      functionSummary: "Stylesheet evidence only; not a page or screen.",
+      links: [item.markdownLink],
+      path: item.path,
+      raw: item.snippet ?? item.reason,
+      confidence: "low"
+    }];
+  }
+  if (!isPageInventorySourcePath(normalizedPath) && !/\bAPI route\b/i.test(item.title)) return facts;
+  const source = item.snippet ?? "";
+  if (!source || GENERATED_PAGE_ANCHOR_RE.test(source) && !STRONG_PAGE_STRUCTURE_CONTENT_RE.test(source)) return facts;
+  const lines = source.split(/\r?\n/);
+  const add = (name: string, type: PageEvidenceFact["type"], raw: string, description?: string, confidence?: PageEvidenceFact["confidence"]) => {
+    const cleanedName = cleanPageName(name);
+    if (!cleanedName || cleanedName.length > 80) return;
+    facts.push({
+      name: cleanedName,
+      type,
+      functionSummary: description ?? inferPageDescription(raw, type),
+      links: [item.markdownLink],
+      path: item.path,
+      raw: raw.trim(),
+      confidence: confidence ?? inferPageCandidateConfidence(type, raw, item.path)
+    });
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const jsxRoute = trimmed.match(/<Route\b[^>]*\bpath=["']([^"']+)["'][^>]*(?:element=\{?\s*<([A-Z][A-Za-z0-9_]*))?/);
+    if (jsxRoute) add(jsxRoute[2] ? `${jsxRoute[2]} (${jsxRoute[1]})` : jsxRoute[1] ?? "route", "route", trimmed, describeRoute(trimmed, jsxRoute[2], jsxRoute[1]), "high");
+    const objectRoute = trimmed.match(/\bpath\s*:\s*["']([^"']+)["']/);
+    if (objectRoute && /\b(route|router|createBrowserRouter|routes?)\b/i.test(source)) add(objectRoute[1] ?? "route", "route", trimmed, undefined, "high");
+    const htmlSection = trimmed.match(/<(section|main|div)\b[^>]*(?:id|data-view|data-page)=["']([^"']+)["'][^>]*>([^<]{0,140})/i);
+    if (htmlSection) add(htmlSection[2] ?? "section", htmlSection[1]?.toLowerCase() === "section" ? "section" : "html_page", trimmed, htmlSection[3], "high");
+    const jsxNamedSection = trimmed.match(/<(section|main|aside)\b[^>]*(?:className=\{?["']([^"'}]+)["']\}?|aria-label=["']([^"']+)["'])/i);
+    if (jsxNamedSection) {
+      const sectionName = nameFromJsxClassOrAria(jsxNamedSection[3] ?? jsxNamedSection[2] ?? "");
+      if (sectionName) add(sectionName, jsxNamedSection[1]?.toLowerCase() === "main" ? "html_page" : "section", trimmed, undefined, "medium");
+    }
+    const navLink = trimmed.match(/<a\b[^>]*href=["']?([^"'\s>]*)["']?[^>]*>([^<]{1,90})<\/a>/i);
+    if (navLink) add(navLink[2] ?? navLink[1] ?? "navigation", "tab", trimmed, undefined, "medium");
+    const dataViewButton = trimmed.match(/<(button|a)\b[^>]*(?:data-view|data-page)=["']([^"']+)["'][^>]*>([^<]{0,90})/i);
+    if (dataViewButton) add(dataViewButton[3] || dataViewButton[2] || "view", "tab", trimmed, undefined, "medium");
+    const apiRoute = trimmed.match(/^@(app|router)\.(get|post|put|delete|patch)\(["']([^"']+)["']/);
+    if (apiRoute) add(`${apiRoute[2]?.toUpperCase()} ${apiRoute[3]}`, "api_endpoint", trimmed, undefined, "high");
+    const objectView = trimmed.match(/^\{.*\b(?:id|key|name|label|title|path)\s*:\s*["'][^"']+["'].*\}/);
+    if (objectView && /\b(CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b/.test(source)) {
+      const fields = parseStringFieldsFromObject(trimmed);
+      const name = fields.title ?? fields.label ?? fields.name ?? fields.id ?? fields.key ?? fields.path;
+      const description = fields.description ?? fields.summary ?? fields.subtitle ?? fields.body;
+      if (name) add(name, "tab", trimmed, description, description ? "high" : "medium");
+    }
+  }
+
+  if (/\b(CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b/.test(source)) {
+    const collectionName = source.match(/\b(CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b/)?.[1] ?? "views";
+    for (const match of source.matchAll(/\b(?:id|key|name|label|title|path)\s*[:=]\s*["']([^"']{2,80})["']/g)) {
+      add(match[1] ?? collectionName, "tab", match[0] ?? source, undefined, "low");
+    }
+    const quoted = [...source.matchAll(/["']([A-Za-z][A-Za-z0-9 _/-]{2,60})["']/g)]
+      .map((match) => match[1] ?? "")
+      .filter((value) => !/\.(js|jsx|ts|tsx|css|html)$|^\/api\//i.test(value))
+      .slice(0, 12);
+    for (const value of quoted) add(value, "tab", source, undefined, "low");
+  }
+  return facts;
+}
+
+function sortPageFacts(facts: PageEvidenceFact[]) {
+  const rank: Record<PageEvidenceFact["type"], number> = {
+    route: 0,
+    html_page: 1,
+    section: 2,
+    tab: 3,
+    component: 4,
+    api_endpoint: 5,
+    stylesheet_support: 6
+  };
+  const confidenceRank = { high: 0, medium: 1, low: 2 };
+  return facts.sort((left, right) => rank[left.type] - rank[right.type] || confidenceRank[left.confidence] - confidenceRank[right.confidence] || left.name.localeCompare(right.name));
+}
+
+function cleanPageName(value: string) {
+  return sanitizeAnswerFragment(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^#/, "")
+    .trim();
+}
+
+function inferPageDescription(raw: string, type: PageEvidenceFact["type"]) {
+  const text = sanitizeAnswerFragment(raw).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (text.length > 20 && !/^\w+$/.test(text)) return text.slice(0, 160);
+  if (type === "route") return "A frontend route/view defined in the UI routing code.";
+  if (type === "tab") return "A navigation/tab item users can click to reach a view or section.";
+  if (type === "api_endpoint") return "A backend API endpoint, not a confirmed frontend page.";
+  if (type === "component") return "A UI component; it only counts as a screen when rendered by a route or view.";
+  if (type === "stylesheet_support") return "Stylesheet evidence only; not a page or screen.";
+  return "A page-like UI section or screen found in frontend markup.";
+}
+
+function formatArabicPageFactDescription(fact: PageEvidenceFact) {
+  const summary = sanitizeAnswerFragment(fact.functionSummary).replace(/\s+/g, " ").trim();
+  if (summary.length > 8 && !/^(A frontend route|A navigation|A page-like|An item|Stylesheet)/i.test(summary)) return summary.slice(0, 160);
+  if (fact.type === "route") return `route بيعرض شاشة ${fact.name}`;
+  if (fact.type === "tab") return `tab/navigation بيفتح جزء ${fact.name}`;
+  if (fact.type === "api_endpoint") return "backend endpoint، مش صفحة frontend مؤكدة";
+  if (fact.type === "component") return "component في الواجهة، وظيفته الدقيقة محتاجة سياق render";
+  if (fact.type === "stylesheet_support") return "ستايل فقط، مش صفحة";
+  return `section أو view باسم ${fact.name}`;
+}
+
+function formatEnglishPageFactDescription(fact: PageEvidenceFact) {
+  return sanitizeAnswerFragment(fact.functionSummary).replace(/\s+/g, " ").slice(0, 160);
+}
+
+function isPageInventorySourcePath(filePath: string) {
+  const normalizedPath = filePath.replaceAll("\\", "/").toLowerCase();
+  if (PAGE_STYLESHEET_EXT_RE.test(normalizedPath)) return false;
+  if (/package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|readme\.md$/i.test(normalizedPath)) return false;
+  if (!PAGE_STRUCTURE_SOURCE_EXT_RE.test(normalizedPath)) return false;
+  return /(^|\/)(frontend|dashboard_ui|ui|web|client|pages|screens|views|routes|components)\//i.test(normalizedPath)
+    || /(^|\/)src\/app\//i.test(normalizedPath)
+    || /(^|\/)(app|main|index)\.(jsx|tsx|js|ts|mjs)$/i.test(normalizedPath)
+    || /(^|\/)index\.html$/i.test(normalizedPath);
+}
+
+function isCountablePageCandidate(fact: PageEvidenceFact) {
+  return fact.type !== "api_endpoint" && fact.type !== "stylesheet_support" && fact.type !== "component";
+}
+
+function formatArabicPageFactType(fact: PageEvidenceFact) {
+  if (fact.type === "route") return "route/page";
+  if (fact.type === "html_page") return "HTML section";
+  if (fact.type === "section") return "section";
+  if (fact.type === "tab") return "tab/view";
+  if (fact.type === "component") return "component";
+  if (fact.type === "api_endpoint") return "API endpoint";
+  return "CSS support";
+}
+
+function formatArabicConfidence(confidence: PageEvidenceFact["confidence"]) {
+  if (confidence === "high") return "عالية";
+  if (confidence === "medium") return "متوسطة";
+  return "منخفضة";
+}
+
+function formatPageFactLinks(fact: PageEvidenceFact) {
+  return uniqueStrings(fact.links).slice(0, 3).join(", ");
+}
+
+function canonicalPageCandidateKey(fact: PageEvidenceFact) {
+  if (fact.type === "api_endpoint" || fact.type === "stylesheet_support") {
+    return `${fact.type}:${fact.path.toLowerCase()}:${normalizeForGroundingSearch(fact.name)}`;
+  }
+  const normalizedName = normalizeForGroundingSearch(fact.name)
+    .replace(/\b(route|page|screen|view|section|tab|component)\b/g, " ")
+    .replace(/\bhtml\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const routeLike = fact.raw.match(/\bpath=["']([^"']+)["']/)?.[1]
+    ?? fact.raw.match(/\bpath\s*:\s*["']([^"']+)["']/)?.[1]
+    ?? fact.raw.match(/\bhref=["']#?([^"'\s>]+)["']?/)?.[1]
+    ?? fact.raw.match(/\b(?:id|data-view|data-page)=["']([^"']+)["']/)?.[1];
+  const normalizedRoute = routeLike
+    ? normalizeForGroundingSearch(routeLike.replace(/^#/, "").replace(/^\//, "") || "home")
+    : "";
+  return normalizedRoute || normalizedName || normalizeForGroundingSearch(fact.path);
+}
+
+function mergePageCandidates(left: PageEvidenceFact, right: PageEvidenceFact): PageEvidenceFact {
+  const rank: Record<PageEvidenceFact["type"], number> = {
+    route: 6,
+    html_page: 5,
+    section: 4,
+    tab: 3,
+    component: 2,
+    api_endpoint: 1,
+    stylesheet_support: 0
+  };
+  const confidenceRank = { high: 3, medium: 2, low: 1 };
+  const winner = rank[right.type] > rank[left.type] || confidenceRank[right.confidence] > confidenceRank[left.confidence]
+    ? right
+    : left;
+  const loser = winner === right ? left : right;
+  return {
+    ...winner,
+    functionSummary: chooseBetterPageSummary(winner.functionSummary, loser.functionSummary),
+    links: uniqueStrings([...winner.links, ...loser.links]),
+    raw: [winner.raw, loser.raw].filter(Boolean).join("\n")
+  };
+}
+
+function chooseBetterPageSummary(left: string, right: string) {
+  const cleanLeft = sanitizeAnswerFragment(left).trim();
+  const cleanRight = sanitizeAnswerFragment(right).trim();
+  if (!cleanLeft) return cleanRight;
+  if (!cleanRight) return cleanLeft;
+  return scorePageSummary(cleanRight) > scorePageSummary(cleanLeft) ? cleanRight : cleanLeft;
+}
+
+function scorePageSummary(value: string) {
+  let score = 0;
+  const text = value.trim();
+  if (/\b(shows|lists|explains|renders|opens|displays|handles|summary|details|recommendations|decisions)\b/i.test(text)) score += 50;
+  if (/^(A frontend route|A navigation|A page-like|An item|Stylesheet|route بيعرض|tab\/navigation|section أو view)/i.test(text)) score -= 25;
+  if (/\b(export const|const |let |var |function|return |CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|[{}<>;]/.test(text)) score -= 45;
+  if (text.length >= 20 && text.length <= 150) score += 20;
+  if (text.length > 220) score -= 30;
+  return score;
+}
+
+function describeRoute(raw: string, component?: string, routePath?: string) {
+  if (component) return `Route renders the ${component} screen${routePath ? ` for ${routePath}` : ""}.`;
+  const text = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return text || "A frontend route/view defined in the UI routing code.";
+}
+
+function inferPageCandidateConfidence(type: PageEvidenceFact["type"], raw: string, filePath: string): PageEvidenceFact["confidence"] {
+  if (type === "route" || type === "api_endpoint") return "high";
+  if (type === "section" && /<(section|main)\b/i.test(raw)) return "high";
+  if (type === "html_page" && /data-view|data-page|id=|<main\b/i.test(raw)) return "medium";
+  if (type === "tab" && /\b(description|title|label|data-view|data-page)\b/i.test(raw)) return "medium";
+  if (/\/(pages|screens|views|routes)\//i.test(filePath)) return "medium";
+  return "low";
+}
+
+function parseStringFieldsFromObject(value: string) {
+  const fields: Record<string, string> = {};
+  for (const match of value.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*["']([^"']+)["']/g)) {
+    if (match[1] && match[2]) fields[match[1]] = match[2];
+  }
+  return fields;
+}
+
+function nameFromJsxClassOrAria(value: string) {
+  const cleaned = value
+    .split(/\s+/)
+    .find((part) => /\b(page|screen|view|drawer|panel|sidebar|workspace|session|activity|settings|explorer|hero|canvas)\b/i.test(part))
+    ?? value;
+  const normalized = cleaned
+    .replace(/\{.*$/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b(open|active|collapsed|hidden|visible|current|primary|secondary)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized.length < 3) return undefined;
+  if (/^(run card|thread callout|timeline card|summary card)$/i.test(normalized)) return undefined;
+  return normalized;
 }
 
 type NumericEvidenceFact = {
@@ -1352,15 +1912,26 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
 
   if (arabic) {
     const lines = [
-      `\u0627\u0644\u0640 forecasting \u0627\u0644\u0644\u064a \u0628\u0627\u064a\u0646 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a هو ${type}.`,
-      `\u0627\u0644\u0640 scope \u0627\u0644\u0644\u064a \u0642\u062f\u0631\u062a \u0623\u062b\u0628\u062a\u0647: ${scope.label}.`,
+      "### \u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0645\u062e\u062a\u0635\u0631\u0629",
+      `\u0627\u0644\u0640 forecasting \u0647\u0646\u0627 \u0646\u0648\u0639\u0647 \`${type}\`.`,
+      "",
+      "### \u0628\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u0649 \u0645\u064a\u0646\u061f",
       scope.arabicExplanation,
-      cadence?.sentence ?? "\u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u062f\u0644\u064a\u0644 \u0643\u0627\u0641\u064a \u064a\u0642\u0648\u0644 \u0625\u0645\u062a\u0649 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0623\u0648 \u0628\u064a\u062a\u062c\u062f\u062f.",
-      mainEvidence.length
-        ? `\u0627\u0644\u0623\u062f\u0644\u0629: ${formatEvidenceLinks(mainEvidence)}.`
-        : "\u0645\u0641\u064a\u0634 \u0645\u0644\u0641 \u0648\u0627\u0636\u062d \u0643\u0641\u0627\u064a\u0629 \u064a\u062b\u0628\u062a \u0627\u0644\u0646\u0648\u0639.",
+      "",
+      "### \u0628\u064a\u062a\u062c\u062f\u062f \u0625\u0645\u062a\u0649\u061f",
+      cadence?.sentence ?? "\u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u062f\u0644\u064a\u0644 \u0648\u0627\u0636\u062d \u064a\u0642\u0648\u0644 \u0625\u0645\u062a\u0649 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0623\u0648 \u0628\u064a\u062a\u062c\u062f\u062f.",
       ""
     ];
+    if (scope.kind === "unknown") {
+      lines.push("\u0645\u0634 \u0647\u0623\u0643\u062f \u0625\u0646\u0647 \u0644\u0640 customer \u0648\u0627\u062d\u062f \u063a\u064a\u0631 \u0644\u0648 \u0627\u0644\u0643\u0648\u062f \u0642\u0627\u064a\u0644 \u0643\u062f\u0647 \u0628\u0648\u0636\u0648\u062d.", "");
+    }
+    if (mainEvidence.length) {
+      lines.push("### \u0627\u0644\u0623\u062f\u0644\u0629");
+      lines.push(...mainEvidence.map((item) => `- ${item.markdownLink}`));
+      lines.push("");
+    } else {
+      lines.push("\u0645\u0641\u064a\u0634 \u0645\u0644\u0641 \u0648\u0627\u0636\u062d \u0643\u0641\u0627\u064a\u0629 \u064a\u062b\u0628\u062a \u0627\u0644\u0646\u0648\u0639.", "");
+    }
     if (shouldUseTable && facts.length) {
       lines.push("\u0623\u0631\u0642\u0627\u0645/\u0634\u0631\u0648\u0637 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0627\u0644\u0640 forecasting");
       lines.push("| Signal | \u0627\u0644\u0631\u0642\u0645 | \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0629/\u0627\u0644\u0634\u0631\u0637 | Evidence |");
@@ -1370,23 +1941,26 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
       }
       lines.push("");
     }
-    if (scope.kind === "unknown") {
-      lines.push("\u0645\u0634 \u0647\u0623\u0643\u062f \u0625\u0646\u0647 \u0644\u0640 customer \u0648\u0627\u062d\u062f \u063a\u064a\u0631 \u0644\u0648 \u0627\u0644\u0643\u0648\u062f \u0642\u0627\u064a\u0644 \u0643\u062f\u0647 \u0628\u0648\u0636\u0648\u062d.");
-    }
-    if (validationErrors.length) {
-      lines.push("\u0627\u0644\u0631\u062f \u062f\u0647 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.");
-    }
     return lines.filter(Boolean).join("\n");
   }
 
   const lines = [
-    `The forecasting type supported by current files is ${type}.`,
-    `The supported scope is ${scope.label}.`,
+    "### Short Answer",
+    `The forecasting type here is \`${type}\`.`,
+    "",
+    "### Scope",
     scope.englishExplanation,
+    "",
+    "### Refresh",
     cadence?.sentence ?? "I did not find enough evidence to say when the forecast is recomputed or refreshed.",
-    mainEvidence.length ? `Main evidence: ${formatEvidenceLinks(mainEvidence)}.` : "I did not find enough evidence to name the exact forecasting type.",
     ""
   ];
+  if (mainEvidence.length) {
+    lines.push("### Evidence");
+    lines.push(...mainEvidence.map((item) => `- ${item.markdownLink}`));
+  } else {
+    lines.push("I did not find enough evidence to name the exact forecasting type.");
+  }
   if (shouldUseTable && facts.length) {
     lines.push("Forecasting Facts");
     lines.push("| Signal | Value | Condition/formula | Evidence |");
@@ -1405,7 +1979,7 @@ function inferForecastingScope(items: GroundingEvidenceItem[]) {
     return {
       kind: "cluster" as const,
       label: "cluster-level / per-segment, not one SARIMA model per customer",
-      arabicExplanation: "\u064a\u0639\u0646\u064a \u0645\u0634 SARIMA \u062c\u062f\u064a\u062f \u0644\u0643\u0644 customer. \u0627\u0644\u0643\u0648\u062f \u0628\u064a\u0628\u0646\u064a forecast \u0644\u0643\u0644 cluster/segment\u060c \u0648\u0644\u0645\u0627 customer \u064a\u062a\u0639\u0627\u0644\u062c \u0628\u064a\u0633\u062a\u062e\u062f\u0645 predicted_cluster \u0639\u0634\u0627\u0646 \u064a\u062c\u064a\u0628 forecast \u0627\u0644\u0640 cluster \u0628\u062a\u0627\u0639\u0647.",
+      arabicExplanation: "\u0645\u0634 \u0645\u0648\u062f\u064a\u0644 \u0060SARIMA\u0060 \u062c\u062f\u064a\u062f \u0644\u0643\u0644 \u0060customer\u0060. \u0627\u0644\u0643\u0648\u062f \u0628\u064a\u0628\u0646\u064a \u0060forecast\u0060 \u0644\u0643\u0644 \u0060cluster/segment\u0060. \u0648\u0644\u0645\u0627 \u0060customer\u0060 \u062c\u062f\u064a\u062f \u064a\u062a\u0639\u0627\u0644\u062c\u060c \u0628\u064a\u0633\u062a\u062e\u062f\u0645 \u0060predicted_cluster\u0060 \u0639\u0634\u0627\u0646 \u064a\u062c\u064a\u0628 \u0060forecast\u0060 \u0627\u0644\u0640 cluster \u0628\u062a\u0627\u0639\u0647. \u064a\u0639\u0646\u064a \u0060cluster-level / per-segment\u0060.",
       englishExplanation: "It is not a fresh SARIMA model for every customer. The code builds forecasts per cluster/segment, then each processed customer uses the forecast for its predicted_cluster."
     };
   }
@@ -1413,7 +1987,7 @@ function inferForecastingScope(items: GroundingEvidenceItem[]) {
     return {
       kind: "per_customer" as const,
       label: "per-customer",
-      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0631\u062a\u0628\u0637 \u0628\u0640 customer/customer_history \u0646\u0641\u0633\u0647.",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 \u0060forecast\u0060 \u0645\u0631\u062a\u0628\u0637 \u0628\u0640 \u0060customer\u0060 \u0623\u0648 \u0060customer_history\u0060 \u0646\u0641\u0633\u0647.",
       englishExplanation: "The evidence ties the forecast to a specific customer or customer_history."
     };
   }
@@ -1421,7 +1995,7 @@ function inferForecastingScope(items: GroundingEvidenceItem[]) {
     return {
       kind: "aggregate" as const,
       label: "aggregate/global",
-      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0628\u0646\u064a \u0639\u0644\u0649 history \u0645\u062c\u0645\u0639\u0629 \u0623\u0648 global \u0645\u0634 customer \u0648\u0627\u062d\u062f.",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0628\u062a\u0648\u0636\u062d \u0625\u0646 \u0627\u0644\u0640 \u0060forecast\u0060 \u0645\u0628\u0646\u064a \u0639\u0644\u0649 \u0060history\u0060 \u0645\u062c\u0645\u0639\u0629 \u0623\u0648 \u0060global\u0060\u060c \u0645\u0634 \u0060customer\u0060 \u0648\u0627\u062d\u062f.",
       englishExplanation: "The evidence points to aggregate/global history rather than one customer."
     };
   }
@@ -1429,7 +2003,7 @@ function inferForecastingScope(items: GroundingEvidenceItem[]) {
     return {
       kind: "mixed" as const,
       label: "mixed: customer-specific and aggregate signals",
-      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0641\u064a\u0647\u0627 \u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 customer \u0648\u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 aggregate history\u060c \u0641\u0645\u0634 \u0647\u062e\u062a\u0632\u0644\u0647\u0627 \u0641\u064a \u0648\u0627\u062d\u062f \u0628\u0633.",
+      arabicExplanation: "\u0627\u0644\u0623\u062f\u0644\u0629 \u0641\u064a\u0647\u0627 \u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 \u0060customer\u0060 \u0648\u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 \u0060aggregate history\u0060\u060c \u0641\u0645\u0634 \u0647\u062e\u062a\u0632\u0644\u0647\u0627 \u0641\u064a \u0648\u0627\u062d\u062f \u0628\u0633.",
       englishExplanation: "The evidence contains both customer-specific and aggregate-history signals."
     };
   }
@@ -1457,19 +2031,19 @@ function summarizeForecastingCadence(items: GroundingEvidenceItem[], arabic: boo
   if (arabic) {
     if (hasTraining && hasFiftyCustomerCadence) {
       return {
-        sentence: "\u0628\u0627\u064a\u0646 \u0625\u0646 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0645\u0639 \u0627\u0644\u0640 training/retraining\u060c \u0648\u0641\u064a\u0647 \u062f\u0644\u064a\u0644 \u0639\u0644\u0649 cadence \u0643\u0644 50 customer.",
+        sentence: "\u0628\u064a\u062a\u062d\u0633\u0628 \u0645\u0639 \u0627\u0644\u0640 \u0060training/retraining\u0060. \u0648\u0627\u0644\u0640 \u0060auto retrain\u0060 \u0628\u0627\u064a\u0646 \u0625\u0646\u0647 \u0643\u0644 \u006050 customer\u0060.",
         evidence: cadenceEvidence
       };
     }
     if (hasTraining) {
       return {
-        sentence: "\u0628\u0627\u064a\u0646 \u0625\u0646 \u0627\u0644\u0640 forecast \u0645\u0631\u062a\u0628\u0637 \u0628\u0627\u0644\u0640 training \u0623\u0648 \u0627\u0644\u0640 retraining\u060c \u0628\u0633 \u0645\u0627\u0644\u0642\u064a\u062a\u0634 cadence \u0631\u0642\u0645\u064a \u0645\u0624\u0643\u062f.",
+        sentence: "\u0628\u0627\u064a\u0646 \u0625\u0646\u0647 \u0645\u0631\u062a\u0628\u0637 \u0628\u0627\u0644\u0640 \u0060training\u0060 \u0623\u0648 \u0060retraining\u0060\u060c \u0628\u0633 \u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u0631\u0642\u0645 \u0648\u0627\u0636\u062d \u064a\u0642\u0648\u0644 \u0643\u0644 \u0642\u062f \u0625\u064a\u0647.",
         evidence: cadenceEvidence
       };
     }
     if (hasFiftyCustomerCadence) {
       return {
-        sentence: "\u0641\u064a\u0647 \u062f\u0644\u064a\u0644 \u0639\u0644\u0649 cadence \u0645\u0631\u062a\u0628\u0637 \u0628\u0640 50 customer\u060c \u0628\u0633 \u0631\u0628\u0637\u0647 \u0628\u0627\u0644\u0640 forecast \u0646\u0641\u0633\u0647 \u0645\u062d\u062a\u0627\u062c \u062f\u0644\u064a\u0644 \u0623\u0648\u0636\u062d.",
+        sentence: "\u0641\u064a\u0647 \u062f\u0644\u064a\u0644 \u0639\u0644\u0649 \u006050 customer\u0060 \u0643\u0640 cadence\u060c \u0628\u0633 \u0631\u0628\u0637\u0647 \u0628\u0627\u0644\u0640 \u0060forecast\u0060 \u0646\u0641\u0633\u0647 \u0645\u062d\u062a\u0627\u062c \u062f\u0644\u064a\u0644 \u0623\u0648\u0636\u062d.",
         evidence: cadenceEvidence
       };
     }
@@ -1540,7 +2114,9 @@ function evidenceForGroup(grounding: ProjectQuestionGrounding, groupId: string) 
 }
 
 function collectGroundingEvidenceForSynthesis(grounding: ProjectQuestionGrounding) {
-  const limit = isThresholdInventoryConcept(grounding) || isForecastingScopeConcept(grounding) ? 120 : 40;
+  const limit = isThresholdInventoryConcept(grounding)
+    ? 300
+    : isForecastingScopeConcept(grounding) || isPageInventoryConcept(grounding) ? 120 : 40;
   return uniqueEvidenceItems([
     ...grounding.supportingEvidence,
     ...grounding.projectDomain.evidence,
@@ -1561,7 +2137,7 @@ function extractNumericEvidenceFacts(items: GroundingEvidenceItem[]) {
     const lines = (item.snippet || item.reason || item.title || "").split(/\r?\n/);
     for (const rawLine of lines) {
       const line = rawLine.trim();
-      if (!line || line.length > 260) continue;
+      if (!line || line.length > 1000) continue;
       const fact = parseNumericFactLine(line, item);
       if (!fact) continue;
       const key = `${fact.path}:${fact.raw}`;

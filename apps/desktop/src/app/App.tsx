@@ -2192,7 +2192,7 @@ function ThreadFeed({
           />
           <CompactPatchCallout session={session} onOpenDiff={onOpenDiff} />
           <CompactCommandCallout session={session} onOpenActivity={onOpenActivity} />
-          <CompactOutcomeCallout session={session} onOpenPreview={onOpenPreview} />
+          <CompactOutcomeCallout session={session} onOpenPreview={onOpenPreview} onOpenFileReference={onOpenFileReference} />
         </>
       ) : null}
       {connectionState === "disconnected" && !isExplainOnly ? (
@@ -3049,10 +3049,12 @@ function CompactCommandCallout({
 
 function CompactOutcomeCallout({
   session,
-  onOpenPreview
+  onOpenPreview,
+  onOpenFileReference
 }: {
   session: AgentRuntimeSession;
   onOpenPreview: () => void;
+  onOpenFileReference: (reference: FileReference) => void | Promise<void>;
 }) {
   if (session.nextAction?.kind === "preview_ready") {
     return (
@@ -3070,13 +3072,17 @@ function CompactOutcomeCallout({
   }
 
   if (session.status === "completed" && session.runSummary?.summary) {
+    const latestAssistantMessage = [...session.messages].reverse().find((message) => message.role === "assistant")?.content ?? "";
+    if (isProbablyDuplicateOutcomeSummary(session.runSummary.summary, latestAssistantMessage)) {
+      return null;
+    }
     return (
       <section className="thread-callout completed">
         <div className="thread-callout-header">
           <strong>Completed</strong>
           <span>{describeVerificationState(session)}</span>
         </div>
-        <p>{session.runSummary.summary}</p>
+        <MessageMarkdown text={session.runSummary.summary} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
       </section>
     );
   }
@@ -3094,6 +3100,27 @@ function CompactOutcomeCallout({
   }
 
   return null;
+}
+
+function isProbablyDuplicateOutcomeSummary(summary: string, latestAssistantMessage: string) {
+  const left = normalizeOutcomeSummaryText(summary);
+  const right = normalizeOutcomeSummaryText(latestAssistantMessage);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const sharedPrefixLength = Math.min(180, left.length, right.length);
+  if (sharedPrefixLength < 80) return false;
+  const leftPrefix = left.slice(0, sharedPrefixLength);
+  const rightPrefix = right.slice(0, sharedPrefixLength);
+  return left.includes(rightPrefix) || right.includes(leftPrefix);
+}
+
+function normalizeOutcomeSummaryText(value: string) {
+  return value
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[`*_#|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function ProgressHoverRail({
