@@ -25,6 +25,7 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { RunEngine } from "./RunEngine.js";
 import { OrchestratedRuntime } from "./OrchestratedRuntime.js";
+import { CoreOrchestrator, loadPatchHistory, readRunArtifact } from "../orchestration/Orchestrator.js";
 import { buildProjectIntake, classifyRunIntent } from "./ProjectIntake.js";
 import {
   appendAgentJournalEntry,
@@ -992,15 +993,108 @@ export class AgentRuntime {
     projectMap: import("@orchcode/protocol").ProjectMap,
     thinkFirst: boolean
   ) {
+    const session = this.sessionManager.getSession(sessionId)!;
+    const mappedMode: import("../orchestration/OrchestrationConfig.js").ExecutionMode = session.executionMode === "auto_mode" ? "deep" : session.executionMode === "simple_mode" ? "fast" : "exhaustive";
+    const orchestrator = new CoreOrchestrator({
+      workspacePath: session.workspacePath,
+      config: { execution_mode: mappedMode },
+      providerFactory: () => this.getProvider(session),
+      onEvent: (event) => {
+        if (event.type === "agent.invocation_started") {
+          this.sessionManager.updateSession(sessionId, (draft) => {
+            const currentSummary = draft.runSummary?.summary || "";
+            draft.runSummary = {
+              ...(draft.runSummary || { status: "pending", filesChanged: [], appliedPatchIds: [], proposedPatchIds: [], commandResults: [], gates: [], createdAt: new Date().toISOString() }),
+              summary: `${currentSummary}\nAgent started: ${event.message}`.trim()
+            };
+          });
+        }
+      }
+    });
+
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.orchestration ??= createEmptyOrchestration(draft);
+      draft.status = "running";
+      draft.lifecycleStage = "PLAN";
     });
-    const orchestratedRuntime = new OrchestratedRuntime(this.sessionManager);
-    return orchestratedRuntime.run(sessionId, message, {
-      projectMap,
-      delegationDecision: createSimpleDelegationDecision({ prompt: message, projectMap }),
-      thinkFirst
+
+    const result = thinkFirst 
+      ? await orchestrator.planOnly(message)
+      : await orchestrator.runAgenticTask(message);
+
+    const patches = await loadPatchHistory(session.workspacePath, result.run.id);
+    const mappedPatches: import("@orchcode/protocol").PatchProposal[] = [];
+    for (const patchPath of patches) {
+      try {
+        const text = await readRunArtifact(session.workspacePath, result.run.id, patchPath);
+        const parsed = JSON.parse(text);
+        mappedPatches.push({
+          id: parsed.id ?? `patch_${Date.now()}_${Math.random()}`,
+          sessionId,
+          title: parsed.title ?? "Proposed Patch",
+          summary: parsed.summary ?? "Changes from orchestration",
+          riskLevel: "medium",
+          filesChanged: (parsed.files_changed ?? []).map((f: any) => ({
+            path: typeof f === "string" ? f : f.path,
+            changeType: "modify",
+            explanation: "Modified by orchestration"
+          })),
+          artifacts: [],
+          unifiedDiff: parsed.diff ?? "",
+          requiresApproval: true,
+          status: "proposed",
+          createdAt: new Date().toISOString()
+        });
+      } catch (e) {}
+    }
+    
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = result.run.status === "succeeded" ? "needs_approval" : result.run.status === "failed" ? "failed" : "blocked";
+      draft.lifecycleStage = result.run.status === "succeeded" ? "APPROVAL" : "BLOCKED";
+      
+      draft.patchProposals = mappedPatches;
+      
+      draft.tasks = result.tasks.map(t => ({
+        id: t.id,
+        sessionId,
+        title: t.title,
+        status: t.status === "succeeded" ? "done" : t.status === "running" ? "in_progress" : t.status === "failed" ? "blocked" : "todo",
+        agentRole: t.role_required,
+        createdAt: new Date().toISOString()
+      }));
+
+      draft.runSummary = {
+        status: result.run.status === "succeeded" ? "completed" : result.run.status === "failed" ? "failed" : "pending",
+        summary: result.run.summary ?? "Run completed.",
+        filesChanged: result.report.files_changed.map(f => ({ path: f, changeType: "modify" })),
+        appliedPatchIds: [],
+        proposedPatchIds: draft.patchProposals.map(p => p.id),
+        commandResults: [],
+        gates: [],
+        createdAt: new Date().toISOString()
+      };
+      
+      if (thinkFirst) {
+        draft.status = "needs_approval";
+        draft.nextAction = {
+          kind: "confirm_plan",
+          message: "Plan is ready. Want me to proceed with implementation?"
+        };
+      }
     });
+
+    if (thinkFirst) {
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: `I stayed in plan mode only: I organized the team and the steps, then stopped before any edits.\n\nPlanned ${result.tasks.length} task(s).`
+      });
+    } else {
+      await this.sessionManager.addMessage(sessionId, {
+        role: "assistant",
+        content: result.run.summary ?? "Orchestration run completed."
+      });
+    }
+
+    return this.sessionManager.getSession(sessionId)!;
   }
 
   private async syncSessionOutcome(sessionId: string) {

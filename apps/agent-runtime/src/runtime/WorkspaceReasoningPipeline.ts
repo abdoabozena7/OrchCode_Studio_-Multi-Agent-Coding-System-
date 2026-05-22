@@ -296,9 +296,10 @@ function detectStyle(raw: string, normalized: string): WorkspaceAnswerStyle {
 
 function detectActionMode(raw: string, normalized: string): WorkspaceActionMode {
   if (/\b(run|launch|start|serve|open)\b/.test(normalized) || /(?:\u0634\u063a\u0644|\u0627\u0628\u062f\u0623|\u0627\u0641\u062a\u062d)/.test(raw)) return "run";
-  if (/\b(debug|error|failed|bug|crash|broken)\b/.test(normalized) || /(?:\u0628\u0627\u064a\u0638|\u0645\u0634\u0643\u0644\u0629|\u0627\u0631\u0648\u0631)/.test(raw)) return "debug";
-  if (/\b(change|changing|edit|fix|add|implement|update|write|create|make|build|modify|remove)\b/.test(normalized)
-    || /(?:\u063a\u064a\u0631|\u0639\u062f\u0644|\u0635\u0644\u062d|\u0627\u0636\u0641|\u0646\u0641\u0630|\u0627\u0643\u062a\u0628|\u0627\u0639\u0645\u0644|\u0627\u0628\u0646\u064a)/.test(raw)) return "edit";
+  if (/\b(debug|error|failed|bug|crash|broken|break)\b/.test(normalized) || /(?:\u0628\u0627\u064a\u0638|\u0645\u0634\u0643\u0644\u0629|\u0627\u0631\u0648\u0631)/.test(raw)) return "debug";
+  if (/\b(perform|run|do)\s+(?:a\s+)?(?:deep\s+)?(?:audit|review|critique)\b/.test(normalized)) return "debug";
+  if (/\b(change|changing|edit|fix|add|implement|update|write|create|make|build|modify|remove|replace|rename|delete|insert|overwrite|append|prepend|move|refactor)\b/.test(normalized)
+    || /(?:\u063a\u064a\u0631|\u0639\u062f\u0644|\u0635\u0644\u062d|\u0627\u0636\u0641|\u0646\u0641\u0630|\u0627\u0643\u062a\u0628|\u0627\u0639\u0645\u0644|\u0627\u0628\u0646\u064a|\u0627\u0645\u0633\u062d|\u0627\u062d\u0630\u0641)/.test(raw)) return "edit";
   return "answer_only";
 }
 

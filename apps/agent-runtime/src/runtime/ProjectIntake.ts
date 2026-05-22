@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ProjectContextPack, ProjectIntake, ProjectKind, ProjectMap, ProjectRunIntent, ProjectSignal } from "@orchcode/protocol";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { WorkspaceTools } from "../tools/WorkspaceTools.js";
+import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 
 type ProjectIntakeInput = {
   workspacePath: string;
@@ -257,12 +258,8 @@ export function shouldTreatProjectAsExisting(projectKind: ProjectKind) {
 
 export function classifyRunIntent(message: string): ProjectRunIntent {
   const normalized = message.toLowerCase();
-  const explainIntent = /\b(explain|inspect|analyze|summarize|map)\b/.test(normalized) || /(اشرح|حلل|افهم|لخص|راجع)/.test(normalized);
-  const editIntent = /\b(change|edit|fix|add|implement|update|write|create|make|build)\b/.test(normalized) || /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني)/.test(normalized);
-  const runIntent = /\b(run|launch|start|serve|open)\b/.test(normalized) || /(شغل|ابدأ|افتح|ثبت|نزل)/.test(normalized);
-  if (explainIntent && !editIntent) {
-    return "inspect_only";
-  }
+  const workspaceIntent = inferWorkspaceIntent(message);
+  
   if (
     /\b(run to green|make it run|fix until it starts|fix until it runs|boot it|start it working)\b/.test(normalized) ||
     /\bfix\b.*\b(project|app|site|game)\b.*\buntil it (starts|runs)\b/.test(normalized) ||
@@ -271,12 +268,17 @@ export function classifyRunIntent(message: string): ProjectRunIntent {
   ) {
     return "run_to_green";
   }
-  if (runIntent) {
-    return "run_once";
+
+  if (workspaceIntent.actionMode === "answer_only") {
+    return "inspect_only";
   }
-  if (editIntent) {
+  if (workspaceIntent.actionMode === "edit" || workspaceIntent.actionMode === "debug") {
     return "implement_module";
   }
+  if (workspaceIntent.actionMode === "run") {
+    return "run_once";
+  }
+
   return "unknown";
 }
 

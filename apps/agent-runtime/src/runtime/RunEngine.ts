@@ -54,8 +54,8 @@ import { initializeRunToGreenState } from "./RunToGreen.js";
 import {
   buildLargeProjectExplainReport
 } from "./LargeProjectContextBuilder.js";
-import { explainProjectWithLlm } from "./LlmProjectExplainer.js";
 import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
+import { answerUniversalProjectQuestion } from "./UniversalProjectQuestionEngine.js";
 
 type RunPlanTask = {
   id?: string;
@@ -230,6 +230,10 @@ export class RunEngine {
       query: inferSearchQuery(message),
       importantFiles: snapshot.importantFiles
     }, "executed");
+
+    if (isReadOnlyAnswerRequest(snapshot)) {
+      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake);
+    }
 
     if (snapshot.runIntent === "run_to_green") {
       const runToGreenPlan = createDeterministicFallbackPlan(message, snapshot, "run_to_green");
@@ -616,118 +620,7 @@ export class RunEngine {
     }
 
     if (plan.mode === "inspect_only") {
-      const explainReport = buildLargeProjectExplainReport({
-        workspacePath: session.workspacePath,
-        message,
-        projectMap: enrichedProjectMap,
-        intake
-      });
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.explainReport = explainReport;
-      });
-      await this.addArtifact(sessionId, "project_explain_report", "Project explain report", explainReport.overview, {
-        explainReport
-      });
-      await this.addDecisionRecord(sessionId, {
-        category: "finding",
-        finding: "Large-project evidence collection completed without write or command execution.",
-        decision: "Use a read-only evidence report as context, then delegate the actual explanation to the configured LLM provider.",
-        rationaleSummary: explainReport.overview,
-        evidenceRefs: explainReport.evidence
-          .filter((entry) => entry.type !== "directory")
-          .slice(0, 8)
-          .map((entry) => ({
-            type: "file" as const,
-            path: entry.path,
-            category: "project-explain",
-            reason: entry.reason,
-            lineStart: entry.lineStart,
-            lineEnd: entry.lineEnd,
-            symbol: entry.symbol
-          })),
-        linkedFiles: explainReport.importantFiles.slice(0, 8),
-        uncertainty: explainReport.risksAndUnknowns[0],
-        createdByAgent: "Local Run",
-        createdByAgentId: "agent_local_codex",
-        linkedAgentIds: ["agent_local_codex"]
-      });
-      const explainResult = await explainProjectWithLlm({
-        provider: this.provider,
-        userPrompt: message,
-        report: explainReport
-      });
-      await this.addArtifact(sessionId, "project_explain_answer", "LLM project explanation", explainResult.answerMarkdown.slice(0, 500), {
-        answerMarkdown: explainResult.answerMarkdown,
-        usedEvidenceRefs: explainResult.usedEvidenceRefs,
-        unsupportedOrUnclearParts: explainResult.unsupportedOrUnclearParts,
-        revisionCount: explainResult.revisionCount,
-        validationWarnings: explainResult.validationWarnings,
-        grounding: explainResult.grounding
-      });
-      await this.addDecisionRecord(sessionId, {
-        category: explainResult.grounding.decision === "concept_not_found" ? "risk" : "finding",
-        finding: explainResult.grounding.concept.specific
-          ? `Requested concept "${explainResult.grounding.concept.label}" was ${explainResult.grounding.conceptFound ? "found" : "not found"} in current workspace evidence.`
-          : "General project explanation was grounded in current workspace evidence.",
-        decision: explainResult.grounding.decision === "concept_not_found"
-          ? "Return a deterministic not-found answer instead of asking the provider to infer from general knowledge."
-          : "Use only explanation content that passes current-workspace evidence validation.",
-        rationaleSummary: explainResult.grounding.foundInstead,
-        evidenceRefs: explainResult.usedEvidenceRefs.slice(0, 8).map((ref) => {
-          const match = ref.match(/^(.+):(\d+)$/);
-          return {
-            type: "file" as const,
-            path: match?.[1] ?? ref,
-            lineStart: match?.[2] ? Number(match[2]) : undefined,
-            category: "project-explain-grounding",
-            reason: explainResult.grounding.decision === "concept_not_found"
-              ? "Inspected current-workspace file for requested concept."
-              : "Supported the accepted project explanation."
-          };
-        }),
-        linkedFiles: explainResult.grounding.inspectedFiles.slice(0, 8),
-        uncertainty: explainResult.grounding.unknowns[0],
-        createdByAgent: "Local Run",
-        createdByAgentId: "agent_local_codex",
-        linkedAgentIds: ["agent_local_codex"]
-      });
-      const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
-        {
-          name: "Workspace inventory",
-          status: "passed",
-          detail: `Scanned ${explainReport.contextPack.inventory.scannedFiles} file(s), ignored ${explainReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).`
-        },
-        {
-          name: "Module map",
-          status: "passed",
-          detail: `Mapped ${explainReport.moduleMap.length} module(s) with ${explainReport.contextPack.readBudget.sampledFiles} sampled file(s).`
-        },
-        {
-          name: "LLM-grounded answer",
-          status: explainResult.usedEvidenceRefs.length || explainReport.evidence.length === 0 ? "passed" : "pending",
-          detail: explainResult.grounding.decision === "concept_not_found"
-            ? `Deterministic not-found answer returned for "${explainResult.grounding.concept.label}".`
-            : explainResult.revisionCount
-            ? `Generated after ${explainResult.revisionCount} evidence-validation revision(s).`
-            : "Generated by the configured LLM from the evidence report."
-        },
-        { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
-      ]);
-      await this.finish(sessionId, "completed", "DONE", {
-        status: "completed",
-        summary: explainResult.answerMarkdown.slice(0, 500),
-        filesChanged: [],
-        appliedPatchIds: [],
-        proposedPatchIds: [],
-        commandResults: [],
-        gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
-        nextAction: explainReport.suggestedNextQuestions[0] ?? "Ask for a concrete edit or creation task when you want code changes.",
-        createdAt: new Date().toISOString()
-      });
-      await this.updateRunPhase(sessionId, "agents_running", "completed", `Read-only explanation mapped ${explainReport.moduleMap.length} module(s) without file changes.`);
-      await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
-      await this.sessionManager.addMessage(sessionId, { role: "assistant", content: explainResult.answerMarkdown });
-      return this.requireSession(sessionId);
+      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake);
     }
 
     await this.updateStage(sessionId, "EXECUTION_DRAFT", "working", "running", "Draft changes", "Preparing reviewable patch and command intents.");
@@ -986,6 +879,136 @@ export class RunEngine {
       content: formatAssistantSummary(plan, patch, commandRequests, scopeValidation)
     });
     await this.updateStage(sessionId, "APPROVAL", "reviewing", "completed", "Approval", "Review changes, then apply through Rust.");
+    return this.requireSession(sessionId);
+  }
+
+  private async runInspectExplainTurn(
+    sessionId: string,
+    message: string,
+    projectMap: ProjectMap,
+    intake: ReturnType<typeof buildProjectIntake>
+  ): Promise<AgentRuntimeSession> {
+    const session = this.requireSession(sessionId);
+    const tools = new ToolRegistry(session.workspacePath);
+    const enrichedProjectMap = createProjectMapFromIntake(projectMap, intake);
+    const intent = inferWorkspaceIntent(message);
+    
+    await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", "Planning complete for inspect-only task.");
+
+    const explainReport = buildLargeProjectExplainReport({
+      workspacePath: session.workspacePath,
+      message,
+      projectMap: enrichedProjectMap,
+      intake
+    });
+
+    const questionResult = await answerUniversalProjectQuestion({
+      provider: this.provider,
+      userPrompt: message,
+      tools,
+      explainReport,
+      intent
+    });
+    const answerMarkdown = questionResult.answerMarkdown;
+    const validationErrors = questionResult.validationErrors;
+    const evidenceRefs = questionResult.evidenceRefs;
+    const fallbackUsed = questionResult.fallbackUsed;
+
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.explainReport = questionResult.augmentedReport;
+    });
+
+    await this.addArtifact(sessionId, "project_explain_report", "Project explain report", questionResult.augmentedReport.overview, {
+      explainReport: questionResult.augmentedReport,
+      intent,
+      topic: questionResult.topic,
+      questionUnderstanding: questionResult.questionUnderstanding,
+      queryPlan: questionResult.queryPlan,
+      searchIterations: questionResult.searchIterations,
+      candidateFiles: questionResult.candidateFiles,
+      openedFiles: questionResult.openedFiles,
+      evidenceRefs,
+      negativeEvidence: questionResult.negativeEvidence,
+      structuredFacts: questionResult.structuredFacts,
+      validationErrors,
+      fallbackUsed,
+      confidence: questionResult.confidence
+    });
+
+    const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
+      { name: "Workspace inventory", status: "passed", detail: `Scanned ${questionResult.augmentedReport.contextPack.inventory.scannedFiles} file(s), ignored ${questionResult.augmentedReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).` },
+      { name: "Universal evidence search", status: "passed", detail: `Ran ${questionResult.searchIterations.length} bounded search iteration(s), opened ${questionResult.openedFiles.length} file(s), collected ${questionResult.positiveEvidence.length} evidence item(s).` },
+      { name: "Module map", status: "passed", detail: `Mapped ${questionResult.augmentedReport.moduleMap.length} module(s) with ${questionResult.augmentedReport.contextPack.readBudget.sampledFiles} sampled file(s).` },
+      { name: "Evidence-grounded answer", status: "passed", detail: fallbackUsed ? "Provider output was revised or replaced with a deterministic evidence-grounded answer." : "Generated by the configured provider from the evidence report." },
+      { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
+    ]);
+
+    await this.addArtifact(sessionId, "project_explain_answer", "Project explanation", answerMarkdown.slice(0, 500), {
+      answerMarkdown,
+      intent,
+      topic: questionResult.topic,
+      questionUnderstanding: questionResult.questionUnderstanding,
+      queryPlan: questionResult.queryPlan,
+      searchIterations: questionResult.searchIterations,
+      candidateFiles: questionResult.candidateFiles,
+      openedFiles: questionResult.openedFiles,
+      evidenceRefs,
+      negativeEvidence: questionResult.negativeEvidence,
+      structuredFacts: questionResult.structuredFacts,
+      validationErrors,
+      fallbackUsed,
+      confidence: questionResult.confidence,
+      usedEvidenceRefs: evidenceRefs,
+      unsupportedOrUnclearParts: validationErrors,
+      revisionCount: questionResult.revisionCount,
+      validationWarnings: questionResult.validationWarnings,
+      grounding: questionResult.grounding
+    });
+
+    await this.finish(sessionId, "completed", "DONE", {
+      status: "completed",
+      summary: answerMarkdown.slice(0, 500),
+      filesChanged: [],
+      appliedPatchIds: [],
+      proposedPatchIds: [],
+      commandResults: [],
+      gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
+      nextAction: "Ask for a concrete edit or creation task when you want code changes.",
+      createdAt: new Date().toISOString()
+    });
+
+    await this.addDecisionRecord(sessionId, {
+      category: questionResult.positiveEvidence.length || questionResult.grounding.decision !== "concept_not_found" ? "finding" : "risk",
+      finding: questionResult.grounding.concept.specific
+        ? `Requested concept "${questionResult.grounding.concept.label}" was ${questionResult.positiveEvidence.length ? "found by universal local search" : questionResult.grounding.conceptFound ? "found" : "not found"} in current workspace evidence.`
+        : "Project answer was grounded in the current workspace evidence report and universal local search.",
+      decision: fallbackUsed
+        ? "Use a deterministic evidence-grounded answer instead of accepting unsupported provider text."
+        : "Use the provider answer because it passed current-workspace evidence validation.",
+      rationaleSummary: questionResult.positiveEvidence.length
+        ? `Universal search collected ${questionResult.positiveEvidence.length} evidence item(s) across ${questionResult.candidateFiles.length} candidate file(s).`
+        : questionResult.grounding.foundInstead,
+      evidenceRefs: evidenceRefs.slice(0, 8).map((ref) => {
+        const match = ref.match(/^(.+):(\d+)$/);
+        return {
+          type: "file" as const,
+          path: match?.[1] ?? ref,
+          lineStart: match?.[2] ? Number(match[2]) : undefined,
+          category: "project-explain-grounding",
+          reason: "Supported the accepted project explanation."
+        };
+      }),
+      linkedFiles: questionResult.openedFiles.slice(0, 8),
+      uncertainty: questionResult.validationErrors[0] ?? questionResult.grounding.unknowns[0],
+      createdByAgent: "Local Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: ["agent_local_codex"]
+    });
+
+    await this.updateRunPhase(sessionId, "agents_running", "completed", `Read-only explanation completed from evidence report.`);
+    await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
+    
+    await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answerMarkdown });
     return this.requireSession(sessionId);
   }
 
@@ -1280,6 +1303,10 @@ export class RunEngine {
   }
 }
 
+function isReadOnlyAnswerRequest(snapshot: RepoSnapshot) {
+  return snapshot.intentUnderstanding?.actionMode === "answer_only" || snapshot.runIntent === "inspect_only";
+}
+
 type RepoSnapshot = {
   summary: string;
   intentUnderstanding?: ReturnType<typeof inferWorkspaceIntent>;
@@ -1403,8 +1430,7 @@ function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: 
 function shouldForceInferredInspectOnly(message: string, snapshot: RepoSnapshot) {
   return (
     inferRunMode(message, snapshot) === "inspect_only" &&
-    (/\b(continue|resume|inspect|explain|analyze|summarize|map|understand)\b/i.test(message) || /(اشرح|حلل|افهم|لخص|راجع)/.test(message)) &&
-    !(/\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|create)\b/i.test(message) || /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني|امسح|احذف)/.test(message))
+    (snapshot.intentUnderstanding?.actionMode === "answer_only" || inferWorkspaceIntent(message).actionMode === "answer_only")
   );
 }
 
@@ -2503,6 +2529,7 @@ function formatAssistantSummary(
 
 function inferRunMode(message: string, snapshot: RepoSnapshot): RunPlanModel["mode"] {
   const normalized = message.toLowerCase();
+  const workspaceIntent = snapshot.intentUnderstanding ?? inferWorkspaceIntent(message);
   const explicitEditPattern =
     /\b(change|changing|edit|fix|add|implement|update|wire|build|make|write|replace|rename|delete|remove|modify)\b/;
   const arabicEditPattern = /(غيّر|غير|عدّل|عدل|صلح|أصلح|اضف|أضف|نفذ|اكتب|اعمل|أنشئ|انشئ|ابني|امسح|احذف)/;
@@ -2512,6 +2539,9 @@ function inferRunMode(message: string, snapshot: RepoSnapshot): RunPlanModel["mo
     snapshot.intake?.projectKind === "empty_project"
   ) {
     return "create_project";
+  }
+  if (workspaceIntent.actionMode === "answer_only") {
+    return "inspect_only";
   }
   if (
     snapshot.intake?.projectKind === "unknown" &&

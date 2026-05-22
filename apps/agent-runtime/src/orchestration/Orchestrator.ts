@@ -64,6 +64,8 @@ export type AgenticRunOptions = {
   maxContextChars?: number;
   maxTaskAttempts?: number;
   config?: PartialOrchestrationSafetyConfig;
+  onEvent?: (event: import("./OrchestrationModels.js").OrchestratorEvent) => void;
+  providerFactory?: (role: string) => import("../llm/LlmProvider.js").LlmProvider;
 };
 
 export type AgenticRunResult = {
@@ -80,6 +82,8 @@ export class CoreOrchestrator {
   private readonly maxTaskAttempts: number;
   private readonly config: OrchestrationSafetyConfig;
   private readonly artifactStore: OrchestrationArtifactStore;
+  private readonly onEvent?: (event: import("./OrchestrationModels.js").OrchestratorEvent) => void;
+  private readonly providerFactory?: (role: string) => import("../llm/LlmProvider.js").LlmProvider;
 
   constructor(options: AgenticRunOptions) {
     this.workspacePath = path.resolve(options.workspacePath);
@@ -92,6 +96,8 @@ export class CoreOrchestrator {
     this.maxContextChars = options.maxContextChars ?? this.config.max_context_size;
     this.maxTaskAttempts = options.maxTaskAttempts ?? this.config.max_attempts_per_task;
     this.artifactStore = new OrchestrationArtifactStore(this.workspacePath, this.memoryDir);
+    this.onEvent = options.onEvent;
+    this.providerFactory = options.providerFactory;
   }
 
   async planOnly(userRequest: string): Promise<AgenticRunResult> {
@@ -518,7 +524,8 @@ export class CoreOrchestrator {
       userPrompt: invocation.prompt,
       accessProfile: "default_permissions"
     });
-    const seniorAgent = new SeniorCodingAgent(new MockLlmProvider(), sessionManager);
+    const provider = this.providerFactory ? this.providerFactory(task.role_required) : new MockLlmProvider();
+    const seniorAgent = new SeniorCodingAgent(provider, sessionManager);
     const completed = await seniorAgent.runTurn(session.id, invocation.prompt);
     invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, completed);
     return summarizeSeniorSession(completed, task, pack, invocation.raw_output_ref);
