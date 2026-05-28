@@ -1,0 +1,1771 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-24T11:06:31.002Z",
+  "dependencyGraph": {
+    "apps/desktop/scripts/run-project-smoke.ts": [
+      "apps/desktop/src/app/activityStream.ts"
+    ],
+    "apps/desktop/src/app/App.tsx": [
+      "apps/desktop/src/app/activityStream.ts",
+      "apps/desktop/src/lib/agentRuntime.ts",
+      "apps/desktop/src/lib/tauri.ts",
+      "apps/desktop/src/lib/terminalOrchestrator.ts"
+    ],
+    "apps/desktop/src/lib/terminalOrchestrator.ts": [
+      "apps/desktop/src/lib/tauri.ts"
+    ],
+    "apps/desktop/src/main.tsx": [
+      "apps/desktop/src/app/App.tsx",
+      "apps/desktop/src/app/styles.css"
+    ]
+  },
+  "reverseDependencyGraph": {
+    "apps/desktop/src/app/activityStream.ts": [
+      "apps/desktop/scripts/run-project-smoke.ts",
+      "apps/desktop/src/app/App.tsx"
+    ],
+    "apps/desktop/src/app/App.tsx": [
+      "apps/desktop/src/main.tsx"
+    ],
+    "apps/desktop/src/app/styles.css": [
+      "apps/desktop/src/main.tsx"
+    ],
+    "apps/desktop/src/lib/agentRuntime.ts": [
+      "apps/desktop/src/app/App.tsx"
+    ],
+    "apps/desktop/src/lib/tauri.ts": [
+      "apps/desktop/src/app/App.tsx",
+      "apps/desktop/src/lib/terminalOrchestrator.ts"
+    ],
+    "apps/desktop/src/lib/terminalOrchestrator.ts": [
+      "apps/desktop/src/app/App.tsx"
+    ]
+  },
+  "testToSourceMap": {
+    "apps/agent-runtime/src/tests/agent-lifecycle.test.ts": [
+      "apps/agent-runtime/src/tests/agent-lifecycle.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/auto-orchestration.test.ts": [
+      "apps/agent-runtime/src/tests/auto-orchestration.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/command-policy.test.ts": [
+      "apps/agent-runtime/src/tests/command-policy.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/durable-event-model.test.ts": [
+      "apps/agent-runtime/src/tests/durable-event-model.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts": [
+      "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/inspect-explain.test.ts": [
+      "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+      "apps/agent-runtime/src/tests/inspect-explain.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/memory-indexing.test.ts": [
+      "apps/agent-runtime/src/tests/memory-indexing.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/mock-llm.test.ts": [
+      "apps/agent-runtime/src/tests/mock-llm.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/module-execution-planning.test.ts": [
+      "apps/agent-runtime/src/tests/module-execution-planning.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/module3-orchestration.test.ts": [
+      "apps/agent-runtime/src/tests/module3-orchestration.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/orchestration.test.ts": [
+      "apps/agent-runtime/src/orchestration/ApprovalGates.ts",
+      "apps/agent-runtime/src/orchestration/ArtifactStore.ts",
+      "apps/agent-runtime/src/orchestration/CampaignManager.ts",
+      "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts",
+      "apps/agent-runtime/src/orchestration/FileLockManager.ts",
+      "apps/agent-runtime/src/orchestration/Metrics.ts",
+      "apps/agent-runtime/src/orchestration/OrchestrationConfig.ts",
+      "apps/agent-runtime/src/orchestration/OrchestrationModels.ts",
+      "apps/agent-runtime/src/orchestration/Orchestrator.ts",
+      "apps/agent-runtime/src/orchestration/campaign-cli.ts",
+      "apps/agent-runtime/src/orchestration/cli.ts",
+      "apps/agent-runtime/src/orchestration/index.ts"
+    ],
+    "apps/agent-runtime/src/tests/patch-intent.test.ts": [
+      "apps/agent-runtime/src/tests/patch-intent.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/patch-validation.test.ts": [
+      "apps/agent-runtime/src/tests/patch-validation.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/phase4-factory.test.ts": [
+      "apps/agent-runtime/src/tests/phase4-factory.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/project-explain.test.ts": [
+      "apps/agent-runtime/src/tests/project-explain.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/project-intake.test.ts": [
+      "apps/agent-runtime/src/tests/project-intake.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts": [
+      "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/quality-gates.test.ts": [
+      "apps/agent-runtime/src/tests/quality-gates.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/reliability-foundation.test.ts": [
+      "apps/agent-runtime/src/tests/reliability-foundation.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/replay-restore.test.ts": [
+      "apps/agent-runtime/src/tests/replay-restore.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/run-to-green.test.ts": [
+      "apps/agent-runtime/scripts/run-to-green-smoke.ts",
+      "apps/agent-runtime/src/tests/run-to-green.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts": [
+      "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/runtime-task-state.test.ts": [
+      "apps/agent-runtime/src/tests/runtime-task-state.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/safety-verification.test.ts": [
+      "apps/agent-runtime/src/tests/safety-verification.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts": [
+      "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/swarm-autopilot.test.ts": [
+      "apps/agent-runtime/src/tests/swarm-autopilot.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts": [
+      "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/tool-registry.test.ts": [
+      "apps/agent-runtime/src/tests/tool-registry.test.ts"
+    ],
+    "apps/agent-runtime/src/tests/universal-project-question.test.ts": [
+      "apps/agent-runtime/src/tests/universal-project-question.test.ts"
+    ]
+  },
+  "commandToAreaMap": {
+    "npm run agent:trial:test-discovery": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run test": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "cargo test": [
+      "apps/desktop/src-tauri"
+    ],
+    "npm run typecheck": [
+      ".",
+      "apps/agent-runtime",
+      "apps/desktop",
+      "packages/protocol"
+    ],
+    "cargo check": [
+      "apps/desktop/src-tauri"
+    ],
+    "npm run build": [
+      ".",
+      "apps/agent-runtime",
+      "apps/desktop",
+      "packages/protocol"
+    ],
+    "npm run tauri:build": [
+      "apps/desktop"
+    ],
+    "cargo build": [
+      "apps/desktop/src-tauri"
+    ],
+    "npm run smoke:desktop-run-project": [
+      "."
+    ],
+    "npm run smoke:python-pygame-fallback": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run smoke:run-to-green": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run smoke:terminal-authority": [
+      "."
+    ],
+    "npm run smoke:run-project": [
+      "apps/desktop"
+    ],
+    "npm run agent:dev": [
+      "."
+    ],
+    "npm run desktop:dev": [
+      "."
+    ],
+    "npm run dev": [
+      ".",
+      "apps/agent-runtime",
+      "apps/desktop"
+    ],
+    "npm run web:dev": [
+      "."
+    ],
+    "npm run dev:reuse": [
+      "apps/desktop"
+    ],
+    "npm run tauri:dev": [
+      "apps/desktop"
+    ],
+    "npm run agent:inspect-run": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:run": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:resume-run": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:run": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:run-metrics": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-run": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-run-events": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:run-next": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:plan": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:report": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:resume": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:architecture-scan": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:compare": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:huge-readonly-scan": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:scheduler-scale": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:small-safe-fix": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agent:trial:staffing-eval": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:inspect-task": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:list-runs": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:plan": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-artifact": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-artifacts": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-context-pack": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-patch-history": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-report": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-task-artifacts": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run agentic:show-validation-logs": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:create": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:metrics": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:pause": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:plan": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:report": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:resume": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run campaign:status": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run eval:phase4": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:clean-runs": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:compact": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:decisions": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:explain-task": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:failed-attempts": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:index": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:index-explain": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:index-refresh": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:index-status": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:inspect": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:lessons": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:show-commands": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run memory:status": [
+      ".",
+      "apps/agent-runtime"
+    ],
+    "npm run tauri": [
+      "apps/desktop"
+    ]
+  },
+  "ownershipHints": {
+    ".": [],
+    "apps": [
+      "application workspace",
+      "has local tests"
+    ],
+    "docs": [
+      "documentation owned area"
+    ],
+    "packages": [
+      "shared package workspace"
+    ],
+    "scripts": []
+  },
+  "moduleMap": {
+    ".": [
+      ".gitattributes",
+      ".gitignore",
+      "AGENTS.md",
+      "package-lock.json",
+      "package.json"
+    ],
+    "apps": [
+      "apps/agent-runtime/package.json",
+      "apps/agent-runtime/scripts/python-pygame-fallback-smoke.ts",
+      "apps/agent-runtime/scripts/run-to-green-smoke.ts",
+      "apps/agent-runtime/src/agents/SeniorCodingAgent.ts",
+      "apps/agent-runtime/src/agents/workers/ArchitectAgent.ts",
+      "apps/agent-runtime/src/agents/workers/BaseWorker.ts",
+      "apps/agent-runtime/src/agents/workers/CodebaseMapperAgent.ts",
+      "apps/agent-runtime/src/agents/workers/FrontendAgent.ts",
+      "apps/agent-runtime/src/agents/workers/GenericWorkerAgent.ts",
+      "apps/agent-runtime/src/agents/workers/ReviewerAgent.ts",
+      "apps/agent-runtime/src/agents/workers/RustBackendAgent.ts",
+      "apps/agent-runtime/src/agents/workers/SecurityAgent.ts",
+      "apps/agent-runtime/src/agents/workers/TestAgent.ts",
+      "apps/agent-runtime/src/agents/workers/ToolingTerminalAgent.ts",
+      "apps/agent-runtime/src/agents/workers/index.ts",
+      "apps/agent-runtime/src/config.ts",
+      "apps/agent-runtime/src/evals/cli.ts",
+      "apps/agent-runtime/src/evals/phase4.ts",
+      "apps/agent-runtime/src/index.ts",
+      "apps/agent-runtime/src/llm/LlmProvider.ts",
+      "apps/agent-runtime/src/llm/MockLlmProvider.ts",
+      "apps/agent-runtime/src/llm/OllamaProvider.ts",
+      "apps/agent-runtime/src/llm/OpenAIProvider.ts",
+      "apps/agent-runtime/src/memory/CommandInventory.ts",
+      "apps/agent-runtime/src/memory/IndexFreshness.ts",
+      "apps/agent-runtime/src/memory/ProjectIntelligence.ts",
+      "apps/agent-runtime/src/memory/ProjectMemory.ts",
+      "apps/agent-runtime/src/memory/RepoIndexer.ts",
+      "apps/agent-runtime/src/memory/cli.ts",
+      "apps/agent-runtime/src/memory/index.ts",
+      "apps/agent-runtime/src/memory/types.ts",
+      "apps/agent-runtime/src/mock/threeJsSnake.ts",
+      "apps/agent-runtime/src/orchestration/ApprovalGates.ts",
+      "apps/agent-runtime/src/orchestration/ArtifactStore.ts",
+      "apps/agent-runtime/src/orchestration/CampaignManager.ts",
+      "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts",
+      "apps/agent-runtime/src/orchestration/FileLockManager.ts",
+      "apps/agent-runtime/src/orchestration/Metrics.ts",
+      "apps/agent-runtime/src/orchestration/OrchestrationConfig.ts",
+      "apps/agent-runtime/src/orchestration/OrchestrationModels.ts",
+      "apps/agent-runtime/src/orchestration/Orchestrator.ts",
+      "apps/agent-runtime/src/orchestration/PatchSafety.ts",
+      "apps/agent-runtime/src/orchestration/RepairLoop.ts",
+      "apps/agent-runtime/src/orchestration/ReviewLoop.ts",
+      "apps/agent-runtime/src/orchestration/RoleRegistry.ts",
+      "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts",
+      "apps/agent-runtime/src/orchestration/StructuredOutputs.ts",
+      "apps/agent-runtime/src/orchestration/SwarmAgentTemplates.ts",
+      "apps/agent-runtime/src/orchestration/SwarmArtifactStore.ts",
+      "apps/agent-runtime/src/orchestration/SwarmFanInOut.ts",
+      "apps/agent-runtime/src/orchestration/SwarmModels.ts",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts",
+      "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts",
+      "apps/agent-runtime/src/orchestration/SwarmTrialArtifactStore.ts",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts",
+      "apps/agent-runtime/src/orchestration/SwarmTrialMemory.ts",
+      "apps/agent-runtime/src/orchestration/SwarmTrialModels.ts",
+      "apps/agent-runtime/src/orchestration/TaskGraphManager.ts",
+      "apps/agent-runtime/src/orchestration/Validation.ts",
+      "apps/agent-runtime/src/orchestration/ValidationRunner.ts",
+      "apps/agent-runtime/src/orchestration/campaign-cli.ts",
+      "apps/agent-runtime/src/orchestration/cli.ts",
+      "apps/agent-runtime/src/orchestration/index.ts",
+      "apps/agent-runtime/src/orchestrators/BusinessOrchestrator.ts",
+      "apps/agent-runtime/src/orchestrators/EngineeringOrchestrator.ts",
+      "apps/agent-runtime/src/orchestrators/ProductOrchestrator.ts",
+      "apps/agent-runtime/src/prompts/businessOrchestratorPrompt.ts",
+      "apps/agent-runtime/src/prompts/engineeringOrchestratorPrompt.ts",
+      "apps/agent-runtime/src/prompts/productOrchestratorPrompt.ts",
+      "apps/agent-runtime/src/prompts/seniorCodingAgentPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/architectPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/codebaseMapperPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/frontendPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/reviewerPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/rustBackendPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/securityPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/testPrompt.ts",
+      "apps/agent-runtime/src/prompts/workers/toolingTerminalPrompt.ts",
+      "apps/agent-runtime/src/runtime/AgentRuntime.ts",
+      "apps/agent-runtime/src/runtime/AgentTelemetry.ts",
+      "apps/agent-runtime/src/runtime/AlgorithmInventoryAnalyzer.ts",
+      "apps/agent-runtime/src/runtime/CodeFlowAnalyzer.ts",
+      "apps/agent-runtime/src/runtime/CodingAgentIntentRouter.ts",
+      "apps/agent-runtime/src/runtime/CommandExecutor.ts",
+      "apps/agent-runtime/src/runtime/DurableRuntimeEvents.ts",
+      "apps/agent-runtime/src/runtime/EventBus.ts",
+      "apps/agent-runtime/src/runtime/FrontendStructureAnalyzer.ts",
+      "apps/agent-runtime/src/runtime/InspectExplainComposer.ts",
+      "apps/agent-runtime/src/runtime/InspectExplainContracts.ts",
+      "apps/agent-runtime/src/runtime/InspectExplainFacts.ts",
+      "apps/agent-runtime/src/runtime/InspectExplainReadLanes.ts",
+      "apps/agent-runtime/src/runtime/LargeProjectContextBuilder.ts",
+      "apps/agent-runtime/src/runtime/LlmProjectExplainer.ts",
+      "apps/agent-runtime/src/runtime/ModuleExecutionPlanning.ts",
+      "apps/agent-runtime/src/runtime/OrchestratedRuntime.ts",
+      "apps/agent-runtime/src/runtime/ProjectIntake.ts",
+      "apps/agent-runtime/src/runtime/ProjectIntelligenceKernel.ts",
+      "apps/agent-runtime/src/runtime/ProjectLaunchInference.ts",
+      "apps/agent-runtime/src/runtime/ProjectQuestionConceptEngine.ts",
+      "apps/agent-runtime/src/runtime/ProjectQuestionGrounding.ts",
+      "apps/agent-runtime/src/runtime/RepairPatchPlanning.ts",
+      "apps/agent-runtime/src/runtime/RunEngine.ts",
+      "apps/agent-runtime/src/runtime/RunToGreen.ts",
+      "apps/agent-runtime/src/runtime/SessionManager.ts",
+      "apps/agent-runtime/src/runtime/SessionReplay.ts",
+      "apps/agent-runtime/src/runtime/TrainingInferenceAnalyzer.ts",
+      "apps/agent-runtime/src/runtime/UIControlAnalyzer.ts",
+      "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts",
+      "apps/agent-runtime/src/runtime/WorkspaceReasoningPipeline.ts",
+      "apps/agent-runtime/src/runtime/delegation.ts",
+      "apps/agent-runtime/src/scheduler/AgentPool.ts",
+      "apps/agent-runtime/src/scheduler/FileLockManager.ts",
+      "apps/agent-runtime/src/scheduler/MergeController.ts",
+      "apps/agent-runtime/src/scheduler/TaskGraph.ts",
+      "apps/agent-runtime/src/scheduler/TaskScheduler.ts",
+      "apps/agent-runtime/src/schemas/businessBriefSchema.ts",
+      "apps/agent-runtime/src/schemas/patchSchemas.ts",
+      "apps/agent-runtime/src/schemas/productBriefSchema.ts",
+      "apps/agent-runtime/src/schemas/reviewSchema.ts",
+      "apps/agent-runtime/src/schemas/sessionSchemas.ts",
+      "apps/agent-runtime/src/schemas/taskGraphSchema.ts",
+      "apps/agent-runtime/src/schemas/technicalPlanSchema.ts",
+      "apps/agent-runtime/src/schemas/toolSchemas.ts",
+      "apps/agent-runtime/src/schemas/validators.ts",
+      "apps/agent-runtime/src/schemas/workerOutputSchema.ts",
+      "apps/agent-runtime/src/server.ts",
+      "apps/agent-runtime/src/tests/agent-lifecycle.test.ts",
+      "apps/agent-runtime/src/tests/auto-orchestration.test.ts",
+      "apps/agent-runtime/src/tests/command-policy.test.ts",
+      "apps/agent-runtime/src/tests/durable-event-model.test.ts",
+      "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+      "apps/agent-runtime/src/tests/inspect-explain.test.ts",
+      "apps/agent-runtime/src/tests/memory-indexing.test.ts",
+      "apps/agent-runtime/src/tests/mock-llm.test.ts",
+      "apps/agent-runtime/src/tests/module-execution-planning.test.ts",
+      "apps/agent-runtime/src/tests/module3-orchestration.test.ts",
+      "apps/agent-runtime/src/tests/orchestration.test.ts",
+      "apps/agent-runtime/src/tests/patch-intent.test.ts",
+      "apps/agent-runtime/src/tests/patch-validation.test.ts",
+      "apps/agent-runtime/src/tests/phase4-factory.test.ts",
+      "apps/agent-runtime/src/tests/project-explain.test.ts",
+      "apps/agent-runtime/src/tests/project-intake.test.ts",
+      "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts",
+      "apps/agent-runtime/src/tests/quality-gates.test.ts",
+      "apps/agent-runtime/src/tests/reliability-foundation.test.ts",
+      "apps/agent-runtime/src/tests/replay-restore.test.ts",
+      "apps/agent-runtime/src/tests/run-to-green.test.ts",
+      "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts",
+      "apps/agent-runtime/src/tests/runtime-task-state.test.ts",
+      "apps/agent-runtime/src/tests/safety-verification.test.ts",
+      "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts",
+      "apps/agent-runtime/src/tests/swarm-autopilot.test.ts",
+      "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts",
+      "apps/agent-runtime/src/tests/tool-registry.test.ts",
+      "apps/agent-runtime/src/tests/universal-project-question.test.ts",
+      "apps/agent-runtime/src/tools/CommandPolicy.ts",
+      "apps/agent-runtime/src/tools/CommandTools.ts",
+      "apps/agent-runtime/src/tools/GitTools.ts",
+      "apps/agent-runtime/src/tools/PatchTools.ts",
+      "apps/agent-runtime/src/tools/ToolRegistry.ts",
+      "apps/agent-runtime/src/tools/WorkspaceTools.ts",
+      "apps/agent-runtime/src/tools/security.ts",
+      "apps/agent-runtime/tsconfig.json",
+      "apps/desktop/index.html",
+      "apps/desktop/package.json",
+      "apps/desktop/scripts/dev-or-reuse.mjs",
+      "apps/desktop/scripts/run-project-smoke.ts",
+      "apps/desktop/src-tauri/Cargo.lock",
+      "apps/desktop/src-tauri/Cargo.toml",
+      "apps/desktop/src-tauri/build.rs",
+      "apps/desktop/src-tauri/capabilities/main.json",
+      "apps/desktop/src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml",
+      "apps/desktop/src-tauri/icons/android/values/ic_launcher_background.xml",
+      "apps/desktop/src-tauri/src/bin/runtime_bridge_smoke.rs",
+      "apps/desktop/src-tauri/src/commands/git.rs",
+      "apps/desktop/src-tauri/src/commands/mod.rs",
+      "apps/desktop/src-tauri/src/commands/model_provider.rs",
+      "apps/desktop/src-tauri/src/commands/patch.rs",
+      "apps/desktop/src-tauri/src/commands/sessions.rs",
+      "apps/desktop/src-tauri/src/commands/system.rs",
+      "apps/desktop/src-tauri/src/commands/terminal.rs",
+      "apps/desktop/src-tauri/src/commands/workspace.rs",
+      "apps/desktop/src-tauri/src/db/mod.rs",
+      "apps/desktop/src-tauri/src/lib.rs",
+      "apps/desktop/src-tauri/src/main.rs",
+      "apps/desktop/src-tauri/src/models/mod.rs",
+      "apps/desktop/src-tauri/src/security/mod.rs",
+      "apps/desktop/src-tauri/src/services/command_policy.rs",
+      "apps/desktop/src-tauri/src/services/git.rs",
+      "apps/desktop/src-tauri/src/services/mod.rs",
+      "apps/desktop/src-tauri/src/services/model_provider.rs",
+      "apps/desktop/src-tauri/src/services/patch.rs",
+      "apps/desktop/src-tauri/src/services/paths.rs",
+      "apps/desktop/src-tauri/src/services/project_index.rs",
+      "apps/desktop/src-tauri/src/services/terminal.rs",
+      "apps/desktop/src-tauri/src/services/workspace.rs",
+      "apps/desktop/src-tauri/tauri.conf.json",
+      "apps/desktop/src/app/App.tsx",
+      "apps/desktop/src/app/activityStream.ts",
+      "apps/desktop/src/app/styles.css",
+      "apps/desktop/src/lib/agentRuntime.ts",
+      "apps/desktop/src/lib/tauri.ts",
+      "apps/desktop/src/lib/terminalOrchestrator.ts",
+      "apps/desktop/src/main.tsx",
+      "apps/desktop/src/types/tauri.ts",
+      "apps/desktop/src/vite-env.d.ts",
+      "apps/desktop/tsconfig.json",
+      "apps/desktop/vite.config.ts"
+    ],
+    "docs": [
+      "docs/agent-contracts.md",
+      "docs/architecture.md",
+      "docs/architecture/agentic-coding-factory.md",
+      "docs/architecture/internal-swarm-autopilot.md",
+      "docs/architecture/memory-and-indexing.md",
+      "docs/architecture/phase-1-memory-indexing-plan.md",
+      "docs/architecture/phase-2-orchestrator-taskgraph-plan.md",
+      "docs/architecture/phase-3-swarm-verification-safety-plan.md",
+      "docs/architecture/phase-4-scale-intelligence-hardening-plan.md",
+      "docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md",
+      "docs/extension/add-agent-role.md",
+      "docs/module-1-status.md",
+      "docs/module-2-status.md",
+      "docs/module-3-status.md",
+      "docs/operations/debugging.md",
+      "docs/orchestration-flow.md",
+      "docs/release-candidate-status.md",
+      "docs/reliability-audit.md",
+      "docs/security-model.md",
+      "docs/usage/campaigns.md",
+      "docs/usage/quickstart.md"
+    ],
+    "packages": [
+      "packages/protocol/package.json",
+      "packages/protocol/src/agent-runtime.ts",
+      "packages/protocol/src/agents.ts",
+      "packages/protocol/src/approvals.ts",
+      "packages/protocol/src/events.ts",
+      "packages/protocol/src/index.ts",
+      "packages/protocol/src/models.ts",
+      "packages/protocol/src/orchestration.ts",
+      "packages/protocol/src/patch.ts",
+      "packages/protocol/src/sessions.ts",
+      "packages/protocol/src/task-graph.ts",
+      "packages/protocol/src/tools.ts",
+      "packages/protocol/tsconfig.json"
+    ],
+    "scripts": [
+      "scripts/launch-desktop.mjs"
+    ]
+  },
+  "entrypointMap": {
+    "apps": [
+      "apps/agent-runtime/src/agents/workers/index.ts",
+      "apps/agent-runtime/src/evals/cli.ts",
+      "apps/agent-runtime/src/index.ts",
+      "apps/agent-runtime/src/memory/cli.ts",
+      "apps/agent-runtime/src/memory/index.ts",
+      "apps/agent-runtime/src/orchestration/cli.ts",
+      "apps/agent-runtime/src/orchestration/index.ts",
+      "apps/agent-runtime/src/server.ts",
+      "apps/desktop/index.html",
+      "apps/desktop/src-tauri/src/lib.rs",
+      "apps/desktop/src-tauri/src/main.rs",
+      "apps/desktop/src/app/App.tsx",
+      "apps/desktop/src/main.tsx"
+    ],
+    "packages": [
+      "packages/protocol/src/index.ts"
+    ]
+  },
+  "riskMap": {
+    ".gitattributes": {
+      "risk": "low",
+      "reasons": []
+    },
+    ".gitignore": {
+      "risk": "low",
+      "reasons": []
+    },
+    "AGENTS.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/package.json": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "apps/agent-runtime/scripts/python-pygame-fallback-smoke.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/scripts/run-to-green-smoke.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/SeniorCodingAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/ArchitectAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/BaseWorker.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/CodebaseMapperAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/FrontendAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/GenericWorkerAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/index.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/ReviewerAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/RustBackendAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/SecurityAgent.ts": {
+      "risk": "medium",
+      "reasons": [
+        "security-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/agents/workers/TestAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/agents/workers/ToolingTerminalAgent.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/config.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/evals/cli.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/evals/phase4.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/index.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/llm/LlmProvider.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/llm/MockLlmProvider.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/llm/OllamaProvider.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/llm/OpenAIProvider.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/cli.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/CommandInventory.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/index.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/IndexFreshness.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/ProjectIntelligence.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/ProjectMemory.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/RepoIndexer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/memory/types.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/mock/threeJsSnake.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/ApprovalGates.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/ArtifactStore.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/campaign-cli.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/CampaignManager.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/cli.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/FileLockManager.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/index.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/Metrics.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/OrchestrationConfig.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/OrchestrationModels.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/Orchestrator.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/PatchSafety.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/RepairLoop.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/ReviewLoop.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/RoleRegistry.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts": {
+      "risk": "medium",
+      "reasons": [
+        "tooling, build, deployment, or package configuration"
+      ]
+    },
+    "apps/agent-runtime/src/orchestration/StructuredOutputs.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmAgentTemplates.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmArtifactStore.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmFanInOut.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmModels.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmRuntime.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmScheduler.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmTrialArtifactStore.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmTrialMemory.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/SwarmTrialModels.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/TaskGraphManager.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/Validation.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestration/ValidationRunner.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestrators/BusinessOrchestrator.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestrators/EngineeringOrchestrator.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/orchestrators/ProductOrchestrator.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/businessOrchestratorPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/engineeringOrchestratorPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/productOrchestratorPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/seniorCodingAgentPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/architectPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/codebaseMapperPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/frontendPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/reviewerPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/rustBackendPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/securityPrompt.ts": {
+      "risk": "medium",
+      "reasons": [
+        "security-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/prompts/workers/testPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/prompts/workers/toolingTerminalPrompt.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/AgentRuntime.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/AgentTelemetry.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/AlgorithmInventoryAnalyzer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/CodeFlowAnalyzer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/CodingAgentIntentRouter.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/CommandExecutor.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/delegation.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/DurableRuntimeEvents.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/EventBus.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/FrontendStructureAnalyzer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/InspectExplainComposer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/InspectExplainContracts.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/InspectExplainFacts.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/InspectExplainReadLanes.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/LargeProjectContextBuilder.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/LlmProjectExplainer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ModuleExecutionPlanning.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/OrchestratedRuntime.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ProjectIntake.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ProjectIntelligenceKernel.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ProjectLaunchInference.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ProjectQuestionConceptEngine.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/ProjectQuestionGrounding.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/RepairPatchPlanning.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/RunEngine.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/RunToGreen.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/SessionManager.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/SessionReplay.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/TrainingInferenceAnalyzer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/UIControlAnalyzer.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/runtime/WorkspaceReasoningPipeline.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/scheduler/AgentPool.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/scheduler/FileLockManager.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/scheduler/MergeController.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/scheduler/TaskGraph.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/scheduler/TaskScheduler.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/schemas/businessBriefSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/patchSchemas.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/productBriefSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/reviewSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/sessionSchemas.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/taskGraphSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/technicalPlanSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/toolSchemas.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/validators.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/schemas/workerOutputSchema.ts": {
+      "risk": "medium",
+      "reasons": [
+        "database or schema-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/server.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/agent-lifecycle.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/auto-orchestration.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/command-policy.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/durable-event-model.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/inspect-explain.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/memory-indexing.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/mock-llm.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/module-execution-planning.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/module3-orchestration.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/orchestration.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/patch-intent.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/patch-validation.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/phase4-factory.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/project-explain.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/project-intake.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/quality-gates.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/reliability-foundation.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/replay-restore.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/run-to-green.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/runtime-task-state.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/safety-verification.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/swarm-autopilot.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/tool-registry.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tests/universal-project-question.test.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/CommandPolicy.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/CommandTools.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/GitTools.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/PatchTools.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/security.ts": {
+      "risk": "medium",
+      "reasons": [
+        "security-sensitive naming"
+      ]
+    },
+    "apps/agent-runtime/src/tools/ToolRegistry.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/src/tools/WorkspaceTools.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/agent-runtime/tsconfig.json": {
+      "risk": "medium",
+      "reasons": [
+        "tooling, build, deployment, or package configuration"
+      ]
+    },
+    "apps/desktop/index.html": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/package.json": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "apps/desktop/scripts/dev-or-reuse.mjs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/scripts/run-project-smoke.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/build.rs": {
+      "risk": "medium",
+      "reasons": [
+        "build/dependency role"
+      ]
+    },
+    "apps/desktop/src-tauri/capabilities/main.json": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/Cargo.lock": {
+      "risk": "medium",
+      "reasons": [
+        "build/dependency role"
+      ]
+    },
+    "apps/desktop/src-tauri/Cargo.toml": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "apps/desktop/src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/icons/android/values/ic_launcher_background.xml": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/bin/runtime_bridge_smoke.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/git.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/mod.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/model_provider.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/patch.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/sessions.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/system.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/terminal.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/commands/workspace.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/db/mod.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/lib.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/main.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/models/mod.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/security/mod.rs": {
+      "risk": "medium",
+      "reasons": [
+        "security-sensitive naming"
+      ]
+    },
+    "apps/desktop/src-tauri/src/services/command_policy.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/git.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/mod.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/model_provider.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/patch.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/paths.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/project_index.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/terminal.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/src/services/workspace.rs": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src-tauri/tauri.conf.json": {
+      "risk": "medium",
+      "reasons": [
+        "tooling, build, deployment, or package configuration"
+      ]
+    },
+    "apps/desktop/src/app/activityStream.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/app/App.tsx": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/app/styles.css": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/lib/agentRuntime.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/lib/tauri.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/lib/terminalOrchestrator.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/main.tsx": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/types/tauri.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/src/vite-env.d.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "apps/desktop/tsconfig.json": {
+      "risk": "medium",
+      "reasons": [
+        "tooling, build, deployment, or package configuration"
+      ]
+    },
+    "apps/desktop/vite.config.ts": {
+      "risk": "medium",
+      "reasons": [
+        "build/dependency role"
+      ]
+    },
+    "docs/agent-contracts.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/agentic-coding-factory.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/internal-swarm-autopilot.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/memory-and-indexing.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/phase-1-memory-indexing-plan.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/phase-2-orchestrator-taskgraph-plan.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/phase-3-swarm-verification-safety-plan.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/phase-4-scale-intelligence-hardening-plan.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/extension/add-agent-role.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/module-1-status.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/module-2-status.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/module-3-status.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/operations/debugging.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/orchestration-flow.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/release-candidate-status.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/reliability-audit.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/security-model.md": {
+      "risk": "medium",
+      "reasons": [
+        "security-sensitive naming"
+      ]
+    },
+    "docs/usage/campaigns.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "docs/usage/quickstart.md": {
+      "risk": "low",
+      "reasons": []
+    },
+    "package-lock.json": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "package.json": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "packages/protocol/package.json": {
+      "risk": "high",
+      "reasons": [
+        "tooling, build, deployment, or package configuration",
+        "build/dependency role"
+      ]
+    },
+    "packages/protocol/src/agent-runtime.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/agents.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/approvals.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/events.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/index.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/models.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/orchestration.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/patch.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/sessions.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/task-graph.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/src/tools.ts": {
+      "risk": "low",
+      "reasons": []
+    },
+    "packages/protocol/tsconfig.json": {
+      "risk": "medium",
+      "reasons": [
+        "tooling, build, deployment, or package configuration"
+      ]
+    },
+    "scripts/launch-desktop.mjs": {
+      "risk": "low",
+      "reasons": []
+    }
+  },
+  "generatedFiles": [],
+  "largeFileWarnings": []
+}

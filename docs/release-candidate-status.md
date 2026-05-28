@@ -1,6 +1,6 @@
 # Release Candidate Status
 
-This branch is a release-candidate stabilization snapshot for the current OrchCode Studio operator console.
+This branch is a release-candidate stabilization snapshot for the current Hivo Studio operator console.
 
 ## Current capabilities
 

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+  "summary": "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal.",
+  "scenarios_run": 3,
+  "staffing_accuracy": 1,
+  "modes_compared": [
+    "baseline-simple",
+    "orchestrated",
+    "autopilot-fast",
+    "autopilot-deep",
+    "autopilot-exhaustive"
+  ],
+  "key_metrics": {
+    "runs": 5,
+    "failures": 0,
+    "average_agents": 6.8,
+    "comparison_recommendation": "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal."
+  },
+  "wins": [
+    "Staffing matched small for: Explain architecture without editing",
+    "Staffing matched small for: Explain architecture without editing",
+    "Staffing matched small for: Explain architecture without editing"
+  ],
+  "losses": [],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Explain architecture without editing: executor_limit=1, read_only_ratio=0.89",
+    "Explain architecture without editing: executor_limit=1, read_only_ratio=0.89",
+    "Explain architecture without editing: executor_limit=1, read_only_ratio=0.89"
+  ],
+  "specialist_selection_findings": [
+    "Explain architecture without editing: specialists=DocumentationReviewerAgent",
+    "Explain architecture without editing: specialists=DocumentationReviewerAgent",
+    "Explain architecture without editing: specialists=DocumentationReviewerAgent"
+  ],
+  "recommended_defaults": [
+    "Default mode: fast",
+    "Default total agents for this class: 9",
+    "Executor limit: 1"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

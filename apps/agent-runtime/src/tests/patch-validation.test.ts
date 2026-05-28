@@ -6,7 +6,7 @@ import test from "node:test";
 import { PatchTools } from "../tools/PatchTools.js";
 
 test("patch validation rejects outside workspace paths", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   const tools = new PatchTools(workspace);
   const result = tools.validate({

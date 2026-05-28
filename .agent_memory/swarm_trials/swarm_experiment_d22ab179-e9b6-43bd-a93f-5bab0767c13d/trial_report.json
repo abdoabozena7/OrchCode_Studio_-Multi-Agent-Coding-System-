@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+  "summary": "Ran 10 automatic staffing scenario(s); 8/10 staffing accuracy.",
+  "scenarios_run": 10,
+  "staffing_accuracy": 0.8,
+  "modes_compared": [
+    "autopilot-deep"
+  ],
+  "key_metrics": {
+    "runs": 10,
+    "failures": 2,
+    "average_agents": 59.2,
+    "comparison_recommendation": "not_run"
+  },
+  "wins": [
+    "Staffing matched tiny for: Change the label text in one HTML/component file.",
+    "Staffing matched medium for: Add a feature touching one module and its tests.",
+    "Staffing matched huge for: Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.",
+    "Staffing matched small for: Modify the authentication/session/permission behavior.",
+    "Staffing matched large for: Add or change database migration behavior."
+  ],
+  "losses": [
+    "Unnecessary specialist AccessibilityReviewerAgent was created.",
+    "Expected agent range 35-130, got 25."
+  ],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Change the label text in one HTML/component file.: executor_limit=1, read_only_ratio=0.8",
+    "Fix a small bug in one function.: executor_limit=1, read_only_ratio=0.89",
+    "Add a feature touching one module and its tests.: executor_limit=1, read_only_ratio=0.92",
+    "Refactor a cross-module service while preserving public API behavior.: executor_limit=1, read_only_ratio=0.92",
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: executor_limit=0, read_only_ratio=1",
+    "Modify the authentication/session/permission behavior.: executor_limit=1, read_only_ratio=0.92",
+    "Add or change database migration behavior.: executor_limit=2, read_only_ratio=0.95",
+    "Update a shared UI component with accessibility-safe behavior.: executor_limit=1, read_only_ratio=0.91",
+    "Make the app better and cleaner. Do not edit files until the plan is decomposed.: executor_limit=0, read_only_ratio=1",
+    "Upgrade a major framework version across the project as a staged campaign.: executor_limit=2, read_only_ratio=0.98"
+  ],
+  "specialist_selection_findings": [
+    "Change the label text in one HTML/component file.: specialists=none",
+    "Fix a small bug in one function.: specialists=AccessibilityReviewerAgent",
+    "Add a feature touching one module and its tests.: specialists=AuthSecurityReviewerAgent, AccessibilityReviewerAgent, TestCoverageReviewerAgent",
+    "Refactor a cross-module service while preserving public API behavior.: specialists=AuthSecurityReviewerAgent, AccessibilityReviewerAgent, APICompatibilityReviewerAgent",
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: specialists=AccessibilityReviewerAgent, TestCoverageReviewerAgent, DocumentationReviewerAgent",
+    "Modify the authentication/session/permission behavior.: specialists=AuthSecurityReviewerAgent, AccessibilityReviewerAgent",
+    "Add or change database migration behavior.: specialists=MigrationSafetyReviewerAgent, AccessibilityReviewerAgent",
+    "Update a shared UI component with accessibility-safe behavior.: specialists=AccessibilityReviewerAgent",
+    "Make the app better and cleaner. Do not edit files until the plan is decomposed.: specialists=AccessibilityReviewerAgent",
+    "Upgrade a major framework version across the project as a staged campaign.: specialists=AccessibilityReviewerAgent, DependencyUpgradeReviewerAgent"
+  ],
+  "recommended_defaults": [
+    "Default mode: deep",
+    "Default total agents for this class: 5",
+    "Executor limit: 1"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

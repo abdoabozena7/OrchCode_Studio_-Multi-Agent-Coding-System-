@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_review_21_54227913",
+  "status": "succeeded",
+  "summary": "ReviewerAgent completed review work for Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files..",
+  "relevant_files": [
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/app/App.tsx",
+    "apps/desktop/src/main.tsx",
+    "packages/protocol/src/index.ts",
+    "apps/agent-runtime/package.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "package.json",
+    "packages/protocol/package.json",
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/vite.config.ts",
+    "apps/agent-runtime/tsconfig.json",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src/vite-env.d.ts"
+  ],
+  "findings": [
+    "review work item used schema ReviewerOutput."
+  ],
+  "risks": [
+    "high risk work requires review evidence."
+  ],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.72
+}

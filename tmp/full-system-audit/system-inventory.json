@@ -1,0 +1,255 @@
+{
+  "generatedAt": "2026-05-24T11:14:12.038Z",
+  "workspace": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)",
+  "fileCounts": {
+    "rgFilesIncludingAuditTmp": 699,
+    "rgFilesExcludingAuditTmp": 305,
+    "byTopLevel": {
+      "tmp": 394,
+      "apps": 264,
+      "docs": 21,
+      "packages": 13,
+      "orchcode-icon.ico": 1,
+      "Launch-OrchCode.cmd.lnk": 1,
+      "Launch-OrchCode.cmd": 1,
+      "AGENTS.md": 1,
+      "package.json": 1,
+      "package-lock.json": 1,
+      "scripts": 1
+    }
+  },
+  "packages": {
+    "workspaces": [
+      "apps/agent-runtime",
+      "apps/desktop",
+      "packages/protocol"
+    ],
+    "scripts": {
+      "build": "npm run build -w @orchcode/protocol && npm run build -w @orchcode/agent-runtime && npm run build -w @orchcode/desktop",
+      "typecheck": "npm run build -w @orchcode/protocol && npm run typecheck -w @orchcode/protocol && npm run typecheck -w @orchcode/agent-runtime && npm run typecheck -w @orchcode/desktop",
+      "test": "npm run test -w @orchcode/agent-runtime",
+      "smoke:desktop-run-project": "npm run smoke:run-project -w @orchcode/desktop",
+      "smoke:terminal-authority": "npm run smoke:run-project -w @orchcode/desktop",
+      "smoke:run-to-green": "npm run smoke:run-to-green -w @orchcode/agent-runtime",
+      "smoke:python-pygame-fallback": "npm run smoke:python-pygame-fallback -w @orchcode/agent-runtime",
+      "memory:index": "tsx apps/agent-runtime/src/memory/cli.ts index repo --workspace .",
+      "memory:index-status": "tsx apps/agent-runtime/src/memory/cli.ts index status --workspace .",
+      "memory:index-refresh": "tsx apps/agent-runtime/src/memory/cli.ts index refresh --workspace .",
+      "memory:index-explain": "tsx apps/agent-runtime/src/memory/cli.ts index explain --workspace .",
+      "memory:inspect": "tsx apps/agent-runtime/src/memory/cli.ts memory inspect --workspace .",
+      "memory:status": "tsx apps/agent-runtime/src/memory/cli.ts memory status --workspace .",
+      "memory:show-commands": "tsx apps/agent-runtime/src/memory/cli.ts memory show-commands --workspace .",
+      "memory:clean-runs": "tsx apps/agent-runtime/src/memory/cli.ts memory clean-runs --workspace .",
+      "memory:compact": "tsx apps/agent-runtime/src/memory/cli.ts memory compact --workspace .",
+      "memory:lessons": "tsx apps/agent-runtime/src/memory/cli.ts memory lessons --workspace .",
+      "memory:decisions": "tsx apps/agent-runtime/src/memory/cli.ts memory decisions --workspace .",
+      "memory:failed-attempts": "tsx apps/agent-runtime/src/memory/cli.ts memory failed-attempts --workspace .",
+      "memory:explain-task": "tsx apps/agent-runtime/src/memory/cli.ts memory explain-task --workspace .",
+      "agent:run": "tsx apps/agent-runtime/src/orchestration/cli.ts agent run --workspace .",
+      "agent:plan": "tsx apps/agent-runtime/src/orchestration/cli.ts agent plan --workspace .",
+      "agent:inspect-run": "tsx apps/agent-runtime/src/orchestration/cli.ts agent inspect-run --workspace .",
+      "agent:report": "tsx apps/agent-runtime/src/orchestration/cli.ts agent report --workspace .",
+      "agent:resume": "tsx apps/agent-runtime/src/orchestration/cli.ts agent resume --workspace .",
+      "agent:trial:architecture-scan": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial architecture-scan --workspace .",
+      "agent:trial:test-discovery": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial test-discovery --workspace .",
+      "agent:trial:staffing-eval": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial staffing-eval --workspace .",
+      "agent:trial:scheduler-scale": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial scheduler-scale --workspace .",
+      "agent:trial:compare": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial compare --workspace .",
+      "agent:trial:small-safe-fix": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial small-safe-fix --workspace .",
+      "agent:trial:huge-readonly-scan": "tsx apps/agent-runtime/src/orchestration/cli.ts agent trial huge-readonly-scan --workspace .",
+      "agentic:run": "tsx apps/agent-runtime/src/orchestration/cli.ts run-agentic-task --workspace .",
+      "agentic:plan": "tsx apps/agent-runtime/src/orchestration/cli.ts plan-task --workspace .",
+      "agentic:resume-run": "tsx apps/agent-runtime/src/orchestration/cli.ts resume-run --workspace .",
+      "agentic:list-runs": "tsx apps/agent-runtime/src/orchestration/cli.ts list-runs --workspace .",
+      "agentic:show-run": "tsx apps/agent-runtime/src/orchestration/cli.ts show-run --workspace .",
+      "agentic:show-report": "tsx apps/agent-runtime/src/orchestration/cli.ts show-report --workspace .",
+      "agentic:run-metrics": "tsx apps/agent-runtime/src/orchestration/cli.ts run-metrics --workspace .",
+      "agentic:show-artifacts": "tsx apps/agent-runtime/src/orchestration/cli.ts show-artifacts --workspace .",
+      "agentic:show-artifact": "tsx apps/agent-runtime/src/orchestration/cli.ts show-artifact --workspace .",
+      "agentic:inspect-task": "tsx apps/agent-runtime/src/orchestration/cli.ts inspect-task --workspace .",
+      "agentic:show-context-pack": "tsx apps/agent-runtime/src/orchestration/cli.ts show-context-pack --workspace .",
+      "agentic:show-run-events": "tsx apps/agent-runtime/src/orchestration/cli.ts show-run-events --workspace .",
+      "agentic:show-task-artifacts": "tsx apps/agent-runtime/src/orchestration/cli.ts show-task-artifacts --workspace .",
+      "agentic:show-validation-logs": "tsx apps/agent-runtime/src/orchestration/cli.ts show-validation-logs --workspace .",
+      "agentic:show-patch-history": "tsx apps/agent-runtime/src/orchestration/cli.ts show-patch-history --workspace .",
+      "campaign:create": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts create --workspace .",
+      "campaign:plan": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts plan --workspace .",
+      "campaign:run-next": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts run-next --workspace .",
+      "campaign:status": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts status --workspace .",
+      "campaign:pause": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts pause --workspace .",
+      "campaign:resume": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts resume --workspace .",
+      "campaign:report": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts report --workspace .",
+      "campaign:metrics": "tsx apps/agent-runtime/src/orchestration/campaign-cli.ts metrics --workspace .",
+      "eval:phase4": "tsx apps/agent-runtime/src/evals/cli.ts --workspace .",
+      "agent:dev": "npm run dev -w @orchcode/agent-runtime",
+      "web:dev": "npm run dev -w @orchcode/desktop",
+      "desktop:dev": "npm run tauri:dev -w @orchcode/desktop",
+      "dev": "node scripts/launch-desktop.mjs"
+    }
+  },
+  "importantAreas": {
+    "frontend": [
+      "apps/desktop/src/app/App.tsx",
+      "apps/desktop/src/lib/agentRuntime.ts",
+      "apps/desktop/src/lib/tauri.ts",
+      "apps/desktop/src/app/activityStream.ts"
+    ],
+    "runtime": [
+      "apps/agent-runtime/src/runtime/AgentRuntime.ts",
+      "apps/agent-runtime/src/runtime/RunEngine.ts",
+      "apps/agent-runtime/src/runtime/ProjectIntake.ts",
+      "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts"
+    ],
+    "rustTauri": [
+      "apps/desktop/src-tauri/src/commands/terminal.rs",
+      "apps/desktop/src-tauri/src/commands/patch.rs",
+      "apps/desktop/src-tauri/src/db/mod.rs",
+      "apps/desktop/src-tauri/src/services/terminal.rs"
+    ],
+    "protocol": [
+      "packages/protocol/src/agent-runtime.ts",
+      "packages/protocol/src/approvals.ts",
+      "packages/protocol/src/models.ts"
+    ],
+    "swarm": [
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts",
+      "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts"
+    ],
+    "memory": [
+      ".agent_memory",
+      "apps/agent-runtime/src/memory/RepoIndexer.ts",
+      "apps/agent-runtime/src/memory/CommandInventory.ts"
+    ],
+    "state": [
+      ".orchcode-agent-runtime/sessions.json",
+      "C:/Users/A-plus/AppData/Local/OrchCodeStudio/state.sqlite"
+    ]
+  },
+  "largeBottlenecks": [
+    {
+      "path": "apps/desktop/src-tauri/target/debug/deps/orchcode_desktop_lib.lib",
+      "bytes": 882170364
+    },
+    {
+      "path": "apps/desktop/src-tauri/target/debug/orchcode_desktop_lib.lib",
+      "bytes": 876527638
+    },
+    {
+      "path": "apps/agent-runtime/.orchcode-agent-runtime/sessions.json",
+      "bytes": 68016623
+    },
+    {
+      "path": "C:/Users/A-plus/AppData/Local/OrchCodeStudio/state.sqlite",
+      "bytes": 838959104
+    }
+  ],
+  "commandResults": [
+    {
+      "command": "npm run typecheck",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-run-typecheck.log"
+    },
+    {
+      "command": "npm test",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-test.log"
+    },
+    {
+      "command": "npm run build -w @orchcode/desktop",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-build-desktop.log"
+    },
+    {
+      "command": "cargo test",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/cargo-test-tauri.log"
+    },
+    {
+      "command": "npm run smoke:run-to-green",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/smoke-run-to-green.log"
+    },
+    {
+      "command": "npm run smoke:desktop-run-project",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/smoke-desktop-run-project.log"
+    },
+    {
+      "command": "npm run memory:index-status",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-index-status.log"
+    },
+    {
+      "command": "npm run memory:inspect",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-inspect.log"
+    },
+    {
+      "command": "npm run memory:show-commands",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-show-commands.log"
+    },
+    {
+      "command": "npm run agent:trial:staffing-eval",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-staffing-eval.log"
+    },
+    {
+      "command": "npm run agent:trial:scheduler-scale",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-scheduler-scale.log"
+    },
+    {
+      "command": "npm run agent:trial:compare",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-compare.log"
+    },
+    {
+      "command": "npm run agent:plan",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-plan.log"
+    },
+    {
+      "command": "runtime health injection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/runtime-health-inject-retry.log"
+    },
+    {
+      "command": "SQLite state inspection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/sqlite-state.log"
+    },
+    {
+      "command": "SQLite provider/session inspection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/sqlite-provider-session.log"
+    },
+    {
+      "command": "desktop Vite dev server for DOM capture",
+      "status": "started_then_stopped",
+      "log": "tmp/full-system-audit/command-logs/desktop-vite-dev.log"
+    },
+    {
+      "command": "real provider smoke",
+      "status": "passed",
+      "log": "tmp/full-system-audit/real-provider-smoke.json"
+    },
+    {
+      "command": "inspect/explain prompts with real_provider",
+      "status": "completed_with_provider_timeouts",
+      "log": "tmp/full-system-audit/inspect-explain-reality-report.md"
+    },
+    {
+      "command": "desktop Vite web UI DOM capture",
+      "status": "dom_verified_screenshot_failed",
+      "log": "tmp/full-system-audit/screenshots/desktop-vite-dom-snapshot.txt"
+    },
+    {
+      "command": "audit artifact generation",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/write-audit-artifacts.log"
+    }
+  ]
+}

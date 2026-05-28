@@ -162,8 +162,8 @@ test("successful first run marks run_to_green as passed", async () => {
 });
 
 test("failed run records conservative diagnosis", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-run2g-bare-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run2g-bare-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-run2g-bare-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run2g-bare-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# bare\n", "utf8");
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
@@ -234,8 +234,8 @@ test("unknown error stays unknown and low confidence", async () => {
 });
 
 test("git status outside a repository keeps the diagnosis informative", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-run2g-git-status-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run2g-git-status-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-run2g-git-status-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run2g-git-status-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# no git\n", "utf8");
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
@@ -576,8 +576,8 @@ type PackageFixtureOptions = {
 };
 
 async function createPackageFixture(options: PackageFixtureOptions) {
-  const workspace = path.join(os.tmpdir(), `orchcode-run2g-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run2g-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-run2g-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run2g-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   if (options.withSource) {
     await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -596,8 +596,8 @@ async function createPackageFixture(options: PackageFixtureOptions) {
 }
 
 async function createStaticFixture() {
-  const workspace = path.join(os.tmpdir(), `orchcode-run2g-static-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run2g-static-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-run2g-static-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run2g-static-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "index.html"), '<!doctype html><html><body><script type="module" src="./main.js"></script></body></html>\n', "utf8");
   await writeFile(path.join(workspace, "main.js"), 'console.log("hello");\n', "utf8");

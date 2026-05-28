@@ -3,15 +3,15 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { ProjectMap } from "@orchcode/protocol";
+import type { ProjectMap } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { RunEngine } from "../runtime/RunEngine.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 
 test("existing-file edits use patch intents and generate focused reviewable diffs", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-intent-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-intent-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-intent-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-intent-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
   await writeFile(
@@ -66,8 +66,8 @@ test("existing-file edits use patch intents and generate focused reviewable diff
 });
 
 test("malformed broad patch intents fail with a chat explanation instead of creating AGENT_PROPOSAL", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-malformed-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-malformed-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-malformed-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-malformed-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "src", "App.tsx"), "export const value = 1;\n", "utf8");
 
@@ -98,8 +98,8 @@ test("malformed broad patch intents fail with a chat explanation instead of crea
 });
 
 test("malformed simple file requests fall back to the requested file instead of AGENT_PROPOSAL", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-simple-file-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-simple-file-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-simple-file-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-simple-file-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const provider = new PatchIntentProvider({
@@ -122,8 +122,8 @@ test("malformed simple file requests fall back to the requested file instead of 
 });
 
 test("single-file pygame requests use deterministic implementation fallback", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-pygame-fallback-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-pygame-fallback-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-pygame-fallback-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-pygame-fallback-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const provider = new PatchIntentProvider({
@@ -160,8 +160,8 @@ test("single-file pygame requests use deterministic implementation fallback", as
 });
 
 test("missing anchors are rejected", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-missing-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-missing-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-missing-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-missing-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "src", "App.tsx"), "export const value = 1;\n", "utf8");
 
@@ -193,8 +193,8 @@ test("missing anchors are rejected", async () => {
 });
 
 test("ambiguous anchors are rejected", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-ambiguous-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-ambiguous-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-ambiguous-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-ambiguous-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(
     path.join(workspace, "src", "App.tsx"),
@@ -230,8 +230,8 @@ test("ambiguous anchors are rejected", async () => {
 });
 
 test("outside-workspace patch intents are rejected", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-outside-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-outside-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-outside-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-outside-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const provider = new PatchIntentProvider({
@@ -261,8 +261,8 @@ test("outside-workspace patch intents are rejected", async () => {
 });
 
 test("file creation intents still work", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-create-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-create-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-create-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-create-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "root\n", "utf8");
 
@@ -296,8 +296,8 @@ test("file creation intents still work", async () => {
 });
 
 test("overwrite file intents generate whole-file replacement diffs", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-overwrite-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-overwrite-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-overwrite-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-overwrite-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "notes.txt"), "old\n", "utf8");
 
@@ -328,8 +328,8 @@ test("overwrite file intents generate whole-file replacement diffs", async () =>
 });
 
 test("insert and delete patch intents generate focused diffs", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-patch-ops-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-patch-ops-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-patch-ops-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-patch-ops-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "list.txt"), "one\ntwo\nremove\n", "utf8");
 

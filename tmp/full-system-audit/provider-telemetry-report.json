@@ -1,0 +1,100 @@
+{
+  "generatedAt": "2026-05-24T11:14:12.039Z",
+  "defaults": {
+    "runtimeConfigDefaultMode": "demo_mock (apps/agent-runtime/src/config.ts:14)",
+    "healthEndpointReports": "config.defaultMode only, not active session provider (apps/agent-runtime/src/server.ts:35)",
+    "desktopSavedProvider": {
+      "provider_type": "ollama",
+      "provider_name": "Ollama",
+      "base_url": "http://localhost:11434",
+      "selected_model": "deepseek-coder:6.7b",
+      "api_key_configured": 0,
+      "is_valid": 1,
+      "last_validated_at": "2026-05-18T11:50:42.329407800+00:00",
+      "last_validation_error": null
+    }
+  },
+  "directSmoke": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "preferredModel": "qwen2.5-coder:7b",
+    "startedAt": "2026-05-24T10:34:45.332Z",
+    "directProvider": {
+      "status": "succeeded",
+      "providerMode": "real_provider",
+      "model": "qwen2.5-coder:7b",
+      "responsePreview": "OK.",
+      "latencyMs": 6283
+    },
+    "runtimeRealProvider": {
+      "status": "completed",
+      "sessionStatus": "completed",
+      "lifecycleStage": "DONE",
+      "providerMode": "real_provider",
+      "model": "qwen2.5-coder:7b",
+      "providerCalls": 2,
+      "fallbackUsed": false,
+      "assistantPreview": "I searched for `one`; strongest local evidence:\n\n- This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode-file:README.md:3)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:1](orchcode-file:README.md:1)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:2](orchcode-file:README.md:2)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode",
+      "artifactTypes": [
+        "project_intake",
+        "context_pack",
+        "project_explain_report",
+        "concept_resolution",
+        "investigation_graph",
+        "mechanism_chain",
+        "evidence_tiers",
+        "verification",
+        "project_explain_answer"
+      ],
+      "commandRequests": 0,
+      "patchProposals": 0,
+      "latencyMs": 14538
+    },
+    "calls": [
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:45.361Z",
+        "durationMs": 6282,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:51.795Z",
+        "durationMs": 6985,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:58.783Z",
+        "durationMs": 7353,
+        "ok": true,
+        "status": 200
+      }
+    ],
+    "availableModels": [
+      "gpt-oss:120b-cloud",
+      "qwen2.5-coder:7b",
+      "deepseek-coder:6.7b"
+    ],
+    "selectedModel": "qwen2.5-coder:7b",
+    "tagsLatencyMs": 28,
+    "finishedAt": "2026-05-24T10:35:06.182Z",
+    "providerCallCount": 3,
+    "responseCount": 3,
+    "mockFallbackUsage": false
+  },
+  "inspectExplain": {
+    "model": "qwen2.5-coder:7b",
+    "promptCount": 8,
+    "chatProviderCalls": 8,
+    "successfulResponses": 0,
+    "abortedOrErroredCalls": 8,
+    "maxObservedDurationMs": 60017,
+    "conclusion": "The inspect/explain run attempted real Ollama calls, but the chat calls timed out/aborted; final answers came from deterministic fallback/citation logic, not successful model responses."
+  },
+  "proofRule": "Do not claim a model answered unless providerCalls > 0 and response ok=true. Only the tiny direct/runtime smoke has ok=true responses."
+}

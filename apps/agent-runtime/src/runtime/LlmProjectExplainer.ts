@@ -1,4 +1,4 @@
-import type { ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection } from "@orchcode/protocol";
+import type { ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection } from "@hivo/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { projectExplainSchema } from "../schemas/sessionSchemas.js";
 import {
@@ -35,6 +35,8 @@ export type ProjectExplainResult = ProjectExplainLlmResponse & {
   revisionCount: number;
   validationWarnings: string[];
   grounding: ProjectQuestionGrounding;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
 };
 
 type EvidenceItem = GroundingEvidenceItem & {
@@ -64,7 +66,9 @@ export async function explainProjectWithLlm(input: {
       unsupportedOrUnclearParts: [`Requested concept not found in current workspace evidence: ${grounding.concept.label}`],
       revisionCount: 0,
       validationWarnings: grounding.unknowns,
-      grounding
+      grounding,
+      fallbackUsed: true,
+      fallbackReason: "concept_not_found_without_provider_answer"
     };
   }
 
@@ -104,7 +108,9 @@ export async function explainProjectWithLlm(input: {
     unsupportedOrUnclearParts: validationErrors,
     revisionCount: 1,
     validationWarnings: revisionValidation.warnings,
-    grounding
+    grounding,
+    fallbackUsed: true,
+    fallbackReason: "provider_answer_failed_local_validation"
   };
 }
 
@@ -123,7 +129,9 @@ function createProviderFailureFallback(
     unsupportedOrUnclearParts: validationErrors,
     revisionCount,
     validationWarnings: [...grounding.unknowns, providerError],
-    grounding
+    grounding,
+    fallbackUsed: true,
+    fallbackReason: providerError
   };
 }
 
@@ -205,6 +213,9 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
       ? "The user is asking about how something works inside this project. First state what the current project appears to be from project-domain refs, then answer the exact requested concept."
       : "Answer the user's specific question first. Do not default to a broad project overview unless the user asked for one.",
     `Requested answer style: ${grounding.style}. ${createStyleInstruction(grounding.style)}`,
+    grounding.style === "detailed" || grounding.workspaceReasoning.intent.outputShape === "walkthrough"
+      ? "For detailed walkthroughs: use multiple named sections, explain each proven step in several sentences, cite concrete files/functions/endpoints, and avoid returning only a short bullet list."
+      : "",
     `Project domain candidate: ${grounding.projectDomain.label} (${grounding.projectDomain.confidence}). Use it only if you cite its project-domain refs.`,
     grounding.concept.specific
       ? `Requested concept: ${grounding.concept.label}. Only explain this concept using the listed concept-supporting refs.`
@@ -225,7 +236,7 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
     "For realtime claims, distinguish true realtime streams/sockets/consumers from polling/timers/repeated refresh. Say 'not proven' when the evidence does not prove either.",
     "Every factual claim about code behavior must be grounded in one of the provided refs.",
     "If a concept or project identity is not proven by the current workspace evidence, say you cannot confirm it instead of guessing.",
-    "Use only provided orchcode-file links. Do not invent file paths, line numbers, tools, or run commands.",
+    "Use only provided hivo-file links. Do not invent file paths, line numbers, tools, or run commands.",
     "If evidence conflicts with the user's project name or idea, explain the conflict instead of forcing a label.",
     "Return strict JSON only. Do not wrap it in markdown."
   ].join("\n");
@@ -369,11 +380,11 @@ function validateProjectExplainResponse(
   const linkedRefs = extractOrchcodeRefs(response.answerMarkdown ?? "");
   for (const ref of linkedRefs) {
     if (!allowedRefs.has(ref)) {
-      errors.push(`answerMarkdown contains an unknown orchcode-file ref: ${ref}`);
+      errors.push(`answerMarkdown contains an unknown hivo-file ref: ${ref}`);
     }
   }
   if (evidenceItems.length && linkedRefs.length === 0) {
-    errors.push("answerMarkdown must include at least one provided orchcode-file link.");
+    errors.push("answerMarkdown must include at least one provided hivo-file link.");
   }
   const citedRefs = uniqueStrings([
     ...linkedRefs,
@@ -458,6 +469,16 @@ function validateProjectExplainResponse(
   if (!answerSatisfiesRequestedStyle(response.answerMarkdown ?? "", grounding.style)) {
     errors.push(`answer does not preserve the requested ${grounding.style} style.`);
   }
+  if ((grounding.style === "detailed" || grounding.workspaceReasoning.intent.outputShape === "walkthrough") && evidenceItems.length) {
+    const answerText = response.answerMarkdown ?? "";
+    const sectionCount = countDetailedAnswerSections(answerText);
+    if (answerText.trim().length < 900 || sectionCount < 3) {
+      errors.push(`detailed walkthrough answer is too shallow: ${answerText.trim().length} chars and ${sectionCount} section(s).`);
+    }
+    if (grounding.workspaceReasoning.intent.answerGoal === "trace_flow" && !/\b(def|function|class|endpoint|route|api|fit|predict|predict_proba|SVC|SHAP|joblib|pickle|train_|predict_)\b/i.test(answerText)) {
+      errors.push("detailed flow answer must mention concrete functions, endpoints, or implementation symbols from the evidence.");
+    }
+  }
   if (!appearsToAnswerPrompt(response.answerMarkdown ?? "", userPrompt)) {
     errors.push("answerMarkdown does not appear to directly answer the user's prompt.");
   }
@@ -476,7 +497,8 @@ function normalizeProjectExplainResponse(
     unsupportedOrUnclearParts: response.unsupportedOrUnclearParts.filter((entry) => typeof entry === "string" && entry.trim()),
     revisionCount,
     validationWarnings,
-    grounding
+    grounding,
+    fallbackUsed: false
   };
 }
 
@@ -605,7 +627,7 @@ function meaningfulTerms(text: string) {
 
 function extractOrchcodeRefs(markdown: string) {
   const refs: string[] = [];
-  for (const match of markdown.matchAll(/orchcode-file:([^)\s]+):(\d+)/g)) {
+  for (const match of markdown.matchAll(/hivo-file:([^)\s]+):(\d+)/g)) {
     try {
       refs.push(normalizeRef(decodeURIComponent(match[1] ?? ""), Number(match[2])));
     } catch {
@@ -626,7 +648,7 @@ function normalizeRef(path: string, line: number) {
 }
 
 function formatFileLineLink(filePath: string, line: number) {
-  return `[${filePath}:${line}](orchcode-file:${encodeURIComponent(filePath)}:${line})`;
+  return `[${filePath}:${line}](hivo-file:${encodeURIComponent(filePath)}:${line})`;
 }
 
 function trimText(value: string, maxChars: number) {
@@ -640,6 +662,12 @@ function formatProviderError(error: unknown) {
 
 function indent(value: string, prefix: string) {
   return value.split(/\r?\n/).map((line) => `${prefix}${line}`).join("\n");
+}
+
+function countDetailedAnswerSections(answer: string) {
+  const markdownHeadings = (answer.match(/^#{2,4}\s+/gm) ?? []).length;
+  const boldHeadings = (answer.match(/^\*\*[^*\n]{3,80}\*\*/gm) ?? []).length;
+  return markdownHeadings + boldHeadings;
 }
 
 function uniqueStrings(values: string[]) {

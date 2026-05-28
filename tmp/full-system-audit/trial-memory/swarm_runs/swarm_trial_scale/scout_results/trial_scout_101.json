@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "work_item_id": "trial_scout_101",
+  "status": "succeeded",
+  "summary": "ScoutAgent completed scout work for Process 300 read-only scout work items with mock agents..",
+  "relevant_files": [
+    "src/trial_scout_101.ts"
+  ],
+  "findings": [
+    "scout work item used schema ScoutAgentOutput."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

@@ -8,7 +8,7 @@ import type {
   ProjectContextPack,
   ProjectIntake,
   VerificationResult
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import type { WorkspaceTools } from "../tools/WorkspaceTools.js";
 
 type ModulePlanInput = {
@@ -25,11 +25,13 @@ type ModulePlanInput = {
 export function buildModuleExecutionPlan(input: ModulePlanInput): ModuleExecutionPlan {
   const scopedTargets = input.targetFiles.filter((file) => !isPlaceholderPlanningFile(file));
   const relevantFiles = uniqueStrings([
+    ...(input.contextPack?.confirmedRelevantFiles ?? []),
     ...(input.contextPack?.relevantFiles ?? []),
     ...scopedTargets,
     ...input.intake.importantFiles.slice(0, 4)
   ]).slice(0, 10);
   const ownedPaths = uniqueStrings([
+    ...(input.contextPack?.safeEditSurface ?? []),
     ...relevantFiles,
     ...(input.contextPack?.safeToEdit ?? [])
   ]).slice(0, 10);
@@ -64,6 +66,7 @@ export function buildModuleExecutionPlan(input: ModulePlanInput): ModuleExecutio
     ...relevantFiles.filter((file) => /(api|interface|types|schema|protocol)/i.test(file))
   ]).slice(0, 8);
   const requiredExistingPatterns = uniqueStrings([
+    ...(input.contextPack?.targetMechanismChain ?? []),
     ...(input.contextPack?.conventionsDiscovered ?? []),
     "Prefer modifying existing files over creating parallel systems.",
     "Keep edits narrow after read-wide intake."
@@ -74,6 +77,7 @@ export function buildModuleExecutionPlan(input: ModulePlanInput): ModuleExecutio
     ...input.intake.unknowns
   ]).slice(0, 8);
   const unknowns = uniqueStrings([
+    ...(input.contextPack?.missingEvidenceLinks ?? []).map((link) => `Missing mechanism link: ${link}`),
     ...(input.contextPack?.unknowns ?? []),
     ...input.intake.unknowns
   ]).slice(0, 8);
@@ -110,10 +114,15 @@ export function buildModuleExecutionPlan(input: ModulePlanInput): ModuleExecutio
     unknowns,
     stopConditions: [
       "Stop if the change requires files outside the owned or allowed paths.",
+      "Stop if the patch plan depends on context-only evidence instead of a confirmed mechanism chain.",
       "Stop if the scope grows into architecture rewrite, broad rename, or dependency expansion without approval.",
       "Stop if verification cannot be selected from the scoped command list."
     ],
     approvalRequiredReasons,
+    targetMechanismChain: input.contextPack?.targetMechanismChain ?? [],
+    confirmedRelevantFiles: input.contextPack?.confirmedRelevantFiles ?? [],
+    missingEvidenceLinks: input.contextPack?.missingEvidenceLinks ?? [],
+    safeEditSurface: input.contextPack?.safeEditSurface ?? [],
     createdAt: input.createdAt,
     updatedAt: input.createdAt
   };
@@ -158,6 +167,17 @@ export function validatePatchAgainstModulePlan(
       modulePlan.publicContractsToPreserve.some((contract) => normalizePath(contract) === filePath || filePath.includes(normalizePath(path.basename(contract))))
     ) {
       publicContractConcerns.push(`Public contract touched: ${file.path}`);
+    }
+  }
+
+  const mechanismSurface = modulePlan.safeEditSurface?.length ? modulePlan.safeEditSurface : modulePlan.confirmedRelevantFiles ?? [];
+  if ((modulePlan.missingEvidenceLinks?.length ?? 0) && mechanismSurface.length) {
+    const outsideMechanismSurface = patch.filesChanged
+      .map((file) => file.path)
+      .filter((file) => !matchesAnyPath(normalizePath(file), mechanismSurface));
+    if (outsideMechanismSurface.length) {
+      reasons.push(`Patch touches file(s) outside the confirmed mechanism surface while evidence links are missing: ${outsideMechanismSurface.join(", ")}`);
+      cautionChanges.push(...outsideMechanismSurface);
     }
   }
 

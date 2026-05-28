@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { WorkerCapabilityGrant } from "@orchcode/protocol";
+import type { WorkerCapabilityGrant } from "@hivo/protocol";
 import { assertGrantAllowsTool, isSecretCandidate, resolveInsideWorkspace, shouldIgnore } from "./security.js";
 
 export type WorkspaceFileEntry = {

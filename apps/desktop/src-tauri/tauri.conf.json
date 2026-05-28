@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OrchCode Studio",
+  "productName": "Hivo Studio",
   "version": "0.1.0",
-  "identifier": "studio.orchcode.desktop",
+  "identifier": "studio.hivo.desktop",
   "build": {
     "beforeDevCommand": "npm run dev:reuse",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OrchCode Studio",
+        "title": "Hivo Studio",
         "width": 1440,
         "height": 920,
         "minWidth": 1100,

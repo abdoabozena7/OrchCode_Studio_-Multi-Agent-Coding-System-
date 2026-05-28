@@ -1,0 +1,210 @@
+{
+  "generatedAt": "2026-05-24T11:14:12.039Z",
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-run-typecheck.log"
+    },
+    {
+      "command": "npm test",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-test.log"
+    },
+    {
+      "command": "npm run build -w @orchcode/desktop",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/npm-build-desktop.log"
+    },
+    {
+      "command": "cargo test",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/cargo-test-tauri.log"
+    },
+    {
+      "command": "npm run smoke:run-to-green",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/smoke-run-to-green.log"
+    },
+    {
+      "command": "npm run smoke:desktop-run-project",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/smoke-desktop-run-project.log"
+    },
+    {
+      "command": "npm run memory:index-status",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-index-status.log"
+    },
+    {
+      "command": "npm run memory:inspect",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-inspect.log"
+    },
+    {
+      "command": "npm run memory:show-commands",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/memory-show-commands.log"
+    },
+    {
+      "command": "npm run agent:trial:staffing-eval",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-staffing-eval.log"
+    },
+    {
+      "command": "npm run agent:trial:scheduler-scale",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-scheduler-scale.log"
+    },
+    {
+      "command": "npm run agent:trial:compare",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-trial-compare.log"
+    },
+    {
+      "command": "npm run agent:plan",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/agent-plan.log"
+    },
+    {
+      "command": "runtime health injection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/runtime-health-inject-retry.log"
+    },
+    {
+      "command": "SQLite state inspection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/sqlite-state.log"
+    },
+    {
+      "command": "SQLite provider/session inspection",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/sqlite-provider-session.log"
+    },
+    {
+      "command": "desktop Vite dev server for DOM capture",
+      "status": "started_then_stopped",
+      "log": "tmp/full-system-audit/command-logs/desktop-vite-dev.log"
+    },
+    {
+      "command": "real provider smoke",
+      "status": "passed",
+      "log": "tmp/full-system-audit/real-provider-smoke.json"
+    },
+    {
+      "command": "inspect/explain prompts with real_provider",
+      "status": "completed_with_provider_timeouts",
+      "log": "tmp/full-system-audit/inspect-explain-reality-report.md"
+    },
+    {
+      "command": "desktop Vite web UI DOM capture",
+      "status": "dom_verified_screenshot_failed",
+      "log": "tmp/full-system-audit/screenshots/desktop-vite-dom-snapshot.txt"
+    },
+    {
+      "command": "audit artifact generation",
+      "status": "passed",
+      "log": "tmp/full-system-audit/command-logs/write-audit-artifacts.log"
+    }
+  ],
+  "runToGreen": {
+    "status": "passed",
+    "evidence": "tmp/full-system-audit/command-logs/smoke-run-to-green.log",
+    "finding": "Package-script workspace requested npm test and smoke reported result back to runtime; static workspace completed with preview/no command."
+  },
+  "terminalAuthority": {
+    "status": "passed",
+    "evidence": "tmp/full-system-audit/command-logs/smoke-desktop-run-project.log",
+    "finding": "Rust classified git status outside repo as not_git_repository and blocked risky git push dry scenario."
+  },
+  "realProvider": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "preferredModel": "qwen2.5-coder:7b",
+    "startedAt": "2026-05-24T10:34:45.332Z",
+    "directProvider": {
+      "status": "succeeded",
+      "providerMode": "real_provider",
+      "model": "qwen2.5-coder:7b",
+      "responsePreview": "OK.",
+      "latencyMs": 6283
+    },
+    "runtimeRealProvider": {
+      "status": "completed",
+      "sessionStatus": "completed",
+      "lifecycleStage": "DONE",
+      "providerMode": "real_provider",
+      "model": "qwen2.5-coder:7b",
+      "providerCalls": 2,
+      "fallbackUsed": false,
+      "assistantPreview": "I searched for `one`; strongest local evidence:\n\n- This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode-file:README.md:3)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:1](orchcode-file:README.md:1)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:2](orchcode-file:README.md:2)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode",
+      "artifactTypes": [
+        "project_intake",
+        "context_pack",
+        "project_explain_report",
+        "concept_resolution",
+        "investigation_graph",
+        "mechanism_chain",
+        "evidence_tiers",
+        "verification",
+        "project_explain_answer"
+      ],
+      "commandRequests": 0,
+      "patchProposals": 0,
+      "latencyMs": 14538
+    },
+    "calls": [
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:45.361Z",
+        "durationMs": 6282,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:51.795Z",
+        "durationMs": 6985,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen2.5-coder:7b",
+        "startedAt": "2026-05-24T10:34:58.783Z",
+        "durationMs": 7353,
+        "ok": true,
+        "status": 200
+      }
+    ],
+    "availableModels": [
+      "gpt-oss:120b-cloud",
+      "qwen2.5-coder:7b",
+      "deepseek-coder:6.7b"
+    ],
+    "selectedModel": "qwen2.5-coder:7b",
+    "tagsLatencyMs": 28,
+    "finishedAt": "2026-05-24T10:35:06.182Z",
+    "providerCallCount": 3,
+    "responseCount": 3,
+    "mockFallbackUsage": false
+  },
+  "inspectExplain": {
+    "model": "qwen2.5-coder:7b",
+    "promptCount": 8,
+    "chatProviderCalls": 8,
+    "successfulResponses": 0,
+    "abortedOrErroredCalls": 8,
+    "maxObservedDurationMs": 60017,
+    "conclusion": "The inspect/explain run attempted real Ollama calls, but the chat calls timed out/aborted; final answers came from deterministic fallback/citation logic, not successful model responses."
+  },
+  "desktopWebDom": {
+    "status": "DOM loaded",
+    "screenshotStatus": "screenshot timed out",
+    "evidence": [
+      "tmp/full-system-audit/screenshots/desktop-vite-dom-snapshot.txt",
+      "tmp/full-system-audit/screenshots/SCREENSHOT_UNAVAILABLE.md"
+    ]
+  }
+}

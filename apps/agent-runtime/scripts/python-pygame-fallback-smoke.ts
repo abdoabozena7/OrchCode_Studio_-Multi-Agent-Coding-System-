@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ProjectMap } from "@orchcode/protocol";
+import type { ProjectMap } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../src/llm/LlmProvider.js";
 import { EventBus } from "../src/runtime/EventBus.js";
 import { RunEngine } from "../src/runtime/RunEngine.js";
@@ -93,8 +93,8 @@ type Fixture = {
 };
 
 async function createFixture(label: string): Promise<Fixture> {
-  const workspace = path.join(os.tmpdir(), `orchcode-${label}-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-${label}-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-${label}-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-${label}-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await mkdir(storageDir, { recursive: true });
   return {

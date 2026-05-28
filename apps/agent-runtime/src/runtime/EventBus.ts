@@ -1,4 +1,4 @@
-import type { AppEvent } from "@orchcode/protocol";
+import type { AppEvent } from "@hivo/protocol";
 
 export type EventListener = (event: AppEvent) => void;
 

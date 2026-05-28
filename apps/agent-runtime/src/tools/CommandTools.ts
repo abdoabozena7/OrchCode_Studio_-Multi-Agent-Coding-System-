@@ -1,4 +1,4 @@
-import type { CommandRequest, WorkerCapabilityGrant } from "@orchcode/protocol";
+import type { CommandRequest, WorkerCapabilityGrant } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "./CommandPolicy.js";
 import { assertGrantAllowsTool } from "./security.js";

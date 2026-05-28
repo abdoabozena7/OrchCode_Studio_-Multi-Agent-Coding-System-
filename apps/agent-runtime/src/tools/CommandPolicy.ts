@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CommandRisk } from "@orchcode/protocol";
+import type { CommandRisk } from "@hivo/protocol";
 
 export function classifyCommandRisk(command: string, workspacePath: string): CommandRisk {
   const normalized = command.trim().toLowerCase();

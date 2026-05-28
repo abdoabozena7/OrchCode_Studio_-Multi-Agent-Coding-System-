@@ -123,7 +123,7 @@ async function scenario(id: string, title: string, fn: () => Promise<string>): P
 }
 
 async function createFixtureRepo() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "orchcode-phase4-eval-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "hivo-phase4-eval-"));
   await writeJson(path.join(root, "package.json"), {
     scripts: {
       test: "node -e \"process.exit(0)\"",

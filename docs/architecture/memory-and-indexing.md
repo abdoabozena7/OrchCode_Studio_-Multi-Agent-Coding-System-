@@ -1,6 +1,6 @@
 # Memory And Indexing
 
-Phase 1 adds durable, file-backed repository memory to OrchCode Studio. The memory layer gives the runtime and future orchestrator a stable project map instead of forcing every worker to rediscover the same repository facts during every turn.
+Phase 1 adds durable, file-backed repository memory to Hivo Studio. The memory layer gives the runtime and future orchestrator a stable project map instead of forcing every worker to rediscover the same repository facts during every turn.
 
 ## Why This Exists
 
@@ -127,7 +127,7 @@ npm run agentic:show-patch-history -- <run_id>
 The memory directory can be overridden with:
 
 ```powershell
-$env:ORCHCODE_MEMORY_DIR=".custom_agent_memory"
+$env:HIVO_MEMORY_DIR=".custom_agent_memory"
 npm run memory:index
 ```
 
@@ -139,7 +139,7 @@ The Phase 1 indexer ignores generated, vendor, cache, and build-heavy paths such
 
 - `.git`
 - `.agent_memory`
-- `.orchcode-agent-runtime`
+- `.hivo-agent-runtime`
 - `.venv`, `venv`, `__pycache__`
 - `node_modules`
 - `dist`, `build`, `coverage`, `target`

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Persistent guidance for future coding-agent work in OrchCode Studio.
+Persistent guidance for future coding-agent work in Hivo Studio.
 
 ## Operating Principles
 
@@ -15,7 +15,7 @@ Persistent guidance for future coding-agent work in OrchCode Studio.
 
 ## Multi-Agent Direction
 
-OrchCode is evolving from a simple coding agent into an orchestration-first multi-agent coding system. The goal is not to make a small model pretend to be a huge model. The goal is to make small models reliable by surrounding them with:
+Hivo is evolving from a simple coding agent into an orchestration-first multi-agent coding system. The goal is not to make a small model pretend to be a huge model. The goal is to make small models reliable by surrounding them with:
 
 - Repository memory and repeatable indexing.
 - Durable project instructions and decision history.
@@ -42,6 +42,28 @@ OrchCode is evolving from a simple coding agent into an orchestration-first mult
 - Default to `deep` mode for serious work. Use `fast` only for small low-risk tasks and `exhaustive` for high-risk or large campaigns.
 - Treat approval-required status as a real safety stop. Do not bypass it by widening edit scope without explicit operator intent.
 - Runs are checkpointed, but background execution is not implied. Resume commands must reconcile saved task state and repository freshness.
+
+## Internal Swarm Autopilot
+
+- Do not ask the user how many agents to use by default. Let the system staff itself from the task, repo index, command inventory, memory, risk, and scope.
+- Treat 300 logical agents as maximum internal capacity, not normal behavior and not the primary UX.
+- Use high logical-agent counts only when justified by whole-repo exploration, large audits, broad review, validation, or campaign-scale work.
+- Prefer read-only fan-out for scouts, analyzers, reviewers, testers, and specialists.
+- Cap executors separately from total logical agents. Never allow hundreds of write-capable agents.
+- Dynamic specialists should be created only from evidence such as security, database, API, dependency, performance, UI accessibility, test coverage, or documentation risk.
+- Dynamic specialists are read-only or review-only unless a future task explicitly adds a safe write contract.
+- Explain staffing decisions in artifacts and reports: complexity, scope, risk, chosen count, role distribution, executor cap, validation level, and approval requirements.
+- Keep file locks, review gates, validation, repair loops, and human approval gates active for swarm work.
+
+## Swarm Trial Lab
+
+- Use `agent trial ...` commands to measure automatic staffing behavior; do not turn agent count into the normal user-facing control.
+- Run `agent trial staffing-eval` after staffing heuristic changes to check tiny, small, medium, large, huge, risky, and specialist scenarios.
+- Run `agent trial scheduler-scale` for 300-logical-agent scheduler checks with mock read-only work only.
+- Use `agent trial compare "<goal>"` to compare baseline, orchestrated, and autopilot modes with explicit metrics before claiming swarm benefit.
+- Store trial artifacts under `.agent_memory/swarm_trials/` and durable lessons in the swarm tuning JSONL files.
+- Treat one noisy experiment as evidence, not a default-changing mandate. Tune defaults only after repeated, confidence-backed patterns.
+- Reports should call out overstaffing, understaffing, duplicate work, useful findings, conflicts, executor caps, and specialist justification.
 
 ## Coding Rules
 

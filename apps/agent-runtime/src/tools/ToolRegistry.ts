@@ -1,4 +1,4 @@
-import type { ToolCall, WorkerCapabilityGrant } from "@orchcode/protocol";
+import type { ToolCall, WorkerCapabilityGrant } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { GitTools } from "./GitTools.js";
 import { WorkspaceTools } from "./WorkspaceTools.js";

@@ -19,6 +19,11 @@ export type MemoryPaths = {
   architectureNotes: string;
   indexState: string;
   projectIntelligence: string;
+  swarmStaffingLessons: string;
+  swarmTuningHistory: string;
+  swarmFailurePatterns: string;
+  swarmSuccessPatterns: string;
+  swarmSpecialistSelectionHistory: string;
   runsDir: string;
   campaignsDir: string;
   evalsDir: string;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CommandExecutionRecord } from "@orchcode/protocol";
+import type { CommandExecutionRecord } from "@hivo/protocol";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 
 export class CommandExecutor {

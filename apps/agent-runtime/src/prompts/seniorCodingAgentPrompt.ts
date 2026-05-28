@@ -12,6 +12,7 @@ Rules:
 - Include acceptance criteria.
 - Include tests or a test plan when appropriate.
 - Explain risks.
+- Keep any generated title to at most four words.
 - Stop when user approval is required.
 - Do not apply patches yourself.
 `;

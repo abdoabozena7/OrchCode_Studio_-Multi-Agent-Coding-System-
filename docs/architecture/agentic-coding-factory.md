@@ -1,6 +1,6 @@
 # Agentic Coding Factory Architecture
 
-OrchCode is an orchestration-first coding system. It keeps small worker agents reliable by surrounding them with repository memory, narrow task scopes, structured outputs, review, verification, repair, and durable artifacts.
+Hivo is an orchestration-first coding system. It keeps small worker agents reliable by surrounding them with repository memory, narrow task scopes, structured outputs, review, verification, repair, and durable artifacts.
 
 ## Core Layers
 
@@ -16,6 +16,9 @@ OrchCode is an orchestration-first coding system. It keeps small worker agents r
    - `CoreOrchestrator` turns a request into Scout, Planner, Executor, and Reporter tasks.
    - `TaskGraphManager` enforces status transitions, dependencies, and persisted task state.
    - Context packs include only relevant snippets, constraints, allowed edit scope, validation requirements, prior decisions, and warnings.
+   - When a task or read-only worker is assigned to an `AgentTeam`, context packs carry team scope metadata, inherited parent constraints, memory-scope refs, planning evidence links, durable lock context, and explicit fallback warnings without changing task execution order.
+   - Medium and multi-plan runs can produce read-only `TeamSubPlan` artifacts after AgentTeam proposal. These scoped sub-plans summarize team assumptions, task drafts, risks, dependencies, evidence, memory refs, lock context, and validation strategy, then aggregate them into a recursive planning summary without creating executor tasks or changing scheduling.
+   - Team sub-plan task drafts can pass through a task adoption gate that records `AdoptedTaskProposal` metadata and readiness decisions. These proposals can be represented in a separate proposed task graph, but proposed nodes are explicitly non-executable and do not schedule work or grant write authority.
 
 3. Roles
    - ScoutAgent, ArchitectAgent, PlannerAgent, ExecutorAgent, ReviewerAgent, TesterAgent, IntegratorAgent, and ReporterAgent are registered with allowed/forbidden operations and output contracts.
@@ -57,9 +60,68 @@ Run artifacts:
   integration/
   repairs/
   locks/
+  teams/
   metrics/
   reports/
 ```
+
+Team context artifacts live under the run `teams/` directory:
+
+```text
+.agent_memory/runs/<run_id>/teams/
+  team_context_scope_<team_id>.json
+  team_context_summary_<team_id>.md
+  team_memory_query_<query_id>.json
+```
+
+Read-only recursive team planning artifacts live under `teams/sub_plans/`:
+
+```text
+.agent_memory/runs/<run_id>/teams/sub_plans/
+  team_sub_plan_<team_id>_<sub_plan_id>.json
+  team_sub_plan_summary_<team_id>_<sub_plan_id>.md
+  sub_plan_aggregation_<aggregation_id>.json
+  sub_plan_aggregation_summary_<aggregation_id>.md
+```
+
+Task adoption gate artifacts live under `teams/task_adoption/`:
+
+```text
+.agent_memory/runs/<run_id>/teams/task_adoption/
+  adoption_request_<id>.json
+  adopted_task_proposal_<id>.json
+  rejected_task_draft_<id>.json
+  readiness_result_<id>.json
+  adoption_summary_<id>.json
+  adoption_summary_<id>.md
+```
+
+Proposed task graph artifacts live under `task_graph/proposed/`:
+
+```text
+.agent_memory/runs/<run_id>/task_graph/proposed/
+  proposed_task_graph_<id>.json
+  proposed_task_nodes_<id>.json
+  proposed_task_edges_<id>.json
+  proposed_task_graph_validation_<id>.json
+  proposed_task_graph_summary_<id>.md
+```
+
+Proposed task graph nodes are planning records only. They can represent adopted metadata-only drafts, read-only-ready drafts, future write candidates, blocked drafts, duplicates, dependency hints, shared scopes, and lock relationships, but they are never scheduled or granted write authority by this layer.
+
+Execution readiness approval artifacts live under `execution_readiness/`:
+
+```text
+.agent_memory/runs/<run_id>/execution_readiness/
+  readiness_batch_<id>.json
+  readiness_decision_<id>.json
+  approval_requirement_<id>.json
+  readiness_summary_<id>.md
+  dry_run_prompt_check_<id>.json
+  context_preview_<id>.json
+```
+
+The execution readiness gate evaluates proposed graph nodes for context, prompt, validation, success criteria, lock metadata, review policy, integration readiness, and human approval requirements. It is an approval-readiness layer only: it does not schedule nodes, create executable tasks, acquire locks, invoke workers, run validation commands, or apply integration candidates.
 
 Campaign artifacts:
 
@@ -78,11 +140,12 @@ Campaign artifacts:
 - Do not treat blocked validation as invisible success.
 - Do not silently rely on stale memory.
 - Do not assume campaign work runs in the background.
+- Do not treat team context, team sub-plans, or adopted task proposals as recursive execution authority; teams currently scope memory, context, read-only planning, and metadata-only future task proposals.
 - Keep each run auditable enough that a human can inspect what happened and why.
 
 ## Current Limitations
 
-- Worker roles are not yet true provider-backed parallel agents.
+- Recursive team execution is not enabled; AgentTeams currently provide metadata-first context, memory boundaries, read-only recursive planning summaries, and non-executable adopted task proposal records.
 - Checkpoint resume is practical and conservative, not perfect process restoration.
 - Changed-only indexing reports changed files, then performs a full refresh for correctness.
 - Locks are process-local leases, not durable distributed locks.

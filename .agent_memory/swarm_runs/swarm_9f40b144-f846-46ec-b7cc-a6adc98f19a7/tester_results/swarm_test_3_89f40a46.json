@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_test_3_89f40a46",
+  "status": "succeeded",
+  "summary": "TesterAgent completed test work for Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files..",
+  "relevant_files": [],
+  "findings": [
+    "test work item used schema TesterOutput."
+  ],
+  "risks": [
+    "high risk work requires review evidence."
+  ],
+  "unknowns": [],
+  "validation_passed": true,
+  "structured_output_valid": true,
+  "confidence": 0.72
+}

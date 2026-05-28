@@ -7,8 +7,8 @@ import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
 test("auto mode keeps small tasks in a single agent", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-auto-simple-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-auto-simple-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-auto-simple-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-auto-simple-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 
@@ -32,8 +32,8 @@ test("auto mode keeps small tasks in a single agent", async () => {
 });
 
 test("auto mode chooses orchestrated workers dynamically and respects explicit count", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-auto-orch-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-auto-orch-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-auto-orch-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-auto-orch-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 
@@ -60,8 +60,8 @@ test("auto mode chooses orchestrated workers dynamically and respects explicit c
 });
 
 test("explicit one-agent request still uses one worker plus mandatory gates", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-one-agent-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-one-agent-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-one-agent-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-one-agent-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
@@ -84,8 +84,8 @@ test("explicit one-agent request still uses one worker plus mandatory gates", as
 });
 
 test("explicit three-agent single-file pygame request requires plan confirmation instead of failing", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-three-agent-pygame-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-three-agent-pygame-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-three-agent-pygame-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-three-agent-pygame-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
@@ -111,8 +111,8 @@ test("explicit three-agent single-file pygame request requires plan confirmation
 });
 
 test("think first stops after planning and waits for confirmation", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-think-first-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-think-first-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-think-first-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-think-first-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
   await writeFile(path.join(workspace, "src", "App.tsx"), "export function App(){return null}\n", "utf8");

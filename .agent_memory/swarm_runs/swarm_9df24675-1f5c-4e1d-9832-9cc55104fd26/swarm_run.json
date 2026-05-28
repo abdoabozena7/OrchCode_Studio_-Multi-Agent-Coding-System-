@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "swarm_9df24675-1f5c-4e1d-9832-9cc55104fd26",
+  "user_goal": "Change copy text in one component.",
+  "status": "planning",
+  "mode": "deep",
+  "staffing_plan_ref": "staffing_plan.json",
+  "effective_total_logical_agents": 5,
+  "active_agent_count": 0,
+  "max_supported_logical_agents": 300,
+  "scheduler_config": {
+    "max_parallel_agents": 3,
+    "max_parallel_read_only_agents": 3,
+    "executor_limit": 1,
+    "write_agent_limit": 1,
+    "reviewer_limit": 1,
+    "tester_limit": 1,
+    "risk_level": "low",
+    "validation_level": "basic",
+    "backpressure_failure_threshold": 3
+  },
+  "created_at": "2026-05-23T21:45:29.879Z",
+  "updated_at": "2026-05-23T21:45:30.244Z",
+  "artifacts_path": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_9df24675-1f5c-4e1d-9832-9cc55104fd26"
+}

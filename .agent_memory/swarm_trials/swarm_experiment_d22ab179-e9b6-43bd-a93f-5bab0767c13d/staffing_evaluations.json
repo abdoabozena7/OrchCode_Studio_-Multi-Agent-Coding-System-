@@ -1,0 +1,957 @@
+[
+  {
+    "schema_version": 1,
+    "input_goal": "Change the label text in one HTML/component file.",
+    "expected_complexity": "tiny",
+    "expected_agent_range": [
+      3,
+      8
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_8310334d-03b9-441e-8695-308e43c57214",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "tiny",
+      "repo_scope": "single_file",
+      "risk_level": "low",
+      "recommended_total_logical_agents": 5,
+      "max_parallel_agents": 3,
+      "scout_count": 1,
+      "planner_count": 0,
+      "architect_count": 0,
+      "executor_count": 1,
+      "reviewer_count": 1,
+      "tester_count": 1,
+      "integrator_count": 0,
+      "specialist_agents": [],
+      "role_counts": {
+        "ScoutAgent": 1,
+        "PlannerAgent": 0,
+        "ArchitectAgent": 0,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 1,
+        "TesterAgent": 1,
+        "IntegratorAgent": 0,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 0,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 0
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 1,
+      "tester_limit": 1,
+      "read_only_ratio": 0.8,
+      "write_agent_limit": 1,
+      "validation_level": "basic",
+      "requires_human_approval": false,
+      "reasoning": [
+        "Classified task as tiny with single_file scope and low risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 1 candidate relevant file(s) were selected.",
+        "No dynamic specialists were created because no specialist trigger was justified.",
+        "The system selected 5 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.91,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.937Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as tiny with single_file scope and low risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 1 candidate relevant file(s) were selected.",
+      "No dynamic specialists were created because no specialist trigger was justified.",
+      "The system selected 5 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Fix a small bug in one function.",
+    "expected_complexity": "small",
+    "expected_agent_range": [
+      4,
+      10
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_63088fdb-fb45-4cc4-9ed1-1d525c573bdf",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "small",
+      "repo_scope": "multiple_modules",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 9,
+      "max_parallel_agents": 6,
+      "scout_count": 2,
+      "planner_count": 1,
+      "architect_count": 0,
+      "executor_count": 1,
+      "reviewer_count": 2,
+      "tester_count": 1,
+      "integrator_count": 0,
+      "specialist_agents": [
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 2,
+        "PlannerAgent": 1,
+        "ArchitectAgent": 0,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 2,
+        "TesterAgent": 1,
+        "IntegratorAgent": 0,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 0,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 0,
+        "AccessibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 3,
+      "tester_limit": 1,
+      "read_only_ratio": 0.89,
+      "write_agent_limit": 1,
+      "validation_level": "strict",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as small with multiple_modules scope and high risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+        "The system selected 9 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.85,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.937Z"
+    },
+    "pass_fail": "fail",
+    "reasoning": [
+      "Classified task as small with multiple_modules scope and high risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+      "The system selected 9 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": [
+      "Unnecessary specialist AccessibilityReviewerAgent was created."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Add a feature touching one module and its tests.",
+    "expected_complexity": "medium",
+    "expected_agent_range": [
+      10,
+      30
+    ],
+    "expected_executor_limit": 3,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_d64e991e-c5c0-4334-bba2-ce64e03d880c",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "medium",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 25,
+      "max_parallel_agents": 12,
+      "scout_count": 6,
+      "planner_count": 2,
+      "architect_count": 1,
+      "executor_count": 1,
+      "reviewer_count": 5,
+      "tester_count": 2,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        },
+        {
+          "id": "test_coverage_reviewer",
+          "role": "TestCoverageReviewerAgent",
+          "purpose": "Review whether changed behavior has adequate focused test coverage.",
+          "trigger": "test coverage indicators were present",
+          "read_only": true,
+          "output_schema": "TestCoverageReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 6,
+        "PlannerAgent": 2,
+        "ArchitectAgent": 1,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 5,
+        "TesterAgent": 2,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 2,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 1,
+        "AuthSecurityReviewerAgent": 1,
+        "AccessibilityReviewerAgent": 1,
+        "TestCoverageReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 8,
+      "tester_limit": 2,
+      "read_only_ratio": 0.92,
+      "write_agent_limit": 2,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as medium with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present; TestCoverageReviewerAgent: test coverage indicators were present.",
+        "The system selected 25 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.938Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as medium with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present; TestCoverageReviewerAgent: test coverage indicators were present.",
+      "The system selected 25 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+    "expected_complexity": "large",
+    "expected_agent_range": [
+      35,
+      130
+    ],
+    "expected_executor_limit": 6,
+    "expected_specialists": [
+      "APICompatibilityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_b3f36eed-b569-4559-8f59-a452f987e343",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "medium",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 25,
+      "max_parallel_agents": 12,
+      "scout_count": 6,
+      "planner_count": 2,
+      "architect_count": 1,
+      "executor_count": 1,
+      "reviewer_count": 5,
+      "tester_count": 2,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        },
+        {
+          "id": "api_compatibility_reviewer",
+          "role": "APICompatibilityReviewerAgent",
+          "purpose": "Review public API and protocol compatibility risks.",
+          "trigger": "public API compatibility indicators were present",
+          "read_only": true,
+          "output_schema": "APICompatibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 6,
+        "PlannerAgent": 2,
+        "ArchitectAgent": 1,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 5,
+        "TesterAgent": 2,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 2,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 1,
+        "AuthSecurityReviewerAgent": 1,
+        "AccessibilityReviewerAgent": 1,
+        "APICompatibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 8,
+      "tester_limit": 2,
+      "read_only_ratio": 0.92,
+      "write_agent_limit": 2,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as medium with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+        "The system selected 25 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.938Z"
+    },
+    "pass_fail": "fail",
+    "reasoning": [
+      "Classified task as medium with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+      "The system selected 25 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": [
+      "Expected agent range 35-130, got 25."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.",
+    "expected_complexity": "huge",
+    "expected_agent_range": [
+      80,
+      300
+    ],
+    "expected_executor_limit": 0,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_59e3227b-6a91-40b8-9778-33821de26401",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "huge",
+      "repo_scope": "whole_repo",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 300,
+      "max_parallel_agents": 32,
+      "scout_count": 177,
+      "planner_count": 10,
+      "architect_count": 6,
+      "executor_count": 0,
+      "reviewer_count": 74,
+      "tester_count": 7,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        },
+        {
+          "id": "test_coverage_reviewer",
+          "role": "TestCoverageReviewerAgent",
+          "purpose": "Review whether changed behavior has adequate focused test coverage.",
+          "trigger": "test coverage indicators were present",
+          "read_only": true,
+          "output_schema": "TestCoverageReviewOutput"
+        },
+        {
+          "id": "documentation_reviewer",
+          "role": "DocumentationReviewerAgent",
+          "purpose": "Review documentation updates for operator workflow and architecture accuracy.",
+          "trigger": "documentation indicators were present",
+          "read_only": true,
+          "output_schema": "DocumentationReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 177,
+        "PlannerAgent": 10,
+        "ArchitectAgent": 6,
+        "ExecutorAgent": 0,
+        "ReviewerAgent": 74,
+        "TesterAgent": 7,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 5,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 15,
+        "AccessibilityReviewerAgent": 1,
+        "TestCoverageReviewerAgent": 1,
+        "DocumentationReviewerAgent": 1
+      },
+      "executor_limit": 0,
+      "reviewer_limit": 77,
+      "tester_limit": 7,
+      "read_only_ratio": 1,
+      "write_agent_limit": 1,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as huge with whole_repo scope and high risk.",
+        "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present; TestCoverageReviewerAgent: test coverage indicators were present; DocumentationReviewerAgent: documentation indicators were present.",
+        "The system selected 300 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.72,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.939Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as huge with whole_repo scope and high risk.",
+      "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present; TestCoverageReviewerAgent: test coverage indicators were present; DocumentationReviewerAgent: documentation indicators were present.",
+      "The system selected 300 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Modify the authentication/session/permission behavior.",
+    "expected_complexity": "small",
+    "expected_risk_level": "critical",
+    "expected_agent_range": [
+      5,
+      30
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [
+      "AuthSecurityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_70821967-184e-4277-879a-fddb55cb32c9",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "small",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 13,
+      "max_parallel_agents": 6,
+      "scout_count": 2,
+      "planner_count": 1,
+      "architect_count": 0,
+      "executor_count": 1,
+      "reviewer_count": 3,
+      "tester_count": 1,
+      "integrator_count": 0,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 2,
+        "PlannerAgent": 1,
+        "ArchitectAgent": 0,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 3,
+        "TesterAgent": 1,
+        "IntegratorAgent": 0,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 2,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 0,
+        "AuthSecurityReviewerAgent": 1,
+        "AccessibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 5,
+      "tester_limit": 1,
+      "read_only_ratio": 0.92,
+      "write_agent_limit": 1,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as small with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+        "The system selected 13 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.85,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.939Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as small with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+      "The system selected 13 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Add or change database migration behavior.",
+    "expected_complexity": "large",
+    "expected_risk_level": "high",
+    "expected_agent_range": [
+      30,
+      140
+    ],
+    "expected_executor_limit": 2,
+    "expected_specialists": [
+      "MigrationSafetyReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_feb543ae-c2c6-4a2c-bb76-162ffa0130ac",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "large",
+      "repo_scope": "multiple_modules",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 64,
+      "max_parallel_agents": 24,
+      "scout_count": 21,
+      "planner_count": 3,
+      "architect_count": 3,
+      "executor_count": 2,
+      "reviewer_count": 18,
+      "tester_count": 5,
+      "integrator_count": 2,
+      "specialist_agents": [
+        {
+          "id": "migration_safety_reviewer",
+          "role": "MigrationSafetyReviewerAgent",
+          "purpose": "Review database migration ordering, rollback safety, data-loss risk, and schema compatibility.",
+          "trigger": "database or migration indicators were present",
+          "read_only": true,
+          "output_schema": "MigrationReviewOutput"
+        },
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 21,
+        "PlannerAgent": 3,
+        "ArchitectAgent": 3,
+        "ExecutorAgent": 2,
+        "ReviewerAgent": 18,
+        "TesterAgent": 5,
+        "IntegratorAgent": 2,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 3,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 3,
+        "MigrationSafetyReviewerAgent": 1,
+        "AccessibilityReviewerAgent": 1
+      },
+      "executor_limit": 2,
+      "reviewer_limit": 20,
+      "tester_limit": 5,
+      "read_only_ratio": 0.95,
+      "write_agent_limit": 3,
+      "validation_level": "strict",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as large with multiple_modules scope and high risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: MigrationSafetyReviewerAgent: database or migration indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+        "The system selected 64 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.939Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as large with multiple_modules scope and high risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: MigrationSafetyReviewerAgent: database or migration indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+      "The system selected 64 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Update a shared UI component with accessibility-safe behavior.",
+    "expected_complexity": "medium",
+    "expected_agent_range": [
+      8,
+      40
+    ],
+    "expected_executor_limit": 3,
+    "expected_specialists": [
+      "AccessibilityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_aa36a5d2-25f2-4e3a-afbf-d0309f27de7d",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "medium",
+      "repo_scope": "multiple_modules",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 22,
+      "max_parallel_agents": 12,
+      "scout_count": 6,
+      "planner_count": 2,
+      "architect_count": 1,
+      "executor_count": 1,
+      "reviewer_count": 5,
+      "tester_count": 2,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 6,
+        "PlannerAgent": 2,
+        "ArchitectAgent": 1,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 5,
+        "TesterAgent": 2,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 1,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 1,
+        "AccessibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 6,
+      "tester_limit": 2,
+      "read_only_ratio": 0.91,
+      "write_agent_limit": 2,
+      "validation_level": "strict",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as medium with multiple_modules scope and high risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+        "The system selected 22 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.940Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as medium with multiple_modules scope and high risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+      "The system selected 22 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Make the app better and cleaner. Do not edit files until the plan is decomposed.",
+    "expected_complexity": "small",
+    "expected_agent_range": [
+      3,
+      20
+    ],
+    "expected_executor_limit": 0,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_6161f5ec-3521-476d-8693-2cd6700c044f",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "small",
+      "repo_scope": "multiple_modules",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 8,
+      "max_parallel_agents": 8,
+      "scout_count": 2,
+      "planner_count": 1,
+      "architect_count": 0,
+      "executor_count": 0,
+      "reviewer_count": 2,
+      "tester_count": 1,
+      "integrator_count": 0,
+      "specialist_agents": [
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 2,
+        "PlannerAgent": 1,
+        "ArchitectAgent": 0,
+        "ExecutorAgent": 0,
+        "ReviewerAgent": 2,
+        "TesterAgent": 1,
+        "IntegratorAgent": 0,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 0,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 0,
+        "AccessibilityReviewerAgent": 1
+      },
+      "executor_limit": 0,
+      "reviewer_limit": 3,
+      "tester_limit": 1,
+      "read_only_ratio": 1,
+      "write_agent_limit": 0,
+      "validation_level": "strict",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as small with multiple_modules scope and high risk.",
+        "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+        "The system selected 8 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.85,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.940Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as small with multiple_modules scope and high risk.",
+      "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present.",
+      "The system selected 8 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Upgrade a major framework version across the project as a staged campaign.",
+    "expected_complexity": "huge",
+    "expected_agent_range": [
+      80,
+      300
+    ],
+    "expected_executor_limit": 3,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_a9c7404b-c05b-4457-b91a-3a775fbf10dc",
+      "swarm_run_id": "swarm_experiment_d22ab179-e9b6-43bd-a93f-5bab0767c13d",
+      "task_complexity": "huge",
+      "repo_scope": "whole_repo",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 121,
+      "max_parallel_agents": 24,
+      "scout_count": 50,
+      "planner_count": 6,
+      "architect_count": 5,
+      "executor_count": 2,
+      "reviewer_count": 35,
+      "tester_count": 6,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "accessibility_reviewer",
+          "role": "AccessibilityReviewerAgent",
+          "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+          "trigger": "frontend/accessibility indicators were present",
+          "read_only": true,
+          "output_schema": "AccessibilityReviewOutput"
+        },
+        {
+          "id": "dependency_upgrade_reviewer",
+          "role": "DependencyUpgradeReviewerAgent",
+          "purpose": "Review dependency upgrade, lockfile, and package manager risk.",
+          "trigger": "dependency or lockfile indicators were present",
+          "read_only": true,
+          "output_schema": "DependencyUpgradeReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 50,
+        "PlannerAgent": 6,
+        "ArchitectAgent": 5,
+        "ExecutorAgent": 2,
+        "ReviewerAgent": 35,
+        "TesterAgent": 6,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 4,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 8,
+        "AccessibilityReviewerAgent": 1,
+        "DependencyUpgradeReviewerAgent": 1
+      },
+      "executor_limit": 2,
+      "reviewer_limit": 37,
+      "tester_limit": 6,
+      "read_only_ratio": 0.98,
+      "write_agent_limit": 3,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as huge with whole_repo scope and high risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present; DependencyUpgradeReviewerAgent: dependency or lockfile indicators were present.",
+        "The system selected 121 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.72,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:43:56.940Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as huge with whole_repo scope and high risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AccessibilityReviewerAgent: frontend/accessibility indicators were present; DependencyUpgradeReviewerAgent: dependency or lockfile indicators were present.",
+      "The system selected 121 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  }
+]

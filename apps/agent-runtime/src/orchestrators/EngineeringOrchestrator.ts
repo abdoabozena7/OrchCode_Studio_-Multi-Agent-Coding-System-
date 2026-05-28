@@ -9,7 +9,7 @@ import type {
   TaskNode,
   TechnicalPlan,
   WorkOrder
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { estimateComplexity, parsePromptDirective } from "../runtime/delegation.js";
 

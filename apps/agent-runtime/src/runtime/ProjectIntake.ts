@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ProjectContextPack, ProjectIntake, ProjectKind, ProjectMap, ProjectRunIntent, ProjectSignal } from "@orchcode/protocol";
+import type { ProjectContextPack, ProjectIntake, ProjectKind, ProjectMap, ProjectRunIntent, ProjectSignal } from "@hivo/protocol";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { WorkspaceTools } from "../tools/WorkspaceTools.js";
+import { buildProjectIntelligenceGraph, resolveMechanismChain } from "./ProjectIntelligenceKernel.js";
 import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 
 type ProjectIntakeInput = {
@@ -40,7 +41,7 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
     ...workspace.searchCode("FIXME", 8),
     ...workspace.searchCode("not implemented", 6)
   ]);
-  const orchCodeStateFiles = filePaths.filter((file) => /(orchcode|agent_proposal|work[_-]?journal|decision)/i.test(file));
+  const orchCodeStateFiles = filePaths.filter((file) => /(hivo|agent_proposal|work[_-]?journal|decision)/i.test(file));
   const buildCommands = collectBuildCommands(scripts);
   const testCommands = uniqueStrings([...projectMap.testCommands, ...collectTestCommands(scripts)]);
   const knownCommands = uniqueStrings([
@@ -89,8 +90,8 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
   }
   if (orchCodeStateFiles.length) {
     signals.push({
-      type: "previous_orchcode_state",
-      detail: "Detected existing OrchCode-like state or proposal artifacts.",
+      type: "previous_hivo_state",
+      detail: "Detected existing Hivo-like state or proposal artifacts.",
       paths: orchCodeStateFiles.slice(0, 8)
     });
   }
@@ -221,7 +222,8 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
     doNotTouchCandidates,
     unknowns,
     currentStateSummary,
-    guardrails
+    guardrails,
+    workspace
   });
 
   return {
@@ -481,6 +483,7 @@ function buildContextPack(input: {
   unknowns: string[];
   currentStateSummary: string;
   guardrails: ProjectIntake["guardrails"];
+  workspace: WorkspaceTools;
 }): ProjectContextPack {
   const relevantFiles = uniqueStrings([
     ...pickFilesRelevantToMessage(input.message, [...input.importantFiles, ...input.sourceFiles]),
@@ -510,6 +513,19 @@ function buildContextPack(input: {
     ...input.todoHits.slice(0, 4).map((hit) => `Existing TODO/FIXME marker in ${hit.path}.`),
     ...cautionPaths.map((file) => `Use caution in ${file}.`)
   ]).slice(0, 8);
+  const intelligenceGraph = buildProjectIntelligenceGraph({
+    targetConcept: inferMechanismTargetFromObjective(input.message),
+    filePaths: uniqueStrings([...relevantFiles, ...input.sourceFiles]).slice(0, 120),
+    readFile: (relativePath) => input.workspace.readWholeFile(relativePath),
+    maxFiles: 100,
+    maxReadChars: 40_000
+  });
+  const mechanismChain = resolveMechanismChain(intelligenceGraph, intelligenceGraph.targetConcept);
+  const confirmedRelevantFiles = uniqueStrings([...relevantFiles, ...mechanismChain.confirmedFiles]).slice(0, 12);
+  const safeEditSurface = uniqueStrings([
+    ...safeToEdit,
+    ...confirmedRelevantFiles.filter((file) => !input.riskyFiles.includes(file) && !input.doNotTouchCandidates.includes(file))
+  ]).slice(0, 12);
   return {
     projectSummary: input.currentStateSummary,
     currentTaskObjective: input.message || undefined,
@@ -524,7 +540,11 @@ function buildContextPack(input: {
     verificationCommands: uniqueStrings([...input.testCommands, ...input.knownCommands]).slice(0, 6),
     knownRisks,
     unknowns: input.unknowns,
-    guardrails: input.guardrails
+    guardrails: input.guardrails,
+    targetMechanismChain: mechanismChain.steps.map((step) => step.label),
+    confirmedRelevantFiles,
+    missingEvidenceLinks: mechanismChain.missingLinks,
+    safeEditSurface
   };
 }
 
@@ -558,6 +578,17 @@ function summarizeTopLevelDirs(filePaths: string[]) {
 
 function isConfigFile(file: string) {
   return /(^|\/)(package\.json|tsconfig.*\.json|Cargo\.toml|pyproject\.toml|vite\.config\.(ts|js)|tauri\.conf\.json)$/i.test(file);
+}
+
+function inferMechanismTargetFromObjective(objective: string) {
+  const normalized = objective.toLowerCase();
+  if (/\bfeedback\b|customer_feedback|submitfeedback|awaiting_feedback/i.test(objective)) return "feedback";
+  if (/\bouter\s*loop\b|\bouterloop\b|outer_loop/i.test(objective)) return "outerloop";
+  if (/\bdbscan\b/i.test(objective)) return "dbscan";
+  if (/\bfcm\b|fuzzy c/i.test(objective)) return "fcm";
+  if (/\bsvm\b|support vector/i.test(objective)) return "svm";
+  const candidate = normalized.match(/\b[a-z][a-z0-9_]{3,}\b/);
+  return candidate?.[0] ?? "general";
 }
 
 function uniqueStrings(values: string[]) {

@@ -1,5 +1,5 @@
-import type { DelegationComplexity, DelegationDecision, RuntimeExecutionMode } from "@orchcode/protocol";
-import type { ProjectMap } from "@orchcode/protocol";
+import type { DelegationComplexity, DelegationDecision, RuntimeExecutionMode } from "@hivo/protocol";
+import type { ProjectMap } from "@hivo/protocol";
 
 export type PromptDirective = {
   requestedAgentCount?: number;

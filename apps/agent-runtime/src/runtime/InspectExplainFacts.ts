@@ -47,6 +47,12 @@ export type CodeFlowFacts = {
     description: string;
     sourceRef: string;
     proven: boolean;
+    inputData?: string;
+    output?: string;
+    parameters?: string[];
+    nextConsumers?: string[];
+    sourceRole?: "implementation" | "orchestration" | "artifact_preparation" | "downstream_stage" | "visualization" | "test" | "documentation" | "unrelated_name_match";
+    confidence?: "high" | "medium" | "low";
   }>;
   inspectedFiles: string[];
   uncertainties: string[];

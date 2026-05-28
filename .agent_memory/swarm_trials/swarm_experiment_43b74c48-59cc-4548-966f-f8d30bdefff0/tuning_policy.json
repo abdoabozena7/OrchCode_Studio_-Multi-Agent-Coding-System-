@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "task_size_estimate": "large",
+  "repo_size_estimate": "large_repo",
+  "risk_level": "critical",
+  "edit_scope_size": "single_file",
+  "validation_strength": "exhaustive",
+  "recommended_mode": "fast",
+  "recommended_total_logical_agents": 65,
+  "executor_limit": 1,
+  "reviewer_limit": 22,
+  "scout_limit": 21,
+  "specialist_agents": [
+    {
+      "id": "auth_security_reviewer",
+      "role": "AuthSecurityReviewerAgent",
+      "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+      "trigger": "security/authentication indicators were present",
+      "read_only": true,
+      "output_schema": "SecurityReviewOutput"
+    },
+    {
+      "id": "api_compatibility_reviewer",
+      "role": "APICompatibilityReviewerAgent",
+      "purpose": "Review public API and protocol compatibility risks.",
+      "trigger": "public API compatibility indicators were present",
+      "read_only": true,
+      "output_schema": "APICompatibilityReviewOutput"
+    }
+  ],
+  "reasoning": [
+    "Staffing expectations passed in this run; keep defaults stable.",
+    "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal.",
+    "Do not update defaults from one noisy experiment; require confidence and repeated evidence."
+  ]
+}

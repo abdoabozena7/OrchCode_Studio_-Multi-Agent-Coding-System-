@@ -170,13 +170,13 @@ mod tests {
 
     #[test]
     fn rejects_paths_outside_workspace() {
-        let base = std::env::temp_dir().join(format!("orchcode-test-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("hivo-test-{}", uuid::Uuid::new_v4()));
         let outside =
-            std::env::temp_dir().join(format!("orchcode-outside-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("hivo-outside-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&base).unwrap();
         fs::write(outside.join("missing-parent"), "").ok();
         let outside_file =
-            std::env::temp_dir().join(format!("orchcode-outside-file-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("hivo-outside-file-{}", uuid::Uuid::new_v4()));
         fs::write(&outside_file, "nope").unwrap();
 
         let mut service = WorkspaceService::new();

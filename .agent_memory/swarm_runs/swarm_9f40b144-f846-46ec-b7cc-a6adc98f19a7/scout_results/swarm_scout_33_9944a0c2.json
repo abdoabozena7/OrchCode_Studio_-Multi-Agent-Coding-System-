@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_scout_33_9944a0c2",
+  "status": "succeeded",
+  "summary": "ScoutAgent completed scout work for Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files..",
+  "relevant_files": [
+    "docs/architecture/phase-2-orchestrator-taskgraph-plan.md",
+    "apps/desktop/src-tauri/src/commands/terminal.rs"
+  ],
+  "findings": [
+    "scout work item used schema ScoutResult."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

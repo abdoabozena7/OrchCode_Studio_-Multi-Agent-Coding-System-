@@ -23,7 +23,7 @@ import {
 
 const MEMORY_README = `# Agent Memory
 
-This directory stores durable local project memory for OrchCode.
+This directory stores durable local project memory for Hivo.
 
 Committed files:
 
@@ -46,14 +46,24 @@ Generated local files:
 - \`architecture_notes.jsonl\`: append-only architecture facts and constraints.
 - \`index_state.json\`: index freshness metadata.
 - \`project_intelligence.json\`: dependency, risk, entrypoint, and test mapping hints.
+- \`swarm_staffing_lessons.jsonl\`: append-only staffing fit lessons from Phase 6 experiments.
+- \`swarm_tuning_history.jsonl\`: append-only tuning recommendations with confidence/evidence metadata.
+- \`swarm_failure_patterns.jsonl\`: swarm trial failure patterns and avoidance notes.
+- \`swarm_success_patterns.jsonl\`: swarm trial success patterns.
+- \`swarm_specialist_selection_history.jsonl\`: specialist selection precision notes.
+- \`factory_metadata.sqlite\`: generated SQLite metadata index for orchestration artifacts; artifact contents remain in their JSON/JSONL/log files.
 - \`runs/\`: volatile run-specific artifacts.
+- \`swarm_runs/\`: internal Swarm Autopilot run artifacts, staffing plans, scheduler traces, metrics, and reports.
 - \`campaigns/\`: long-running campaign artifacts.
 - \`evals/\`: local eval and benchmark artifacts.
 
 Do not store secrets here. Large generated artifacts and volatile run files should stay local.
 `;
 
-export function resolveMemoryPaths(workspacePath: string, memoryDir = process.env.ORCHCODE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR): MemoryPaths {
+export function resolveMemoryPaths(
+  workspacePath: string,
+  memoryDir = process.env.HIVO_MEMORY_DIR ?? process.env.ORCHCODE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR
+): MemoryPaths {
   const rootDir = path.resolve(workspacePath, memoryDir);
   return {
     rootDir,
@@ -73,6 +83,11 @@ export function resolveMemoryPaths(workspacePath: string, memoryDir = process.en
     architectureNotes: path.join(rootDir, "architecture_notes.jsonl"),
     indexState: path.join(rootDir, "index_state.json"),
     projectIntelligence: path.join(rootDir, "project_intelligence.json"),
+    swarmStaffingLessons: path.join(rootDir, "swarm_staffing_lessons.jsonl"),
+    swarmTuningHistory: path.join(rootDir, "swarm_tuning_history.jsonl"),
+    swarmFailurePatterns: path.join(rootDir, "swarm_failure_patterns.jsonl"),
+    swarmSuccessPatterns: path.join(rootDir, "swarm_success_patterns.jsonl"),
+    swarmSpecialistSelectionHistory: path.join(rootDir, "swarm_specialist_selection_history.jsonl"),
     runsDir: path.join(rootDir, "runs"),
     campaignsDir: path.join(rootDir, "campaigns"),
     evalsDir: path.join(rootDir, "evals")
@@ -101,6 +116,11 @@ export async function ensureMemoryLayout(workspacePath: string, memoryDir?: stri
   await touchJsonl(paths.failedAttempts);
   await touchJsonl(paths.successfulPatterns);
   await touchJsonl(paths.architectureNotes);
+  await touchJsonl(paths.swarmStaffingLessons);
+  await touchJsonl(paths.swarmTuningHistory);
+  await touchJsonl(paths.swarmFailurePatterns);
+  await touchJsonl(paths.swarmSuccessPatterns);
+  await touchJsonl(paths.swarmSpecialistSelectionHistory);
   if (!existsSync(paths.projectGlossary)) {
     await writeJson(paths.projectGlossary, {
       schemaVersion: MEMORY_SCHEMA_VERSION,

@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { PatchProposal, ProductBrief, BusinessBrief, TechnicalPlan, TaskGraph } from "@orchcode/protocol";
+import type { PatchProposal, ProductBrief, BusinessBrief, TechnicalPlan, TaskGraph } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 import { FileLockManager } from "../scheduler/FileLockManager.js";
@@ -109,8 +109,8 @@ test("TaskScheduler respects dependencies and file locks", () => {
 });
 
 test("Mock orchestrated run creates dynamic tasks, intents, artifacts, and patch proposals", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-module3-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-module3-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-module3-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-module3-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "apps/desktop/src/app"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
   await writeFile(path.join(workspace, "apps/desktop/src/app/App.tsx"), "export function App(){return null}\n", "utf8");

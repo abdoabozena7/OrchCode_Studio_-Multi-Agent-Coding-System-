@@ -6,7 +6,7 @@ export function composeAnswer(
   language: "arabic" | "english",
   style: "child_simple" | "detailed" | "default" | "technical" | "concise"
 ): string {
-  const ref = (path: string) => `[${path}:1](orchcode-file:${encodeURIComponent(path)}:1)`;
+  const ref = (path: string) => `[${path}:1](hivo-file:${encodeURIComponent(path)}:1)`;
 
   if (topic === "frontend" && facts.frontend) {
     if (language === "arabic") {
@@ -86,6 +86,32 @@ export function composeAnswer(
   }
 
   if (topic === "code_flow" && facts.codeFlow) {
+    if (style === "detailed") {
+      const links = facts.codeFlow.steps.map((step) => ref(step.sourceRef)).join(", ");
+      if (language === "arabic") {
+        let ans = `## الخلاصة\nالفلو مثبت من ملفات المشروع، وأهم الأدلة موجودة هنا: ${links}.\n\n## التسلسل بالتفصيل\n`;
+        for (const step of facts.codeFlow.steps) {
+          ans += `\n### ${step.order}. ${step.label}\n`;
+          ans += `- **ماذا يحدث:** ${step.description}. دي خطوة مثبتة من الكود وليست افتراض عام.\n`;
+          ans += `- **لماذا مهمة:** الخطوة دي بتشرح دور الجزء ده في السلسلة: تجهيز بيانات، تدريب/تحميل موديل، تنبؤ، شرح النتيجة، أو استخدامها في API/service flow.\n`;
+          ans += `- **أين:** ${ref(step.sourceRef)}\n`;
+        }
+        ans += `\n## العلاقة بين الأجزاء\n${facts.codeFlow.steps.map((step) => step.label).join(" -> ")}. التسلسل ده يوضح إزاي النتيجة بتنتقل من مرحلة للي بعدها بدل ما تكون مجرد أسماء متفرقة في الملفات.\n`;
+        if (facts.codeFlow.uncertainties.length) {
+          ans += `\n## غير مؤكد\n${facts.codeFlow.uncertainties.map((item) => `- ${item}`).join("\n")}\n`;
+        }
+        return ans;
+      }
+      let ans = `## Summary\nThe flow is grounded in project files: ${links}.\n\n## Detailed Flow\n`;
+      for (const step of facts.codeFlow.steps) {
+        ans += `\n### ${step.order}. ${step.label}\n`;
+        ans += `- What happens: ${step.description}.\n`;
+        ans += `- Why it matters: this step shows how data/model state moves through the implementation instead of being a loose file mention.\n`;
+        ans += `- Where: ${ref(step.sourceRef)}\n`;
+      }
+      ans += `\n## How The Pieces Connect\n${facts.codeFlow.steps.map((step) => step.label).join(" -> ")}.\n`;
+      return ans;
+    }
     if (language === "arabic") {
       let ans = `إزاي بيطبق هنا؟ ده تسلسل الشغل بالتفصيل:\n\n`;
       for (const step of facts.codeFlow.steps) {

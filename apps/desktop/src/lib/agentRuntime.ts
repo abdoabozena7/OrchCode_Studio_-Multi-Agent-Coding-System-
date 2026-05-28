@@ -9,7 +9,7 @@ import type {
   RuntimeExecutionMode,
   SafetySettings,
   RuntimeTurnResponse
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 
 const runtimeBaseUrl = import.meta.env.VITE_AGENT_RUNTIME_URL ?? "http://127.0.0.1:4317";
 
@@ -18,6 +18,7 @@ export async function createRuntimeSession(input: {
   mode: "demo_mock" | "real_provider";
   trustProfile?: "strict_gated" | "trusted_internal";
   providerConfig?: AgentRuntimeSession["providerConfig"];
+  activeProviderSource?: AgentRuntimeSession["activeProviderSource"];
   sessionToken?: string;
   sessionTokenExpiresAt?: string;
   executionMode: RuntimeExecutionMode;
@@ -141,7 +142,7 @@ async function runtimeFetch<T>(path: string, init?: RequestInit & { sessionToken
     ...requestInit,
     headers: {
       "content-type": "application/json",
-      ...(sessionToken ? { "x-orchcode-session-token": sessionToken } : {}),
+      ...(sessionToken ? { "x-hivo-session-token": sessionToken } : {}),
       ...(requestInit.headers ?? {})
     }
   });

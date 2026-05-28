@@ -1,4 +1,4 @@
-# OrchCode Quickstart
+# Hivo Quickstart
 
 ## Setup
 

@@ -299,7 +299,7 @@ test("background command starts stay pending and preserve heuristic provenance i
 });
 
 test("command execution emits an explicit runtime completion event instead of replaying a request event", async () => {
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-events-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-events-${Date.now()}`);
   const eventBus = new EventBus();
   const manager = new SessionManager(storageDir, eventBus);
   const events: string[] = [];
@@ -348,8 +348,8 @@ test("command execution emits an explicit runtime completion event instead of re
 });
 
 test("expired session tokens mark the runtime task state as expired for reconciliation-aware recovery", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-expired-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-expired-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-expired-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-expired-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   const manager = new SessionManager(storageDir, new EventBus());
   await manager.load();
@@ -374,8 +374,8 @@ test("expired session tokens mark the runtime task state as expired for reconcil
 });
 
 test("runtime task state restores with explicit restored markers after runtime restart", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-state-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-state-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-state-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-state-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "persist runtime state\n", "utf8");
 
@@ -435,7 +435,7 @@ test("runtime task state restores with explicit restored markers after runtime r
 });
 
 test("review gate marks shared and unattributed files conservatively", async () => {
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-attribution-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-attribution-${Date.now()}`);
   const manager = new SessionManager(storageDir, new EventBus());
   await manager.load();
   const session = await manager.createSession({
@@ -540,7 +540,7 @@ test("review gate marks shared and unattributed files conservatively", async () 
 });
 
 test("review gate keeps line totals unknown when unified diff stats are unavailable", async () => {
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-diff-unknown-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-diff-unknown-${Date.now()}`);
   const manager = new SessionManager(storageDir, new EventBus());
   await manager.load();
   const session = await manager.createSession({
@@ -678,8 +678,8 @@ test("post-apply reconciliation divergence blocks trust when files differ from t
 });
 
 async function createPatchFixture(userPrompt: string) {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-fixture-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-fixture-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 

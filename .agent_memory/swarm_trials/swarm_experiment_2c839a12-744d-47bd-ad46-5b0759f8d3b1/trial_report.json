@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_2c839a12-744d-47bd-ad46-5b0759f8d3b1",
+  "summary": "Scheduler scale trial processed 300 read-only work items with 300 logical agents.",
+  "scenarios_run": 1,
+  "staffing_accuracy": 1,
+  "modes_compared": [
+    "autopilot-huge-readonly"
+  ],
+  "key_metrics": {
+    "runs": 1,
+    "failures": 0,
+    "average_agents": 300,
+    "comparison_recommendation": "not_run"
+  },
+  "wins": [
+    "Staffing matched huge for: Process 300 read-only scout work items with mock agents."
+  ],
+  "losses": [],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Process 300 read-only scout work items with mock agents.: executor_limit=0, read_only_ratio=1"
+  ],
+  "specialist_selection_findings": [
+    "Process 300 read-only scout work items with mock agents.: specialists=none"
+  ],
+  "recommended_defaults": [
+    "Default mode: deep",
+    "Default total agents for this class: 300",
+    "Executor limit: 0"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

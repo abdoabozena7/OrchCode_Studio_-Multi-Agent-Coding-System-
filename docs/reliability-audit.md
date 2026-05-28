@@ -1,4 +1,4 @@
-# Reliability Audit: OrchCode Studio
+# Reliability Audit: Hivo Studio
 
 Date: 2026-05-14
 
@@ -15,7 +15,7 @@ Status note for the current operator-console RC branch:
 - Command safety still depends on heuristic classification and should not be read as sandbox-grade containment.
 - Background jobs now have limited lifecycle tracking and provenance, but they are not backed by a full process supervisor.
 
-This audit answers one question: what currently prevents OrchCode Studio from being trusted as a coding agent for large or business-critical work, and what concrete changes would close those gaps.
+This audit answers one question: what currently prevents Hivo Studio from being trusted as a coding agent for large or business-critical work, and what concrete changes would close those gaps.
 
 Method used:
 - Source inspection across `apps/agent-runtime`, `apps/desktop`, `apps/desktop/src-tauri`, `packages/protocol`, and `docs/`

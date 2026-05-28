@@ -1,4 +1,4 @@
-import type { TaskGraph, TaskNode } from "@orchcode/protocol";
+import type { TaskGraph, TaskNode } from "@hivo/protocol";
 
 export function getReadyTasks(graph: TaskGraph) {
   return graph.nodes.filter((node) => {

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "task_size_estimate": "small",
+  "repo_size_estimate": "large_repo",
+  "risk_level": "high",
+  "edit_scope_size": "single_file",
+  "validation_strength": "strict",
+  "recommended_mode": "fast",
+  "recommended_total_logical_agents": 9,
+  "executor_limit": 1,
+  "reviewer_limit": 3,
+  "scout_limit": 2,
+  "specialist_agents": [
+    {
+      "id": "documentation_reviewer",
+      "role": "DocumentationReviewerAgent",
+      "purpose": "Review documentation updates for operator workflow and architecture accuracy.",
+      "trigger": "documentation indicators were present",
+      "read_only": true,
+      "output_schema": "DocumentationReviewOutput"
+    }
+  ],
+  "reasoning": [
+    "Staffing expectations passed in this run; keep defaults stable.",
+    "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal.",
+    "Do not update defaults from one noisy experiment; require confidence and repeated evidence."
+  ]
+}

@@ -50,8 +50,8 @@ import type {
   WorkerSpec,
   WorkOrder,
   WorkspaceInfo
-} from "@orchcode/protocol";
-import { accessProfileDefaults, defaultSafetySettings } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { accessProfileDefaults, defaultSafetySettings } from "@hivo/protocol";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   approveRuntimePatch,
@@ -155,20 +155,35 @@ type FileTreeNode = {
   children: FileTreeNode[];
 };
 
-const RECENT_WORKSPACES_KEY = "orchcode.recentWorkspaces";
-const RECENT_SESSIONS_KEY = "orchcode.recentSessions";
-const LAST_WORKSPACE_KEY = "orchcode.lastWorkspace";
-const PROMPT_HISTORY_KEY = "orchcode.promptHistory";
-const COMPOSER_SCALE_KEY = "orchcode.composerScale";
-const FULL_ACCESS_WARNING_KEY = "orchcode.fullAccessAcknowledged";
-const RTL_TEXT_MODE_KEY = "orchcode.rtlTextMode";
-const SIDEBAR_WIDTH_KEY = "orchcode.sidebarWidth";
-const SESSION_TOKENS_KEY = "orchcode.sessionTokens";
-const COLLAPSED_PROJECTS_KEY = "orchcode.collapsedProjects";
-const SESSION_TITLE_MIGRATION_KEY = "orchcode.sessionTitleMigration.v1";
+const RECENT_WORKSPACES_KEY = "hivo.recentWorkspaces";
+const RECENT_SESSIONS_KEY = "hivo.recentSessions";
+const LAST_WORKSPACE_KEY = "hivo.lastWorkspace";
+const PROMPT_HISTORY_KEY = "hivo.promptHistory";
+const COMPOSER_SCALE_KEY = "hivo.composerScale";
+const FULL_ACCESS_WARNING_KEY = "hivo.fullAccessAcknowledged";
+const RTL_TEXT_MODE_KEY = "hivo.rtlTextMode";
+const SIDEBAR_WIDTH_KEY = "hivo.sidebarWidth";
+const SESSION_TOKENS_KEY = "hivo.sessionTokens";
+const COLLAPSED_PROJECTS_KEY = "hivo.collapsedProjects";
+const SESSION_TITLE_MIGRATION_KEY = "hivo.sessionTitleMigration.v1";
+const PET_VISIBLE_KEY = "hivo.petVisible";
+const MIGRATED_STORAGE_KEYS = [
+  RECENT_WORKSPACES_KEY,
+  RECENT_SESSIONS_KEY,
+  LAST_WORKSPACE_KEY,
+  PROMPT_HISTORY_KEY,
+  COMPOSER_SCALE_KEY,
+  FULL_ACCESS_WARNING_KEY,
+  RTL_TEXT_MODE_KEY,
+  SIDEBAR_WIDTH_KEY,
+  SESSION_TOKENS_KEY,
+  COLLAPSED_PROJECTS_KEY,
+  SESSION_TITLE_MIGRATION_KEY
+];
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
+const MAX_SESSION_TITLE_WORDS = 4;
 const DEFAULT_COMPOSER_SCALE = 0.78;
 const MIN_COMPOSER_SCALE = 0.55;
 const MAX_COMPOSER_SCALE = 1.35;
@@ -294,12 +309,14 @@ export function App() {
   const [fileExplorerFilter, setFileExplorerFilter] = useState("");
   const [expandedExplorerDirs, setExpandedExplorerDirs] = useState<string[]>([]);
   const [rtlTextMode, setRtlTextMode] = useState(false);
+  const [hivoPetVisible, setHivoPetVisible] = useState(true);
   const [bootstrapped, setBootstrapped] = useState(false);
   const progressRailCloseTimerRef = useRef<number | null>(null);
   const titleMigrationStartedRef = useRef(false);
 
   useEffect(() => {
     void (async () => {
+      migrateLegacyStorageKeys();
       try {
         setProviderConfig(await getModelProviderConfig());
       } catch {
@@ -313,12 +330,14 @@ export function App() {
       const storedSessionTokens = pruneExpiredSessionTokens(readStoredJson<Record<string, StoredSessionToken>>(SESSION_TOKENS_KEY, {}));
       const storedCollapsedProjects = readStoredJson<string[]>(COLLAPSED_PROJECTS_KEY, []);
       const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
+      const storedPetVisible = localStorage.getItem(PET_VISIBLE_KEY);
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
       setRecentSessions(storedSessions);
       setPromptHistory(storedPromptHistory);
       setSessionTokens(storedSessionTokens);
       setCollapsedProjectPaths(storedCollapsedProjects.map(normalizeWorkspacePath));
       setRtlTextMode(storedRtlTextMode);
+      setHivoPetVisible(storedPetVisible !== "false");
       if (Number.isFinite(storedComposerScale)) {
         setComposerScale(clampComposerScale(storedComposerScale));
       }
@@ -369,6 +388,10 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(RTL_TEXT_MODE_KEY, rtlTextMode ? "true" : "false");
   }, [rtlTextMode]);
+
+  useEffect(() => {
+    localStorage.setItem(PET_VISIBLE_KEY, hivoPetVisible ? "true" : "false");
+  }, [hivoPetVisible]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(sidebarWidth)));
@@ -608,7 +631,7 @@ export function App() {
     });
   }, [runtimeSession, workspace]);
 
-  const sessionTitle = runtimeSession ? deriveSessionTitle(runtimeSession) : "OrchCode";
+  const sessionTitle = runtimeSession ? deriveSessionTitle(runtimeSession) : "Hivo";
   const hasSessionView = Boolean(runtimeSession);
   const agentPanel = runtimeSession ? buildAgentSidePanel(runtimeSession) : { agents: [], backgroundJobs: [] };
   const hasAgentSidePanel = agentPanel.agents.length > 0;
@@ -736,7 +759,7 @@ export function App() {
   async function handleRestartWithLatestCode() {
     if (restartingApp) return;
     setRestartingApp(true);
-    setMessage("Restarting OrchCode with the latest local code...");
+    setMessage("Restarting Hivo with the latest local code...");
     try {
       await restartWithLatestCode();
     } catch (error) {
@@ -909,6 +932,7 @@ export function App() {
                 mode: wantsDemoProvider ? "demo_mock" : "real_provider",
                 trustProfile,
                 providerConfig: sanitizedProvider,
+                activeProviderSource: wantsDemoProvider ? "runtime_default" : "desktop_saved_provider",
                 sessionToken: rustRun.sessionToken,
                 sessionTokenExpiresAt: rustRun.sessionTokenExpiresAt,
                 executionMode: "auto_mode",
@@ -1397,7 +1421,7 @@ export function App() {
           <button className="frame-icon-button" onClick={() => setSidebarCollapsed((current) => !current)} title="Toggle sidebar">
             <PanelLeft size={16} />
           </button>
-          <img className="app-brand-mark" src="/orchcode-icon.png" alt="OrchCode Studio" />
+          <img className="app-brand-mark" src="/hivo-icon.png" alt="Hivo Studio" />
         </div>
 
         <div className="frame-bar-right">
@@ -1607,7 +1631,13 @@ export function App() {
           <section className={`hero-panel ${hasSessionView ? "session-active" : ""}`}>
             <div className="hero-copy">
               <p className="hero-eyebrow">{sessionSummary}</p>
-              {!runtimeSession ? <h1>What should we build?</h1> : null}
+              {!runtimeSession ? (
+                <>
+                  <img className="hero-brand-mark" src="/hivo-icon.png" alt="" aria-hidden="true" />
+                  <h1>Hivo</h1>
+                  <p className="hero-slogan">stop paying, stop thinking, stop prompting</p>
+                </>
+              ) : null}
             </div>
 
             {runtimeSession ? (
@@ -1638,7 +1668,7 @@ export function App() {
                   }
                 }}
                 onKeyDown={handlePromptKeyDown}
-                placeholder="Ask local Codex to create or edit a project with Ollama..."
+                placeholder="Ask Hivo to create or edit a project with Ollama..."
                 rows={1}
                 dir={rtlTextMode ? "rtl" : "auto"}
               />
@@ -2044,9 +2074,13 @@ export function App() {
         />
       ) : null}
 
+      <HivoMascot visible={hivoPetVisible} raised={bottomView !== "none"} />
+
       {settingsOpen ? (
         <SettingsDialog
           currentConfig={providerConfig}
+          hivoPetVisible={hivoPetVisible}
+          onHivoPetVisibleChange={setHivoPetVisible}
           onClose={() => setSettingsOpen(false)}
           onSaved={(config) => {
             setProviderConfig(config);
@@ -2477,7 +2511,7 @@ function renderInlineMarkdown(
       };
       nodes.push(
         <MarkdownLink
-          href={`orchcode-file:${encodeURIComponent(reference.path)}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
+          href={`hivo-file:${encodeURIComponent(reference.path)}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
           label={`${reference.path}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
           workspacePath={workspacePath}
           onOpenFileReference={onOpenFileReference}
@@ -2557,8 +2591,13 @@ function renderMarkdownTable(
 }
 
 function parseFileRef(href: string) {
-  if (!href.startsWith("orchcode-file:")) return null;
-  const rest = href.slice("orchcode-file:".length);
+  const scheme = href.startsWith("hivo-file:")
+    ? "hivo-file:"
+    : href.startsWith("orchcode-file:")
+      ? "orchcode-file:"
+      : "";
+  if (!scheme) return null;
+  const rest = href.slice(scheme.length);
   const separator = rest.lastIndexOf(":");
   if (separator <= 0) return null;
   const pathPart = rest.slice(0, separator);
@@ -2632,7 +2671,7 @@ function FileReferencePanel({
         {reference.status === "failed" ? (
           <div className="file-reference-error">{reference.error ?? "Could not open this file reference."}</div>
         ) : reference.status === "loading" ? (
-          <div className="file-reference-loading">Opening file inside OrchCode...</div>
+          <div className="file-reference-loading">Opening file inside Hivo...</div>
         ) : (
           <div className="file-reference-code" role="region" aria-label={`${reference.path} preview`}>
             {lines.map((line, index) => {
@@ -3677,6 +3716,8 @@ function OperatorStateCard({
         <div className="summary-line compact">Write state: {describePatchState(session)}</div>
         <div className="summary-line compact">Command state: {describeCommandState(session)}</div>
         <div className="summary-line compact">Verification: {describeVerificationState(session)}</div>
+        <div className="summary-line compact">Provider: {describeProviderTruth(session)}</div>
+        <div className="summary-line compact">Evidence: {describeEvidenceTruth(session)}</div>
         <div className="summary-line compact">Audit trail: {describeAuditTrail(session)}</div>
       </div>
     </section>
@@ -4585,6 +4626,21 @@ function describeVerificationState(session: AgentRuntimeSession) {
   return "Verification passed for the recorded checks.";
 }
 
+function describeProviderTruth(session: AgentRuntimeSession) {
+  const truth = session.providerTelemetry;
+  if (!truth) return "No provider telemetry recorded yet.";
+  const providerKind = truth.mockProviderUsed ? "mock" : truth.realProviderUsed ? "real" : "unknown";
+  const fallback = truth.fallbackUsed ? "yes" : "no";
+  return `${providerKind} | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | fallback ${fallback}`;
+}
+
+function describeEvidenceTruth(session: AgentRuntimeSession) {
+  const report = session.evidenceReport;
+  if (!report) return "No inspect evidence report recorded yet.";
+  const used = report.finalEvidenceFilesActuallyUsed.slice(0, 3).join(", ");
+  return `${report.finalEvidenceFilesActuallyUsed.length} file(s) used${used ? `: ${used}` : ""}; ${report.generatedEvidenceExcludedCount} generated/runtime candidate(s) excluded.`;
+}
+
 function describeAuditTrail(session: AgentRuntimeSession) {
   const previewArtifacts = session.artifacts.filter((artifact) => artifact.type === "preview").length;
   const verificationArtifacts = session.artifacts.filter((artifact) => artifact.type === "verification").length;
@@ -4721,6 +4777,20 @@ function readStoredJson<T>(key: string, fallback: T): T {
   }
 }
 
+function legacyStorageKey(key: string) {
+  return key.replace(/^hivo\./, "orchcode.");
+}
+
+function migrateLegacyStorageKeys() {
+  for (const key of MIGRATED_STORAGE_KEYS) {
+    if (localStorage.getItem(key) !== null) continue;
+    const legacyValue = localStorage.getItem(legacyStorageKey(key));
+    if (legacyValue !== null) {
+      localStorage.setItem(key, legacyValue);
+    }
+  }
+}
+
 function pruneExpiredSessionTokens(tokens: Record<string, StoredSessionToken>) {
   const now = Date.now();
   return Object.fromEntries(
@@ -4737,6 +4807,15 @@ function getPersistedSessionToken(tokens: Record<string, StoredSessionToken>, se
   const expiresAt = Date.parse(record.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return undefined;
   return record;
+}
+
+function HivoMascot({ visible, raised }: { visible: boolean; raised: boolean }) {
+  if (!visible) return null;
+  return (
+    <div className={`hivo-mascot ${raised ? "raised" : ""}`} aria-hidden="true">
+      <img src="/hivo-icon.png" alt="" />
+    </div>
+  );
 }
 
 function persistRecentWorkspaces(entries: RecentWorkspaceEntry[]) {
@@ -4784,7 +4863,7 @@ function upsertRecentSession(
 
 function deriveSessionTitle(session: AgentRuntimeSession, fallbackTitle?: string) {
   const displayTitle = deriveDisplaySessionTitle(session, fallbackTitle);
-  return truncateSessionLabel(displayTitle || "OrchCode", 42);
+  return truncateSessionLabel(displayTitle || "Hivo", 42);
 }
 
 function deriveDisplaySessionTitle(session: AgentRuntimeSession, fallbackTitle?: string) {
@@ -4811,6 +4890,9 @@ function normalizeSessionTitleCandidate(value: string | null | undefined) {
     .map((line) => line.trim())
     .find(Boolean)
     ?.replace(/^#+\s*/, "")
+    .replace(/^[-*]\s*/, "")
+    .replace(/^(chat|session)?\s*title\s*[:：-]\s*/i, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/\s+/g, " ")
     .trim() ?? "";
 }
@@ -4846,11 +4928,17 @@ function isLowSignalSessionTitleCandidate(value: string) {
 }
 
 function shouldBackfillSessionTitle(value: string) {
-  return !value || value === "OrchCode" || isLowSignalSessionTitleCandidate(value);
+  return !value || value === "Hivo" || isLowSignalSessionTitleCandidate(value);
 }
 
 function truncateSessionLabel(value: string, max = 42) {
-  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+  const wordLimitedValue = limitSessionTitleWords(value);
+  return wordLimitedValue.length > max ? `${wordLimitedValue.slice(0, max - 3).trimEnd()}...` : wordLimitedValue;
+}
+
+function limitSessionTitleWords(value: string, maxWords = MAX_SESSION_TITLE_WORDS) {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  return words.length > maxWords ? words.slice(0, maxWords).join(" ") : value.trim();
 }
 
 function truncateLabel(value: string, max = 42) {
@@ -4983,9 +5071,13 @@ function buildSidebarProjects(input: {
   }
 
   for (const sessionEntry of input.recentSessions) {
+    const sidebarSessionEntry = {
+      ...sessionEntry,
+      title: truncateSessionLabel(sessionEntry.title)
+    };
     const existing = grouped.get(sessionEntry.workspacePath);
     if (existing) {
-      existing.sessions.push(sessionEntry);
+      existing.sessions.push(sidebarSessionEntry);
       existing.lastOpenedAt = existing.lastOpenedAt > sessionEntry.updatedAt ? existing.lastOpenedAt : sessionEntry.updatedAt;
     } else {
       grouped.set(sessionEntry.workspacePath, {
@@ -4993,7 +5085,7 @@ function buildSidebarProjects(input: {
         name: sessionEntry.workspaceName,
         lastOpenedAt: sessionEntry.updatedAt,
         isActive: sessionEntry.workspacePath === input.workspace?.path,
-        sessions: [sessionEntry]
+        sessions: [sidebarSessionEntry]
       });
     }
   }
@@ -5005,7 +5097,7 @@ function buildSidebarProjects(input: {
       id: input.runtimeSession.id,
       workspacePath: input.workspace.path,
       workspaceName: input.workspace.name,
-      title: activeTitle || "OrchCode",
+      title: activeTitle || "Hivo",
       status: humanSessionStatus(input.runtimeSession, input.agentBusy, input.runtimeConnectionState),
       updatedAt: input.runtimeSession.updatedAt
     };
@@ -5075,11 +5167,15 @@ function isSafeRelativeFilePath(targetPath: string) {
 
 function SettingsDialog({
   currentConfig,
+  hivoPetVisible,
+  onHivoPetVisibleChange,
   onClose,
   onSaved,
   onCleared
 }: {
   currentConfig: ModelProviderConfig | null;
+  hivoPetVisible: boolean;
+  onHivoPetVisibleChange: (visible: boolean) => void;
   onClose: () => void;
   onSaved: (config: ModelProviderConfig) => void;
   onCleared: () => void;
@@ -5193,6 +5289,18 @@ function SettingsDialog({
             <X size={18} />
           </button>
         </div>
+
+        <section className="settings-preferences">
+          <h3>Hivo</h3>
+          <label className="toggle-setting">
+            <span>Show Hivo pet</span>
+            <input
+              type="checkbox"
+              checked={hivoPetVisible}
+              onChange={(event) => onHivoPetVisibleChange(event.target.checked)}
+            />
+          </label>
+        </section>
 
         <div className="preset-grid">
           {providerPresets.map((preset) => (

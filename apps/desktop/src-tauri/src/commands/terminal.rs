@@ -141,7 +141,8 @@ async fn post_runtime_command_result(
     session_token: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
-    let runtime_base = std::env::var("ORCHCODE_AGENT_RUNTIME_URL")
+    let runtime_base = std::env::var("HIVO_AGENT_RUNTIME_URL")
+        .or_else(|_| std::env::var("ORCHCODE_AGENT_RUNTIME_URL"))
         .or_else(|_| std::env::var("VITE_AGENT_RUNTIME_URL"))
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
     let url = format!(
@@ -165,7 +166,7 @@ async fn post_runtime_command_result(
         "backgroundJob": result.background_job
     }));
     if let Some(token) = session_token {
-        request = request.header("x-orchcode-session-token", token);
+        request = request.header("x-hivo-session-token", token);
     }
     let response = request
         .send()

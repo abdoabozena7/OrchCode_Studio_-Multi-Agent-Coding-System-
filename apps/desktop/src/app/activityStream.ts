@@ -1,4 +1,4 @@
-import type { AgentRuntimeSession, RuntimeTaskTransition } from "@orchcode/protocol";
+import type { AgentRuntimeSession, RuntimeTaskTransition } from "@hivo/protocol";
 
 export type ActivityStreamStatus = "running" | "completed" | "blocked" | "failed";
 

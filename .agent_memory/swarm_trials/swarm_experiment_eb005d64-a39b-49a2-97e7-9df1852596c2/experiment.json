@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "swarm_experiment_eb005d64-a39b-49a2-97e7-9df1852596c2",
+  "title": "Architecture Scan Trial",
+  "description": "Read-only architecture scan using automatic swarm staffing.",
+  "scenario_type": "dry_run",
+  "tasks_to_test": [
+    {
+      "id": "architecture_scan",
+      "title": "Architecture scan",
+      "input_goal": "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.",
+      "expected": {
+        "expected_complexity": "huge",
+        "expected_agent_range": [
+          10,
+          300
+        ],
+        "expected_executor_limit": 0,
+        "min_read_only_ratio": 0.9
+      }
+    }
+  ],
+  "modes_to_compare": [
+    "autopilot-exhaustive"
+  ],
+  "expected_staffing_behavior": [
+    {
+      "expected_complexity": "huge",
+      "expected_agent_range": [
+        10,
+        300
+      ],
+      "expected_executor_limit": 0,
+      "min_read_only_ratio": 0.9
+    }
+  ],
+  "created_at": "2026-05-23T21:45:15.723Z",
+  "status": "succeeded",
+  "config": {
+    "read_only": true,
+    "swarm_run_id": "swarm_9f40b144-f846-46ec-b7cc-a6adc98f19a7"
+  },
+  "results_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_eb005d64-a39b-49a2-97e7-9df1852596c2\\runs.json",
+  "report_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_eb005d64-a39b-49a2-97e7-9df1852596c2\\trial_report.md"
+}

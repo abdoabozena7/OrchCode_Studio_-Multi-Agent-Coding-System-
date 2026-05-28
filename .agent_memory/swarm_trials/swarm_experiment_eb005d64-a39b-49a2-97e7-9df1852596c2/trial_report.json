@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_eb005d64-a39b-49a2-97e7-9df1852596c2",
+  "summary": "Architecture scan trial completed using read-only swarm execution.",
+  "scenarios_run": 1,
+  "staffing_accuracy": 1,
+  "modes_compared": [
+    "autopilot-exhaustive"
+  ],
+  "key_metrics": {
+    "runs": 1,
+    "failures": 0,
+    "average_agents": 300,
+    "comparison_recommendation": "not_run"
+  },
+  "wins": [
+    "Staffing matched huge for: Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files."
+  ],
+  "losses": [],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: executor_limit=0, read_only_ratio=1"
+  ],
+  "specialist_selection_findings": [
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: specialists=TestCoverageReviewerAgent, DocumentationReviewerAgent"
+  ],
+  "recommended_defaults": [
+    "Default mode: deep",
+    "Default total agents for this class: 300",
+    "Executor limit: 0"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

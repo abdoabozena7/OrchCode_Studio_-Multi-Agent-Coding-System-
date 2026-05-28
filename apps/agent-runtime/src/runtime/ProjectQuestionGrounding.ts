@@ -1,10 +1,11 @@
-﻿import type { ProjectExplainReport } from "@orchcode/protocol";
+import type { ProjectExplainReport } from "@hivo/protocol";
 
 import {
   analyzeWorkspaceReasoning,
   createEvidenceBasedAnswerFallback,
   type WorkspaceReasoning
 } from "./WorkspaceReasoningPipeline.js";
+import { resolveInvestigationConcept } from "./ProjectIntelligenceKernel.js";
 
 export type ProjectAnswerStyle = "child_simple" | "technical" | "concise" | "detailed" | "default";
 export type ProjectAnswerShape = "inventory_table" | "concise_explanation" | "detailed_walkthrough";
@@ -99,22 +100,22 @@ const QUESTION_STOP_WORDS = new Set([
   "how", "i", "in", "is", "it", "me", "of", "please", "project", "selected",
   "show", "system", "tell", "that", "the", "this", "to", "walk", "what", "where",
   "why", "with", "work", "works", "workspace", "you",
-  "ط§ط´ط±ط­", "ط§ط´ط±ط­ظ„ظٹ", "ط´ط±ط­", "ط§ظ„ظ…ط´ط±ظˆط¹", "ظ…ط´ط±ظˆط¹", "ط¯ظ‡", "ط¯ط§", "ط¯ظٹ", "ط§ط²ط§ظٹ", "ط¥ط²ط§ظٹ", "ظƒظٹظپ", "ط§ظٹظ‡",
-  "ط¥ظٹظ‡", "ظ…ظ†", "ظپظٹ", "ظ‡ظ†ط§", "ط¹ظ„ظ‰", "ظ‡ظˆ", "ظ‡ظٹ", "ط¨ظٹظ‚ط¯ط±", "ظٹظ‚ط¯ط±", "ظٹط¬ظٹط¨", "ظƒط£ظ†ظ‡ط§", "ظƒط§ظ†ظ‡ط§", "prompt",
-  "ط§ط´ط±ط­", "ط´ط±ط­", "ط§ظ„ظ…ط´ط±ظˆط¹", "ظ…ط´ط±ظˆط¹", "ط¯ظ‡", "ط¯ط§", "ط¯ظٹ", "ط§ط²ط§ظٹ", "ظƒظٹظپ", "ط§ظٹظ‡",
-  "ط¥ظٹظ‡", "ظ…ظ†", "ظپظٹ", "ط¹ظ„ظ‰", "ظ‡ظˆ", "ظ‡ظٹ",
-  "ط·آ§ط·آ´ط·آ±ط·آ­", "ط·آ´ط·آ±ط·آ­", "ط·آ§ط¸â€‍ط¸â€¦ط·آ´ط·آ±ط¸ث†ط·آ¹", "ط¸â€¦ط·آ´ط·آ±ط¸ث†ط·آ¹", "ط·آ¯ط·آ§", "ط·آ¯ط¸â€،",
-  "ط·آ¯ط¸ظ¹", "ط·آ§ط·آ²ط·آ§ط¸ظ¹", "ط¸ئ’ط¸ظ¹ط¸ظ¾", "ط·آ§ط¸ظ¹ط¸â€،", "ط·آ¥ط¸ظ¹ط¸â€،", "ط¸â€¦ط¸â€ ", "ط¸ظ¾ط¸ظ¹",
-  "ط·آ¹ط¸â€‍ط¸â€°", "ط¸â€،ط¸ث†", "ط¸â€،ط¸ظ¹"
+  "اشرح", "اشرحلي", "شرح", "المشروع", "مشروع", "ده", "دا", "دي", "ازاي", "إزاي", "كيف", "ايه",
+  "إيه", "من", "في", "هنا", "على", "هو", "هي", "بيقدر", "يقدر", "يجيب", "كأنها", "كانها", "prompt",
+  "اشرح", "شرح", "المشروع", "مشروع", "ده", "دا", "دي", "ازاي", "كيف", "ايه",
+  "إيه", "من", "في", "على", "هو", "هي",
+  "ط§ط´ط±ط­", "ط´ط±ط­", "ط§ظ„ظ…ط´ط±ظˆط¹", "ظ…ط´ط±ظˆط¹", "ط¯ط§", "ط¯ظ‡",
+  "ط¯ظٹ", "ط§ط²ط§ظٹ", "ظƒظٹظپ", "ط§ظٹظ‡", "ط¥ظٹظ‡", "ظ…ظ†", "ظپظٹ",
+  "ط¹ظ„ظ‰", "ظ‡ظˆ", "ظ‡ظٹ"
 ]);
 
 const STYLE_STOP_WORDS = new Set([
   "basic", "brief", "child", "children", "concise", "detailed", "eli5", "jargon",
   "kid", "kids", "simple", "simply", "technical", "tiny",
-  "ط·ظپظ„", "ط§ط·ظپط§ظ„", "ط£ط·ظپط§ظ„", "ظٹظپظ‡ظ…", "ظٹظپظ‡ظ…ظ‡ط§", "ظٹظ‚ط¯ط±", "ط¨ظٹظ‚ط¯ط±", "ط¨ط¨ط³ط§ط·ط©", "ط¨ط³ظٹط·", "ط¨ط³ظٹط·ط©",
-  "ظ…ط¨ط³ط·", "ظ…ط¨ط³ط·ط©", "ظ„ظ„ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦ظٹظ†",
-  "ط·ظپظ„", "ط§ط·ظپط§ظ„", "ط£ط·ظپط§ظ„", "ظٹظپظ‡ظ…", "ظٹظپظ‡ظ…ظ‡ط§", "ظٹظ‚ط¯ط±", "ط¨ظٹظ‚ط¯ط±", "ط¨ط¨ط³ط§ط·ط©",
-  "ط¨ط³ظٹط·", "ط¨ط³ظٹط·ط©", "ظ…ط¨ط³ط·", "ظ…ط¨ط³ط·ط©", "ظ„ظ„ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦ظٹظ†"
+  "طفل", "اطفال", "أطفال", "يفهم", "يفهمها", "يقدر", "بيقدر", "ببساطة", "بسيط", "بسيطة",
+  "مبسط", "مبسطة", "للمبتدئ", "مبتدئ", "مبتدئين",
+  "طفل", "اطفال", "أطفال", "يفهم", "يفهمها", "يقدر", "بيقدر", "ببساطة",
+  "بسيط", "بسيطة", "مبسط", "مبسطة", "للمبتدئ", "مبتدئ", "مبتدئين"
 ]);
 
 const GENERIC_CONCEPT_WORDS = new Set([
@@ -123,14 +124,14 @@ const GENERIC_CONCEPT_WORDS = new Set([
 ]);
 
 const EXTRA_ARABIC_QUESTION_STOP_WORDS = new Set([
-  "ط§ط´ط±ط­", "ط§ط´ط±ط­ظ„ظٹ", "ط§ظ„ظ…ط´ط±ظˆط¹", "ظ…ط´ط±ظˆط¹", "ط¯ط§", "ط¯ظ‡", "ط¯ظٹ", "ط§ط²ط§ظٹ", "ظƒظٹظپ", "ط§ظٹظ‡",
-  "ط¥ظٹظ‡", "ظ…ظ†", "ظپظٹ", "ظ‡ظ†ط§", "ط¹ظ„ظ‰", "ظ‡ظˆ", "ظ‡ظٹ", "ط¨ظٹظ‚ط¯ط±", "ظٹظ‚ط¯ط±", "ظٹط¬ظٹط¨",
-  "ظƒط§ظ†ظ‡ط§", "ظƒط£ظ†ظ‡ط§", "prompt"
+  "اشرح", "اشرحلي", "المشروع", "مشروع", "دا", "ده", "دي", "ازاي", "كيف", "ايه",
+  "إيه", "من", "في", "هنا", "على", "هو", "هي", "بيقدر", "يقدر", "يجيب",
+  "كانها", "كأنها", "prompt"
 ]);
 
 const EXTRA_ARABIC_STYLE_STOP_WORDS = new Set([
-  "ط·ظپظ„", "ط§ط·ظپط§ظ„", "ط£ط·ظپط§ظ„", "ظٹظپظ‡ظ…", "ظٹظپظ‡ظ…ظ‡ط§", "ظٹظ‚ط¯ط±", "ط¨ظٹظ‚ط¯ط±", "ط¨ط¨ط³ط§ط·ط©",
-  "ط¨ط³ظٹط·", "ط¨ط³ظٹط·ط©", "ظ…ط¨ط³ط·", "ظ…ط¨ط³ط·ط©", "ظ„ظ„ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦", "ظ…ط¨طھط¯ط¦ظٹظ†"
+  "طفل", "اطفال", "أطفال", "يفهم", "يفهمها", "يقدر", "بيقدر", "ببساطة",
+  "بسيط", "بسيطة", "مبسط", "مبسطة", "للمبتدئ", "مبتدئ", "مبتدئين"
 ]);
 
 const REAL_ARABIC_QUESTION_STOP_WORDS = new Set([
@@ -148,16 +149,16 @@ const REAL_ARABIC_STYLE_STOP_WORDS = new Set([
 const DATASET_SOURCE_ALIASES = [
   "dataset", "data set", "data", "records", "record", "csv", "rows", "row",
   "load data", "data source", "dataset source", "dataset loader", "normalize dataset row",
-  "ط¯ط§طھط§", "ط§ظ„ط¯ط§طھط§", "ط¯ط§طھط§ ط³ظٹطھ", "ط§ظ„ط¯ط§طھط§ ط³ظٹطھ", "ط¨ظٹط§ظ†ط§طھ", "ط§ظ„ط¨ظٹط§ظ†ط§طھ",
-  "ط¯ط§طھط§", "ط§ظ„ط¯ط§طھط§", "ط¯ط§طھط§ ط³ظٹطھ", "ط§ظ„ط¯ط§طھط§ ط³ظٹطھ", "ط¨ظٹط§ظ†ط§طھ", "ط§ظ„ط¨ظٹط§ظ†ط§طھ"
+  "داتا", "الداتا", "داتا سيت", "الداتا سيت", "بيانات", "البيانات",
+  "داتا", "الداتا", "داتا سيت", "الداتا سيت", "بيانات", "البيانات"
 ];
 
 const REALTIME_UPDATE_ALIASES = [
   "realtime", "real time", "real-time", "near realtime", "near real time", "polling",
   "refresh", "repeated refresh", "update loop", "setinterval", "set interval", "stream",
   "socket", "websocket", "timer", "interval",
-  "طھط­ط¯ظٹط«", "طھط­ط¯ظٹط« ظ…طھظƒط±ط±", "ظ„ط­ط¸ظٹ", "ظƒط£ظ†ظ‡ط§ realtime", "ظƒط§ظ†ظ‡ط§ realtime",
-  "طھط­ط¯ظٹط«", "طھط­ط¯ظٹط« ظ…طھظƒط±ط±", "ظ„ط­ط¸ظٹ", "ظƒط£ظ†ظ‡ط§ realtime", "ظƒط§ظ†ظ‡ط§ realtime"
+  "تحديث", "تحديث متكرر", "لحظي", "كأنها realtime", "كانها realtime",
+  "تحديث", "تحديث متكرر", "لحظي", "كأنها realtime", "كانها realtime"
 ];
 
 DATASET_SOURCE_ALIASES.push(
@@ -180,14 +181,14 @@ const DATASET_SOURCE_GROUP: RequestedConceptEvidenceGroup = {
   id: "dataset_source",
   label: "dataset/data source",
   aliases: DATASET_SOURCE_ALIASES,
-  coreTerms: ["dataset", "data", "records", "csv", "ط¯ط§طھط§", "ط¨ظٹط§ظ†ط§طھ"]
+  coreTerms: ["dataset", "data", "records", "csv", "داتا", "بيانات"]
 };
 
 const REALTIME_UPDATE_GROUP: RequestedConceptEvidenceGroup = {
   id: "realtime_update",
   label: "realtime/update behavior",
   aliases: REALTIME_UPDATE_ALIASES,
-  coreTerms: ["realtime", "polling", "refresh", "setinterval", "stream", "socket", "طھط­ط¯ظٹط«", "ظ„ط­ط¸ظٹ"]
+  coreTerms: ["realtime", "polling", "refresh", "setinterval", "stream", "socket", "تحديث", "لحظي"]
 };
 
 const THRESHOLD_FACT_ALIASES = [
@@ -272,11 +273,11 @@ const STRONG_PAGE_STRUCTURE_CONTENT_RE = PAGE_STRUCTURE_CONTENT_RE;
 const GENERATED_PAGE_ANCHOR_RE = /\b(Requested concept evidence|Requested concept match|screen inventory|page\/screen inventory)\b/i;
 
 const DATASET_REALTIME_CONCEPT_LABEL = "dataset realtime behavior";
-const DATASET_REALTIME_DISPLAY_LABEL = "dataset realtime behavior / ط§ظ„ط¯ط§طھط§ ظ…ظ† ط§ظ„ط¯ط§طھط§ ط³ظٹطھ ظƒط£ظ†ظ‡ط§ realtime";
+const DATASET_REALTIME_DISPLAY_LABEL = "dataset realtime behavior / الداتا من الداتا سيت كأنها realtime";
 const THRESHOLD_INVENTORY_CONCEPT_LABEL = "threshold inventory";
 const FORECASTING_SCOPE_CONCEPT_LABEL = "forecasting type and scope";
 const PAGE_INVENTORY_CONCEPT_LABEL = "page/screen inventory";
-const ARABIC_CHILD_SIMPLE_PATTERN = /(?:ط§ط´ط±ط­.*ظ„\s*ط·ظپظ„|ط·ظپظ„.*ظٹظپظ‡ظ…|ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط¨ط¨ط³ط§ط·ط©|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ…ط¨طھط¯ط¦)/;
+const ARABIC_CHILD_SIMPLE_PATTERN = /(?:اشرح.*ل\s*طفل|طفل.*يفهم|ل\s*طفل|للطفل|ببساطة|بشكل\s+مبسط|مبسط|مبسطة|للمبتدئ|مبتدئ)/;
 
 const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
   "analytics": ["analytics", "analysis", "dashboard", "metrics"],
@@ -287,7 +288,7 @@ const DOMAIN_CLAIM_ALIASES: Record<string, string[]> = {
   "e-commerce": ["e-commerce", "ecommerce", "shopping", "shop", "storefront", "commerce"],
   "payment": ["payment", "payments", "billing", "stripe", "invoice"],
   "realtime": REALTIME_UPDATE_ALIASES,
-  "sentiment": ["sentiment", "sentiment analysis", "sentement", "sentement analysis", "classify sentiment", "analyze sentiment", "sentiment classifier", "sentiment pipeline", "sentiment model", "طھط­ظ„ظٹظ„ ط§ظ„ظ…ط´ط§ط¹ط±", "طھط­ظ„ظٹظ„ ظ…ط´ط§ط¹ط±", "ط§ظ„ظ…ط´ط§ط¹ط±", "ظ…ط´ط§ط¹ط±", "emotion", "emotions"],
+  "sentiment": ["sentiment", "sentiment analysis", "sentement", "sentement analysis", "classify sentiment", "analyze sentiment", "sentiment classifier", "sentiment pipeline", "sentiment model", "تحليل المشاعر", "تحليل مشاعر", "المشاعر", "مشاعر", "emotion", "emotions"],
   "thresholds": THRESHOLD_FACT_ALIASES,
   "forecasting": FORECASTING_ALIASES,
   "algorithms": ALGORITHM_MODEL_ALIASES,
@@ -358,14 +359,14 @@ const KNOWN_CONCEPTS: Array<{
   {
     key: "sentiment",
     label: "sentiment analysis",
-    displayLabel: "sentiment analysis / طھط­ظ„ظٹظ„ ط§ظ„ظ…ط´ط§ط¹ط±",
+    displayLabel: "sentiment analysis / تحليل المشاعر",
     aliases: DOMAIN_CLAIM_ALIASES.sentiment ?? [],
-    coreTerms: ["sentiment", "sentement", "ظ…ط´ط§ط¹ط±"]
+    coreTerms: ["sentiment", "sentement", "مشاعر"]
   },
   {
     key: "dataset",
     label: "dataset/data source",
-    displayLabel: "dataset/data source / ط§ظ„ط¯ط§طھط§ ظ…ظ† ط§ظ„ط¯ط§طھط§ ط³ظٹطھ",
+    displayLabel: "dataset/data source / الداتا من الداتا سيت",
     aliases: DATASET_SOURCE_ALIASES,
     coreTerms: DATASET_SOURCE_GROUP.coreTerms,
     evidenceGroups: [DATASET_SOURCE_GROUP]
@@ -421,14 +422,14 @@ export function detectProjectAnswerStyle(userPrompt: string): ProjectAnswerStyle
   if (/(?:\u0627\u0634\u0631\u062d.*\u0644\s*\u0637\u0641\u0644|\u0637\u0641\u0644.*\u064a\u0641\u0647\u0645|\u0644\s*\u0637\u0641\u0644|\u0644\u0644\u0637\u0641\u0644|\u0628\u0628\u0633\u0627\u0637\u0629|\u0628\u0634\u0643\u0644\s+\u0645\u0628\u0633\u0637|\u0645\u0628\u0633\u0637|\u0645\u0628\u0633\u0637\u0629|\u0644\u0644\u0645\u0628\u062a\u062f\u0626|\u0645\u0628\u062a\u062f\u0626)/.test(rawPrompt)) return "child_simple";
   if (/\b(eli5|child|kid|kids|five year old|simple|simply)\b/.test(normalized)) return "child_simple";
   if (ARABIC_CHILD_SIMPLE_PATTERN.test(normalized)) return "child_simple";
-  if (/(ط§ط´ط±ط­.*ظ„\s*ط·ظپظ„|ط·ظپظ„.*ظٹظپظ‡ظ…|ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط¨ط¨ط³ط§ط·ط©|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ…ط¨طھط¯ط¦)/.test(normalized)) return "child_simple";
-  if (/(ط§ط´ط±ط­.*ظ„ط·ظپظ„|ط·ظپظ„.*ظٹظپظ‡ظ…|ظ„ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط¨ط¨ط³ط§ط·ط©|ط¨ط´ظƒظ„ ظ…ط¨ط³ط·|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ…ط¨طھط¯ط¦)/.test(normalized)) return "child_simple";
+  if (/(اشرح.*ل\s*طفل|طفل.*يفهم|ل\s*طفل|للطفل|ببساطة|بشكل\s+مبسط|مبسط|مبسطة|للمبتدئ|مبتدئ)/.test(normalized)) return "child_simple";
+  if (/(اشرح.*لطفل|طفل.*يفهم|لطفل|للطفل|ببساطة|بشكل مبسط|مبسط|مبسطة|للمبتدئ|مبتدئ)/.test(normalized)) return "child_simple";
   if (/\b(technical|architecture|internals|code level|deep dive)\b/.test(normalized)) return "technical";
   if (/\b(concise|brief|short|quick)\b/.test(normalized)) return "concise";
-  if (/(ظ…ط®طھطµط±|ط¨ط§ط®طھطµط§ط±)/.test(normalized)) return "concise";
+  if (/(مختصر|باختصار)/.test(normalized)) return "concise";
   if (/\b(detailed|thorough|step by step|full)\b/.test(normalized)) return "detailed";
   if (/(?:\u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644|\u062e\u0637\u0648\u0629\s+\u0628\u062e\u0637\u0648\u0629|\u0628\u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644)/.test(rawPrompt)) return "detailed";
-  if (/(ط¨ط§ظ„طھظپطµظٹظ„|ط®ط·ظˆط© ط¨ط®ط·ظˆط©)/.test(normalized)) return "detailed";
+  if (/(بالتفصيل|خطوة بخطوة)/.test(normalized)) return "detailed";
   return "default";
 }
 
@@ -464,6 +465,8 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   if (compound) return compound;
   const known = detectKnownConcept(styleStripped) ?? detectKnownConcept(userPrompt);
   if (known) return known;
+  const investigationConcept = conceptFromInvestigationResolution(styleStripped) ?? conceptFromInvestigationResolution(userPrompt);
+  if (investigationConcept) return investigationConcept;
   const normalized = normalizeForGroundingSearch(styleStripped);
   const focused = selectConceptPhrase(normalized);
   const terms = meaningfulConceptTerms(focused);
@@ -480,6 +483,41 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
     coreTerms: coreTerms.length ? coreTerms : terms,
     aliases,
     confidence: terms.length ? "medium" : "low"
+  };
+}
+
+function conceptFromInvestigationResolution(userPrompt: string): RequestedConcept | undefined {
+  const resolved = resolveInvestigationConcept(userPrompt);
+  if (!resolved.isTargeted || resolved.targetConcept === "general") return undefined;
+  return {
+    specific: true,
+    label: resolved.targetConcept,
+    displayLabel: resolved.resolvedName ?? resolved.inferredPatternName ?? resolved.requestedConceptText,
+    terms: uniqueStrings([
+      resolved.targetConcept,
+      resolved.requestedConceptText,
+      ...(resolved.resolvedName ? [resolved.resolvedName] : []),
+      ...(resolved.inferredPatternName ? [resolved.inferredPatternName] : []),
+      ...resolved.literalTerms,
+      ...resolved.aliasTerms,
+      ...resolved.behavioralTerms,
+      ...resolved.architecturalTerms
+    ]),
+    coreTerms: uniqueStrings([
+      resolved.targetConcept,
+      resolved.requestedConceptText,
+      ...resolved.literalTerms,
+      ...resolved.aliasTerms.slice(0, 8)
+    ]),
+    aliases: uniqueStrings([
+      resolved.requestedConceptText,
+      ...(resolved.resolvedName ? [resolved.resolvedName] : []),
+      ...(resolved.inferredPatternName ? [resolved.inferredPatternName] : []),
+      ...resolved.aliasTerms,
+      ...resolved.behavioralTerms,
+      ...resolved.architecturalTerms
+    ]),
+    confidence: resolved.confidence
   };
 }
 
@@ -557,7 +595,7 @@ export function createStyleInstruction(style: ProjectAnswerStyle) {
     return "Keep the answer concise and focused.";
   }
   if (style === "detailed") {
-    return "Give a detailed explanation, but do not add facts that are not proven by evidence.";
+    return "Give a detailed multi-section explanation with a summary, step-by-step flow, concrete files/functions/endpoints, and explicit uncertainty. Do not add facts that are not proven by evidence.";
   }
   return "Use a clear, direct explanation.";
 }
@@ -883,14 +921,14 @@ export function normalizeForGroundingSearch(value: string) {
 
 function stripStylePhrases(value: string) {
   return value
-    .replace(/\bexplain\s+it\s+like\s+i(?:'|â€™)?m\s+(?:a\s+)?(?:child|kid|five year old)\b/gi, " ")
-    .replace(/\bexplain\s+like\s+i(?:'|â€™)?m\s+(?:a\s+)?(?:child|kid|five year old)\b/gi, " ")
+    .replace(/\bexplain\s+it\s+like\s+i(?:'|’)?m\s+(?:a\s+)?(?:child|kid|five year old)\b/gi, " ")
+    .replace(/\bexplain\s+like\s+i(?:'|’)?m\s+(?:a\s+)?(?:child|kid|five year old)\b/gi, " ")
     .replace(/\bexplain\s+(?:it\s+)?(?:simply|in simple terms|for a child|to a child)\b/gi, " ")
     .replace(/\bkeep\s+it\s+(?:brief|short|concise|technical|detailed)\b/gi, " ")
     .replace(/(?:\u0627\u0634\u0631\u062d(?:\u0647|\u0647\u0627|\u0644\u064a)?\s*)?(?:\u0644\s*\u0637\u0641\u0644|\u0644\u0644\u0637\u0641\u0644|\u0637\u0641\u0644\s+\u064a\u0642\u062f\u0631\s+\u064a\u0641\u0647\u0645|\u0637\u0641\u0644\s+\u064a\u0641\u0647\u0645|\u0628\u0634\u0643\u0644\s+\u0645\u0628\u0633\u0637|\u0628\u0628\u0633\u0627\u0637\u0629|\u0644\u0644\u0645\u0628\u062a\u062f\u0626(?:\u064a\u0646)?|\u0628\u0633\u064a\u0637(?:\u0629)?|\u0645\u0628\u0633\u0637(?:\u0629)?)/g, " ")
-    .replace(/(?:ط§ط´ط±ط­(?:ظ‡|ظ‡ط§|ظ„ظٹ)?\s*)?(?:ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط·ظپظ„\s+ظٹظ‚ط¯ط±\s+ظٹظپظ‡ظ…|ط·ظپظ„\s+ظٹظپظ‡ظ…|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ط¨ط¨ط³ط§ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦(?:ظٹظ†)?|ط¨ط³ظٹط·(?:ط©)?|ظ…ط¨ط³ط·(?:ط©)?)/g, " ")
-    .replace(/(?:ط§ط´ط±ط­(?:ظ‡|ظ‡ط§|ظ„ظٹ)?\s*)?(?:ظ„\s*ط·ظپظ„|ظ„ظ„ط·ظپظ„|ط·ظپظ„\s+ظٹظ‚ط¯ط±\s+ظٹظپظ‡ظ…|ط·ظپظ„\s+ظٹظپظ‡ظ…|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ط¨ط¨ط³ط§ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦(?:ظٹظ†)?|ط¨ط³ظٹط·(?:ط©)?|ظ…ط¨ط³ط·(?:ط©)?)/g, " ")
-    .replace(/(?:ط§ط´ط±ط­(?:ظ‡|ظ‡ط§|ظ„ظٹ)?\s*)?(?:ظ„ط·ظپظ„|ظ„ظ„ط·ظپظ„|ظ„ ط·ظپظ„|ط·ظپظ„\s+ظٹظ‚ط¯ط±\s+ظٹظپظ‡ظ…|ط·ظپظ„\s+ظٹظپظ‡ظ…|ط¨ط´ظƒظ„\s+ظ…ط¨ط³ط·|ط¨ط¨ط³ط§ط·ط©|ظ„ظ„ظ…ط¨طھط¯ط¦|ظ„ظ„ظ…ط¨طھط¯ط¦ظٹظ†|ط¨ط³ظٹط·|ط¨ط³ظٹط·ط©|ظ…ط¨ط³ط·|ظ…ط¨ط³ط·ط©)/g, " ");
+    .replace(/(?:اشرح(?:ه|ها|لي)?\s*)?(?:ل\s*طفل|للطفل|طفل\s+يقدر\s+يفهم|طفل\s+يفهم|بشكل\s+مبسط|ببساطة|للمبتدئ(?:ين)?|بسيط(?:ة)?|مبسط(?:ة)?)/g, " ")
+    .replace(/(?:اشرح(?:ه|ها|لي)?\s*)?(?:ل\s*طفل|للطفل|طفل\s+يقدر\s+يفهم|طفل\s+يفهم|بشكل\s+مبسط|ببساطة|للمبتدئ(?:ين)?|بسيط(?:ة)?|مبسط(?:ة)?)/g, " ")
+    .replace(/(?:اشرح(?:ه|ها|لي)?\s*)?(?:لطفل|للطفل|ل طفل|طفل\s+يقدر\s+يفهم|طفل\s+يفهم|بشكل\s+مبسط|ببساطة|للمبتدئ|للمبتدئين|بسيط|بسيطة|مبسط|مبسطة)/g, " ");
 }
 
 function detectCompoundDatasetRealtimeConcept(userPrompt: string): RequestedConcept | undefined {
@@ -1176,7 +1214,7 @@ function detectProjectContextRequired(userPrompt: string) {
   const normalized = normalizeForGroundingSearch(userPrompt);
   if (/\b(project|workspace|codebase|app|application|here|this|current)\b/.test(normalized)) return true;
   if (/(\u0627\u0644\u0645\u0634\u0631\u0648\u0639|\u0645\u0634\u0631\u0648\u0639|\u0647\u0646\u0627|\u062f\u0627|\u062f\u0647|\u062f\u064a|\u062f\u0627\u062e\u0644|\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639)/.test(userPrompt)) return true;
-  return /(ط§ظ„ظ…ط´ط±ظˆط¹|ظ…ط´ط±ظˆط¹|ظ‡ظ†ط§|ط¯ط§|ط¯ظ‡|ط¯ظٹ|ط¯ط§ط®ظ„|ظپظٹ ط§ظ„ظ…ط´ط±ظˆط¹)/.test(userPrompt);
+  return /(المشروع|مشروع|هنا|دا|ده|دي|داخل|في المشروع)/.test(userPrompt);
 }
 
 function inferProjectDomain(
@@ -1442,31 +1480,31 @@ function createPageInventoryFallback(grounding: ProjectQuestionGrounding, valida
     const lines: string[] = [];
     if (pageFacts.length) {
       if (hasRealRoutes) {
-        lines.push(`لقيت ${pageFacts.length} route/page مؤكدة من كود الواجهة.`);
+        lines.push(`\u0644\u0642\u064a\u062a ${pageFacts.length} route/page \u0645\u0624\u0643\u062f\u0629 \u0645\u0646 \u0643\u0648\u062f \u0627\u0644\u0648\u0627\u062c\u0647\u0629.`);
       } else if (hasSectionsOrTabs) {
-        lines.push(`واضح إن الواجهة أقرب لـ single-page app، ولقيت ${pageFacts.length} section/tab أو view جوهها.`);
+        lines.push(`\u0648\u0627\u0636\u062d \u0625\u0646 \u0627\u0644\u0648\u0627\u062c\u0647\u0629 \u0623\u0642\u0631\u0628 \u0644\u0640 single-page app\u060c \u0648\u0644\u0642\u064a\u062a ${pageFacts.length} section/tab \u0623\u0648 view \u062c\u0648\u0647\u0647\u0627.`);
       } else {
-        lines.push(`لقيت ${pageFacts.length} candidate من كود الواجهة، بس نوعهم محتاج تأكيد.`);
+        lines.push(`\u0644\u0642\u064a\u062a ${pageFacts.length} candidate \u0645\u0646 \u0643\u0648\u062f \u0627\u0644\u0648\u0627\u062c\u0647\u0629\u060c \u0628\u0633 \u0646\u0648\u0639\u0647\u0645 \u0645\u062d\u062a\u0627\u062c \u062a\u0623\u0643\u064a\u062f.`);
       }
       lines.push("");
-      lines.push("| الاسم | النوع | بتعمل إيه | الدليل | الثقة |");
+      lines.push("| \u0627\u0644\u0627\u0633\u0645 | \u0627\u0644\u0646\u0648\u0639 | \u0628\u062a\u0639\u0645\u0644 \u0625\u064a\u0647 | \u0627\u0644\u062f\u0644\u064a\u0644 | \u0627\u0644\u062b\u0642\u0629 |");
       lines.push("| --- | --- | --- | --- | --- |");
       for (const fact of pageFacts) {
         lines.push(`| ${escapeTableCell(fact.name)} | ${formatArabicPageFactType(fact)} | ${escapeTableCell(formatArabicPageFactDescription(fact))} | ${formatPageFactLinks(fact)} | ${formatArabicConfidence(fact.confidence)} |`);
       }
-      if (stylesheetFacts.length) lines.push("\nملفات CSS لو ظهرت في الأدلة فهي محسوبة كستايل فقط، مش كصفحات.");
+      if (stylesheetFacts.length) lines.push("\n\u0645\u0644\u0641\u0627\u062a CSS \u0644\u0648 \u0638\u0647\u0631\u062a \u0641\u064a \u0627\u0644\u0623\u062f\u0644\u0629 \u0641\u0647\u064a \u0645\u062d\u0633\u0648\u0628\u0629 \u0643\u0633\u062a\u0627\u064a\u0644 \u0641\u0642\u0637\u060c \u0645\u0634 \u0643\u0635\u0641\u062d\u0627\u062a.");
     } else {
-      lines.push("لا أقدر أؤكد عدد صفحات frontend من الأدلة الحالية.");
+      lines.push("\u0644\u0627 \u0623\u0642\u062f\u0631 \u0623\u0624\u0643\u062f \u0639\u062f\u062f \u0635\u0641\u062d\u0627\u062a frontend \u0645\u0646 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629.");
       if (stylesheetFacts.length) {
-        lines.push("لقيت CSS أو styling، لكنه لا يكفي يتعد كصفحة أو screen.");
+        lines.push("\u0644\u0642\u064a\u062a CSS \u0623\u0648 styling\u060c \u0644\u0643\u0646\u0647 \u0644\u0627 \u064a\u0643\u0641\u064a \u064a\u062a\u0639\u062f \u0643\u0635\u0641\u062d\u0629 \u0623\u0648 screen.");
       }
       if (endpointFacts.length) {
-        lines.push("اللي ظهر بدل كده backend/API endpoints، ودي مش صفحات واجهة مؤكدة:");
+        lines.push("\u0627\u0644\u0644\u064a \u0638\u0647\u0631 \u0628\u062f\u0644 \u0643\u062f\u0647 backend/API endpoints\u060c \u0648\u062f\u064a \u0645\u0634 \u0635\u0641\u062d\u0627\u062a \u0648\u0627\u062c\u0647\u0629 \u0645\u0624\u0643\u062f\u0629:");
         for (const fact of endpointFacts) {
           lines.push(`- ${fact.name}: ${formatArabicPageFactDescription(fact)} ${formatPageFactLinks(fact)}`);
         }
       } else {
-        lines.push(`راجعت: ${formatPageInventoryInspectedFiles(grounding)}.`);
+        lines.push(`\u0631\u0627\u062c\u0639\u062a: ${formatPageInventoryInspectedFiles(grounding)}.`);
       }
     }
     return lines.join("\n");
@@ -1638,12 +1676,12 @@ function inferPageDescription(raw: string, type: PageEvidenceFact["type"]) {
 function formatArabicPageFactDescription(fact: PageEvidenceFact) {
   const summary = sanitizeAnswerFragment(fact.functionSummary).replace(/\s+/g, " ").trim();
   if (summary.length > 8 && !/^(A frontend route|A navigation|A page-like|An item|Stylesheet)/i.test(summary)) return summary.slice(0, 160);
-  if (fact.type === "route") return `route بيعرض شاشة ${fact.name}`;
-  if (fact.type === "tab") return `tab/navigation بيفتح جزء ${fact.name}`;
-  if (fact.type === "api_endpoint") return "backend endpoint، مش صفحة frontend مؤكدة";
-  if (fact.type === "component") return "component في الواجهة، وظيفته الدقيقة محتاجة سياق render";
-  if (fact.type === "stylesheet_support") return "ستايل فقط، مش صفحة";
-  return `section أو view باسم ${fact.name}`;
+  if (fact.type === "route") return `route \u0628\u064a\u0639\u0631\u0636 \u0634\u0627\u0634\u0629 ${fact.name}`;
+  if (fact.type === "tab") return `tab/navigation \u0628\u064a\u0641\u062a\u062d \u062c\u0632\u0621 ${fact.name}`;
+  if (fact.type === "api_endpoint") return "backend endpoint\u060c \u0645\u0634 \u0635\u0641\u062d\u0629 frontend \u0645\u0624\u0643\u062f\u0629";
+  if (fact.type === "component") return "component \u0641\u064a \u0627\u0644\u0648\u0627\u062c\u0647\u0629\u060c \u0648\u0638\u064a\u0641\u062a\u0647 \u0627\u0644\u062f\u0642\u064a\u0642\u0629 \u0645\u062d\u062a\u0627\u062c\u0629 \u0633\u064a\u0627\u0642 render";
+  if (fact.type === "stylesheet_support") return "\u0633\u062a\u0627\u064a\u0644 \u0641\u0642\u0637\u060c \u0645\u0634 \u0635\u0641\u062d\u0629";
+  return `section \u0623\u0648 view \u0628\u0627\u0633\u0645 ${fact.name}`;
 }
 
 function formatEnglishPageFactDescription(fact: PageEvidenceFact) {
@@ -1676,9 +1714,9 @@ function formatArabicPageFactType(fact: PageEvidenceFact) {
 }
 
 function formatArabicConfidence(confidence: PageEvidenceFact["confidence"]) {
-  if (confidence === "high") return "عالية";
-  if (confidence === "medium") return "متوسطة";
-  return "منخفضة";
+  if (confidence === "high") return "\u0639\u0627\u0644\u064a\u0629";
+  if (confidence === "medium") return "\u0645\u062a\u0648\u0633\u0637\u0629";
+  return "\u0645\u0646\u062e\u0641\u0636\u0629";
 }
 
 function formatPageFactLinks(fact: PageEvidenceFact) {
@@ -1739,7 +1777,7 @@ function scorePageSummary(value: string) {
   let score = 0;
   const text = value.trim();
   if (/\b(shows|lists|explains|renders|opens|displays|handles|summary|details|recommendations|decisions)\b/i.test(text)) score += 50;
-  if (/^(A frontend route|A navigation|A page-like|An item|Stylesheet|route بيعرض|tab\/navigation|section أو view)/i.test(text)) score -= 25;
+  if (/^(A frontend route|A navigation|A page-like|An item|Stylesheet|route \u0628\u064a\u0639\u0631\u0636|tab\/navigation|section \u0623\u0648 view)/i.test(text)) score -= 25;
   if (/\b(export const|const |let |var |function|return |CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|[{}<>;]/.test(text)) score -= 45;
   if (text.length >= 20 && text.length <= 150) score += 20;
   if (text.length > 220) score -= 30;
@@ -2289,7 +2327,7 @@ function uniqueStrings(values: string[]) {
 }
 
 function sanitizeAnswerFragment(value: string) {
-  return /(?:ط§ظ|ظپظ|ط¨ط|ظ…ط|ط§ط|ظ„ظ)/.test(value)
+  return /(?:\uFFFD|\u0637\u00a7\u0638|\u0638\u067e\u0638|\u0637\u00a8\u0637|\u0638\u2026\u0637|\u0637\u00a7\u0637|\u0638\u201e\u0638)/.test(value)
     ? "current-workspace evidence"
     : value;
 }

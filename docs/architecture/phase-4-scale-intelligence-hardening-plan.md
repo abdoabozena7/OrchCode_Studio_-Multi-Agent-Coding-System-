@@ -2,7 +2,7 @@
 
 ## Current Phase 3 Architecture Summary
 
-OrchCode now has a file-backed project memory layer, repository indexing, command inventory, an orchestration task graph, role registry, context packs, structured output validators, patch safety checks, file locks, review loops, validation runner, repair task creation, and run artifacts under `.agent_memory/runs/<run_id>/`.
+Hivo now has a file-backed project memory layer, repository indexing, command inventory, an orchestration task graph, role registry, context packs, structured output validators, patch safety checks, file locks, review loops, validation runner, repair task creation, and run artifacts under `.agent_memory/runs/<run_id>/`.
 
 The current vertical slice is intentionally conservative. `CoreOrchestrator` rebuilds repository memory, creates a Scout/Planner/Executor/Reporter task graph, invokes deterministic read-only roles, routes ExecutorAgent through the existing `SeniorCodingAgent` path, records artifacts, runs safety and validation gates, and writes a final report.
 

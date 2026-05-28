@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_report_67431a3f",
+  "status": "succeeded",
+  "summary": "ReporterAgent completed summarize work for Change copy text in docs/architecture.md.",
+  "relevant_files": [],
+  "findings": [
+    "summarize work item used schema FinalSwarmReport."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

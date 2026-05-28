@@ -52,10 +52,26 @@ export type VerificationResult = {
   commands_run: Array<{
     command: string;
     cwd: string;
-    status: "passed" | "failed" | "blocked" | "timed_out";
+    status: "passed" | "failed" | "blocked" | "skipped" | "timed_out" | "not_run";
     exit_code?: number | null;
+    required?: boolean;
+    summary?: string;
+    log_ref?: string;
   }>;
   passed: boolean;
+  validation_status?: "passed" | "failed" | "skipped" | "blocked" | "partial" | "not_required" | "not_run";
+  aggregate?: {
+    status: "passed" | "failed" | "skipped" | "blocked" | "partial" | "not_required" | "not_run";
+    required_command_count: number;
+    optional_command_count: number;
+    passed_count: number;
+    failed_count: number;
+    blocked_count: number;
+    skipped_count: number;
+    timed_out_count: number;
+    not_run_count: number;
+    reason: string;
+  };
   failed_commands: string[];
   logs_refs: string[];
   summary: string;

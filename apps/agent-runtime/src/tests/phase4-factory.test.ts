@@ -134,7 +134,7 @@ test("Phase 4 memory compaction records failed attempts", async () => {
 });
 
 async function fixtureWorkspace() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "orchcode-phase4-test-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "hivo-phase4-test-"));
   await mkdir(path.join(root, "src"), { recursive: true });
   await writeJson(path.join(root, "package.json"), {
     scripts: {

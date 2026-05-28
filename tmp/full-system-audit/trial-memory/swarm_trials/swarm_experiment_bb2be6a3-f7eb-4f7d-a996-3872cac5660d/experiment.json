@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+  "title": "Baseline vs Swarm Autopilot Comparison",
+  "description": "Compares simple, orchestrated, and autopilot modes using deterministic mock metrics derived from actual staffing plans.",
+  "scenario_type": "comparison",
+  "tasks_to_test": [
+    {
+      "id": "comparison_goal",
+      "title": "Comparison goal",
+      "input_goal": "Explain architecture without editing",
+      "expected": {
+        "expected_complexity": "medium",
+        "expected_agent_range": [
+          1,
+          300
+        ],
+        "expected_executor_limit": 6
+      }
+    }
+  ],
+  "modes_to_compare": [
+    "baseline-simple",
+    "orchestrated",
+    "autopilot-fast",
+    "autopilot-deep",
+    "autopilot-exhaustive"
+  ],
+  "expected_staffing_behavior": [
+    {
+      "expected_complexity": "medium",
+      "expected_agent_range": [
+        1,
+        300
+      ],
+      "expected_executor_limit": 6
+    }
+  ],
+  "created_at": "2026-05-24T10:33:05.263Z",
+  "status": "succeeded",
+  "config": {
+    "uses_mock_agents": true,
+    "uses_real_model": false
+  },
+  "results_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\tmp\\full-system-audit\\trial-memory\\swarm_trials\\swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d\\runs.json",
+  "report_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\tmp\\full-system-audit\\trial-memory\\swarm_trials\\swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d\\trial_report.md"
+}

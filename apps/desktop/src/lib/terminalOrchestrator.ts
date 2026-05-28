@@ -1,4 +1,4 @@
-import type { AgentRuntimeSession, CommandRequest, SafetySettings } from "@orchcode/protocol";
+import type { AgentRuntimeSession, CommandRequest, SafetySettings } from "@hivo/protocol";
 import { executeApprovedCommand } from "./tauri";
 
 type RuntimeCommandExecutionInput = {

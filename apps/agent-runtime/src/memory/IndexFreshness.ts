@@ -9,7 +9,7 @@ import { MEMORY_SCHEMA_VERSION, type FileManifestEntry, type IndexFreshnessRepor
 const IGNORED_DIRECTORIES = new Set([
   ".agent_memory",
   ".git",
-  ".orchcode-agent-runtime",
+  ".hivo-agent-runtime",
   ".playwright-mcp",
   "node_modules",
   "dist",

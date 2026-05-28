@@ -1,4 +1,4 @@
-import type { AgentPlan, PatchProposal } from "@orchcode/protocol";
+import type { AgentPlan, PatchProposal } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "./LlmProvider.js";
 import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../mock/threeJsSnake.js";
 
@@ -145,7 +145,7 @@ export class MockLlmProvider implements LlmProvider {
         title: mode === "create_project" && index === 0 ? "Create project scaffold" : `Prepare reviewable change ${index + 1}`,
         objective: request,
         roleTitle: mode === "create_project" && index === 0 ? "Project Scaffolder" : rolePool[index] ?? `Dynamic Worker ${index + 1}`,
-        targetFiles: mode === "create_project" ? ["orchcode-project/README.md", "orchcode-project/index.html"] : ["AGENT_PROPOSAL.md"],
+        targetFiles: mode === "create_project" ? ["hivo-project/README.md", "hivo-project/index.html"] : ["AGENT_PROPOSAL.md"],
         expectedArtifact: "Reviewable diff",
         verification: "git diff --check"
       })),

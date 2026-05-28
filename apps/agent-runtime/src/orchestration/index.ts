@@ -1,17 +1,129 @@
 export * from "./ArtifactStore.js";
+export * from "./AgentTeamManager.js";
+export * from "./AgentTeamModels.js";
 export * from "./ApprovalGates.js";
 export * from "./CampaignManager.js";
+export * from "./ContextInclusion.js";
 export * from "./ContextPackBuilder.js";
 export * from "./FileLockManager.js";
+export * from "./DurableLockManager.js";
+export * from "./FactoryLockModels.js";
+export * from "./FactoryMetadataStore.js";
+export * from "./FactoryTraceEvents.js";
+export * from "./FactoryTraceReader.js";
+export * from "./FactoryTraceWriter.js";
+export * from "./IntegrationManager.js";
+export {
+  createIntegrationCandidate,
+  createIntegrationPlan,
+  createIntegrationResult,
+  integrationStatusFromValidation,
+  integrationValidationImpact,
+  isIntegrationBlocking,
+  isIntegrationSuccessful,
+  riskLevelForFiles
+} from "./IntegrationModels.js";
+export type {
+  IntegrationApplyMode,
+  IntegrationArtifactRef,
+  IntegrationBatch,
+  IntegrationCandidate,
+  IntegrationConflict,
+  IntegrationPlan,
+  IntegrationResult as FactoryIntegrationResult,
+  IntegrationRiskLevel,
+  IntegrationRollbackPlan,
+  IntegrationStatus,
+  IntegrationValidationImpact
+} from "./IntegrationModels.js";
 export * from "./OrchestrationModels.js";
 export * from "./OrchestrationConfig.js";
 export * from "./Orchestrator.js";
 export * from "./Metrics.js";
+export * from "./MultiPlanFactory.js";
+export * from "./MultiPlanModels.js";
+export * from "./PlanEvaluator.js";
+export * from "./PlanMerger.js";
+export * from "./PlanningEvidenceCollector.js";
 export * from "./PatchSafety.js";
+export * from "./PromptSystem.js";
+export * from "./PromptQualityGate.js";
+export * from "./PromptWriterModels.js";
+export * from "./PromptWriterService.js";
+export * from "./ProviderBackedSwarmWorker.js";
+export * from "./ReadOnlySwarmWorkerSchemas.js";
 export * from "./RepairLoop.js";
 export * from "./ReviewLoop.js";
 export * from "./RoleRegistry.js";
+export * from "./RunStateMachine.js";
 export * from "./StructuredOutputs.js";
+export * from "./SpecialistAgentFactory.js";
+export * from "./SwarmAgentTemplates.js";
+export * from "./SwarmArtifactStore.js";
+export * from "./SwarmFanInOut.js";
+export * from "./SwarmModels.js";
+export * from "./SwarmRuntime.js";
+export * from "./SwarmScheduler.js";
+export * from "./SwarmStaffingPlanner.js";
+export * from "./SwarmTrialArtifactStore.js";
+export * from "./SwarmTrialLab.js";
+export * from "./SwarmTrialMemory.js";
+export * from "./SwarmTrialModels.js";
+export * from "./TeamSubPlanningModels.js";
+export * from "./TeamSubPlanner.js";
+export * from "./TeamSubPlanAggregator.js";
+export * from "./TeamTaskAdoptionModels.js";
+export * from "./TeamTaskAdoptionGate.js";
+export * from "./TeamTaskReadinessGate.js";
+export * from "./ProposedTaskGraphModels.js";
+export * from "./ProposedTaskGraphManager.js";
+export * from "./ExecutionReadinessModels.js";
+export * from "./ExecutionApprovalPolicy.js";
+export * from "./ExecutionReadinessGate.js";
+export * from "./ExecutionApprovalModels.js";
+export * from "./ExecutionPromotionPolicy.js";
+export * from "./ExecutionApprovalManager.js";
+export * from "./ExecutionPromotionQueue.js";
+export * from "./ExecutionPreparationModels.js";
+export * from "./ExecutionPreparationPolicy.js";
+export * from "./ExecutionPreparationPlanner.js";
+export * from "./PatchProposalModels.js";
+export * from "./PatchProposalScopeChecker.js";
+export * from "./OneWriterDryRunModels.js";
+export * from "./OneWriterDryRunExecutor.js";
+export {
+  countSeverities,
+  createPatchProposalReview,
+  createPatchProposalReviewBatch,
+  createPatchProposalReviewBlocker,
+  createPatchProposalReviewFinding,
+  createPatchProposalReviewRequest,
+  createPatchProposalReviewResult,
+  createPatchProposalReviewSummary,
+  createPatchProposalReviewWarning
+} from "./PatchProposalReviewModels.js";
+export type {
+  PatchProposalReview,
+  PatchProposalReviewBatch,
+  PatchProposalReviewBlocker,
+  PatchProposalReviewDecision,
+  PatchProposalReviewFinding,
+  PatchProposalReviewProvider,
+  PatchProposalReviewProviderInput,
+  PatchProposalReviewProviderResult,
+  PatchProposalReviewRequest,
+  PatchProposalReviewResult,
+  PatchProposalReviewStatus,
+  PatchProposalReviewSummary,
+  PatchProposalReviewWarning,
+  ReviewCategory
+} from "./PatchProposalReviewModels.js";
+export * from "./PatchProposalReviewSchemas.js";
+export * from "./PatchProposalReviewGate.js";
+export * from "./ValidationCandidateModels.js";
+export * from "./ValidationPreflightChecker.js";
+export * from "./ValidationCandidateGate.js";
 export * from "./TaskGraphManager.js";
 export * from "./Validation.js";
 export * from "./ValidationRunner.js";
+export * from "./ValidationSemantics.js";

@@ -1,0 +1,73 @@
+{
+  "baseUrl": "http://127.0.0.1:11434",
+  "preferredModel": "qwen2.5-coder:7b",
+  "startedAt": "2026-05-24T10:34:45.332Z",
+  "directProvider": {
+    "status": "succeeded",
+    "providerMode": "real_provider",
+    "model": "qwen2.5-coder:7b",
+    "responsePreview": "OK.",
+    "latencyMs": 6283
+  },
+  "runtimeRealProvider": {
+    "status": "completed",
+    "sessionStatus": "completed",
+    "lifecycleStage": "DONE",
+    "providerMode": "real_provider",
+    "model": "qwen2.5-coder:7b",
+    "providerCalls": 2,
+    "fallbackUsed": false,
+    "assistantPreview": "I searched for `one`; strongest local evidence:\n\n- This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode-file:README.md:3)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:1](orchcode-file:README.md:1)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:2](orchcode-file:README.md:2)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode",
+    "artifactTypes": [
+      "project_intake",
+      "context_pack",
+      "project_explain_report",
+      "concept_resolution",
+      "investigation_graph",
+      "mechanism_chain",
+      "evidence_tiers",
+      "verification",
+      "project_explain_answer"
+    ],
+    "commandRequests": 0,
+    "patchProposals": 0,
+    "latencyMs": 14538
+  },
+  "calls": [
+    {
+      "url": "http://127.0.0.1:11434/api/chat",
+      "model": "qwen2.5-coder:7b",
+      "startedAt": "2026-05-24T10:34:45.361Z",
+      "durationMs": 6282,
+      "ok": true,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:11434/api/chat",
+      "model": "qwen2.5-coder:7b",
+      "startedAt": "2026-05-24T10:34:51.795Z",
+      "durationMs": 6985,
+      "ok": true,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:11434/api/chat",
+      "model": "qwen2.5-coder:7b",
+      "startedAt": "2026-05-24T10:34:58.783Z",
+      "durationMs": 7353,
+      "ok": true,
+      "status": 200
+    }
+  ],
+  "availableModels": [
+    "gpt-oss:120b-cloud",
+    "qwen2.5-coder:7b",
+    "deepseek-coder:6.7b"
+  ],
+  "selectedModel": "qwen2.5-coder:7b",
+  "tagsLatencyMs": 28,
+  "finishedAt": "2026-05-24T10:35:06.182Z",
+  "providerCallCount": 3,
+  "responseCount": 3,
+  "mockFallbackUsage": false
+}

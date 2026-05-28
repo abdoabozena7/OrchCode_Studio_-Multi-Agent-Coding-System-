@@ -1,3 +1,4 @@
+import { canonicalRunStatusValues } from "./RunStateMachine.js";
 import type {
   AgentInvocation,
   AgentRole,
@@ -15,16 +16,12 @@ export type ValidationResult = {
 };
 
 const RUN_STATUSES: RunStatus[] = [
-  "created",
+  ...canonicalRunStatusValues(),
+  "analyzing",
+  "staffing",
   "indexing",
-  "planning",
-  "executing",
-  "reviewing",
   "verifying",
-  "integrating",
-  "succeeded",
-  "failed",
-  "cancelled"
+  "scheduling"
 ];
 
 const TASK_STATUSES: TaskStatus[] = ["pending", "ready", "running", "blocked", "succeeded", "failed", "skipped"];
@@ -82,6 +79,10 @@ export function validateContextPack(value: ContextPack): ValidationResult {
     "constraints",
     "allowed_files_to_edit",
     "forbidden_files",
+    "target_mechanism_chain",
+    "confirmed_relevant_files",
+    "missing_evidence_links",
+    "safe_edit_surface",
     "previous_decisions",
     "validation_requirements",
     "warnings"

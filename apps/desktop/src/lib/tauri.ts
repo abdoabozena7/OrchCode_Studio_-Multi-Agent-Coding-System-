@@ -13,8 +13,8 @@ import type {
   Task,
   WorkspaceDiffSnapshot,
   WorkspaceInfo
-} from "@orchcode/protocol";
-import type { AppEvent, SafetySettings } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import type { AppEvent, SafetySettings } from "@hivo/protocol";
 
 export type ModelProviderConfigInput = {
   id: string;

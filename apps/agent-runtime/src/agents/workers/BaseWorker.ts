@@ -6,7 +6,7 @@ import type {
   TaskNode,
   WorkOrder,
   WorkerOutput
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { ToolRegistry } from "../../tools/ToolRegistry.js";
 

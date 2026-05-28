@@ -4,7 +4,7 @@ import process from "node:process";
 const devUrl = "http://127.0.0.1:1420/";
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const freshLaunch = process.argv.includes("--fresh") || process.env.ORCHCODE_DEV_FRESH === "1";
+const freshLaunch = process.argv.includes("--fresh") || process.env.HIVO_DEV_FRESH === "1" || process.env.ORCHCODE_DEV_FRESH === "1";
 
 if (freshLaunch) {
   await stopDevProcessOnPort(1420, "desktop dev server");

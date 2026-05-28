@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   DURABLE_RUNTIME_EVENT_TYPES,
   isDurableRuntimeEventType
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import {
   createDurableRuntimeEvent,
   mapRuntimeEventNameToDurableType

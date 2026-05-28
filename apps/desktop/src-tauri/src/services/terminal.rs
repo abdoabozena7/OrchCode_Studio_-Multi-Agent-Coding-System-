@@ -764,7 +764,7 @@ mod tests {
             .expect("time")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "orchcode-terminal-{}-{}",
+            "hivo-terminal-{}-{}",
             std::process::id(),
             unique
         ));

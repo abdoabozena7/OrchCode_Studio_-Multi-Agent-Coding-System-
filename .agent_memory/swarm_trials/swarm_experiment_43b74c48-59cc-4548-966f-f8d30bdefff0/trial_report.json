@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0",
+  "summary": "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal.",
+  "scenarios_run": 3,
+  "staffing_accuracy": 1,
+  "modes_compared": [
+    "baseline-simple",
+    "orchestrated",
+    "autopilot-fast",
+    "autopilot-deep",
+    "autopilot-exhaustive"
+  ],
+  "key_metrics": {
+    "runs": 5,
+    "failures": 0,
+    "average_agents": 40.4,
+    "comparison_recommendation": "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal."
+  },
+  "wins": [
+    "Staffing matched large for: Refactor a cross-module service while preserving public API behavior.",
+    "Staffing matched large for: Refactor a cross-module service while preserving public API behavior.",
+    "Staffing matched large for: Refactor a cross-module service while preserving public API behavior."
+  ],
+  "losses": [],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Refactor a cross-module service while preserving public API behavior.: executor_limit=1, read_only_ratio=0.97",
+    "Refactor a cross-module service while preserving public API behavior.: executor_limit=1, read_only_ratio=0.97",
+    "Refactor a cross-module service while preserving public API behavior.: executor_limit=1, read_only_ratio=0.97"
+  ],
+  "specialist_selection_findings": [
+    "Refactor a cross-module service while preserving public API behavior.: specialists=AuthSecurityReviewerAgent, APICompatibilityReviewerAgent",
+    "Refactor a cross-module service while preserving public API behavior.: specialists=AuthSecurityReviewerAgent, APICompatibilityReviewerAgent",
+    "Refactor a cross-module service while preserving public API behavior.: specialists=AuthSecurityReviewerAgent, APICompatibilityReviewerAgent"
+  ],
+  "recommended_defaults": [
+    "Default mode: fast",
+    "Default total agents for this class: 65",
+    "Executor limit: 1"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

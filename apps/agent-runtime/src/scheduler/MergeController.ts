@@ -1,4 +1,4 @@
-import type { PatchProposal, ReviewResult, WorkerOutput } from "@orchcode/protocol";
+import type { PatchProposal, ReviewResult, WorkerOutput } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 
 export type MergeSummary = {

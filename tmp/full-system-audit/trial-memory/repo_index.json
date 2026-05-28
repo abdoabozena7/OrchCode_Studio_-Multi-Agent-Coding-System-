@@ -1,0 +1,801 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-24T11:06:31.002Z",
+  "workspaceRoot": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)",
+  "projectName": "orchcode-studio",
+  "totals": {
+    "indexedFiles": 249,
+    "sourceFiles": 209,
+    "testFiles": 29,
+    "configFiles": 12,
+    "docFiles": 22,
+    "skippedFiles": 67,
+    "indexedBytes": 2983556
+  },
+  "languages": {
+    "CSS": 1,
+    "HTML": 1,
+    "JavaScript": 2,
+    "JSON": 8,
+    "Markdown": 22,
+    "Rust": 24,
+    "TOML": 1,
+    "TypeScript": 183,
+    "XML": 2
+  },
+  "extensions": {
+    ".css": 1,
+    ".html": 1,
+    ".json": 10,
+    ".lock": 1,
+    ".md": 22,
+    ".mjs": 2,
+    ".rs": 24,
+    ".toml": 1,
+    ".ts": 181,
+    ".tsx": 2,
+    ".xml": 2,
+    "[none]": 2
+  },
+  "topLevelDirectories": [
+    {
+      "path": "apps",
+      "files": 209
+    },
+    {
+      "path": "docs",
+      "files": 21
+    },
+    {
+      "path": "packages",
+      "files": 13
+    },
+    {
+      "path": ".",
+      "files": 5
+    },
+    {
+      "path": "scripts",
+      "files": 1
+    }
+  ],
+  "ignoredDirectories": [
+    ".agent_memory",
+    ".git",
+    ".orchcode-agent-runtime",
+    ".playwright-mcp",
+    ".tmp-run",
+    "apps/agent-runtime/.orchcode-agent-runtime",
+    "apps/agent-runtime/dist",
+    "apps/desktop/dist",
+    "apps/desktop/node_modules",
+    "apps/desktop/src-tauri/gen",
+    "apps/desktop/src-tauri/target",
+    "node_modules",
+    "packages/protocol/dist",
+    "test-results",
+    "tmp"
+  ],
+  "skippedFiles": [
+    {
+      "path": ".orchcode-agent-runtime.log",
+      "reason": "unreadable",
+      "sizeBytes": 1952
+    },
+    {
+      "path": ".orchcode-agent-runtime.watch.err.log",
+      "reason": "unreadable",
+      "sizeBytes": 2749942
+    },
+    {
+      "path": ".orchcode-agent-runtime.watch.log",
+      "reason": "unreadable",
+      "sizeBytes": 28969
+    },
+    {
+      "path": ".orchcode-desktop.log",
+      "reason": "unreadable",
+      "sizeBytes": 9318
+    },
+    {
+      "path": ".orchcode-launch.err.log",
+      "reason": "unreadable",
+      "sizeBytes": 1223
+    },
+    {
+      "path": ".orchcode-launch.fresh.err.log",
+      "reason": "unreadable",
+      "sizeBytes": 2749842
+    },
+    {
+      "path": ".orchcode-launch.fresh.log",
+      "reason": "unreadable",
+      "sizeBytes": 29767
+    },
+    {
+      "path": ".orchcode-launch.latest.log",
+      "reason": "unreadable",
+      "sizeBytes": 5660122
+    },
+    {
+      "path": ".orchcode-launch.log",
+      "reason": "unreadable",
+      "sizeBytes": 468
+    },
+    {
+      "path": "apps/desktop/public/orchcode-icon.png",
+      "reason": "binary",
+      "sizeBytes": 237419
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128.png",
+      "reason": "binary",
+      "sizeBytes": 18928
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/128x128@2x.png",
+      "reason": "binary",
+      "sizeBytes": 63152
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/32x32.png",
+      "reason": "binary",
+      "sizeBytes": 2109
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/64x64.png",
+      "reason": "binary",
+      "sizeBytes": 6007
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png",
+      "reason": "binary",
+      "sizeBytes": 28266
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png",
+      "reason": "binary",
+      "sizeBytes": 3936
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher.png",
+      "reason": "binary",
+      "sizeBytes": 3339
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png",
+      "reason": "binary",
+      "sizeBytes": 14139
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png",
+      "reason": "binary",
+      "sizeBytes": 3880
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png",
+      "reason": "binary",
+      "sizeBytes": 3230
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png",
+      "reason": "binary",
+      "sizeBytes": 46032
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png",
+      "reason": "binary",
+      "sizeBytes": 10938
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png",
+      "reason": "binary",
+      "sizeBytes": 9427
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png",
+      "reason": "binary",
+      "sizeBytes": 98317
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png",
+      "reason": "binary",
+      "sizeBytes": 21447
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png",
+      "reason": "binary",
+      "sizeBytes": 18265
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png",
+      "reason": "binary",
+      "sizeBytes": 170116
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png",
+      "reason": "binary",
+      "sizeBytes": 34543
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png",
+      "reason": "binary",
+      "sizeBytes": 29365
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.icns",
+      "reason": "binary",
+      "sizeBytes": 1613919
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.ico",
+      "reason": "binary",
+      "sizeBytes": 78861
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/icon.png",
+      "reason": "binary",
+      "sizeBytes": 237419
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-20x20@1x.png",
+      "reason": "binary",
+      "sizeBytes": 953
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-20x20@2x-1.png",
+      "reason": "binary",
+      "sizeBytes": 2638
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-20x20@2x.png",
+      "reason": "binary",
+      "sizeBytes": 2638
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-20x20@3x.png",
+      "reason": "binary",
+      "sizeBytes": 5000
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-29x29@1x.png",
+      "reason": "binary",
+      "sizeBytes": 1605
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-29x29@2x-1.png",
+      "reason": "binary",
+      "sizeBytes": 4794
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-29x29@2x.png",
+      "reason": "binary",
+      "sizeBytes": 4794
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-29x29@3x.png",
+      "reason": "binary",
+      "sizeBytes": 9311
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-40x40@1x.png",
+      "reason": "binary",
+      "sizeBytes": 2638
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-40x40@2x-1.png",
+      "reason": "binary",
+      "sizeBytes": 8061
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-40x40@2x.png",
+      "reason": "binary",
+      "sizeBytes": 8061
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-40x40@3x.png",
+      "reason": "binary",
+      "sizeBytes": 15940
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-512@2x.png",
+      "reason": "binary",
+      "sizeBytes": 907494
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-60x60@2x.png",
+      "reason": "binary",
+      "sizeBytes": 15940
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-60x60@3x.png",
+      "reason": "binary",
+      "sizeBytes": 31905
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-76x76@1x.png",
+      "reason": "binary",
+      "sizeBytes": 7350
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-76x76@2x.png",
+      "reason": "binary",
+      "sizeBytes": 23953
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png",
+      "reason": "binary",
+      "sizeBytes": 28243
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square107x107Logo.png",
+      "reason": "binary",
+      "sizeBytes": 13868
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square142x142Logo.png",
+      "reason": "binary",
+      "sizeBytes": 22658
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square150x150Logo.png",
+      "reason": "binary",
+      "sizeBytes": 24780
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square284x284Logo.png",
+      "reason": "binary",
+      "sizeBytes": 76747
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square30x30Logo.png",
+      "reason": "binary",
+      "sizeBytes": 1953
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square310x310Logo.png",
+      "reason": "binary",
+      "sizeBytes": 90773
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square44x44Logo.png",
+      "reason": "binary",
+      "sizeBytes": 3364
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square71x71Logo.png",
+      "reason": "binary",
+      "sizeBytes": 7105
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/Square89x89Logo.png",
+      "reason": "binary",
+      "sizeBytes": 10216
+    },
+    {
+      "path": "apps/desktop/src-tauri/icons/StoreLogo.png",
+      "reason": "binary",
+      "sizeBytes": 4091
+    },
+    {
+      "path": "Launch-OrchCode.cmd",
+      "reason": "unreadable",
+      "sizeBytes": 56
+    },
+    {
+      "path": "Launch-OrchCode.cmd.lnk",
+      "reason": "unreadable",
+      "sizeBytes": 1656
+    },
+    {
+      "path": "orchcode-icon.ico",
+      "reason": "binary",
+      "sizeBytes": 78861
+    },
+    {
+      "path": "tauri-dev.clean.err.log",
+      "reason": "unreadable",
+      "sizeBytes": 1732
+    },
+    {
+      "path": "tauri-dev.clean.log",
+      "reason": "unreadable",
+      "sizeBytes": 277
+    },
+    {
+      "path": "tauri-dev.verify.err.log",
+      "reason": "unreadable",
+      "sizeBytes": 1733
+    },
+    {
+      "path": "tauri-dev.verify.log",
+      "reason": "unreadable",
+      "sizeBytes": 118
+    }
+  ],
+  "sourceFiles": [
+    "apps/agent-runtime/scripts/python-pygame-fallback-smoke.ts",
+    "apps/agent-runtime/scripts/run-to-green-smoke.ts",
+    "apps/agent-runtime/src/agents/SeniorCodingAgent.ts",
+    "apps/agent-runtime/src/agents/workers/ArchitectAgent.ts",
+    "apps/agent-runtime/src/agents/workers/BaseWorker.ts",
+    "apps/agent-runtime/src/agents/workers/CodebaseMapperAgent.ts",
+    "apps/agent-runtime/src/agents/workers/FrontendAgent.ts",
+    "apps/agent-runtime/src/agents/workers/GenericWorkerAgent.ts",
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/agents/workers/ReviewerAgent.ts",
+    "apps/agent-runtime/src/agents/workers/RustBackendAgent.ts",
+    "apps/agent-runtime/src/agents/workers/SecurityAgent.ts",
+    "apps/agent-runtime/src/agents/workers/TestAgent.ts",
+    "apps/agent-runtime/src/agents/workers/ToolingTerminalAgent.ts",
+    "apps/agent-runtime/src/config.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/evals/phase4.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/llm/LlmProvider.ts",
+    "apps/agent-runtime/src/llm/MockLlmProvider.ts",
+    "apps/agent-runtime/src/llm/OllamaProvider.ts",
+    "apps/agent-runtime/src/llm/OpenAIProvider.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/CommandInventory.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/memory/IndexFreshness.ts",
+    "apps/agent-runtime/src/memory/ProjectIntelligence.ts",
+    "apps/agent-runtime/src/memory/ProjectMemory.ts",
+    "apps/agent-runtime/src/memory/RepoIndexer.ts",
+    "apps/agent-runtime/src/memory/types.ts",
+    "apps/agent-runtime/src/mock/threeJsSnake.ts",
+    "apps/agent-runtime/src/orchestration/ApprovalGates.ts",
+    "apps/agent-runtime/src/orchestration/ArtifactStore.ts",
+    "apps/agent-runtime/src/orchestration/campaign-cli.ts",
+    "apps/agent-runtime/src/orchestration/CampaignManager.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts",
+    "apps/agent-runtime/src/orchestration/FileLockManager.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/orchestration/Metrics.ts",
+    "apps/agent-runtime/src/orchestration/OrchestrationConfig.ts",
+    "apps/agent-runtime/src/orchestration/OrchestrationModels.ts",
+    "apps/agent-runtime/src/orchestration/Orchestrator.ts",
+    "apps/agent-runtime/src/orchestration/PatchSafety.ts",
+    "apps/agent-runtime/src/orchestration/RepairLoop.ts",
+    "apps/agent-runtime/src/orchestration/ReviewLoop.ts",
+    "apps/agent-runtime/src/orchestration/RoleRegistry.ts",
+    "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts",
+    "apps/agent-runtime/src/orchestration/StructuredOutputs.ts",
+    "apps/agent-runtime/src/orchestration/SwarmAgentTemplates.ts",
+    "apps/agent-runtime/src/orchestration/SwarmArtifactStore.ts",
+    "apps/agent-runtime/src/orchestration/SwarmFanInOut.ts",
+    "apps/agent-runtime/src/orchestration/SwarmModels.ts",
+    "apps/agent-runtime/src/orchestration/SwarmRuntime.ts",
+    "apps/agent-runtime/src/orchestration/SwarmScheduler.ts",
+    "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts",
+    "apps/agent-runtime/src/orchestration/SwarmTrialArtifactStore.ts",
+    "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts",
+    "apps/agent-runtime/src/orchestration/SwarmTrialMemory.ts",
+    "apps/agent-runtime/src/orchestration/SwarmTrialModels.ts",
+    "apps/agent-runtime/src/orchestration/TaskGraphManager.ts",
+    "apps/agent-runtime/src/orchestration/Validation.ts",
+    "apps/agent-runtime/src/orchestration/ValidationRunner.ts",
+    "apps/agent-runtime/src/orchestrators/BusinessOrchestrator.ts",
+    "apps/agent-runtime/src/orchestrators/EngineeringOrchestrator.ts",
+    "apps/agent-runtime/src/orchestrators/ProductOrchestrator.ts",
+    "apps/agent-runtime/src/prompts/businessOrchestratorPrompt.ts",
+    "apps/agent-runtime/src/prompts/engineeringOrchestratorPrompt.ts",
+    "apps/agent-runtime/src/prompts/productOrchestratorPrompt.ts",
+    "apps/agent-runtime/src/prompts/seniorCodingAgentPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/architectPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/codebaseMapperPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/frontendPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/reviewerPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/rustBackendPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/securityPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/testPrompt.ts",
+    "apps/agent-runtime/src/prompts/workers/toolingTerminalPrompt.ts",
+    "apps/agent-runtime/src/runtime/AgentRuntime.ts",
+    "apps/agent-runtime/src/runtime/AgentTelemetry.ts",
+    "apps/agent-runtime/src/runtime/AlgorithmInventoryAnalyzer.ts",
+    "apps/agent-runtime/src/runtime/CodeFlowAnalyzer.ts",
+    "apps/agent-runtime/src/runtime/CodingAgentIntentRouter.ts",
+    "apps/agent-runtime/src/runtime/CommandExecutor.ts",
+    "apps/agent-runtime/src/runtime/delegation.ts",
+    "apps/agent-runtime/src/runtime/DurableRuntimeEvents.ts",
+    "apps/agent-runtime/src/runtime/EventBus.ts",
+    "apps/agent-runtime/src/runtime/FrontendStructureAnalyzer.ts",
+    "apps/agent-runtime/src/runtime/InspectExplainComposer.ts",
+    "apps/agent-runtime/src/runtime/InspectExplainContracts.ts",
+    "apps/agent-runtime/src/runtime/InspectExplainFacts.ts",
+    "apps/agent-runtime/src/runtime/InspectExplainReadLanes.ts",
+    "apps/agent-runtime/src/runtime/LargeProjectContextBuilder.ts",
+    "apps/agent-runtime/src/runtime/LlmProjectExplainer.ts",
+    "apps/agent-runtime/src/runtime/ModuleExecutionPlanning.ts",
+    "apps/agent-runtime/src/runtime/OrchestratedRuntime.ts",
+    "apps/agent-runtime/src/runtime/ProjectIntake.ts",
+    "apps/agent-runtime/src/runtime/ProjectIntelligenceKernel.ts",
+    "apps/agent-runtime/src/runtime/ProjectLaunchInference.ts",
+    "apps/agent-runtime/src/runtime/ProjectQuestionConceptEngine.ts",
+    "apps/agent-runtime/src/runtime/ProjectQuestionGrounding.ts",
+    "apps/agent-runtime/src/runtime/RepairPatchPlanning.ts",
+    "apps/agent-runtime/src/runtime/RunEngine.ts",
+    "apps/agent-runtime/src/runtime/RunToGreen.ts",
+    "apps/agent-runtime/src/runtime/SessionManager.ts",
+    "apps/agent-runtime/src/runtime/SessionReplay.ts",
+    "apps/agent-runtime/src/runtime/TrainingInferenceAnalyzer.ts",
+    "apps/agent-runtime/src/runtime/UIControlAnalyzer.ts",
+    "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts",
+    "apps/agent-runtime/src/runtime/WorkspaceReasoningPipeline.ts",
+    "apps/agent-runtime/src/scheduler/AgentPool.ts",
+    "apps/agent-runtime/src/scheduler/FileLockManager.ts",
+    "apps/agent-runtime/src/scheduler/MergeController.ts",
+    "apps/agent-runtime/src/scheduler/TaskGraph.ts",
+    "apps/agent-runtime/src/scheduler/TaskScheduler.ts",
+    "apps/agent-runtime/src/schemas/businessBriefSchema.ts",
+    "apps/agent-runtime/src/schemas/patchSchemas.ts",
+    "apps/agent-runtime/src/schemas/productBriefSchema.ts",
+    "apps/agent-runtime/src/schemas/reviewSchema.ts",
+    "apps/agent-runtime/src/schemas/sessionSchemas.ts",
+    "apps/agent-runtime/src/schemas/taskGraphSchema.ts",
+    "apps/agent-runtime/src/schemas/technicalPlanSchema.ts",
+    "apps/agent-runtime/src/schemas/toolSchemas.ts",
+    "apps/agent-runtime/src/schemas/validators.ts",
+    "apps/agent-runtime/src/schemas/workerOutputSchema.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/agent-runtime/src/tests/agent-lifecycle.test.ts",
+    "apps/agent-runtime/src/tests/auto-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/command-policy.test.ts",
+    "apps/agent-runtime/src/tests/durable-event-model.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain.test.ts",
+    "apps/agent-runtime/src/tests/memory-indexing.test.ts",
+    "apps/agent-runtime/src/tests/mock-llm.test.ts",
+    "apps/agent-runtime/src/tests/module-execution-planning.test.ts",
+    "apps/agent-runtime/src/tests/module3-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/orchestration.test.ts",
+    "apps/agent-runtime/src/tests/patch-intent.test.ts",
+    "apps/agent-runtime/src/tests/patch-validation.test.ts",
+    "apps/agent-runtime/src/tests/phase4-factory.test.ts",
+    "apps/agent-runtime/src/tests/project-explain.test.ts",
+    "apps/agent-runtime/src/tests/project-intake.test.ts",
+    "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts",
+    "apps/agent-runtime/src/tests/quality-gates.test.ts",
+    "apps/agent-runtime/src/tests/reliability-foundation.test.ts",
+    "apps/agent-runtime/src/tests/replay-restore.test.ts",
+    "apps/agent-runtime/src/tests/run-to-green.test.ts",
+    "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts",
+    "apps/agent-runtime/src/tests/runtime-task-state.test.ts",
+    "apps/agent-runtime/src/tests/safety-verification.test.ts",
+    "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts",
+    "apps/agent-runtime/src/tests/swarm-autopilot.test.ts",
+    "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts",
+    "apps/agent-runtime/src/tests/tool-registry.test.ts",
+    "apps/agent-runtime/src/tests/universal-project-question.test.ts",
+    "apps/agent-runtime/src/tools/CommandPolicy.ts",
+    "apps/agent-runtime/src/tools/CommandTools.ts",
+    "apps/agent-runtime/src/tools/GitTools.ts",
+    "apps/agent-runtime/src/tools/PatchTools.ts",
+    "apps/agent-runtime/src/tools/security.ts",
+    "apps/agent-runtime/src/tools/ToolRegistry.ts",
+    "apps/agent-runtime/src/tools/WorkspaceTools.ts",
+    "apps/desktop/scripts/dev-or-reuse.mjs",
+    "apps/desktop/scripts/run-project-smoke.ts",
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/src-tauri/src/bin/runtime_bridge_smoke.rs",
+    "apps/desktop/src-tauri/src/commands/git.rs",
+    "apps/desktop/src-tauri/src/commands/mod.rs",
+    "apps/desktop/src-tauri/src/commands/model_provider.rs",
+    "apps/desktop/src-tauri/src/commands/patch.rs",
+    "apps/desktop/src-tauri/src/commands/sessions.rs",
+    "apps/desktop/src-tauri/src/commands/system.rs",
+    "apps/desktop/src-tauri/src/commands/terminal.rs",
+    "apps/desktop/src-tauri/src/commands/workspace.rs",
+    "apps/desktop/src-tauri/src/db/mod.rs",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src-tauri/src/models/mod.rs",
+    "apps/desktop/src-tauri/src/security/mod.rs",
+    "apps/desktop/src-tauri/src/services/command_policy.rs",
+    "apps/desktop/src-tauri/src/services/git.rs",
+    "apps/desktop/src-tauri/src/services/mod.rs",
+    "apps/desktop/src-tauri/src/services/model_provider.rs",
+    "apps/desktop/src-tauri/src/services/patch.rs",
+    "apps/desktop/src-tauri/src/services/paths.rs",
+    "apps/desktop/src-tauri/src/services/project_index.rs",
+    "apps/desktop/src-tauri/src/services/terminal.rs",
+    "apps/desktop/src-tauri/src/services/workspace.rs",
+    "apps/desktop/src/app/activityStream.ts",
+    "apps/desktop/src/app/App.tsx",
+    "apps/desktop/src/lib/agentRuntime.ts",
+    "apps/desktop/src/lib/tauri.ts",
+    "apps/desktop/src/lib/terminalOrchestrator.ts",
+    "apps/desktop/src/main.tsx",
+    "apps/desktop/src/types/tauri.ts",
+    "apps/desktop/src/vite-env.d.ts",
+    "apps/desktop/vite.config.ts",
+    "packages/protocol/src/agent-runtime.ts",
+    "packages/protocol/src/agents.ts",
+    "packages/protocol/src/approvals.ts",
+    "packages/protocol/src/events.ts",
+    "packages/protocol/src/index.ts",
+    "packages/protocol/src/models.ts",
+    "packages/protocol/src/orchestration.ts",
+    "packages/protocol/src/patch.ts",
+    "packages/protocol/src/sessions.ts",
+    "packages/protocol/src/task-graph.ts",
+    "packages/protocol/src/tools.ts",
+    "scripts/launch-desktop.mjs"
+  ],
+  "testFiles": [
+    "apps/agent-runtime/src/tests/agent-lifecycle.test.ts",
+    "apps/agent-runtime/src/tests/auto-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/command-policy.test.ts",
+    "apps/agent-runtime/src/tests/durable-event-model.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain.test.ts",
+    "apps/agent-runtime/src/tests/memory-indexing.test.ts",
+    "apps/agent-runtime/src/tests/mock-llm.test.ts",
+    "apps/agent-runtime/src/tests/module-execution-planning.test.ts",
+    "apps/agent-runtime/src/tests/module3-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/orchestration.test.ts",
+    "apps/agent-runtime/src/tests/patch-intent.test.ts",
+    "apps/agent-runtime/src/tests/patch-validation.test.ts",
+    "apps/agent-runtime/src/tests/phase4-factory.test.ts",
+    "apps/agent-runtime/src/tests/project-explain.test.ts",
+    "apps/agent-runtime/src/tests/project-intake.test.ts",
+    "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts",
+    "apps/agent-runtime/src/tests/quality-gates.test.ts",
+    "apps/agent-runtime/src/tests/reliability-foundation.test.ts",
+    "apps/agent-runtime/src/tests/replay-restore.test.ts",
+    "apps/agent-runtime/src/tests/run-to-green.test.ts",
+    "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts",
+    "apps/agent-runtime/src/tests/runtime-task-state.test.ts",
+    "apps/agent-runtime/src/tests/safety-verification.test.ts",
+    "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts",
+    "apps/agent-runtime/src/tests/swarm-autopilot.test.ts",
+    "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts",
+    "apps/agent-runtime/src/tests/tool-registry.test.ts",
+    "apps/agent-runtime/src/tests/universal-project-question.test.ts"
+  ],
+  "configFiles": [
+    ".gitignore",
+    "apps/agent-runtime/package.json",
+    "apps/agent-runtime/tsconfig.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src/vite-env.d.ts",
+    "apps/desktop/tsconfig.json",
+    "apps/desktop/vite.config.ts",
+    "package.json",
+    "packages/protocol/package.json",
+    "packages/protocol/tsconfig.json"
+  ],
+  "docFiles": [
+    "AGENTS.md",
+    "docs/agent-contracts.md",
+    "docs/architecture.md",
+    "docs/architecture/agentic-coding-factory.md",
+    "docs/architecture/internal-swarm-autopilot.md",
+    "docs/architecture/memory-and-indexing.md",
+    "docs/architecture/phase-1-memory-indexing-plan.md",
+    "docs/architecture/phase-2-orchestrator-taskgraph-plan.md",
+    "docs/architecture/phase-3-swarm-verification-safety-plan.md",
+    "docs/architecture/phase-4-scale-intelligence-hardening-plan.md",
+    "docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md",
+    "docs/extension/add-agent-role.md",
+    "docs/module-1-status.md",
+    "docs/module-2-status.md",
+    "docs/module-3-status.md",
+    "docs/operations/debugging.md",
+    "docs/orchestration-flow.md",
+    "docs/release-candidate-status.md",
+    "docs/reliability-audit.md",
+    "docs/security-model.md",
+    "docs/usage/campaigns.md",
+    "docs/usage/quickstart.md"
+  ],
+  "importantFiles": [
+    "apps/agent-runtime/package.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "package.json",
+    "packages/protocol/package.json",
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/vite.config.ts",
+    "apps/agent-runtime/tsconfig.json",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src/vite-env.d.ts",
+    "apps/desktop/tsconfig.json",
+    "packages/protocol/tsconfig.json",
+    "docs/agent-contracts.md",
+    "docs/architecture.md",
+    "docs/architecture/agentic-coding-factory.md",
+    "docs/architecture/internal-swarm-autopilot.md",
+    "docs/architecture/memory-and-indexing.md",
+    "docs/architecture/phase-1-memory-indexing-plan.md",
+    "docs/architecture/phase-2-orchestrator-taskgraph-plan.md",
+    "docs/architecture/phase-3-swarm-verification-safety-plan.md",
+    "docs/architecture/phase-4-scale-intelligence-hardening-plan.md",
+    "docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md",
+    "docs/extension/add-agent-role.md",
+    "docs/module-1-status.md",
+    "docs/module-2-status.md",
+    "docs/module-3-status.md",
+    "docs/operations/debugging.md",
+    "docs/orchestration-flow.md",
+    "docs/release-candidate-status.md",
+    "docs/reliability-audit.md",
+    "docs/security-model.md",
+    "docs/usage/campaigns.md",
+    "docs/usage/quickstart.md",
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/app/App.tsx",
+    "apps/desktop/src/main.tsx",
+    "packages/protocol/src/index.ts",
+    "apps/agent-runtime/src/tests/agent-lifecycle.test.ts",
+    "apps/agent-runtime/src/tests/auto-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/command-policy.test.ts",
+    "apps/agent-runtime/src/tests/durable-event-model.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+    "apps/agent-runtime/src/tests/inspect-explain.test.ts",
+    "apps/agent-runtime/src/tests/memory-indexing.test.ts",
+    "apps/agent-runtime/src/tests/mock-llm.test.ts",
+    "apps/agent-runtime/src/tests/module-execution-planning.test.ts",
+    "apps/agent-runtime/src/tests/module3-orchestration.test.ts",
+    "apps/agent-runtime/src/tests/orchestration.test.ts",
+    "apps/agent-runtime/src/tests/patch-intent.test.ts",
+    "apps/agent-runtime/src/tests/patch-validation.test.ts",
+    "apps/agent-runtime/src/tests/phase4-factory.test.ts",
+    "apps/agent-runtime/src/tests/project-explain.test.ts",
+    "apps/agent-runtime/src/tests/project-intake.test.ts",
+    "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts",
+    "apps/agent-runtime/src/tests/quality-gates.test.ts",
+    "apps/agent-runtime/src/tests/reliability-foundation.test.ts",
+    "apps/agent-runtime/src/tests/replay-restore.test.ts"
+  ],
+  "entrypoints": [
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/app/App.tsx",
+    "apps/desktop/src/main.tsx",
+    "packages/protocol/src/index.ts"
+  ],
+  "packageFiles": [
+    "apps/agent-runtime/package.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "package.json",
+    "packages/protocol/package.json"
+  ],
+  "dependencyFiles": [
+    "apps/desktop/src-tauri/Cargo.lock",
+    "package-lock.json"
+  ],
+  "buildFiles": [
+    "apps/agent-runtime/package.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/desktop/vite.config.ts",
+    "package.json",
+    "packages/protocol/package.json"
+  ]
+}

@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { ProjectExplainReport, ProjectMap } from "@orchcode/protocol";
+import type { ProjectExplainReport, ProjectMap } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { loadConfig } from "../config.js";
 import { buildLargeProjectExplainReport } from "../runtime/LargeProjectContextBuilder.js";
@@ -58,7 +58,7 @@ const ARABIC_DATASET_REALTIME_PROMPT = "اشرح المشروع دا ل طفل �
 const ARABIC_THRESHOLD_PROMPT = "\u0647\u0627\u062a\u0644\u064a \u0643\u0644 \u0627\u0644threshlods \u0627\u0644\u064a \u0628\u0642\u0627\u0631\u0646 \u0628\u064a\u0647\u0627 \u0641 \u0627\u0644\u0633\u064a\u0633\u062a\u0645\u0643 \u064a\u0639\u0646\u064a \u0627\u0646\u0627 \u0639\u0631\u0641\u062a \u0627\u0644\u0645\u0639\u0627\u062f\u0647 \u0628\u0633 \u0645\u0639\u0631\u0641\u062a\u0634 \u0628\u0642\u0627\u0631\u0646 \u0628 \u0643\u0627\u0627\u0645 \u0641\u0639\u0644\u064a\u0627 \u062c\u0648\u0627 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u062f\u0627 \u0641 \u0647\u0627\u062a\u0644\u064a\u0628 \u0643\u0644 \u0627\u0644\u0627\u0631\u0642\u0627\u0645 \u062f\u064a \u0628 \u0643\u0644 \u0627\u0644\u0645\u0639\u0627\u062f\u0644\u0627\u062a \u0641\u0639\u0644\u0627 \u0628\u0627\u0644\u0630\u0627\u062a \u0641 \u0635\u0641\u062d\u0647\u0639 \u0627\u0644 agents";
 const ARABIC_FORECASTING_PROMPT = "\u0627\u064a\u0647 \u0646\u0648\u0639 \u0627\u0644 forecasting \u0647\u0646\u0627 \u0648\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u064a customer \u0648\u0627\u062d\u062f \u0648\u0644\u0627 \u0627\u064a\u0647 \u061f";
 const ARABIC_ALGORITHMS_PROMPT = "\u0639\u0646\u062f\u0646\u0627 \u0643\u0627\u0645 algorithm \u0647\u0646\u0627\u061f \u0648\u0627\u0634\u0631\u062d\u0647\u0645 \u0648\u0627\u062d\u062f\u0647 \u0648\u0627\u062d\u062f\u0647.";
-const MOJIBAKE_PATTERN = /ط§ظ|ظپظ|ط¨ط|ظ…ط/;
+const MOJIBAKE_PATTERN = /\uFFFD|ط§ظ|ظپظ|ط¨ط|ظ…ط/;
 
 const ARABIC_SVM_DETAIL_PROMPT = "\u0625\u0632\u0627\u064a \u0627\u0644 SVM \u0628\u064a\u062a\u0637\u0628\u0642 \u0647\u0646\u0627\u061f \u0627\u0634\u0631\u062d \u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644.";
 const ARABIC_PAGE_INVENTORY_PROMPT = "\u0639\u0646\u062f\u064a \u0647\u0646\u0627 \u0643\u0627\u0645 \u0635\u0641\u062d\u0647 \u0641 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u062f\u0627 \u0648\u0643\u0644 \u0648\u0627\u062d\u062f\u0647 \u0628\u062a\u0639\u0645\u0644 \u0627\u064a\u0647 \u061f";
@@ -247,7 +247,7 @@ test("concept extraction regressions preserve concept, style, and evidence group
 });
 
 test("large project explain report clusters modules and ignores vendor/build folders", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-large-explain-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-large-explain-${Date.now()}`);
   await mkdir(path.join(workspace, "apps", "web", "src"), { recursive: true });
   await mkdir(path.join(workspace, "packages", "core", "src"), { recursive: true });
   await mkdir(path.join(workspace, "apps", "api", "src", "features"), { recursive: true });
@@ -309,7 +309,7 @@ test("large project explain report clusters modules and ignores vendor/build fol
 });
 
 test("static explain report emits line refs, snippets, and ignores agent proposals by default", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-static-explain-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-static-explain-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   try {
@@ -628,7 +628,7 @@ test("LLM project explainer revises invalid citations once", async () => {
     const validDatasetRef = requireRef(report, /services\/cleaning\.py/);
     const provider = new CapturingExplainProvider([
       {
-        answerMarkdown: "This answer invents a citation [fake.py:1](orchcode-file:fake.py:1).",
+        answerMarkdown: "This answer invents a citation [fake.py:1](hivo-file:fake.py:1).",
         usedEvidenceRefs: ["fake.py:1"],
         unsupportedOrUnclearParts: []
       },
@@ -1037,7 +1037,7 @@ test("Arabic page inventory prompt returns pages instead of threshold inventory"
 });
 
 test("page inventory ignores CSS and title-only evidence instead of counting fake pages", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-css-only-pages-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-css-only-pages-${Date.now()}`);
   await mkdir(path.join(workspace, "frontend"), { recursive: true });
 
   try {
@@ -1085,13 +1085,14 @@ test("page inventory ignores CSS and title-only evidence instead of counting fak
     assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
     assert.doesNotMatch(result.answerMarkdown, /AMARS Pipeline Atlas.*(?:صفحة|screen|view|section|page)/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
 test("page inventory reports SPA sections with functions and dedupes duplicate stylesheets", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-spa-pages-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-spa-pages-${Date.now()}`);
   await mkdir(path.join(workspace, "frontend", "frontend"), { recursive: true });
 
   try {
@@ -1156,13 +1157,14 @@ test("page inventory reports SPA sections with functions and dedupes duplicate s
     assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
     assert.doesNotMatch(result.answerMarkdown, /:root|--bg|overview-section|customers-page|agents-screen/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
+    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
 test("page inventory can use JSX className sections from real UI source", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-jsx-sections-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-jsx-sections-${Date.now()}`);
   await mkdir(path.join(workspace, "apps", "desktop", "src", "app"), { recursive: true });
 
   try {
@@ -1247,7 +1249,7 @@ test("page inventory question stays turn-scoped after a threshold question", asy
 });
 
 test("backend-only page inventory reports no confirmed frontend pages", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-backend-only-pages-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-backend-only-pages-${Date.now()}`);
   await mkdir(path.join(workspace, "backend"), { recursive: true });
   try {
     await writeFile(path.join(workspace, "backend", "main.py"), "@app.get('/customers')\ndef customers():\n    return []\n", "utf8");
@@ -1290,8 +1292,8 @@ test("threshold concept absent returns not-found for threshold inventory, not ty
 });
 
 test("runtime inspect-only stores evidence and does not fake a project explanation in demo mock mode", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-explain-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-explain-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-explain-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-explain-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "apps", "desktop", "src"), { recursive: true });
   await mkdir(path.join(workspace, "packages", "protocol", "src"), { recursive: true });
 
@@ -1322,8 +1324,8 @@ test("runtime inspect-only stores evidence and does not fake a project explanati
       assert.ok(session?.explainReport);
       assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_report"));
       assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_answer"));
-      assert.match(assistantMessage, /current workspace evidence|workspace|orchcode-file/i);
-      assert.match(assistantMessage, /orchcode-file:/);
+      assert.match(assistantMessage, /current workspace evidence|workspace|hivo-file/i);
+      assert.match(assistantMessage, /hivo-file:/);
       assert.doesNotMatch(assistantMessage, /could not safely produce/i);
       assert.doesNotMatch(assistantMessage, MOJIBAKE_PATTERN);
       assert.doesNotMatch(assistantMessage, /Agentic AI E-Commerce|shopping\/search request|checkout/i);
@@ -1331,7 +1333,7 @@ test("runtime inspect-only stores evidence and does not fake a project explanati
       await runtime.runTurn(created.sessionId, "انت جبت الملفات دي منين؟");
       const provenanceMessage = runtime.getSession(created.sessionId)?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
       assert.match(provenanceMessage, /Workspace:/);
-      assert.match(provenanceMessage, /orchcode-file:/);
+      assert.match(provenanceMessage, /hivo-file:/);
     } finally {
       await app.close();
     }
@@ -1342,7 +1344,7 @@ test("runtime inspect-only stores evidence and does not fake a project explanati
 });
 
 async function createDecisionThresholdWorkspace() {
-  const workspace = path.join(os.tmpdir(), `orchcode-decision-thresholds-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-decision-thresholds-${Date.now()}`);
   await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
   await mkdir(path.join(workspace, "frontend"), { recursive: true });
   await writeFile(
@@ -1658,7 +1660,7 @@ async function createPageInventoryWorkspace() {
 }
 
 async function createBigDataSentimentWorkspace() {
-  const workspace = path.join(os.tmpdir(), `orchcode-bigdata-sentiment-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-bigdata-sentiment-${Date.now()}`);
   await mkdir(path.join(workspace, "dashboard_ui", "src"), { recursive: true });
   await mkdir(path.join(workspace, "analytics_engine"), { recursive: true });
   await mkdir(path.join(workspace, "docs"), { recursive: true });
@@ -1781,7 +1783,7 @@ async function createBigDataSentimentWorkspace() {
 }
 
 async function createDatasetOnlyWorkspace() {
-  const workspace = path.join(os.tmpdir(), `orchcode-dataset-only-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-dataset-only-${Date.now()}`);
   await mkdir(path.join(workspace, "services"), { recursive: true });
   await writeFile(
     path.join(workspace, "README.md"),
@@ -1811,7 +1813,7 @@ async function createDatasetOnlyWorkspace() {
 }
 
 async function createAlphaBetaWorkspaces() {
-  const base = path.join(os.tmpdir(), `orchcode-alpha-beta-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const base = path.join(os.tmpdir(), `hivo-alpha-beta-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const alpha = path.join(base, "ALPHA_SENTIMENT_PROJECT");
   const beta = path.join(base, "BETA_TODO_APP");
   await mkdir(path.join(alpha, "src"), { recursive: true });
@@ -1891,5 +1893,5 @@ function requireRef(report: ProjectExplainReport, pathPattern: RegExp) {
 function linkForRef(ref: string) {
   const match = ref.match(/^(.+):(\d+)$/);
   assert.ok(match, `Invalid ref ${ref}`);
-  return `[${ref}](orchcode-file:${encodeURIComponent(match[1]!)}:${match[2]})`;
+  return `[${ref}](hivo-file:${encodeURIComponent(match[1]!)}:${match[2]})`;
 }

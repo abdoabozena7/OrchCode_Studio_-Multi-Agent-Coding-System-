@@ -7,7 +7,7 @@ import type {
   TaskNode,
   WorkerOutput,
   WorkerSpec
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { ToolRegistry } from "../../tools/ToolRegistry.js";
 import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../../mock/threeJsSnake.js";

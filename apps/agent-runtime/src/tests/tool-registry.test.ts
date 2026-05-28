@@ -6,7 +6,7 @@ import test from "node:test";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 test("ToolRegistry exposes guarded workspace tools", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-tools-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-tools-${Date.now()}`);
   await mkdir(path.join(workspace, ".venv", "Lib"), { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello agent\n", "utf8");
   await writeFile(path.join(workspace, ".venv", "Lib", "ignored.py"), "value = 1\n", "utf8");
@@ -18,7 +18,7 @@ test("ToolRegistry exposes guarded workspace tools", async () => {
 });
 
 test("ToolRegistry enforces capability grants for tools, paths, and network commands", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-tools-grant-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-tools-grant-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello agent\n", "utf8");
   const registry = new ToolRegistry(workspace, {

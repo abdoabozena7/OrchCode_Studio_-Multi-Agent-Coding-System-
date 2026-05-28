@@ -14,7 +14,7 @@ import type {
   RuntimeRestoreDisposition,
   RuntimeRestoreState,
   VerificationResult
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 
 export type ReplayRestoreResult = {
   session?: AgentRuntimeSession;

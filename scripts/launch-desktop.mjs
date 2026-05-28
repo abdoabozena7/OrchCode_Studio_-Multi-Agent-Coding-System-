@@ -5,11 +5,11 @@ const root = process.cwd();
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
 const dryRun = process.argv.includes("--dry-run");
-const reuseLaunch = process.argv.includes("--reuse") || process.env.ORCHCODE_DEV_REUSE === "1";
-const freshLaunch = !reuseLaunch || process.argv.includes("--fresh") || process.env.ORCHCODE_DEV_FRESH === "1";
+const reuseLaunch = process.argv.includes("--reuse") || process.env.HIVO_DEV_REUSE === "1" || process.env.ORCHCODE_DEV_REUSE === "1";
+const freshLaunch = !reuseLaunch || process.argv.includes("--fresh") || process.env.HIVO_DEV_FRESH === "1" || process.env.ORCHCODE_DEV_FRESH === "1";
 
-const runtimeArgs = ["run", "dev", "-w", "@orchcode/agent-runtime"];
-const desktopArgs = ["run", "tauri:dev", "-w", "@orchcode/desktop"];
+const runtimeArgs = ["run", "dev", "-w", "@hivo/agent-runtime"];
+const desktopArgs = ["run", "tauri:dev", "-w", "@hivo/desktop"];
 const runtimeHealthUrl = "http://127.0.0.1:4317/health";
 
 const children = [];
@@ -28,7 +28,7 @@ await main();
 
 async function main() {
   if (freshLaunch) {
-    process.env.ORCHCODE_DEV_FRESH = "1";
+    process.env.HIVO_DEV_FRESH = "1";
     stopDesktopProcess();
     await stopDevProcessOnPort(4317, "runtime");
   }
@@ -45,7 +45,7 @@ async function main() {
   }
 
   if (isDesktopAlreadyRunning()) {
-    process.stdout.write("OrchCode desktop is already running. Skipping duplicate launch.\n");
+    process.stdout.write("Hivo desktop is already running. Skipping duplicate launch.\n");
     return;
   }
 
@@ -106,14 +106,14 @@ async function waitForRuntime() {
 
 function isDesktopAlreadyRunning() {
   if (isWindows) {
-    const result = spawnSync("tasklist", ["/FI", "IMAGENAME eq orchcode-desktop.exe"], {
+    const result = spawnSync("tasklist", ["/FI", "IMAGENAME eq hivo-desktop.exe"], {
       cwd: root,
       encoding: "utf8"
     });
-    return /orchcode-desktop\.exe/i.test(result.stdout ?? "");
+    return /hivo-desktop\.exe/i.test(result.stdout ?? "");
   }
 
-  const result = spawnSync("pgrep", ["-f", "orchcode-desktop"], {
+  const result = spawnSync("pgrep", ["-f", "hivo-desktop"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -122,14 +122,14 @@ function isDesktopAlreadyRunning() {
 
 function stopDesktopProcess() {
   if (isWindows) {
-    spawnSync("taskkill", ["/IM", "orchcode-desktop.exe", "/F", "/T"], {
+    spawnSync("taskkill", ["/IM", "hivo-desktop.exe", "/F", "/T"], {
       cwd: root,
       stdio: "ignore"
     });
     return;
   }
 
-  spawnSync("pkill", ["-f", "orchcode-desktop"], {
+  spawnSync("pkill", ["-f", "hivo-desktop"], {
     cwd: root,
     stdio: "ignore"
   });

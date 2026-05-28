@@ -1,0 +1,98 @@
+[
+  {
+    "schema_version": 1,
+    "input_goal": "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.",
+    "expected_complexity": "huge",
+    "expected_agent_range": [
+      10,
+      300
+    ],
+    "expected_executor_limit": 0,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_6982665a-b654-4366-95e4-a20662f2931c",
+      "swarm_run_id": "swarm_9f40b144-f846-46ec-b7cc-a6adc98f19a7",
+      "task_complexity": "huge",
+      "repo_scope": "whole_repo",
+      "risk_level": "high",
+      "recommended_total_logical_agents": 300,
+      "max_parallel_agents": 32,
+      "scout_count": 178,
+      "planner_count": 10,
+      "architect_count": 6,
+      "executor_count": 0,
+      "reviewer_count": 74,
+      "tester_count": 7,
+      "integrator_count": 1,
+      "specialist_agents": [
+        {
+          "id": "test_coverage_reviewer",
+          "role": "TestCoverageReviewerAgent",
+          "purpose": "Review whether changed behavior has adequate focused test coverage.",
+          "trigger": "test coverage indicators were present",
+          "read_only": true,
+          "output_schema": "TestCoverageReviewOutput"
+        },
+        {
+          "id": "documentation_reviewer",
+          "role": "DocumentationReviewerAgent",
+          "purpose": "Review documentation updates for operator workflow and architecture accuracy.",
+          "trigger": "documentation indicators were present",
+          "read_only": true,
+          "output_schema": "DocumentationReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 178,
+        "PlannerAgent": 10,
+        "ArchitectAgent": 6,
+        "ExecutorAgent": 0,
+        "ReviewerAgent": 74,
+        "TesterAgent": 7,
+        "IntegratorAgent": 1,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 5,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 15,
+        "TestCoverageReviewerAgent": 1,
+        "DocumentationReviewerAgent": 1
+      },
+      "executor_limit": 0,
+      "reviewer_limit": 76,
+      "tester_limit": 7,
+      "read_only_ratio": 1,
+      "write_agent_limit": 1,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as huge with whole_repo scope and high risk.",
+        "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: TestCoverageReviewerAgent: test coverage indicators were present; DocumentationReviewerAgent: documentation indicators were present.",
+        "The system selected 300 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.72,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:45:12.702Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as huge with whole_repo scope and high risk.",
+      "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: TestCoverageReviewerAgent: test coverage indicators were present; DocumentationReviewerAgent: documentation indicators were present.",
+      "The system selected 300 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  }
+]

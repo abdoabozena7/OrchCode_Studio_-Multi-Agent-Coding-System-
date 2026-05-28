@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0",
+  "title": "Baseline vs Swarm Autopilot Comparison",
+  "description": "Compares simple, orchestrated, and autopilot modes using deterministic mock metrics derived from actual staffing plans.",
+  "scenario_type": "comparison",
+  "tasks_to_test": [
+    {
+      "id": "comparison_goal",
+      "title": "Comparison goal",
+      "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+      "expected": {
+        "expected_complexity": "medium",
+        "expected_agent_range": [
+          1,
+          300
+        ],
+        "expected_executor_limit": 6
+      }
+    }
+  ],
+  "modes_to_compare": [
+    "baseline-simple",
+    "orchestrated",
+    "autopilot-fast",
+    "autopilot-deep",
+    "autopilot-exhaustive"
+  ],
+  "expected_staffing_behavior": [
+    {
+      "expected_complexity": "medium",
+      "expected_agent_range": [
+        1,
+        300
+      ],
+      "expected_executor_limit": 6
+    }
+  ],
+  "created_at": "2026-05-23T21:45:08.333Z",
+  "status": "succeeded",
+  "config": {
+    "uses_mock_agents": true,
+    "uses_real_model": false
+  },
+  "results_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0\\runs.json",
+  "report_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0\\trial_report.md"
+}

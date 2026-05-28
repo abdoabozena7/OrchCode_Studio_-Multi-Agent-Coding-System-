@@ -5,7 +5,7 @@ import type {
   ReportCommandResultRequest,
   ReportPatchApplyResultRequest,
   RuntimeTurnRequest
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { loadConfig, type RuntimeConfig } from "./config.js";
 import { AgentRuntime } from "./runtime/AgentRuntime.js";
 import { EventBus } from "./runtime/EventBus.js";
@@ -26,7 +26,7 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("Access-Control-Allow-Origin", "*");
-    reply.header("Access-Control-Allow-Headers", "content-type,x-orchcode-session-token");
+    reply.header("Access-Control-Allow-Headers", "content-type,x-hivo-session-token,x-orchcode-session-token");
     reply.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   });
 
@@ -144,7 +144,7 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 }
 
 function authorizeSessionRequest(sessionManager: SessionManager, sessionId: string, request: { headers: Record<string, unknown>; query?: unknown }) {
-  const header = request.headers["x-orchcode-session-token"];
+  const header = request.headers["x-hivo-session-token"] ?? request.headers["x-orchcode-session-token"];
   const queryToken =
     typeof request.query === "object" && request.query && "token" in request.query
       ? String((request.query as { token?: unknown }).token ?? "")

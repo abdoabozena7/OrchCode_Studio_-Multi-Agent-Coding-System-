@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "task_size_estimate": "huge",
+  "repo_size_estimate": "large_repo",
+  "risk_level": "low",
+  "edit_scope_size": "read_only",
+  "validation_strength": "none",
+  "recommended_mode": "deep",
+  "recommended_total_logical_agents": 300,
+  "executor_limit": 0,
+  "reviewer_limit": 0,
+  "scout_limit": 300,
+  "specialist_agents": [],
+  "reasoning": [
+    "Staffing expectations passed in this run; keep defaults stable.",
+    "No comparison run was included.",
+    "Do not update defaults from one noisy experiment; require confidence and repeated evidence."
+  ]
+}

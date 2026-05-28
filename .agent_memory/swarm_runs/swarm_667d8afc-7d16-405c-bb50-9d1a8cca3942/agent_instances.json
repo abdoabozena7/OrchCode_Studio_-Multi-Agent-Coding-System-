@@ -1,0 +1,90 @@
+[
+  {
+    "schema_version": 1,
+    "id": "agent_ScoutAgent_1_7cc8cc8d",
+    "template_id": "template_scout",
+    "role": "ScoutAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.645Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_ExecutorAgent_1_1bf1b674",
+    "template_id": "template_executor",
+    "role": "ExecutorAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.668Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_ReviewerAgent_1_8a9279b4",
+    "template_id": "template_reviewer",
+    "role": "ReviewerAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.682Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_TesterAgent_1_41a0aca9",
+    "template_id": "template_tester",
+    "role": "TesterAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.733Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_ReporterAgent_1_c7bc6938",
+    "template_id": "template_reporter",
+    "role": "ReporterAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.747Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_APICompatibilityReviewerAgent_1_11e38b9e",
+    "template_id": "template_api_compatibility_reviewer",
+    "role": "APICompatibilityReviewerAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.690Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_DependencyUpgradeReviewerAgent_1_11fa3210",
+    "template_id": "template_dependency_upgrade_reviewer",
+    "role": "DependencyUpgradeReviewerAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.698Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  },
+  {
+    "schema_version": 1,
+    "id": "agent_DocumentationReviewerAgent_1_d87d8c29",
+    "template_id": "template_documentation_reviewer",
+    "role": "DocumentationReviewerAgent",
+    "status": "idle",
+    "created_at": "2026-05-23T21:18:05.594Z",
+    "last_heartbeat_at": "2026-05-23T21:18:05.712Z",
+    "failure_count": 0,
+    "completed_work_item_count": 1
+  }
+]

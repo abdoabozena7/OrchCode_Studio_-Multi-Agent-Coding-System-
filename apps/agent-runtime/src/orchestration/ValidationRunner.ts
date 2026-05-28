@@ -8,13 +8,20 @@ import type { OrchestratorEvent, Task } from "./OrchestrationModels.js";
 import type { OrchestrationSafetyConfig } from "./OrchestrationConfig.js";
 import type { VerificationResult } from "./StructuredOutputs.js";
 import { validateStructuredOutput } from "./StructuredOutputs.js";
+import {
+  aggregateValidationStatus,
+  validationTraceTypeForStatus,
+  type ValidationAggregationResult,
+  type ValidationCommandStatus
+} from "./ValidationSemantics.js";
 
 export type ValidationCommandRun = {
   command: string;
   cwd: string;
-  status: "passed" | "failed" | "blocked" | "timed_out";
+  status: ValidationCommandStatus;
   exit_code?: number | null;
   risk: string;
+  required: boolean;
   log_ref?: string;
   started_at: string;
   finished_at: string;
@@ -43,16 +50,39 @@ export class ValidationRunner {
       allowlist: this.config.safe_commands_allowlist
     });
     const runs: ValidationCommandRun[] = [];
+    await input.onEvent?.({
+      run_id: input.runId,
+      task_id: input.task.id,
+      type: "validation.started",
+      message: `Validation started for ${input.task.id}.`,
+      payload: {
+        required_command_count: selected.filter((command) => command.required).length,
+        optional_command_count: selected.filter((command) => !command.required).length,
+        requested_command_count: input.task.validation_commands.length
+      }
+    });
     if (!selected.length) {
+      const aggregate = aggregateValidationStatus([], [], {});
       const result: VerificationResult = {
         commands_run: [],
-        passed: true,
+        passed: false,
+        validation_status: aggregate.status,
+        aggregate: verificationAggregate(aggregate),
         failed_commands: [],
         logs_refs: [],
-        summary: "No safe validation commands were available for this task.",
-        next_action: "no_validation_available"
+        summary: aggregate.reason,
+        next_action: "manual_review"
       };
       assertVerificationResult(result);
+      const artifact = await this.artifactStore.saveValidationArtifact(input.runId, `${input.task.id}_verification`, {
+        task_id: input.task.id,
+        status: aggregate.status,
+        result,
+        runs,
+        aggregate
+      });
+      result.logs_refs.push(artifact);
+      await this.emitAggregateEvent(input, aggregate, result.logs_refs);
       return result;
     }
     for (const command of selected) {
@@ -72,35 +102,56 @@ export class ValidationRunner {
         task_id: input.task.id,
         type: "validation.command_completed",
         message: `Validation command ${run.status}: ${run.command}`,
-        payload: { command: run.command, cwd: run.cwd, status: run.status, exit_code: run.exit_code, log_ref: run.log_ref }
+        payload: {
+          command: run.command,
+          cwd: run.cwd,
+          status: run.status,
+          required: run.required,
+          exit_code: run.exit_code,
+          log_ref: run.log_ref,
+          reason: run.summary
+        }
       });
     }
-    const failed = runs.filter((run) => run.status === "failed" || run.status === "timed_out");
-    const blocked = runs.filter((run) => run.status === "blocked");
+    const aggregate = aggregateValidationStatus(runs.map((run) => ({
+      command: run.command,
+      status: run.status,
+      required: run.required,
+      reason: run.summary,
+      log_ref: run.log_ref
+    })), selected.map((command) => ({
+      command: command.command,
+      required: command.required,
+      reason: command.blocked_reason
+    })));
     const result: VerificationResult = {
       commands_run: runs.map((run) => ({
         command: run.command,
         cwd: run.cwd,
         status: run.status,
-        exit_code: run.exit_code
+        exit_code: run.exit_code,
+        required: run.required,
+        summary: run.summary,
+        log_ref: run.log_ref
       })),
-      passed: failed.length === 0 && (blocked.length === 0 || blocked.length < runs.length),
-      failed_commands: failed.map((run) => run.command),
+      passed: aggregate.status === "passed",
+      validation_status: aggregate.status,
+      aggregate: verificationAggregate(aggregate),
+      failed_commands: runs.filter((run) => run.status === "failed" || run.status === "timed_out").map((run) => run.command),
       logs_refs: runs.flatMap((run) => run.log_ref ? [run.log_ref] : []),
-      summary: failed.length
-        ? `${failed.length} validation command(s) failed.`
-        : blocked.length
-          ? `${blocked.length} validation command(s) were blocked by safety policy; no failures were observed.`
-          : `${runs.length} validation command(s) passed.`,
-      next_action: failed.length ? "repair" : blocked.length ? "manual_review" : "accept"
+      summary: aggregate.reason,
+      next_action: aggregate.status === "passed" ? "accept" : aggregate.status === "failed" ? "repair" : "manual_review"
     };
     assertVerificationResult(result);
     const artifact = await this.artifactStore.saveValidationArtifact(input.runId, `${input.task.id}_verification`, {
       task_id: input.task.id,
+      status: aggregate.status,
       result,
-      runs
+      runs,
+      aggregate
     });
     result.logs_refs.push(artifact);
+    await this.emitAggregateEvent(input, aggregate, result.logs_refs);
     return result;
   }
 
@@ -128,6 +179,7 @@ export class ValidationRunner {
       status: output.timedOut ? "timed_out" : output.exitCode === 0 ? "passed" : "failed",
       exit_code: output.exitCode,
       risk: command.risk,
+      required: command.required,
       log_ref: logRef,
       started_at: startedAt,
       finished_at: finishedAt,
@@ -148,11 +200,39 @@ export class ValidationRunner {
       cwd: command.cwd,
       status: "blocked",
       risk: command.risk,
+      required: command.required,
       log_ref: logRef,
       started_at: now,
       finished_at: now,
       summary: reason
     };
+  }
+
+  private async emitAggregateEvent(input: {
+    runId: string;
+    task: Task;
+    onEvent?: (event: ValidationRunnerEvent) => Promise<void>;
+  }, aggregate: ValidationAggregationResult, artifactRefs: string[]) {
+    await input.onEvent?.({
+      run_id: input.runId,
+      task_id: input.task.id,
+      type: "validation.completed",
+      message: `Validation ${aggregate.status}: ${aggregate.reason}`,
+      payload: {
+        validation_status: aggregate.status,
+        trace_event_type: validationTraceTypeForStatus(aggregate.status),
+        required_command_count: aggregate.required_command_count,
+        optional_command_count: aggregate.optional_command_count,
+        passed_count: aggregate.passed_count,
+        failed_count: aggregate.failed_count,
+        blocked_count: aggregate.blocked_count,
+        skipped_count: aggregate.skipped_count,
+        timed_out_count: aggregate.timed_out_count,
+        not_run_count: aggregate.not_run_count,
+        reason: aggregate.reason,
+        artifact_refs: artifactRefs
+      }
+    });
   }
 }
 
@@ -161,6 +241,7 @@ export type SelectedValidationCommand = {
   cwd: string;
   kind: CommandKind | "fallback";
   risk: string;
+  required: boolean;
   blocked_reason?: string;
 };
 
@@ -177,7 +258,22 @@ export function selectValidationCommands(input: {
     .filter((entry) => ["test", "lint", "typecheck", "build", "smoke"].includes(entry.kind))
     .sort((left, right) => priority(left.kind) - priority(right.kind) || left.command.localeCompare(right.command))
     .slice(0, 2)
-    .map((entry) => selectedFromEntry(input.workspacePath, entry, input.allowlist));
+    .map((entry) => selectedFromEntry(input.workspacePath, entry, input.allowlist, true));
+  const selectedCommands = new Set(candidates.map((command) => command.command));
+  for (const command of requested) {
+    if (selectedCommands.has(command)) continue;
+    const risk = classifyCommandRisk(command, input.workspacePath);
+    candidates.push({
+      command,
+      cwd: ".",
+      kind: "fallback",
+      risk,
+      required: true,
+      blocked_reason: risk === "safe" && commandAllowed(command, input.allowlist)
+        ? "Required validation command is unavailable in command inventory."
+        : `Required validation command is not allowed for automatic validation (risk=${risk}).`
+    });
+  }
   if (existsSync(path.join(input.workspacePath, ".git"))) {
     candidates.unshift(selectedFromEntry(input.workspacePath, {
       id: "cmd_git_diff_check",
@@ -187,12 +283,12 @@ export function selectValidationCommands(input: {
       sourceFile: ".git",
       source: "ci",
       confidence: "high"
-    }, input.allowlist));
+    }, input.allowlist, false));
   }
   return dedupeSelected(candidates);
 }
 
-function selectedFromEntry(workspacePath: string, entry: CommandInventoryEntry, allowlist: string[]): SelectedValidationCommand {
+function selectedFromEntry(workspacePath: string, entry: CommandInventoryEntry, allowlist: string[], required: boolean): SelectedValidationCommand {
   const risk = classifyCommandRisk(entry.command, workspacePath);
   const allowed = risk === "safe" && commandAllowed(entry.command, allowlist);
   return {
@@ -200,6 +296,7 @@ function selectedFromEntry(workspacePath: string, entry: CommandInventoryEntry, 
     cwd: entry.cwd || ".",
     kind: entry.kind,
     risk,
+    required,
     blocked_reason: allowed ? undefined : `Command is not allowed for automatic validation (risk=${risk}).`
   };
 }
@@ -278,6 +375,21 @@ function truncate(value: string, maxBytes: number) {
 function assertVerificationResult(result: VerificationResult) {
   const validation = validateStructuredOutput("VerificationResult", result);
   if (!validation.valid) throw new Error(`VerificationResult validation failed: ${validation.errors.join("; ")}`);
+}
+
+function verificationAggregate(aggregate: ValidationAggregationResult) {
+  return {
+    status: aggregate.status,
+    required_command_count: aggregate.required_command_count,
+    optional_command_count: aggregate.optional_command_count,
+    passed_count: aggregate.passed_count,
+    failed_count: aggregate.failed_count,
+    blocked_count: aggregate.blocked_count,
+    skipped_count: aggregate.skipped_count,
+    timed_out_count: aggregate.timed_out_count,
+    not_run_count: aggregate.not_run_count,
+    reason: aggregate.reason
+  };
 }
 
 function safeId(value: string) {

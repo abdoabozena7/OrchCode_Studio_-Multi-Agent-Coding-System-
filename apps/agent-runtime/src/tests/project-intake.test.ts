@@ -10,7 +10,7 @@ import { buildProjectIntake, classifyRunIntent } from "../runtime/ProjectIntake.
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 test("empty workspace intake stays empty or unknown without fake certainty", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-intake-empty-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-intake-empty-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   try {
     const intake = buildProjectIntake({
@@ -35,7 +35,7 @@ test("empty workspace intake stays empty or unknown without fake certainty", asy
 });
 
 test("zero visible files fail closed as unknown instead of fake empty project", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-intake-zero-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-intake-zero-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   try {
     const intake = buildProjectIntake({
@@ -59,7 +59,7 @@ test("zero visible files fail closed as unknown instead of fake empty project", 
 });
 
 test("source plus config plus docs produces high-confidence existing project intake", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-intake-existing-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-intake-existing-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await mkdir(path.join(workspace, "tests"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "voxbox", scripts: { build: "vite build", test: "vitest run" } }, null, 2), "utf8");
@@ -94,7 +94,7 @@ test("source plus config plus docs produces high-confidence existing project int
 });
 
 test("git changes and todo markers produce mid-progress signals and warnings", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-intake-mid-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-intake-mid-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ scripts: { dev: "vite" } }, null, 2), "utf8");
   await writeFile(path.join(workspace, "src", "app.ts"), "// TODO finish this module\nexport const value = 1;\n", "utf8");
@@ -133,8 +133,8 @@ test("run intent contract distinguishes run once and run to green", () => {
 });
 
 test("runtime records project intake, context pack, and intake decisions before patch planning", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-intake-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-intake-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-intake-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-intake-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await mkdir(path.join(workspace, "tests"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "voxbox", scripts: { test: "echo ok" } }, null, 2), "utf8");

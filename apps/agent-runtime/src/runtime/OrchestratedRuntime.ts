@@ -11,7 +11,7 @@ import type {
   RuntimeProgressStage,
   RuntimeProgressStatus,
   WorkerOutput
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { ProductOrchestrator } from "../orchestrators/ProductOrchestrator.js";
 import { BusinessOrchestrator } from "../orchestrators/BusinessOrchestrator.js";
 import { EngineeringOrchestrator } from "../orchestrators/EngineeringOrchestrator.js";
@@ -36,7 +36,7 @@ export class OrchestratedRuntime {
     message: string,
     options: {
       projectMap?: ProjectMap;
-      delegationDecision?: import("@orchcode/protocol").DelegationDecision;
+      delegationDecision?: import("@hivo/protocol").DelegationDecision;
       thinkFirst?: boolean;
     } = {}
   ) {
@@ -216,11 +216,11 @@ export class OrchestratedRuntime {
       session.orchestration.safetySettings.maxParallelAgents
     );
     const outputs: WorkerOutput[] = [];
-    const artifacts: import("@orchcode/protocol").ArtifactHandoff[] = [];
+    const artifacts: import("@hivo/protocol").ArtifactHandoff[] = [];
     const merge = new MergeController();
     const securityAgent = new SecurityAgent();
     const reviewerAgent = new ReviewerAgent();
-    let previewRecommendation: import("@orchcode/protocol").PreviewRecommendation | undefined;
+    let previewRecommendation: import("@hivo/protocol").PreviewRecommendation | undefined;
 
     await scheduler.runAllAsync(async (task, runningTaskIds) => {
       if (runningTaskIds.length >= 2) {
@@ -660,7 +660,7 @@ function formatRunSummaryMessage(summary: RunSummary) {
 function runQualityGates(
   sessionId: string,
   prompt: string,
-  patches: import("@orchcode/protocol").PatchProposal[],
+  patches: import("@hivo/protocol").PatchProposal[],
   outputs: WorkerOutput[],
   securityPassed: boolean,
   reviewerFindings: string[]

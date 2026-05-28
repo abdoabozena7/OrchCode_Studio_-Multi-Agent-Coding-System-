@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_scout_1_f332c010",
+  "status": "succeeded",
+  "summary": "ScoutAgent completed scout work for Change copy text in docs/architecture.md.",
+  "relevant_files": [
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/app/App.tsx"
+  ],
+  "findings": [
+    "scout work item used schema ScoutResult."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

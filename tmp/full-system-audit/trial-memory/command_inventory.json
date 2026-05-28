@@ -1,0 +1,1936 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-24T11:06:31.002Z",
+  "packageManagers": [
+    "cargo",
+    "npm"
+  ],
+  "commands": [
+    {
+      "id": "cmd_package_agent_trial_test_discovery",
+      "kind": "test",
+      "command": "npm run agent:trial:test-discovery",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:test-discovery",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial test-discovery --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_test",
+      "kind": "test",
+      "command": "npm run test",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "test",
+      "confidence": "high",
+      "notes": [
+        "script: npm run test -w @orchcode/agent-runtime"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_test_discovery",
+      "kind": "test",
+      "command": "npm run agent:trial:test-discovery",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:test-discovery",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial test-discovery --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_test",
+      "kind": "test",
+      "command": "npm run test",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "test",
+      "confidence": "high",
+      "notes": [
+        "script: npm run build && node --test dist/tests/*.test.js"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_src_tauri_cargo_test",
+      "kind": "test",
+      "command": "cargo test",
+      "cwd": "apps/desktop/src-tauri",
+      "sourceFile": "apps/desktop/src-tauri/Cargo.toml",
+      "source": "cargo",
+      "packageManager": "cargo",
+      "confidence": "medium"
+    },
+    {
+      "id": "cmd_package_typecheck",
+      "kind": "typecheck",
+      "command": "npm run typecheck",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "typecheck",
+      "confidence": "high",
+      "notes": [
+        "script: npm run build -w @orchcode/protocol && npm run typecheck -w @orchcode/protocol && npm run typecheck -w @orchcode/agent-runtime && npm run typecheck -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_typecheck",
+      "kind": "typecheck",
+      "command": "npm run typecheck",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "typecheck",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json --noEmit"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_typecheck",
+      "kind": "typecheck",
+      "command": "npm run typecheck",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "typecheck",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json --noEmit"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_src_tauri_cargo_check",
+      "kind": "typecheck",
+      "command": "cargo check",
+      "cwd": "apps/desktop/src-tauri",
+      "sourceFile": "apps/desktop/src-tauri/Cargo.toml",
+      "source": "cargo",
+      "packageManager": "cargo",
+      "confidence": "medium"
+    },
+    {
+      "id": "cmd_packages_protocol_package_typecheck",
+      "kind": "typecheck",
+      "command": "npm run typecheck",
+      "cwd": "packages/protocol",
+      "sourceFile": "packages/protocol/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "typecheck",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json --noEmit"
+      ]
+    },
+    {
+      "id": "cmd_package_build",
+      "kind": "build",
+      "command": "npm run build",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "build",
+      "confidence": "high",
+      "notes": [
+        "script: npm run build -w @orchcode/protocol && npm run build -w @orchcode/agent-runtime && npm run build -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_build",
+      "kind": "build",
+      "command": "npm run build",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "build",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_build",
+      "kind": "build",
+      "command": "npm run build",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "build",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json && vite build"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_tauri_build",
+      "kind": "build",
+      "command": "npm run tauri:build",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "tauri:build",
+      "confidence": "high",
+      "notes": [
+        "script: tauri build"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_src_tauri_cargo_build",
+      "kind": "build",
+      "command": "cargo build",
+      "cwd": "apps/desktop/src-tauri",
+      "sourceFile": "apps/desktop/src-tauri/Cargo.toml",
+      "source": "cargo",
+      "packageManager": "cargo",
+      "confidence": "medium"
+    },
+    {
+      "id": "cmd_packages_protocol_package_build",
+      "kind": "build",
+      "command": "npm run build",
+      "cwd": "packages/protocol",
+      "sourceFile": "packages/protocol/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "build",
+      "confidence": "high",
+      "notes": [
+        "script: tsc -p tsconfig.json"
+      ]
+    },
+    {
+      "id": "cmd_package_smoke_desktop_run_project",
+      "kind": "smoke",
+      "command": "npm run smoke:desktop-run-project",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:desktop-run-project",
+      "confidence": "high",
+      "notes": [
+        "script: npm run smoke:run-project -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_package_smoke_python_pygame_fallback",
+      "kind": "smoke",
+      "command": "npm run smoke:python-pygame-fallback",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:python-pygame-fallback",
+      "confidence": "high",
+      "notes": [
+        "script: npm run smoke:python-pygame-fallback -w @orchcode/agent-runtime"
+      ]
+    },
+    {
+      "id": "cmd_package_smoke_run_to_green",
+      "kind": "smoke",
+      "command": "npm run smoke:run-to-green",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:run-to-green",
+      "confidence": "high",
+      "notes": [
+        "script: npm run smoke:run-to-green -w @orchcode/agent-runtime"
+      ]
+    },
+    {
+      "id": "cmd_package_smoke_terminal_authority",
+      "kind": "smoke",
+      "command": "npm run smoke:terminal-authority",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:terminal-authority",
+      "confidence": "high",
+      "notes": [
+        "script: npm run smoke:run-project -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_smoke_python_pygame_fallback",
+      "kind": "smoke",
+      "command": "npm run smoke:python-pygame-fallback",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:python-pygame-fallback",
+      "confidence": "high",
+      "notes": [
+        "script: tsx scripts/python-pygame-fallback-smoke.ts"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_smoke_run_to_green",
+      "kind": "smoke",
+      "command": "npm run smoke:run-to-green",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:run-to-green",
+      "confidence": "high",
+      "notes": [
+        "script: tsx scripts/run-to-green-smoke.ts"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_smoke_run_project",
+      "kind": "smoke",
+      "command": "npm run smoke:run-project",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "smoke:run-project",
+      "confidence": "high",
+      "notes": [
+        "script: tsx scripts/run-project-smoke.ts"
+      ]
+    },
+    {
+      "id": "cmd_package_agent_dev",
+      "kind": "dev",
+      "command": "npm run agent:dev",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:dev",
+      "confidence": "high",
+      "notes": [
+        "script: npm run dev -w @orchcode/agent-runtime"
+      ]
+    },
+    {
+      "id": "cmd_package_desktop_dev",
+      "kind": "dev",
+      "command": "npm run desktop:dev",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "desktop:dev",
+      "confidence": "high",
+      "notes": [
+        "script: npm run tauri:dev -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_package_dev",
+      "kind": "dev",
+      "command": "npm run dev",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "dev",
+      "confidence": "high",
+      "notes": [
+        "script: node scripts/launch-desktop.mjs"
+      ]
+    },
+    {
+      "id": "cmd_package_web_dev",
+      "kind": "dev",
+      "command": "npm run web:dev",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "web:dev",
+      "confidence": "high",
+      "notes": [
+        "script: npm run dev -w @orchcode/desktop"
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_dev",
+      "kind": "dev",
+      "command": "npm run dev",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "dev",
+      "confidence": "high",
+      "notes": [
+        "script: tsx watch --clear-screen=false src/index.ts"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_dev",
+      "kind": "dev",
+      "command": "npm run dev",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "dev",
+      "confidence": "high",
+      "notes": [
+        "script: vite --host 127.0.0.1 --port 1420"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_dev_reuse",
+      "kind": "dev",
+      "command": "npm run dev:reuse",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "dev:reuse",
+      "confidence": "high",
+      "notes": [
+        "script: node scripts/dev-or-reuse.mjs"
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_tauri_dev",
+      "kind": "dev",
+      "command": "npm run tauri:dev",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "tauri:dev",
+      "confidence": "high",
+      "notes": [
+        "script: tauri dev"
+      ]
+    },
+    {
+      "id": "cmd_package_agent_inspect_run",
+      "kind": "run",
+      "command": "npm run agent:inspect-run",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:inspect-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent inspect-run --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_run",
+      "kind": "run",
+      "command": "npm run agent:run",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent run --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_resume_run",
+      "kind": "run",
+      "command": "npm run agentic:resume-run",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:resume-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts resume-run --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_run",
+      "kind": "run",
+      "command": "npm run agentic:run",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts run-agentic-task --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_run_metrics",
+      "kind": "run",
+      "command": "npm run agentic:run-metrics",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:run-metrics",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts run-metrics --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_run",
+      "kind": "run",
+      "command": "npm run agentic:show-run",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-run --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_run_events",
+      "kind": "run",
+      "command": "npm run agentic:show-run-events",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-run-events",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-run-events --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_run_next",
+      "kind": "run",
+      "command": "npm run campaign:run-next",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:run-next",
+      "confidence": "high",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts run-next --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_inspect_run",
+      "kind": "run",
+      "command": "npm run agent:inspect-run",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:inspect-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent inspect-run --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_run",
+      "kind": "run",
+      "command": "npm run agent:run",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent run --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_resume_run",
+      "kind": "run",
+      "command": "npm run agentic:resume-run",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:resume-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts resume-run --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_run",
+      "kind": "run",
+      "command": "npm run agentic:run",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts run-agentic-task --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_run_metrics",
+      "kind": "run",
+      "command": "npm run agentic:run-metrics",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:run-metrics",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts run-metrics --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_run",
+      "kind": "run",
+      "command": "npm run agentic:show-run",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-run",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-run --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_run_events",
+      "kind": "run",
+      "command": "npm run agentic:show-run-events",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-run-events",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-run-events --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_run_next",
+      "kind": "run",
+      "command": "npm run campaign:run-next",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:run-next",
+      "confidence": "high",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts run-next --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_plan",
+      "kind": "unknown",
+      "command": "npm run agent:plan",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent plan --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_report",
+      "kind": "unknown",
+      "command": "npm run agent:report",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent report --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_resume",
+      "kind": "unknown",
+      "command": "npm run agent:resume",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:resume",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent resume --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_architecture_scan",
+      "kind": "unknown",
+      "command": "npm run agent:trial:architecture-scan",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:architecture-scan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial architecture-scan --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_compare",
+      "kind": "unknown",
+      "command": "npm run agent:trial:compare",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:compare",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial compare --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_huge_readonly_scan",
+      "kind": "unknown",
+      "command": "npm run agent:trial:huge-readonly-scan",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:huge-readonly-scan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial huge-readonly-scan --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_scheduler_scale",
+      "kind": "unknown",
+      "command": "npm run agent:trial:scheduler-scale",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:scheduler-scale",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial scheduler-scale --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_small_safe_fix",
+      "kind": "unknown",
+      "command": "npm run agent:trial:small-safe-fix",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:small-safe-fix",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial small-safe-fix --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agent_trial_staffing_eval",
+      "kind": "unknown",
+      "command": "npm run agent:trial:staffing-eval",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:staffing-eval",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts agent trial staffing-eval --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_inspect_task",
+      "kind": "unknown",
+      "command": "npm run agentic:inspect-task",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:inspect-task",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts inspect-task --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_list_runs",
+      "kind": "unknown",
+      "command": "npm run agentic:list-runs",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:list-runs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts list-runs --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_plan",
+      "kind": "unknown",
+      "command": "npm run agentic:plan",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts plan-task --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_artifact",
+      "kind": "unknown",
+      "command": "npm run agentic:show-artifact",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-artifact",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-artifact --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_artifacts",
+      "kind": "unknown",
+      "command": "npm run agentic:show-artifacts",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-artifacts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-artifacts --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_context_pack",
+      "kind": "unknown",
+      "command": "npm run agentic:show-context-pack",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-context-pack",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-context-pack --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_patch_history",
+      "kind": "unknown",
+      "command": "npm run agentic:show-patch-history",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-patch-history",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-patch-history --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_report",
+      "kind": "unknown",
+      "command": "npm run agentic:show-report",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-report --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_task_artifacts",
+      "kind": "unknown",
+      "command": "npm run agentic:show-task-artifacts",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-task-artifacts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-task-artifacts --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_agentic_show_validation_logs",
+      "kind": "unknown",
+      "command": "npm run agentic:show-validation-logs",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-validation-logs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/cli.ts show-validation-logs --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_create",
+      "kind": "unknown",
+      "command": "npm run campaign:create",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:create",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts create --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_metrics",
+      "kind": "unknown",
+      "command": "npm run campaign:metrics",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:metrics",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts metrics --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_pause",
+      "kind": "unknown",
+      "command": "npm run campaign:pause",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:pause",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts pause --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_plan",
+      "kind": "unknown",
+      "command": "npm run campaign:plan",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts plan --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_report",
+      "kind": "unknown",
+      "command": "npm run campaign:report",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts report --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_resume",
+      "kind": "unknown",
+      "command": "npm run campaign:resume",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:resume",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts resume --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_campaign_status",
+      "kind": "unknown",
+      "command": "npm run campaign:status",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/orchestration/campaign-cli.ts status --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_eval_phase4",
+      "kind": "unknown",
+      "command": "npm run eval:phase4",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "eval:phase4",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/evals/cli.ts --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_clean_runs",
+      "kind": "unknown",
+      "command": "npm run memory:clean-runs",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:clean-runs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory clean-runs --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_compact",
+      "kind": "unknown",
+      "command": "npm run memory:compact",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:compact",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory compact --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_decisions",
+      "kind": "unknown",
+      "command": "npm run memory:decisions",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:decisions",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory decisions --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_explain_task",
+      "kind": "unknown",
+      "command": "npm run memory:explain-task",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:explain-task",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory explain-task --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_failed_attempts",
+      "kind": "unknown",
+      "command": "npm run memory:failed-attempts",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:failed-attempts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory failed-attempts --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_index",
+      "kind": "unknown",
+      "command": "npm run memory:index",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts index repo --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_index_explain",
+      "kind": "unknown",
+      "command": "npm run memory:index-explain",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-explain",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts index explain --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_index_refresh",
+      "kind": "unknown",
+      "command": "npm run memory:index-refresh",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-refresh",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts index refresh --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_index_status",
+      "kind": "unknown",
+      "command": "npm run memory:index-status",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts index status --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_inspect",
+      "kind": "unknown",
+      "command": "npm run memory:inspect",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:inspect",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory inspect --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_lessons",
+      "kind": "unknown",
+      "command": "npm run memory:lessons",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:lessons",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory lessons --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_show_commands",
+      "kind": "unknown",
+      "command": "npm run memory:show-commands",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:show-commands",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory show-commands --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_package_memory_status",
+      "kind": "unknown",
+      "command": "npm run memory:status",
+      "cwd": ".",
+      "sourceFile": "package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx apps/agent-runtime/src/memory/cli.ts memory status --workspace ."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_plan",
+      "kind": "unknown",
+      "command": "npm run agent:plan",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent plan --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_report",
+      "kind": "unknown",
+      "command": "npm run agent:report",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent report --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_resume",
+      "kind": "unknown",
+      "command": "npm run agent:resume",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:resume",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent resume --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_architecture_scan",
+      "kind": "unknown",
+      "command": "npm run agent:trial:architecture-scan",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:architecture-scan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial architecture-scan --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_compare",
+      "kind": "unknown",
+      "command": "npm run agent:trial:compare",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:compare",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial compare --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_huge_readonly_scan",
+      "kind": "unknown",
+      "command": "npm run agent:trial:huge-readonly-scan",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:huge-readonly-scan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial huge-readonly-scan --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_scheduler_scale",
+      "kind": "unknown",
+      "command": "npm run agent:trial:scheduler-scale",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:scheduler-scale",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial scheduler-scale --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_small_safe_fix",
+      "kind": "unknown",
+      "command": "npm run agent:trial:small-safe-fix",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:small-safe-fix",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial small-safe-fix --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agent_trial_staffing_eval",
+      "kind": "unknown",
+      "command": "npm run agent:trial:staffing-eval",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agent:trial:staffing-eval",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts agent trial staffing-eval --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_inspect_task",
+      "kind": "unknown",
+      "command": "npm run agentic:inspect-task",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:inspect-task",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts inspect-task --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_list_runs",
+      "kind": "unknown",
+      "command": "npm run agentic:list-runs",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:list-runs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts list-runs --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_plan",
+      "kind": "unknown",
+      "command": "npm run agentic:plan",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts plan-task --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_artifact",
+      "kind": "unknown",
+      "command": "npm run agentic:show-artifact",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-artifact",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-artifact --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_artifacts",
+      "kind": "unknown",
+      "command": "npm run agentic:show-artifacts",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-artifacts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-artifacts --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_context_pack",
+      "kind": "unknown",
+      "command": "npm run agentic:show-context-pack",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-context-pack",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-context-pack --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_patch_history",
+      "kind": "unknown",
+      "command": "npm run agentic:show-patch-history",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-patch-history",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-patch-history --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_report",
+      "kind": "unknown",
+      "command": "npm run agentic:show-report",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-report --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_task_artifacts",
+      "kind": "unknown",
+      "command": "npm run agentic:show-task-artifacts",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-task-artifacts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-task-artifacts --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_agentic_show_validation_logs",
+      "kind": "unknown",
+      "command": "npm run agentic:show-validation-logs",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "agentic:show-validation-logs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/cli.ts show-validation-logs --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_create",
+      "kind": "unknown",
+      "command": "npm run campaign:create",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:create",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts create --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_metrics",
+      "kind": "unknown",
+      "command": "npm run campaign:metrics",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:metrics",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts metrics --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_pause",
+      "kind": "unknown",
+      "command": "npm run campaign:pause",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:pause",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts pause --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_plan",
+      "kind": "unknown",
+      "command": "npm run campaign:plan",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:plan",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts plan --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_report",
+      "kind": "unknown",
+      "command": "npm run campaign:report",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:report",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts report --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_resume",
+      "kind": "unknown",
+      "command": "npm run campaign:resume",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:resume",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts resume --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_campaign_status",
+      "kind": "unknown",
+      "command": "npm run campaign:status",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "campaign:status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/orchestration/campaign-cli.ts status --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_eval_phase4",
+      "kind": "unknown",
+      "command": "npm run eval:phase4",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "eval:phase4",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/evals/cli.ts --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_clean_runs",
+      "kind": "unknown",
+      "command": "npm run memory:clean-runs",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:clean-runs",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory clean-runs --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_compact",
+      "kind": "unknown",
+      "command": "npm run memory:compact",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:compact",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory compact --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_decisions",
+      "kind": "unknown",
+      "command": "npm run memory:decisions",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:decisions",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory decisions --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_explain_task",
+      "kind": "unknown",
+      "command": "npm run memory:explain-task",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:explain-task",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory explain-task --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_failed_attempts",
+      "kind": "unknown",
+      "command": "npm run memory:failed-attempts",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:failed-attempts",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory failed-attempts --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_index",
+      "kind": "unknown",
+      "command": "npm run memory:index",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts index repo --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_index_explain",
+      "kind": "unknown",
+      "command": "npm run memory:index-explain",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-explain",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts index explain --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_index_refresh",
+      "kind": "unknown",
+      "command": "npm run memory:index-refresh",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-refresh",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts index refresh --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_index_status",
+      "kind": "unknown",
+      "command": "npm run memory:index-status",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:index-status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts index status --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_inspect",
+      "kind": "unknown",
+      "command": "npm run memory:inspect",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:inspect",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory inspect --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_lessons",
+      "kind": "unknown",
+      "command": "npm run memory:lessons",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:lessons",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory lessons --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_show_commands",
+      "kind": "unknown",
+      "command": "npm run memory:show-commands",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:show-commands",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory show-commands --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_agent_runtime_package_memory_status",
+      "kind": "unknown",
+      "command": "npm run memory:status",
+      "cwd": "apps/agent-runtime",
+      "sourceFile": "apps/agent-runtime/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "memory:status",
+      "confidence": "medium",
+      "notes": [
+        "script: tsx src/memory/cli.ts memory status --workspace ../.."
+      ]
+    },
+    {
+      "id": "cmd_apps_desktop_package_tauri",
+      "kind": "unknown",
+      "command": "npm run tauri",
+      "cwd": "apps/desktop",
+      "sourceFile": "apps/desktop/package.json",
+      "source": "package_json",
+      "packageManager": "npm",
+      "scriptName": "tauri",
+      "confidence": "medium",
+      "notes": [
+        "script: tauri"
+      ]
+    }
+  ],
+  "byKind": {
+    "test": [
+      "npm run agent:trial:test-discovery",
+      "npm run test",
+      "npm run agent:trial:test-discovery",
+      "npm run test",
+      "cargo test"
+    ],
+    "lint": [],
+    "typecheck": [
+      "npm run typecheck",
+      "npm run typecheck",
+      "npm run typecheck",
+      "cargo check",
+      "npm run typecheck"
+    ],
+    "build": [
+      "npm run build",
+      "npm run build",
+      "npm run build",
+      "npm run tauri:build",
+      "cargo build",
+      "npm run build"
+    ],
+    "format": [],
+    "smoke": [
+      "npm run smoke:desktop-run-project",
+      "npm run smoke:python-pygame-fallback",
+      "npm run smoke:run-to-green",
+      "npm run smoke:terminal-authority",
+      "npm run smoke:python-pygame-fallback",
+      "npm run smoke:run-to-green",
+      "npm run smoke:run-project"
+    ],
+    "dev": [
+      "npm run agent:dev",
+      "npm run desktop:dev",
+      "npm run dev",
+      "npm run web:dev",
+      "npm run dev",
+      "npm run dev",
+      "npm run dev:reuse",
+      "npm run tauri:dev"
+    ],
+    "run": [
+      "npm run agent:inspect-run",
+      "npm run agent:run",
+      "npm run agentic:resume-run",
+      "npm run agentic:run",
+      "npm run agentic:run-metrics",
+      "npm run agentic:show-run",
+      "npm run agentic:show-run-events",
+      "npm run campaign:run-next",
+      "npm run agent:inspect-run",
+      "npm run agent:run",
+      "npm run agentic:resume-run",
+      "npm run agentic:run",
+      "npm run agentic:run-metrics",
+      "npm run agentic:show-run",
+      "npm run agentic:show-run-events",
+      "npm run campaign:run-next"
+    ],
+    "unknown": [
+      "npm run agent:plan",
+      "npm run agent:report",
+      "npm run agent:resume",
+      "npm run agent:trial:architecture-scan",
+      "npm run agent:trial:compare",
+      "npm run agent:trial:huge-readonly-scan",
+      "npm run agent:trial:scheduler-scale",
+      "npm run agent:trial:small-safe-fix",
+      "npm run agent:trial:staffing-eval",
+      "npm run agentic:inspect-task",
+      "npm run agentic:list-runs",
+      "npm run agentic:plan",
+      "npm run agentic:show-artifact",
+      "npm run agentic:show-artifacts",
+      "npm run agentic:show-context-pack",
+      "npm run agentic:show-patch-history",
+      "npm run agentic:show-report",
+      "npm run agentic:show-task-artifacts",
+      "npm run agentic:show-validation-logs",
+      "npm run campaign:create",
+      "npm run campaign:metrics",
+      "npm run campaign:pause",
+      "npm run campaign:plan",
+      "npm run campaign:report",
+      "npm run campaign:resume",
+      "npm run campaign:status",
+      "npm run eval:phase4",
+      "npm run memory:clean-runs",
+      "npm run memory:compact",
+      "npm run memory:decisions",
+      "npm run memory:explain-task",
+      "npm run memory:failed-attempts",
+      "npm run memory:index",
+      "npm run memory:index-explain",
+      "npm run memory:index-refresh",
+      "npm run memory:index-status",
+      "npm run memory:inspect",
+      "npm run memory:lessons",
+      "npm run memory:show-commands",
+      "npm run memory:status",
+      "npm run agent:plan",
+      "npm run agent:report",
+      "npm run agent:resume",
+      "npm run agent:trial:architecture-scan",
+      "npm run agent:trial:compare",
+      "npm run agent:trial:huge-readonly-scan",
+      "npm run agent:trial:scheduler-scale",
+      "npm run agent:trial:small-safe-fix",
+      "npm run agent:trial:staffing-eval",
+      "npm run agentic:inspect-task",
+      "npm run agentic:list-runs",
+      "npm run agentic:plan",
+      "npm run agentic:show-artifact",
+      "npm run agentic:show-artifacts",
+      "npm run agentic:show-context-pack",
+      "npm run agentic:show-patch-history",
+      "npm run agentic:show-report",
+      "npm run agentic:show-task-artifacts",
+      "npm run agentic:show-validation-logs",
+      "npm run campaign:create",
+      "npm run campaign:metrics",
+      "npm run campaign:pause",
+      "npm run campaign:plan",
+      "npm run campaign:report",
+      "npm run campaign:resume",
+      "npm run campaign:status",
+      "npm run eval:phase4",
+      "npm run memory:clean-runs",
+      "npm run memory:compact",
+      "npm run memory:decisions",
+      "npm run memory:explain-task",
+      "npm run memory:failed-attempts",
+      "npm run memory:index",
+      "npm run memory:index-explain",
+      "npm run memory:index-refresh",
+      "npm run memory:index-status",
+      "npm run memory:inspect",
+      "npm run memory:lessons",
+      "npm run memory:show-commands",
+      "npm run memory:status",
+      "npm run tauri"
+    ]
+  }
+}

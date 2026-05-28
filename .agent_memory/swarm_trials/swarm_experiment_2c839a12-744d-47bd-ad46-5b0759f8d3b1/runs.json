@@ -1,0 +1,23 @@
+[
+  {
+    "schema_version": 1,
+    "id": "experiment_run_bfdfd0b5-929b-4f72-bbdb-144fa1f40222",
+    "experiment_id": "swarm_experiment_2c839a12-744d-47bd-ad46-5b0759f8d3b1",
+    "input_goal": "swarm_trial_scale",
+    "mode": "autopilot-huge-readonly",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "staffing_plan_ref": "staffing_swarm_trial_scale",
+    "effective_total_logical_agents": 300,
+    "role_distribution": {
+      "ScoutAgent": 300
+    },
+    "started_at": "2026-05-23T21:44:42.591Z",
+    "finished_at": "2026-05-23T21:44:42.591Z",
+    "metrics_ref": "metrics.json",
+    "artifacts_ref": "swarm_trial_scale",
+    "final_report_ref": "final_report.md"
+  }
+]

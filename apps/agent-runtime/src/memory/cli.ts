@@ -214,7 +214,7 @@ function formatInline(value: unknown) {
 }
 
 function printHelp() {
-  console.log(`OrchCode memory CLI
+  console.log(`Hivo memory CLI
 
 Commands:
   index repo                 Rebuild .agent_memory repository index
@@ -233,7 +233,7 @@ Commands:
 
 Options:
   --workspace <path>         Workspace to scan (default: current directory)
-  --memory-dir <path>        Memory directory (default: .agent_memory or ORCHCODE_MEMORY_DIR)
+  --memory-dir <path>        Memory directory (default: .agent_memory or HIVO_MEMORY_DIR)
   --json                     Print JSON
   --limit <n>                Limit displayed arrays
   --older-than-days <n>      For clean-runs only

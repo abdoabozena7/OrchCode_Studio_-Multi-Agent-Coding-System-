@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "swarm_cad4e5a7-a891-45fa-ad67-f6b9259c6600",
+  "user_goal": "Explain architecture without editing",
+  "status": "planning",
+  "mode": "deep",
+  "staffing_plan_ref": "staffing_plan.json",
+  "effective_total_logical_agents": 9,
+  "active_agent_count": 0,
+  "max_supported_logical_agents": 300,
+  "scheduler_config": {
+    "max_parallel_agents": 6,
+    "max_parallel_read_only_agents": 6,
+    "executor_limit": 1,
+    "write_agent_limit": 1,
+    "reviewer_limit": 3,
+    "tester_limit": 1,
+    "risk_level": "high",
+    "validation_level": "strict",
+    "backpressure_failure_threshold": 1
+  },
+  "created_at": "2026-05-24T11:06:30.882Z",
+  "updated_at": "2026-05-24T11:06:31.269Z",
+  "artifacts_path": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\tmp\\full-system-audit\\trial-memory\\swarm_runs\\swarm_cad4e5a7-a891-45fa-ad67-f6b9259c6600"
+}

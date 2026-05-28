@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "task_size_estimate": "tiny",
+  "repo_size_estimate": "large_repo",
+  "risk_level": "low",
+  "edit_scope_size": "single_file",
+  "validation_strength": "basic",
+  "recommended_mode": "deep",
+  "recommended_total_logical_agents": 5,
+  "executor_limit": 1,
+  "reviewer_limit": 1,
+  "scout_limit": 1,
+  "specialist_agents": [],
+  "reasoning": [
+    "2 staffing scenario(s) deviated from expectations; tune thresholds only after repeated evidence.",
+    "No comparison run was included.",
+    "Do not update defaults from one noisy experiment; require confidence and repeated evidence."
+  ]
+}

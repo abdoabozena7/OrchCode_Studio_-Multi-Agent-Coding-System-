@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "staffing_1f3b7a04-e6dc-4408-9225-591234a3c8da",
+  "swarm_run_id": "swarm_17c736d7-3ff0-4eef-bd3e-36958522bf49",
+  "task_complexity": "huge",
+  "repo_scope": "whole_repo",
+  "risk_level": "critical",
+  "recommended_total_logical_agents": 300,
+  "max_parallel_agents": 24,
+  "scout_count": 176,
+  "planner_count": 10,
+  "architect_count": 6,
+  "executor_count": 0,
+  "reviewer_count": 74,
+  "tester_count": 7,
+  "integrator_count": 1,
+  "specialist_agents": [
+    {
+      "id": "auth_security_reviewer",
+      "role": "AuthSecurityReviewerAgent",
+      "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+      "trigger": "security/authentication indicators were present",
+      "read_only": true,
+      "output_schema": "SecurityReviewOutput"
+    },
+    {
+      "id": "accessibility_reviewer",
+      "role": "AccessibilityReviewerAgent",
+      "purpose": "Review UI changes for semantics, keyboard access, labels, focus, and regression risk.",
+      "trigger": "frontend/accessibility indicators were present",
+      "read_only": true,
+      "output_schema": "AccessibilityReviewOutput"
+    },
+    {
+      "id": "api_compatibility_reviewer",
+      "role": "APICompatibilityReviewerAgent",
+      "purpose": "Review public API and protocol compatibility risks.",
+      "trigger": "public API compatibility indicators were present",
+      "read_only": true,
+      "output_schema": "APICompatibilityReviewOutput"
+    },
+    {
+      "id": "dependency_upgrade_reviewer",
+      "role": "DependencyUpgradeReviewerAgent",
+      "purpose": "Review dependency upgrade, lockfile, and package manager risk.",
+      "trigger": "dependency or lockfile indicators were present",
+      "read_only": true,
+      "output_schema": "DependencyUpgradeReviewOutput"
+    }
+  ],
+  "role_counts": {
+    "ScoutAgent": 176,
+    "PlannerAgent": 10,
+    "ArchitectAgent": 6,
+    "ExecutorAgent": 0,
+    "ReviewerAgent": 74,
+    "TesterAgent": 7,
+    "IntegratorAgent": 1,
+    "ReporterAgent": 1,
+    "RiskAnalyzerAgent": 5,
+    "MemoryUpdaterAgent": 1,
+    "ContextBuilderAgent": 15,
+    "AuthSecurityReviewerAgent": 1,
+    "AccessibilityReviewerAgent": 1,
+    "APICompatibilityReviewerAgent": 1,
+    "DependencyUpgradeReviewerAgent": 1
+  },
+  "executor_limit": 0,
+  "reviewer_limit": 78,
+  "tester_limit": 7,
+  "read_only_ratio": 1,
+  "write_agent_limit": 1,
+  "validation_level": "exhaustive",
+  "requires_human_approval": true,
+  "reasoning": [
+    "Classified task as huge with whole_repo scope and critical risk.",
+    "Goal appears read-only, so staffing favors scouts, reviewers, testers, and reporters over executors.",
+    "Repository index reports 243 indexed file(s); 24 candidate relevant file(s) were selected.",
+    "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; AccessibilityReviewerAgent: frontend/accessibility indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present; DependencyUpgradeReviewerAgent: dependency or lockfile indicators were present.",
+    "The system selected 300 logical agents automatically; the user did not need to provide an agent count."
+  ],
+  "confidence": 0.72,
+  "downgrade_conditions": [
+    "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+    "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+    "Use a single executor when write scopes overlap or sensitive files are involved."
+  ],
+  "escalation_conditions": [
+    "Escalate scouts and reviewers when relevant modules remain unknown.",
+    "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+    "Require human approval when high-risk files or critical safety gates are involved."
+  ],
+  "created_at": "2026-05-23T21:19:04.757Z"
+}

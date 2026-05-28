@@ -1,4 +1,4 @@
-import type { ProductBrief } from "@orchcode/protocol";
+import type { ProductBrief } from "@hivo/protocol";
 
 export class ProductOrchestrator {
   createBrief(userPrompt: string): ProductBrief {

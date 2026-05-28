@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_report_9f5ada40",
+  "status": "succeeded",
+  "summary": "ReporterAgent completed summarize work for Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files..",
+  "relevant_files": [],
+  "findings": [
+    "summarize work item used schema FinalSwarmReport."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

@@ -3,15 +3,15 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { AgentRuntimeSession, ModuleExecutionPlan, PatchProposal, ProjectIntake, VerificationResult } from "@orchcode/protocol";
+import type { AgentRuntimeSession, ModuleExecutionPlan, PatchProposal, ProjectIntake, VerificationResult } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 import { buildModuleExecutionPlan, summarizeModuleExecution, validatePatchAgainstModulePlan } from "../runtime/ModuleExecutionPlanning.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 test("existing project creates a module execution plan before implementation", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-module-plan-existing-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-module-plan-existing-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-module-plan-existing-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-module-plan-existing-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "voxbox", scripts: { test: "echo ok" } }, null, 2), "utf8");
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
@@ -39,8 +39,8 @@ test("existing project creates a module execution plan before implementation", a
 });
 
 test("empty project does not force continuation module planning", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-module-plan-empty-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-module-plan-empty-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-module-plan-empty-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-module-plan-empty-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
@@ -63,8 +63,8 @@ test("empty project does not force continuation module planning", async () => {
 });
 
 test("unknown project prefers inspect-only over broad implementation assumptions", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-module-plan-unknown-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-module-plan-unknown-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-module-plan-unknown-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-module-plan-unknown-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "tests"), { recursive: true });
   await writeFile(path.join(workspace, "tests", "smoke.test.snap"), "fixture\n", "utf8");
 
@@ -106,11 +106,15 @@ test("context pack fields flow into the module execution plan", () => {
   assert.ok(modulePlan.forbiddenPaths.includes(".git/"));
   assert.ok(modulePlan.publicContractsToPreserve.includes("src/auth.ts"));
   assert.ok(modulePlan.verificationCommands.includes("npm test"));
+  assert.ok(modulePlan.targetMechanismChain?.includes("Auth form calls backend"));
+  assert.ok(modulePlan.confirmedRelevantFiles?.includes("src/auth.ts"));
+  assert.ok(modulePlan.safeEditSurface?.includes("src/auth.ts"));
+  assert.ok(modulePlan.unknowns.includes("Missing mechanism link: backend_handler"));
 });
 
 test("agent contracts receive owned and forbidden paths from the module plan", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-module-contract-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-module-contract-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-module-contract-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-module-contract-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "voxbox" }, null, 2), "utf8");
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
@@ -225,8 +229,8 @@ test("new dependency changes require review unless explicitly allowed", async ()
 });
 
 test("review gate includes scope verdict for existing project continuation", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-scope-review-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-scope-review-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-scope-review-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-scope-review-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "voxbox", scripts: { test: "echo ok" } }, null, 2), "utf8");
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
@@ -319,7 +323,11 @@ function createIntakeFixture(): ProjectIntake {
       guardrails: {
         summary: "Read wide, edit narrow.",
         rules: ["No deleting files without explicit approval."]
-      }
+      },
+      targetMechanismChain: ["Auth form calls backend"],
+      confirmedRelevantFiles: ["src/auth.ts"],
+      missingEvidenceLinks: ["backend_handler"],
+      safeEditSurface: ["src/auth.ts"]
     },
     runIntent: "implement_module",
     guardrails: {
@@ -355,6 +363,10 @@ function createModulePlanFixture(): ModuleExecutionPlan {
     unknowns: ["Unknown test coverage"],
     stopConditions: ["Stop outside scope."],
     approvalRequiredReasons: ["Caution paths require review."],
+    targetMechanismChain: ["Auth form calls backend"],
+    confirmedRelevantFiles: ["src/auth.ts"],
+    missingEvidenceLinks: [],
+    safeEditSurface: ["src/auth.ts"],
     createdAt: "2026-05-15T00:00:00.000Z",
     updatedAt: "2026-05-15T00:00:00.000Z"
   };
@@ -436,7 +448,7 @@ function createSessionFixture(): AgentRuntimeSession {
     reconciliationReport: undefined,
     thinkFirst: false,
     userPrompt: "update auth",
-    agentName: "OrchCode",
+    agentName: "Hivo",
     status: "completed",
     lifecycleStage: "DONE",
     taskState: {
@@ -477,7 +489,7 @@ function createSessionFixture(): AgentRuntimeSession {
 }
 
 async function createWorkspaceWithPackage() {
-  const workspace = path.join(os.tmpdir(), `orchcode-scope-fixture-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-scope-fixture-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "src", "auth.ts"), "export const auth = true;\n", "utf8");
   await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "fixture", dependencies: {} }, null, 2), "utf8");

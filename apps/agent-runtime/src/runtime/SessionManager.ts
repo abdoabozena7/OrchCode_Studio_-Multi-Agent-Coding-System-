@@ -19,10 +19,10 @@ import type {
   Task,
   ToolIntent,
   ToolCall
-} from "@orchcode/protocol";
-import { accessProfileDefaults } from "@orchcode/protocol";
-import type { AccessProfile, AccessProfileInput, DeclaredAccessPolicy, ResolvedAccessPolicy } from "@orchcode/protocol";
-import type { DurableRuntimeEvent } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { accessProfileDefaults } from "@hivo/protocol";
+import type { AccessProfile, AccessProfileInput, DeclaredAccessPolicy, ResolvedAccessPolicy } from "@hivo/protocol";
+import type { DurableRuntimeEvent } from "@hivo/protocol";
 import { EventBus } from "./EventBus.js";
 import { listDurableRuntimeEventsFromSqlite } from "./DurableRuntimeEvents.js";
 import { replaySessionFromDurableEvents } from "./SessionReplay.js";
@@ -112,8 +112,9 @@ export class SessionManager {
     mode: AgentRuntimeMode;
     executionMode?: AgentRuntimeSession["executionMode"];
     accessProfile?: AccessProfileInput;
-    trustProfile?: import("@orchcode/protocol").RunTrustProfile;
-    providerConfig?: import("@orchcode/protocol").SanitizedProviderConfig;
+    trustProfile?: import("@hivo/protocol").RunTrustProfile;
+    providerConfig?: import("@hivo/protocol").SanitizedProviderConfig;
+    activeProviderSource?: import("@hivo/protocol").ActiveProviderSource;
     sessionToken?: string;
     sessionTokenExpiresAt?: string;
     thinkFirst?: boolean;
@@ -135,6 +136,7 @@ export class SessionManager {
       mode: input.mode,
       trustProfile,
       providerConfig: input.providerConfig,
+      activeProviderSource: input.activeProviderSource,
       executionMode,
       accessProfile,
       declaredAccess: {
@@ -146,7 +148,7 @@ export class SessionManager {
       decisionLedger: [],
       thinkFirst: input.thinkFirst ?? false,
       userPrompt: input.userPrompt,
-      agentName: "OrchCode",
+      agentName: "Hivo",
       status: "created",
       lifecycleStage: "INTAKE",
       taskState: createInitialTaskState(now),
@@ -564,7 +566,7 @@ export class SessionManager {
     }
   }
 
-  async setVerificationResult(sessionId: string, verification: import("@orchcode/protocol").VerificationResult) {
+  async setVerificationResult(sessionId: string, verification: import("@hivo/protocol").VerificationResult) {
     await this.updateSession(sessionId, (session) => {
       session.verificationResult = verification;
       const taskState = asManagedTaskState(session.taskState);
@@ -726,7 +728,7 @@ function createInitialTaskState(now: string): RuntimeTaskState {
 
 function pushTaskTransition(
   taskState: RuntimeTaskState,
-  type: import("@orchcode/protocol").RuntimeTaskTransitionType,
+  type: import("@hivo/protocol").RuntimeTaskTransitionType,
   detail: string
 ) {
   taskState.version += 1;
@@ -850,13 +852,13 @@ function normalizeAccessProfile(profile: AccessProfileInput | undefined): Access
   return "default_permissions";
 }
 
-function inferTrustProfile(accessProfile: AccessProfile): import("@orchcode/protocol").RunTrustProfile {
+function inferTrustProfile(accessProfile: AccessProfile): import("@hivo/protocol").RunTrustProfile {
   return accessProfile === "auto_review" || accessProfile === "bounded_autonomy" || accessProfile === "full_access" ? "trusted_internal" : "strict_gated";
 }
 
 function buildDeclaredAccessPolicy(
   accessProfile: AccessProfile,
-  trustProfile: import("@orchcode/protocol").RunTrustProfile
+  trustProfile: import("@hivo/protocol").RunTrustProfile
 ): DeclaredAccessPolicy {
   if (accessProfile === "full_access") {
     return {

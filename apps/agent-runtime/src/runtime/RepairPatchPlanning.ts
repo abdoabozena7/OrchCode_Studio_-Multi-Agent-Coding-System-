@@ -1,4 +1,4 @@
-import type { ModuleExecutionPlan, PatchFileChange, PatchProposal, RunToGreenDiagnosis } from "@orchcode/protocol";
+import type { ModuleExecutionPlan, PatchFileChange, PatchProposal, RunToGreenDiagnosis } from "@hivo/protocol";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 export type RepairPatchIntentOperation = "create_file" | "replace_range";

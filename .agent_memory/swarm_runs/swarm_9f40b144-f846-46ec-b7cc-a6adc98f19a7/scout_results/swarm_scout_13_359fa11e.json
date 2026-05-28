@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_scout_13_359fa11e",
+  "status": "succeeded",
+  "summary": "ScoutAgent completed scout work for Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files..",
+  "relevant_files": [
+    "apps/desktop/src/main.tsx",
+    "apps/agent-runtime/src/tests/swarm-autopilot.test.ts"
+  ],
+  "findings": [
+    "scout work item used schema ScoutResult."
+  ],
+  "risks": [],
+  "unknowns": [],
+  "structured_output_valid": true,
+  "confidence": 0.86
+}

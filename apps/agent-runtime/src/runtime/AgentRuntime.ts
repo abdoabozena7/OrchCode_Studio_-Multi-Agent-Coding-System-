@@ -9,14 +9,19 @@ import type {
   RunSummary,
   RuntimeSessionStatus,
   RuntimeTurnResponse
-} from "@orchcode/protocol";
-import { accessProfileDefaults } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { accessProfileDefaults } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import type { RuntimeConfig } from "../config.js";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
 import { OllamaProvider } from "../llm/OllamaProvider.js";
 import { OpenAIProvider } from "../llm/OpenAIProvider.js";
+import {
+  createProviderTelemetryRecorder,
+  inferActiveProviderSource,
+  TelemetryLlmProvider
+} from "../llm/ProviderTelemetry.js";
 import { runPatchIntentSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { SessionManager } from "./SessionManager.js";
@@ -72,6 +77,7 @@ export class AgentRuntime {
       mode,
       trustProfile: input.trustProfile,
       providerConfig: input.providerConfig,
+      activeProviderSource: input.activeProviderSource ?? inferActiveProviderSource(mode, input.providerConfig),
       sessionToken: input.sessionToken,
       sessionTokenExpiresAt: input.sessionTokenExpiresAt,
       executionMode: input.executionMode,
@@ -113,7 +119,12 @@ export class AgentRuntime {
     }
 
     try {
-      const provider = this.getProvider(session);
+      const providerTelemetry = createProviderTelemetryRecorder({
+        mode: session.mode,
+        providerConfig: session.providerConfig,
+        activeProviderSource: session.activeProviderSource
+      });
+      const provider = new TelemetryLlmProvider(this.getProvider(session), providerTelemetry);
       const tools = new ToolRegistry(session.workspacePath);
       const projectSummary = tools.workspace.getProjectSummary();
       const projectMap = {
@@ -183,7 +194,7 @@ export class AgentRuntime {
       const updated =
         modeResolution.mode === "orchestrated_mode"
           ? await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst)
-          : await new RunEngine(provider, this.sessionManager).runTurn(sessionId, promptForExecution, {
+          : await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, promptForExecution, {
               resolvedMode: modeResolution.mode,
               projectMap,
               thinkFirst
@@ -719,7 +730,7 @@ export class AgentRuntime {
       relevantFiles
     });
     const generated = await provider.generateStructured<Partial<RepairPatchIntentModel>>(
-      { systemPrompt: "You produce strict JSON repair patch intents for small scoped fixes only.", userPrompt: prompt },
+      { systemPrompt: "You produce strict JSON repair patch intents for small scoped fixes only. Any title field you return must be at most four words.", userPrompt: prompt },
       runPatchIntentSchema
     );
     const validation = validateStructuredOutput(generated, runPatchIntentSchema);
@@ -990,7 +1001,7 @@ export class AgentRuntime {
   private async runOrchestratedTurn(
     sessionId: string,
     message: string,
-    projectMap: import("@orchcode/protocol").ProjectMap,
+    projectMap: import("@hivo/protocol").ProjectMap,
     thinkFirst: boolean
   ) {
     const session = this.sessionManager.getSession(sessionId)!;
@@ -1022,7 +1033,7 @@ export class AgentRuntime {
       : await orchestrator.runAgenticTask(message);
 
     const patches = await loadPatchHistory(session.workspacePath, result.run.id);
-    const mappedPatches: import("@orchcode/protocol").PatchProposal[] = [];
+    const mappedPatches: import("@hivo/protocol").PatchProposal[] = [];
     for (const patchPath of patches) {
       try {
         const text = await readRunArtifact(session.workspacePath, result.run.id, patchPath);
@@ -1420,8 +1431,8 @@ function containsArabic(value: string) {
 
 function setRunPhaseState(
   session: AgentRuntimeSession,
-  phaseId: import("@orchcode/protocol").RunPhase["id"],
-  status: import("@orchcode/protocol").RunPhase["status"],
+  phaseId: import("@hivo/protocol").RunPhase["id"],
+  status: import("@hivo/protocol").RunPhase["status"],
   summary: string,
   evidenceCount?: number
 ) {
@@ -1694,7 +1705,7 @@ function formatExplainEvidenceAnswer(session: AgentRuntimeSession, message: stri
     .map((entry) => {
       const line = entry.lineStart ?? 1;
       const label = `${entry.path}:${line}`;
-      return `- [${label}](orchcode-file:${encodeURIComponent(entry.path)}:${line}): ${entry.reason}`;
+      return `- [${label}](hivo-file:${encodeURIComponent(entry.path)}:${line}): ${entry.reason}`;
     });
   const ignored = report.contextPack.inventory.ignoredDirectories.slice(0, 6).join(", ") || "none";
   if (arabic) {
@@ -1703,7 +1714,7 @@ function formatExplainEvidenceAnswer(session: AgentRuntimeSession, message: stri
       "",
       `- Workspace: \`${session.workspacePath}\``,
       `- اتفحص ${report.contextPack.inventory.scannedFiles} ملف قابل للقراءة، واتجاهلت generated/vendor زي: ${ignored}.`,
-      "- الروابط `orchcode-file:` هي مراجع نسبية داخل نفس الـ workspace، والسطر جنب كل رابط هو السطر اللي اتاخد كدليل.",
+      "- الروابط `hivo-file:` هي مراجع نسبية داخل نفس الـ workspace، والسطر جنب كل رابط هو السطر اللي اتاخد كدليل.",
       "",
       "أهم الأدلة المستخدمة:",
       ...(evidence.length ? evidence : ["- مفيش evidence file refs محفوظة في التقرير السابق."]),
@@ -1716,7 +1727,7 @@ function formatExplainEvidenceAnswer(session: AgentRuntimeSession, message: stri
     "",
     `- Workspace: \`${session.workspacePath}\``,
     `- Scanned ${report.contextPack.inventory.scannedFiles} readable file(s); ignored generated/vendor folders such as: ${ignored}.`,
-    "- `orchcode-file:` links are relative references inside that workspace, with the linked line used as evidence.",
+    "- `hivo-file:` links are relative references inside that workspace, with the linked line used as evidence.",
     "",
     "Main evidence refs:",
     ...(evidence.length ? evidence : ["- No file evidence refs were stored on the previous report."]),
@@ -1873,7 +1884,7 @@ function looksLikeTestCommand(command: string) {
 
 function mergeRuntimeEvidenceRefs(
   existing: NonNullable<NonNullable<AgentRuntimeSession["orchestration"]>["agentRuns"]>[number]["evidenceRefs"] | undefined,
-  next: import("@orchcode/protocol").EvidenceRef[]
+  next: import("@hivo/protocol").EvidenceRef[]
 ) {
   const merged = [...(existing ?? [])];
   for (const ref of next) {

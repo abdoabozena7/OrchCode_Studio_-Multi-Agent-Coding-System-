@@ -15,7 +15,7 @@ type SessionResponse = {
 
 async function main() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src-tauri");
-  const storageDir = path.join(os.tmpdir(), `orchcode-desktop-smoke-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-desktop-smoke-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const runtimePort = 45317 + Math.floor(Math.random() * 200);
   const runtimeUrl = `http://127.0.0.1:${runtimePort}`;
   const { app } = await buildServer({
@@ -26,7 +26,7 @@ async function main() {
   });
 
   await app.listen({ host: "127.0.0.1", port: runtimePort });
-  process.env.ORCHCODE_AGENT_RUNTIME_URL = runtimeUrl;
+  process.env.HIVO_AGENT_RUNTIME_URL = runtimeUrl;
 
   try {
     const packageScenario = await runPackageScriptScenario(runtimeUrl, root);
@@ -216,7 +216,7 @@ async function runStaticPreviewScenario(runtimeUrl: string) {
 }
 
 async function createWorkspace(label: string) {
-  const workspace = path.join(os.tmpdir(), `orchcode-desktop-smoke-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-desktop-smoke-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   return workspace;
 }

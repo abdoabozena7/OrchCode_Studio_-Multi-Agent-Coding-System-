@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { AppEvent } from "@orchcode/protocol";
+import type { AppEvent } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { EventBus } from "../runtime/EventBus.js";
@@ -109,8 +109,8 @@ test("command execution emits explicit completion events for projection consumer
 });
 
 async function createRuntimeFixture(userPrompt: string) {
-  const workspace = path.join(os.tmpdir(), `orchcode-runtime-events-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-runtime-events-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-runtime-events-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-events-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");

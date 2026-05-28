@@ -7,8 +7,8 @@ import type {
   RunSummary,
   RuntimeProgressStage,
   Task
-} from "@orchcode/protocol";
-import { accessProfileDefaults } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { accessProfileDefaults } from "@hivo/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { seniorCodingAgentPrompt } from "../prompts/seniorCodingAgentPrompt.js";
 import { agentPlanSchema } from "../schemas/sessionSchemas.js";
@@ -36,7 +36,7 @@ export class SeniorCodingAgent {
     message: string,
     options?: {
       thinkFirst?: boolean;
-      delegationDecision?: import("@orchcode/protocol").DelegationDecision;
+      delegationDecision?: import("@hivo/protocol").DelegationDecision;
     }
   ) {
     const session = this.sessionManager.getSession(sessionId);
@@ -680,7 +680,7 @@ export class SeniorCodingAgent {
     status: "completed" | "needs_approval" | "failed",
     summary: string,
     runSummary: RunSummary,
-    nextAction?: import("@orchcode/protocol").SessionNextAction,
+    nextAction?: import("@hivo/protocol").SessionNextAction,
     assistantMessage?: string,
     previewRecommendation?: PreviewRecommendation
   ) {

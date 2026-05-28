@@ -51,7 +51,7 @@ In a second terminal, run the desktop app:
 npm run dev
 ```
 
-If Rust/Cargo is not installed, the Tauri desktop command will fail before opening. The frontend still builds with `npm run build`, and the runtime can be exercised with `npm run test -w @orchcode/agent-runtime`.
+If Rust/Cargo is not installed, the Tauri desktop command will fail before opening. The frontend still builds with `npm run build`, and the runtime can be exercised with `npm run test -w @hivo/agent-runtime`.
 
 ## Real Provider Later
 

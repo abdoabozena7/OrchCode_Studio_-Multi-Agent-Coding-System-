@@ -1,0 +1,3539 @@
+[
+  {
+    "path": ".gitattributes",
+    "extension": "",
+    "basename": ".gitattributes",
+    "dirname": ".",
+    "sizeBytes": 66,
+    "mtimeMs": 1777394296615,
+    "hashSha256": "1a1dbe176bc233b499d35a57db7513f2941c99ab9759f177830c9149be99005b",
+    "isText": true,
+    "roles": [
+      "other"
+    ]
+  },
+  {
+    "path": ".gitignore",
+    "extension": "",
+    "basename": ".gitignore",
+    "dirname": ".",
+    "sizeBytes": 690,
+    "mtimeMs": 1779390619557,
+    "hashSha256": "f19f8c514ac4b8dc15b28dfff31b9320025d4a36a6b7e1a339f208ed8c51ccd8",
+    "isText": true,
+    "roles": [
+      "config"
+    ]
+  },
+  {
+    "path": "AGENTS.md",
+    "extension": ".md",
+    "basename": "AGENTS.md",
+    "dirname": ".",
+    "sizeBytes": 6371,
+    "mtimeMs": 1779572556664,
+    "hashSha256": "9ee879c51dc6cf147e91e1d957fce134473156d6b0d11474a2b344abff96087c",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/package.json",
+    "extension": ".json",
+    "basename": "package.json",
+    "dirname": "apps/agent-runtime",
+    "sizeBytes": 5201,
+    "mtimeMs": 1779572703853,
+    "hashSha256": "cf7632f9346767bdffc339bba46b46ed52be3363a1116a9c634c927698652ad4",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config",
+      "package",
+      "build"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/scripts/python-pygame-fallback-smoke.ts",
+    "extension": ".ts",
+    "basename": "python-pygame-fallback-smoke.ts",
+    "dirname": "apps/agent-runtime/scripts",
+    "sizeBytes": 5613,
+    "mtimeMs": 1779009807468,
+    "hashSha256": "c0845022927bbcb8b5132f68abb26599f5200405d00a8c17c21fcbca32dd32c0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/scripts/run-to-green-smoke.ts",
+    "extension": ".ts",
+    "basename": "run-to-green-smoke.ts",
+    "dirname": "apps/agent-runtime/scripts",
+    "sizeBytes": 12010,
+    "mtimeMs": 1778969802509,
+    "hashSha256": "ef56a4cbde0ed5ed4d69ed6b380f0ff101a2bec12798b624e71a9bc4aa63d6a5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/SeniorCodingAgent.ts",
+    "extension": ".ts",
+    "basename": "SeniorCodingAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents",
+    "sizeBytes": 33417,
+    "mtimeMs": 1778755786264,
+    "hashSha256": "7bc6a802680fed7be13f005927fda62b98d1503001befe3722f3a1c892cff8cb",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/ArchitectAgent.ts",
+    "extension": ".ts",
+    "basename": "ArchitectAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 644,
+    "mtimeMs": 1777396425266,
+    "hashSha256": "fce7583a6c6e4a9d73a38336cfa3c47efeff3aa4f9551cd1592a05fdea5a6d7f",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/BaseWorker.ts",
+    "extension": ".ts",
+    "basename": "BaseWorker.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 1813,
+    "mtimeMs": 1777580357463,
+    "hashSha256": "f01838623e129001e80b54c576fceab610f04925a9bd89d9185b975e3452bb35",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/CodebaseMapperAgent.ts",
+    "extension": ".ts",
+    "basename": "CodebaseMapperAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 715,
+    "mtimeMs": 1777396425266,
+    "hashSha256": "2e44c691479ffbf18659445db95cceb06cd22965d549523de6855b81369acbf7",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/FrontendAgent.ts",
+    "extension": ".ts",
+    "basename": "FrontendAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 7096,
+    "mtimeMs": 1777583362105,
+    "hashSha256": "7bdf245228e1dd3660e12d15d7017eaae8ecf150f3496d41e1be1aae61645e1b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/GenericWorkerAgent.ts",
+    "extension": ".ts",
+    "basename": "GenericWorkerAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 4939,
+    "mtimeMs": 1777925909107,
+    "hashSha256": "af8b24fc0e01da0f77c4c2bb083b28a5700005112581d1eec03673f6946933bc",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/index.ts",
+    "extension": ".ts",
+    "basename": "index.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 504,
+    "mtimeMs": 1777925056720,
+    "hashSha256": "d11424dedb61cf5d9ddd1c2664dad976fb9747f5cb8c4e30bc346a227867a3e8",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/ReviewerAgent.ts",
+    "extension": ".ts",
+    "basename": "ReviewerAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 2199,
+    "mtimeMs": 1777583317435,
+    "hashSha256": "adb19a40537a186a21d0d4ddd99c398ccd67f3eceee5bfbce09318f9aa5877d6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/RustBackendAgent.ts",
+    "extension": ".ts",
+    "basename": "RustBackendAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 648,
+    "mtimeMs": 1777396425266,
+    "hashSha256": "798e6bbfbf0439666cc80940adacec50e3660679fa99a9eb5a37180328d2bcdc",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/SecurityAgent.ts",
+    "extension": ".ts",
+    "basename": "SecurityAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 1549,
+    "mtimeMs": 1777396433071,
+    "hashSha256": "58482a4428cce05c6b46177dd5947d0cc417ccfe2d86d399bf19adf61c23fb8b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/TestAgent.ts",
+    "extension": ".ts",
+    "basename": "TestAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 773,
+    "mtimeMs": 1777396425267,
+    "hashSha256": "3b022e9833d45b640de6948b9a470b71316115b86eac51533c4d5b2ed3af4c0c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/agents/workers/ToolingTerminalAgent.ts",
+    "extension": ".ts",
+    "basename": "ToolingTerminalAgent.ts",
+    "dirname": "apps/agent-runtime/src/agents/workers",
+    "sizeBytes": 1816,
+    "mtimeMs": 1777408848664,
+    "hashSha256": "143781f5a8d0195efb372fa6e44584b93ff2fbe92874e1e434f77221d49b379a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/config.ts",
+    "extension": ".ts",
+    "basename": "config.ts",
+    "dirname": "apps/agent-runtime/src",
+    "sizeBytes": 717,
+    "mtimeMs": 1777924820104,
+    "hashSha256": "15c4ad9113e7be2a0f46da3e87fdc4f058df5a987faaa569379cf82ddb9c43d4",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/evals/cli.ts",
+    "extension": ".ts",
+    "basename": "cli.ts",
+    "dirname": "apps/agent-runtime/src/evals",
+    "sizeBytes": 1494,
+    "mtimeMs": 1779390580307,
+    "hashSha256": "ea2fc63a99fe605ac9330b585622bb3e5986926851248d24a03abf726f83380a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/evals/phase4.ts",
+    "extension": ".ts",
+    "basename": "phase4.ts",
+    "dirname": "apps/agent-runtime/src/evals",
+    "sizeBytes": 8491,
+    "mtimeMs": 1779390591033,
+    "hashSha256": "414f1e6e61bb51f962f12c16744ebd9ded245fe9d79fd301e3f9da25c8cac8d6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/index.ts",
+    "extension": ".ts",
+    "basename": "index.ts",
+    "dirname": "apps/agent-runtime/src",
+    "sizeBytes": 337,
+    "mtimeMs": 1777395796127,
+    "hashSha256": "73ca5d15d1171a4d0be012ac7e86844b2fe24dcf4a45621eb2830a37fbe433d0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/llm/LlmProvider.ts",
+    "extension": ".ts",
+    "basename": "LlmProvider.ts",
+    "dirname": "apps/agent-runtime/src/llm",
+    "sizeBytes": 256,
+    "mtimeMs": 1777395640819,
+    "hashSha256": "def906c09a648bc51400d249d8f1f01e06fb8aac6badd433fa854e88b4803f8b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/llm/MockLlmProvider.ts",
+    "extension": ".ts",
+    "basename": "MockLlmProvider.ts",
+    "dirname": "apps/agent-runtime/src/llm",
+    "sizeBytes": 8252,
+    "mtimeMs": 1779177946491,
+    "hashSha256": "bce6135ae728d3a7e985845c3a36420c4e0f9790477811d13c1873ca6a2fdf49",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/llm/OllamaProvider.ts",
+    "extension": ".ts",
+    "basename": "OllamaProvider.ts",
+    "dirname": "apps/agent-runtime/src/llm",
+    "sizeBytes": 2842,
+    "mtimeMs": 1778094010217,
+    "hashSha256": "e9b000079bf76bdaa5968cc1b506983ff94a081507ade4f39ded8a81ae475eb5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/llm/OpenAIProvider.ts",
+    "extension": ".ts",
+    "basename": "OpenAIProvider.ts",
+    "dirname": "apps/agent-runtime/src/llm",
+    "sizeBytes": 2879,
+    "mtimeMs": 1779046270582,
+    "hashSha256": "3803216d86d4b139c3c91c1110c80806ac836b5744259be7ebed8ec689437b56",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/cli.ts",
+    "extension": ".ts",
+    "basename": "cli.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 10075,
+    "mtimeMs": 1779390459406,
+    "hashSha256": "ac9fb095e626096b85e86c58bf857297dd566a5318da54fdd9f8eaf10fd7bcf1",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/CommandInventory.ts",
+    "extension": ".ts",
+    "basename": "CommandInventory.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 12713,
+    "mtimeMs": 1779372674471,
+    "hashSha256": "78c2d27f5f8b624d2e0e627c9e5feec8f3824eb83ea883df2b4474dd077f425e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/index.ts",
+    "extension": ".ts",
+    "basename": "index.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 216,
+    "mtimeMs": 1779390604371,
+    "hashSha256": "0bdc8e8082f95708ed8169565a9c50e3612b17c7e7b8e28c1e7b691b631ff7c0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/IndexFreshness.ts",
+    "extension": ".ts",
+    "basename": "IndexFreshness.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 6727,
+    "mtimeMs": 1779392163664,
+    "hashSha256": "f6de6ee28ed9dbd20b4c3ec791d1348c9416349dfb6f94ee52d9934bc1f21a41",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/ProjectIntelligence.ts",
+    "extension": ".ts",
+    "basename": "ProjectIntelligence.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 6901,
+    "mtimeMs": 1779390033290,
+    "hashSha256": "7d391cb6fa02f1cb95412b3ebca4fa8db3cee06ab7fc63f1c44e442a3cfe7a17",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/ProjectMemory.ts",
+    "extension": ".ts",
+    "basename": "ProjectMemory.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 18977,
+    "mtimeMs": 1779571828662,
+    "hashSha256": "491ae0a58fbb5bbc0dab3a6561007aca224d0d3e9627066f6a766c505ceb16dd",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/RepoIndexer.ts",
+    "extension": ".ts",
+    "basename": "RepoIndexer.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 26309,
+    "mtimeMs": 1779390068236,
+    "hashSha256": "fa5888231448713f0b39d32c569defc016704115752d7cca102153df07e59872",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/memory/types.ts",
+    "extension": ".ts",
+    "basename": "types.ts",
+    "dirname": "apps/agent-runtime/src/memory",
+    "sizeBytes": 6889,
+    "mtimeMs": 1779571819040,
+    "hashSha256": "db09d46c5355a1eed41fd7d0f4c07fa52d64e0360e71edb3499d439ec82b0f76",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/mock/threeJsSnake.ts",
+    "extension": ".ts",
+    "basename": "threeJsSnake.ts",
+    "dirname": "apps/agent-runtime/src/mock",
+    "sizeBytes": 18756,
+    "mtimeMs": 1777583304680,
+    "hashSha256": "28fca6d8dd5075b14d9612cda4838f689cf6f92058f85ce65bd06c6c7cbeb69c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/ApprovalGates.ts",
+    "extension": ".ts",
+    "basename": "ApprovalGates.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 1984,
+    "mtimeMs": 1779390227841,
+    "hashSha256": "aac1af2827cf899ac279e445ee8ef34f85176a4b395d846cac4d4218ea5ba9f9",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/ArtifactStore.ts",
+    "extension": ".ts",
+    "basename": "ArtifactStore.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 12170,
+    "mtimeMs": 1779390196627,
+    "hashSha256": "6a6b3f82745eae46dfc82d6d8034b3e0d3c60b2e751e16abb3c1229340fd5f00",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/campaign-cli.ts",
+    "extension": ".ts",
+    "basename": "campaign-cli.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 4684,
+    "mtimeMs": 1779390432910,
+    "hashSha256": "1a582db29c93f00c400e3ea745ec81b46bddae5a1dd5ee663e225ad1c2a99b2a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/CampaignManager.ts",
+    "extension": ".ts",
+    "basename": "CampaignManager.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 10081,
+    "mtimeMs": 1779390406649,
+    "hashSha256": "76518c9ccd8cdcc5119022810fc1eaed24b05256dfb5baf9ba33d917110ada12",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/cli.ts",
+    "extension": ".ts",
+    "basename": "cli.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 19375,
+    "mtimeMs": 1779572246857,
+    "hashSha256": "952e0e4174e7237e7d93f290fc8f70c457917e9068b2d54a92c6e30991b444bc",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts",
+    "extension": ".ts",
+    "basename": "ContextPackBuilder.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 8481,
+    "mtimeMs": 1779547425581,
+    "hashSha256": "2d0bd9193a5f93a1e25faf2adc7668e0fd46137247522a4199f20ea24bab6cb8",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/FileLockManager.ts",
+    "extension": ".ts",
+    "basename": "FileLockManager.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 6135,
+    "mtimeMs": 1779374546351,
+    "hashSha256": "54a327e2a01ec0ba0b3099d4e5fdc772878d37e652835c8be16ce6851c06142f",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/index.ts",
+    "extension": ".ts",
+    "basename": "index.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 1097,
+    "mtimeMs": 1779572218969,
+    "hashSha256": "3298876fd5d6b9d1488591625174adfe58abbe0520383ee61b4a06898ce718c9",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/Metrics.ts",
+    "extension": ".ts",
+    "basename": "Metrics.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 3107,
+    "mtimeMs": 1779390213972,
+    "hashSha256": "5af162ff631b064154af4150c95ec73a130892a0de6c3a9edf803cf97ea1d428",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/OrchestrationConfig.ts",
+    "extension": ".ts",
+    "basename": "OrchestrationConfig.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 9960,
+    "mtimeMs": 1779570605777,
+    "hashSha256": "294770020ac9b4901b75e25c51a5c3cad24568ffa7d52d5d2a17cdfaeac99f24",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/OrchestrationModels.ts",
+    "extension": ".ts",
+    "basename": "OrchestrationModels.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 7785,
+    "mtimeMs": 1779570611202,
+    "hashSha256": "7ee3dd0265dd31dccbcec128c959c79aff6289bdd4c3826cdfe51ecd7d27a491",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/Orchestrator.ts",
+    "extension": ".ts",
+    "basename": "Orchestrator.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 53538,
+    "mtimeMs": 1779570616607,
+    "hashSha256": "3bc324cc34d2c87fbdc810f884187633cd73a8b3bff8e0fb0a536a8e263d7df2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/PatchSafety.ts",
+    "extension": ".ts",
+    "basename": "PatchSafety.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 9836,
+    "mtimeMs": 1779374960384,
+    "hashSha256": "497317d1f5a6b1c2fd81820b4d0516ddb4fa17fb74416c2529b14eabb3acbaf5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/RepairLoop.ts",
+    "extension": ".ts",
+    "basename": "RepairLoop.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 3195,
+    "mtimeMs": 1779392009266,
+    "hashSha256": "d5f173993956ef742f11fc29cd2f54e8a05905c55f6627c406213737680d8c20",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/ReviewLoop.ts",
+    "extension": ".ts",
+    "basename": "ReviewLoop.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 7323,
+    "mtimeMs": 1779374582697,
+    "hashSha256": "5e211312c02a2374cb6be9b73d29af98276f288f980a94c93a5c714177387880",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/RoleRegistry.ts",
+    "extension": ".ts",
+    "basename": "RoleRegistry.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 7445,
+    "mtimeMs": 1779373182936,
+    "hashSha256": "792452173d0eb3bd03adf8334b5f69e44aea4b8ee2facf4d0389dff06a374547",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts",
+    "extension": ".ts",
+    "basename": "SpecialistAgentFactory.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 6680,
+    "mtimeMs": 1779572656047,
+    "hashSha256": "fcb379f924c622d8868f374732874d1fc69fb6ea1e6c8fdb901dd8d36e45067c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/StructuredOutputs.ts",
+    "extension": ".ts",
+    "basename": "StructuredOutputs.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 18721,
+    "mtimeMs": 1779390792297,
+    "hashSha256": "acbaf0215e380869ec91c397001c28f209cfe83a6ed7370bef2a5e4fd6045d04",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmAgentTemplates.ts",
+    "extension": ".ts",
+    "basename": "SwarmAgentTemplates.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 7755,
+    "mtimeMs": 1779570102929,
+    "hashSha256": "e509205f3703c4b91d6f9c6741f790adab3055ce778d34574f39680c1065d695",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmArtifactStore.ts",
+    "extension": ".ts",
+    "basename": "SwarmArtifactStore.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 9668,
+    "mtimeMs": 1779570347172,
+    "hashSha256": "73bde0f5d3b42da72906afddaa8e791ea6d3a6acc5aaa6ac26abbbd9a79d7ce3",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmFanInOut.ts",
+    "extension": ".ts",
+    "basename": "SwarmFanInOut.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 11959,
+    "mtimeMs": 1779570692982,
+    "hashSha256": "16bb368c2fa3065fcc7cb60573c48ab2afac37d97d148e74140678a90b5d42d0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmModels.ts",
+    "extension": ".ts",
+    "basename": "SwarmModels.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 8539,
+    "mtimeMs": 1779570689270,
+    "hashSha256": "1988d164a620c1529cc02409d7a60172de3babe0fae956db7fd39ea6af8d17b7",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmRuntime.ts",
+    "extension": ".ts",
+    "basename": "SwarmRuntime.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 19392,
+    "mtimeMs": 1779570579918,
+    "hashSha256": "2aaea966a148d3a7dd225bdac12288532b8a2e95c981fd2576d20eb4be4be9d0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmScheduler.ts",
+    "extension": ".ts",
+    "basename": "SwarmScheduler.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 24081,
+    "mtimeMs": 1779570474371,
+    "hashSha256": "47a9e674c3d9dd5ea1ab9a89c1a1d05a90ec9d44a5cda79fb5b50a6c5a6f13c2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts",
+    "extension": ".ts",
+    "basename": "SwarmStaffingPlanner.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 18612,
+    "mtimeMs": 1779572648950,
+    "hashSha256": "8ff6225fb33f170aa03355b2186f9b744ac942e29036bbd44f06e2d70fb3f742",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmTrialArtifactStore.ts",
+    "extension": ".ts",
+    "basename": "SwarmTrialArtifactStore.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 5261,
+    "mtimeMs": 1779571872598,
+    "hashSha256": "7b00248a7a25fe89f037df927c66b409d9cc2f03b9ae452c06ed0402a151c022",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts",
+    "extension": ".ts",
+    "basename": "SwarmTrialLab.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 46739,
+    "mtimeMs": 1779572096378,
+    "hashSha256": "4c0e61589616506183e36b780747e42a37aaed3da1990bf16b12901e6ff5e270",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmTrialMemory.ts",
+    "extension": ".ts",
+    "basename": "SwarmTrialMemory.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 2335,
+    "mtimeMs": 1779571843774,
+    "hashSha256": "f2fb16a5533a57635740eeb48c78fd2d85bfef96609abeb5c558ccd5e2e88ee4",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/SwarmTrialModels.ts",
+    "extension": ".ts",
+    "basename": "SwarmTrialModels.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 6075,
+    "mtimeMs": 1779571788529,
+    "hashSha256": "662a4c0b1d78cf3bb96aa58a4e9dbd73b4065451fba2176a35978f7abb892944",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/TaskGraphManager.ts",
+    "extension": ".ts",
+    "basename": "TaskGraphManager.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 5719,
+    "mtimeMs": 1779374705810,
+    "hashSha256": "09f2f0b4b7bfa772ac889b73a9079acfeb0d568663bd11ffd27f70792ae623c2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/Validation.ts",
+    "extension": ".ts",
+    "basename": "Validation.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 5481,
+    "mtimeMs": 1779547391742,
+    "hashSha256": "75cdbd9aeba6e7fb5ec4b25cc7e5e2cfe6994723daa58a90bcc9f228ddf4f323",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestration/ValidationRunner.ts",
+    "extension": ".ts",
+    "basename": "ValidationRunner.ts",
+    "dirname": "apps/agent-runtime/src/orchestration",
+    "sizeBytes": 10893,
+    "mtimeMs": 1779390341024,
+    "hashSha256": "7b60d0e97a4cc8f2126d165561c1beebbf27e1928476fc1a65a38a67e46a068e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestrators/BusinessOrchestrator.ts",
+    "extension": ".ts",
+    "basename": "BusinessOrchestrator.ts",
+    "dirname": "apps/agent-runtime/src/orchestrators",
+    "sizeBytes": 1167,
+    "mtimeMs": 1777580490896,
+    "hashSha256": "e3ca8954985deca74cbed5592072c517a30f2c9591adb4c3d2c95dd42adf5ff2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestrators/EngineeringOrchestrator.ts",
+    "extension": ".ts",
+    "basename": "EngineeringOrchestrator.ts",
+    "dirname": "apps/agent-runtime/src/orchestrators",
+    "sizeBytes": 17103,
+    "mtimeMs": 1777925085259,
+    "hashSha256": "568c738bcbdaf6fbb0fd36ba052b7792c53fc72a7d89fc0eac98f921f18b4dbb",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/orchestrators/ProductOrchestrator.ts",
+    "extension": ".ts",
+    "basename": "ProductOrchestrator.ts",
+    "dirname": "apps/agent-runtime/src/orchestrators",
+    "sizeBytes": 1857,
+    "mtimeMs": 1777580479936,
+    "hashSha256": "a98ba258586140ecbb224900b7f3259466d863c28041b46beede6bca24a748fa",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/businessOrchestratorPrompt.ts",
+    "extension": ".ts",
+    "basename": "businessOrchestratorPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts",
+    "sizeBytes": 337,
+    "mtimeMs": 1777396535815,
+    "hashSha256": "b2a4e4616e15c2c8ef3d6f035285f633fac210a1a3309291abd5418e53733aee",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/engineeringOrchestratorPrompt.ts",
+    "extension": ".ts",
+    "basename": "engineeringOrchestratorPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts",
+    "sizeBytes": 422,
+    "mtimeMs": 1777396535815,
+    "hashSha256": "1b35792dcf7d60d2c32f5cb4cc8305babf9541baf4277f6b4f031842165eb1fd",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/productOrchestratorPrompt.ts",
+    "extension": ".ts",
+    "basename": "productOrchestratorPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts",
+    "sizeBytes": 401,
+    "mtimeMs": 1777396535814,
+    "hashSha256": "07866bd4ee8b67e92c12bec9c027edfa1178c226a144efb50799756d747322e9",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/seniorCodingAgentPrompt.ts",
+    "extension": ".ts",
+    "basename": "seniorCodingAgentPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts",
+    "sizeBytes": 590,
+    "mtimeMs": 1777395750733,
+    "hashSha256": "59f952be8cbfdd9c24f9c5abd075b39fa94a5649b72e4e4b33627aea34440f47",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/architectPrompt.ts",
+    "extension": ".ts",
+    "basename": "architectPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 175,
+    "mtimeMs": 1777396535815,
+    "hashSha256": "7c9fa5c3e5988095eebcd43af6be611b0d7eac1c999e321e63fc4ba2900ff708",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/codebaseMapperPrompt.ts",
+    "extension": ".ts",
+    "basename": "codebaseMapperPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 172,
+    "mtimeMs": 1777396535815,
+    "hashSha256": "1f08f3b20f61f8993e5db113c903d37038947e2affc1c8263af8895d68711cf1",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/frontendPrompt.ts",
+    "extension": ".ts",
+    "basename": "frontendPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 158,
+    "mtimeMs": 1777396535816,
+    "hashSha256": "93b1d384306090a18a53cdd46bc7dd0b3ffb0ddd08c022e01c1fc002302d6faa",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/reviewerPrompt.ts",
+    "extension": ".ts",
+    "basename": "reviewerPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 171,
+    "mtimeMs": 1777396535817,
+    "hashSha256": "65014a77d843c1303540488b2a76eb2435d1c7e7b9f9c5b1fe922642bb14a7ce",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/rustBackendPrompt.ts",
+    "extension": ".ts",
+    "basename": "rustBackendPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 174,
+    "mtimeMs": 1777396535816,
+    "hashSha256": "0ef2965b06aa34ccb4aca56a8721e6b9cdb7400a423d5adcd24abb33664b025e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/securityPrompt.ts",
+    "extension": ".ts",
+    "basename": "securityPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 175,
+    "mtimeMs": 1777396535817,
+    "hashSha256": "4ecde2ce16a4c847a1e49a5de04201676ae4541e6883257f95bb7d9da0d90d07",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/testPrompt.ts",
+    "extension": ".ts",
+    "basename": "testPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 137,
+    "mtimeMs": 1777396535817,
+    "hashSha256": "7c838b8833e66c4213b2df3f0e1f87e234642e1663bc8e58c8dce686aff446da",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/prompts/workers/toolingTerminalPrompt.ts",
+    "extension": ".ts",
+    "basename": "toolingTerminalPrompt.ts",
+    "dirname": "apps/agent-runtime/src/prompts/workers",
+    "sizeBytes": 186,
+    "mtimeMs": 1777396535816,
+    "hashSha256": "4b14059d063b86829559fae6b1939b3d1ab1268fa0e894914e132c94e49f4e69",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/AgentRuntime.ts",
+    "extension": ".ts",
+    "basename": "AgentRuntime.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 86661,
+    "mtimeMs": 1779400400187,
+    "hashSha256": "423790679501962f060c74c6c49b84e610f3df01313e1cc372e399b31847aafa",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/AgentTelemetry.ts",
+    "extension": ".ts",
+    "basename": "AgentTelemetry.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 19550,
+    "mtimeMs": 1778860798853,
+    "hashSha256": "cf746c2df384a3486bf5a3dd29403082eb0e6c3d7a1431fd3e9a5f1f98802b5e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/AlgorithmInventoryAnalyzer.ts",
+    "extension": ".ts",
+    "basename": "AlgorithmInventoryAnalyzer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 3545,
+    "mtimeMs": 1779395937207,
+    "hashSha256": "3677542f27b09b37d804eee156c2ebc985b8903237a5505071e64cbe2679501e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/CodeFlowAnalyzer.ts",
+    "extension": ".ts",
+    "basename": "CodeFlowAnalyzer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 6123,
+    "mtimeMs": 1779516191144,
+    "hashSha256": "ee8c27b4231c2d52ec4ab07455e96baa6b9d23575f3a0b0466172788ea246614",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/CodingAgentIntentRouter.ts",
+    "extension": ".ts",
+    "basename": "CodingAgentIntentRouter.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 3617,
+    "mtimeMs": 1779398222311,
+    "hashSha256": "e074bf71a208408b42fe331fe15c3a526d15a2b9b00da9115ffbc08a5e35e99b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/CommandExecutor.ts",
+    "extension": ".ts",
+    "basename": "CommandExecutor.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 3715,
+    "mtimeMs": 1778862896941,
+    "hashSha256": "a0f1efa5fada9a5910559c120c26808c414fca4d2fba5fc5abfd600f32681887",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/delegation.ts",
+    "extension": ".ts",
+    "basename": "delegation.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 4351,
+    "mtimeMs": 1777408539400,
+    "hashSha256": "05b66e54ee17e67ca40be2aadb5f94d5fdf149b6c3bd2f270025ce8e7e0fb0f0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/DurableRuntimeEvents.ts",
+    "extension": ".ts",
+    "basename": "DurableRuntimeEvents.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 5899,
+    "mtimeMs": 1778857072248,
+    "hashSha256": "49e33305641c7467de9f4c00682108bef002f166c09db4c1d87e5d1bf57f9edc",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/EventBus.ts",
+    "extension": ".ts",
+    "basename": "EventBus.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 428,
+    "mtimeMs": 1777395640818,
+    "hashSha256": "7a166b72a11c86cf4969706bde059b8b35895b421e1163dec39cb46420cf3ce4",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/FrontendStructureAnalyzer.ts",
+    "extension": ".ts",
+    "basename": "FrontendStructureAnalyzer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 4018,
+    "mtimeMs": 1779486081128,
+    "hashSha256": "6eb095fed6f790c2ca72cb734d0034ab3f2f0e8f24e9cd8de16d439525f2f814",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/InspectExplainComposer.ts",
+    "extension": ".ts",
+    "basename": "InspectExplainComposer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 7689,
+    "mtimeMs": 1779489050001,
+    "hashSha256": "6ea1b310c1cb4a9639739c1a06b7d12e1c5e4ad7a4759a409a03beeb8fd228c6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/InspectExplainContracts.ts",
+    "extension": ".ts",
+    "basename": "InspectExplainContracts.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 2218,
+    "mtimeMs": 1779398339146,
+    "hashSha256": "577ee5d909e00c6646d0a5072e58d22e84e86366cf9cd7ee732e62b3a1541e27",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/InspectExplainFacts.ts",
+    "extension": ".ts",
+    "basename": "InspectExplainFacts.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 2728,
+    "mtimeMs": 1779517889928,
+    "hashSha256": "2eff19a265c3edd072dc296a3096c8ceb4dee0e1c4a2137d7a2acffdd9b15303",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/InspectExplainReadLanes.ts",
+    "extension": ".ts",
+    "basename": "InspectExplainReadLanes.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 52935,
+    "mtimeMs": 1779569062822,
+    "hashSha256": "7c6c3590e19b83d17b0f686fd7b8250ed879ee7bd140a491a733f4813f0eac2d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/LargeProjectContextBuilder.ts",
+    "extension": ".ts",
+    "basename": "LargeProjectContextBuilder.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 67150,
+    "mtimeMs": 1779358736798,
+    "hashSha256": "8d367111045a4550e6d00a48759642dd3ca6a825bec1a071fcedcfbb1c402c85",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/LlmProjectExplainer.ts",
+    "extension": ".ts",
+    "basename": "LlmProjectExplainer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 34301,
+    "mtimeMs": 1779489005265,
+    "hashSha256": "c238623220dddf9aac2b3a0b664d094a6daab43befb4f7e0f95a5d2704076d8c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ModuleExecutionPlanning.ts",
+    "extension": ".ts",
+    "basename": "ModuleExecutionPlanning.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 15963,
+    "mtimeMs": 1779547482417,
+    "hashSha256": "dda946a7b909bd377360d53b6eaa123da6f8e5838aa26be3e39df9f033ecb909",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/OrchestratedRuntime.ts",
+    "extension": ".ts",
+    "basename": "OrchestratedRuntime.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 32447,
+    "mtimeMs": 1779128597867,
+    "hashSha256": "2fd59be410f42d4eb0c503a62a02686da48159d3b9a2393845793d0a86553842",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ProjectIntake.ts",
+    "extension": ".ts",
+    "basename": "ProjectIntake.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 23833,
+    "mtimeMs": 1779547457971,
+    "hashSha256": "71dd4309c0c26690b8c8b88ee183c2f230399d1adf4648470f6a0ce037be0c53",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ProjectIntelligenceKernel.ts",
+    "extension": ".ts",
+    "basename": "ProjectIntelligenceKernel.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 59561,
+    "mtimeMs": 1779565750852,
+    "hashSha256": "fd8756d0eef43f4b3a7f2ee36e4c131ed5cf47f71644124401389c01a2aa1158",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ProjectLaunchInference.ts",
+    "extension": ".ts",
+    "basename": "ProjectLaunchInference.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 4275,
+    "mtimeMs": 1777588390250,
+    "hashSha256": "a6dc7aa48284773064883f36196d11c8da473b5172c3506abf4e51d107c7ea16",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ProjectQuestionConceptEngine.ts",
+    "extension": ".ts",
+    "basename": "ProjectQuestionConceptEngine.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 43556,
+    "mtimeMs": 1779565427965,
+    "hashSha256": "57aa4cfb5fc9e92c18facf479f3653ce7a6d62d606c20e52a2f0ffd38bdf79bf",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/ProjectQuestionGrounding.ts",
+    "extension": ".ts",
+    "basename": "ProjectQuestionGrounding.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 128696,
+    "mtimeMs": 1779565416594,
+    "hashSha256": "4af166397c22f2710b6e97bad79018834cc6e4fdbf35fa3b75397b1b47f40fe6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/RepairPatchPlanning.ts",
+    "extension": ".ts",
+    "basename": "RepairPatchPlanning.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 8838,
+    "mtimeMs": 1778882356588,
+    "hashSha256": "8f6c16459d8a530d7dcf7628b3a7ecc5f69087d51fa6f6054ef84c7533393ef6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/RunEngine.ts",
+    "extension": ".ts",
+    "basename": "RunEngine.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 126343,
+    "mtimeMs": 1779568347210,
+    "hashSha256": "4c086187741a6ba94735e28736a911f7c89be1c1e5f82d53ae66a37f22201b2a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/RunToGreen.ts",
+    "extension": ".ts",
+    "basename": "RunToGreen.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 14133,
+    "mtimeMs": 1778952560689,
+    "hashSha256": "182ec8f449f7215c58868e0e8f32da3392e0fe5c58657eeab7bca5603cbf7d20",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/SessionManager.ts",
+    "extension": ".ts",
+    "basename": "SessionManager.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 38432,
+    "mtimeMs": 1779045901749,
+    "hashSha256": "b419fd0a34171fbcca675819f565385bacb89783c42afba718e491637a7df9b5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/SessionReplay.ts",
+    "extension": ".ts",
+    "basename": "SessionReplay.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 26012,
+    "mtimeMs": 1779046227974,
+    "hashSha256": "b6afe7aade5bfbb82b9679536d6e941efcdca4d814d43a60a95bc08f78b87a1c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/TrainingInferenceAnalyzer.ts",
+    "extension": ".ts",
+    "basename": "TrainingInferenceAnalyzer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 2807,
+    "mtimeMs": 1779395937619,
+    "hashSha256": "0b6100afa7f4c253705b33193ffd6fed237a9c11ffbf377ab2f9e8bea34eb824",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/UIControlAnalyzer.ts",
+    "extension": ".ts",
+    "basename": "UIControlAnalyzer.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 6090,
+    "mtimeMs": 1779398209792,
+    "hashSha256": "679aa7e628cccbdb25b47c0e73dc625c064730d9f8888eb931ef17d7f8779850",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts",
+    "extension": ".ts",
+    "basename": "UniversalProjectQuestionEngine.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 139907,
+    "mtimeMs": 1779568789471,
+    "hashSha256": "e628b9f0157f452890428c9655550be1b430827097eccec03421e90edc69395f",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/runtime/WorkspaceReasoningPipeline.ts",
+    "extension": ".ts",
+    "basename": "WorkspaceReasoningPipeline.ts",
+    "dirname": "apps/agent-runtime/src/runtime",
+    "sizeBytes": 50030,
+    "mtimeMs": 1779565450871,
+    "hashSha256": "1f0f567884c6354d1b21becdacf5690ba29b1373de8f60a1731e352023241881",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/scheduler/AgentPool.ts",
+    "extension": ".ts",
+    "basename": "AgentPool.ts",
+    "dirname": "apps/agent-runtime/src/scheduler",
+    "sizeBytes": 190,
+    "mtimeMs": 1777396326858,
+    "hashSha256": "32cdd752f947ef6f0b32e0edb8c773183b34918717f129c933dc9adbdfd0da7d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/scheduler/FileLockManager.ts",
+    "extension": ".ts",
+    "basename": "FileLockManager.ts",
+    "dirname": "apps/agent-runtime/src/scheduler",
+    "sizeBytes": 1243,
+    "mtimeMs": 1777924983955,
+    "hashSha256": "d3a2f416c027c7a12dc005cef66068ecdbb485e96949825210e44e93321f42a9",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/scheduler/MergeController.ts",
+    "extension": ".ts",
+    "basename": "MergeController.ts",
+    "dirname": "apps/agent-runtime/src/scheduler",
+    "sizeBytes": 1702,
+    "mtimeMs": 1777396331908,
+    "hashSha256": "1b73c8bca6a50dea053bdc0e3fae8a31b7e62261ab0928a69954584c39cddd2e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/scheduler/TaskGraph.ts",
+    "extension": ".ts",
+    "basename": "TaskGraph.ts",
+    "dirname": "apps/agent-runtime/src/scheduler",
+    "sizeBytes": 920,
+    "mtimeMs": 1777396326857,
+    "hashSha256": "9f2a1489dba09a6192bb67e1fdfa56626aaa536ee5d4f183d48328f1cf6343c6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/scheduler/TaskScheduler.ts",
+    "extension": ".ts",
+    "basename": "TaskScheduler.ts",
+    "dirname": "apps/agent-runtime/src/scheduler",
+    "sizeBytes": 4659,
+    "mtimeMs": 1777925017094,
+    "hashSha256": "c33c4ff4ae313989cdf121fe99450bd0cbc18cd061014888dfb912eedf56ac6e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/businessBriefSchema.ts",
+    "extension": ".ts",
+    "basename": "businessBriefSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 72,
+    "mtimeMs": 1777396278966,
+    "hashSha256": "f124c808ebe96069eacfc9bcf583f9ef56a9469de6be0acd873c08879055454b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/patchSchemas.ts",
+    "extension": ".ts",
+    "basename": "patchSchemas.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 74,
+    "mtimeMs": 1777395640819,
+    "hashSha256": "893712a7559b4ac7f271378a6fefa7338473ad219c0f728435489eab81d25ff6",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/productBriefSchema.ts",
+    "extension": ".ts",
+    "basename": "productBriefSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 70,
+    "mtimeMs": 1777396278965,
+    "hashSha256": "57cbca283960536ffcd0b648f418677ee84f67580197c2db6a8458ad4acdd943",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/reviewSchema.ts",
+    "extension": ".ts",
+    "basename": "reviewSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 48,
+    "mtimeMs": 1777396278967,
+    "hashSha256": "fa2c6ab68155edf1e75729ad6165b71ff885343107a77e05f8f63f54453974dd",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/sessionSchemas.ts",
+    "extension": ".ts",
+    "basename": "sessionSchemas.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 889,
+    "mtimeMs": 1779177930683,
+    "hashSha256": "f16627831bd9326e4cc77b4df9c6c0c5f5d4b54540254ceddffd0f9f787ece21",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/taskGraphSchema.ts",
+    "extension": ".ts",
+    "basename": "taskGraphSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 64,
+    "mtimeMs": 1777396278966,
+    "hashSha256": "7f49f602f5efe350574dd8d395d658bc26894a3f59aef8be561f14c1439c376f",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/technicalPlanSchema.ts",
+    "extension": ".ts",
+    "basename": "technicalPlanSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 72,
+    "mtimeMs": 1777396278966,
+    "hashSha256": "116ff590d91061d17d63a9f0324423ee2467bcb6403f66dcc427284e25b294be",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/toolSchemas.ts",
+    "extension": ".ts",
+    "basename": "toolSchemas.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 245,
+    "mtimeMs": 1777395640820,
+    "hashSha256": "23988116cf799280da36e702e3f9089baf79d28cdfa9f6007b6630e63c0154f8",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/validators.ts",
+    "extension": ".ts",
+    "basename": "validators.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 10415,
+    "mtimeMs": 1779177939309,
+    "hashSha256": "5f8dff5c979b03b407cf0afed163dbedd87873174e906d51f81157a8c1228c1a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/schemas/workerOutputSchema.ts",
+    "extension": ".ts",
+    "basename": "workerOutputSchema.ts",
+    "dirname": "apps/agent-runtime/src/schemas",
+    "sizeBytes": 54,
+    "mtimeMs": 1777396278967,
+    "hashSha256": "67952e30d8a2460ad66032064d389b65c23ad0b0e5776c3ae9bf52ef8ee6534c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/server.ts",
+    "extension": ".ts",
+    "basename": "server.ts",
+    "dirname": "apps/agent-runtime/src",
+    "sizeBytes": 6460,
+    "mtimeMs": 1778096172035,
+    "hashSha256": "b6780125e77e502978a8db42d9fa83bc2c966e69b46fdaca44241f0619964ea8",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/agent-lifecycle.test.ts",
+    "extension": ".ts",
+    "basename": "agent-lifecycle.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 1551,
+    "mtimeMs": 1777929627355,
+    "hashSha256": "38af0b4fabca1532f2a9e2550f89adde5ff8980fda354a973d17954aee8600db",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/auto-orchestration.test.ts",
+    "extension": ".ts",
+    "basename": "auto-orchestration.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 6185,
+    "mtimeMs": 1779400164406,
+    "hashSha256": "73eb6fa2cacb054ca01ad2d0d8bb8ba6f79620255ee39a080fdab4467a17e81a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/command-policy.test.ts",
+    "extension": ".ts",
+    "basename": "command-policy.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 1543,
+    "mtimeMs": 1779046543289,
+    "hashSha256": "688d2b94cc2bdef8949ae8deb14338d6eb2a2fdbe48040062118e4574b3647c9",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/durable-event-model.test.ts",
+    "extension": ".ts",
+    "basename": "durable-event-model.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 2457,
+    "mtimeMs": 1778856117072,
+    "hashSha256": "cdc0f1c449d47ec2c4f93b46e0d0a64ea6c9f4cc93cb2a416a16b290bdee97a1",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/inspect-explain-read-lanes.test.ts",
+    "extension": ".ts",
+    "basename": "inspect-explain-read-lanes.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 12199,
+    "mtimeMs": 1779569076648,
+    "hashSha256": "7222d2aaf7d06e990583a960f58fd98236b39d6502fc7804f6a3a52d1959c22c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/inspect-explain.test.ts",
+    "extension": ".ts",
+    "basename": "inspect-explain.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 9098,
+    "mtimeMs": 1779398293305,
+    "hashSha256": "20fcef61e29724bf28647449318517be77cc0700dec9bc2bc849c0fd5476aa72",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/memory-indexing.test.ts",
+    "extension": ".ts",
+    "basename": "memory-indexing.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 8194,
+    "mtimeMs": 1779372585816,
+    "hashSha256": "62b186f6705d73f4bb6453db75dc6dbb9ad57be3907c347c049af67034481f7b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/mock-llm.test.ts",
+    "extension": ".ts",
+    "basename": "mock-llm.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 611,
+    "mtimeMs": 1777395822189,
+    "hashSha256": "12160e7ff5bf16f8797764b981c1ee68f4705cbb45fced04a924c2ba6fd4ac2a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/module-execution-planning.test.ts",
+    "extension": ".ts",
+    "basename": "module-execution-planning.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 20118,
+    "mtimeMs": 1779547736256,
+    "hashSha256": "88b796cb6f7eb43e9b01f18402b46f2122d0e2ddf64980ad8a8f525eee7af190",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/module3-orchestration.test.ts",
+    "extension": ".ts",
+    "basename": "module3-orchestration.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 6027,
+    "mtimeMs": 1779400011505,
+    "hashSha256": "46e015770b68ca9d6a9c9951216aaf10ff81d320e14af6c729260b045c422c84",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/orchestration.test.ts",
+    "extension": ".ts",
+    "basename": "orchestration.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 11181,
+    "mtimeMs": 1779373602149,
+    "hashSha256": "ca2144ddedc464c5207894ea7573a367efb9dbe173bc2ac1504897dae637b2a0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/patch-intent.test.ts",
+    "extension": ".ts",
+    "basename": "patch-intent.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 17286,
+    "mtimeMs": 1779046589796,
+    "hashSha256": "a674a372ca48438acd838afabe91422878314e3fa37e28f973d8a67f9920e017",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/patch-validation.test.ts",
+    "extension": ".ts",
+    "basename": "patch-validation.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 753,
+    "mtimeMs": 1777395822190,
+    "hashSha256": "b9bcdf35027d1dbc4fc92a3935865457e1c4aba4c4e47745f95d12f2a3f5a8d1",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/phase4-factory.test.ts",
+    "extension": ".ts",
+    "basename": "phase4-factory.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 7740,
+    "mtimeMs": 1779391394606,
+    "hashSha256": "4f5c64941a856534d68f22fdc62d99d62c7b0787ab8defe6adc6dad4b21f8276",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/project-explain.test.ts",
+    "extension": ".ts",
+    "basename": "project-explain.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 89236,
+    "mtimeMs": 1779371381141,
+    "hashSha256": "f9b23a59d7794bea7fc403f60f2c6d688cae9978978662baef304c03c33d1266",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/project-intake.test.ts",
+    "extension": ".ts",
+    "basename": "project-intake.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 7443,
+    "mtimeMs": 1778883613074,
+    "hashSha256": "e0224047607fa1f046e1e6b96f0f31051726973d00c78835c9912f6b5ca746cc",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/project-intelligence-kernel.test.ts",
+    "extension": ".ts",
+    "basename": "project-intelligence-kernel.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 9510,
+    "mtimeMs": 1779551246543,
+    "hashSha256": "5c017bcd56efb3adcfeb95a43efe1ce8976faecfd03246715312f3e5bd63f792",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/quality-gates.test.ts",
+    "extension": ".ts",
+    "basename": "quality-gates.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 2211,
+    "mtimeMs": 1777583377573,
+    "hashSha256": "a4a192ce0ca3b992d8cfca6c3b6a6f2c0cddc83133a9c277cd49717dceaf8215",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/reliability-foundation.test.ts",
+    "extension": ".ts",
+    "basename": "reliability-foundation.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 6186,
+    "mtimeMs": 1778860212112,
+    "hashSha256": "a82e2d16eb32bd9361c9495f89145e34f19f63fe9c0c93bb4b6734b4e542a0f0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/replay-restore.test.ts",
+    "extension": ".ts",
+    "basename": "replay-restore.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 16284,
+    "mtimeMs": 1778863050814,
+    "hashSha256": "2566b7570751eefaf30f1ece28c81272eaa9360f5c3aed93aca6ebc23bb368fa",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/run-to-green.test.ts",
+    "extension": ".ts",
+    "basename": "run-to-green.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 26822,
+    "mtimeMs": 1778969927952,
+    "hashSha256": "969cbf3aa5790ec3bc7db1f05735cbc2cad3b3410b0c39a91af8513dcf0e4358",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/runtime-event-semantics.test.ts",
+    "extension": ".ts",
+    "basename": "runtime-event-semantics.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 5758,
+    "mtimeMs": 1778838904584,
+    "hashSha256": "f1bc691ee72a9e37b5603be6aece6849b48b1b2cd4565982347cac394fe7a2d7",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/runtime-task-state.test.ts",
+    "extension": ".ts",
+    "basename": "runtime-task-state.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 31134,
+    "mtimeMs": 1779046507841,
+    "hashSha256": "370c77da25facac7ac12624543563c2448a1355d6cf2fd02923b13332b496c6c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/safety-verification.test.ts",
+    "extension": ".ts",
+    "basename": "safety-verification.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 11951,
+    "mtimeMs": 1779375031776,
+    "hashSha256": "7d5184734abf2f86d28d4c86d78b74b3c6b3f8b7832805ecac15c80e69e88d00",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/simple-mode-semantics.test.ts",
+    "extension": ".ts",
+    "basename": "simple-mode-semantics.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 18095,
+    "mtimeMs": 1779568453114,
+    "hashSha256": "454e3c543f077e11f3f8c0abc311e334d07e2efa387ea3c16aea974de9855919",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/swarm-autopilot.test.ts",
+    "extension": ".ts",
+    "basename": "swarm-autopilot.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 21179,
+    "mtimeMs": 1779571116678,
+    "hashSha256": "cc063f618b9aa2f5c14210604021b1e9b7a99dd98bd8192c34f8c4c0bad835e5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts",
+    "extension": ".ts",
+    "basename": "swarm-trial-lab.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 10400,
+    "mtimeMs": 1779572475393,
+    "hashSha256": "6bea634b3b8dda1f78df4320228e0edb64f7a49ccad71447c6f088c829c5eb20",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/tool-registry.test.ts",
+    "extension": ".ts",
+    "basename": "tool-registry.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 2313,
+    "mtimeMs": 1779126883385,
+    "hashSha256": "8c637161cda84aab5100cc659b166d1ff8748f0d02464f1759af0ad336fec285",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tests/universal-project-question.test.ts",
+    "extension": ".ts",
+    "basename": "universal-project-question.test.ts",
+    "dirname": "apps/agent-runtime/src/tests",
+    "sizeBytes": 42176,
+    "mtimeMs": 1779565629207,
+    "hashSha256": "e6c45fc7ec4de6b7d30fc05510c4ebc36fb5edddfa397ea4a0ab2cd567d29bc1",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "test"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/CommandPolicy.ts",
+    "extension": ".ts",
+    "basename": "CommandPolicy.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 3478,
+    "mtimeMs": 1778952482628,
+    "hashSha256": "e93a4a1cb2fb7ed69f673255e20534f0d7a0becc446a4156075f9b749d13361e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/CommandTools.ts",
+    "extension": ".ts",
+    "basename": "CommandTools.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 1799,
+    "mtimeMs": 1778755444537,
+    "hashSha256": "61159aa2e52c805804f90cca2f6e7770c7383c990d66977539b7ac3d3a9df0aa",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/GitTools.ts",
+    "extension": ".ts",
+    "basename": "GitTools.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 608,
+    "mtimeMs": 1777396035652,
+    "hashSha256": "45383432dab6537dcc5d66e672541c9d8c10a200969fb6e7c4be5c4d5a59bd87",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/PatchTools.ts",
+    "extension": ".ts",
+    "basename": "PatchTools.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 2815,
+    "mtimeMs": 1778709457139,
+    "hashSha256": "5f3c0ec2fdd872c75c76441dbd281a8b8231517daafce45daebfb9f0ef154661",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/security.ts",
+    "extension": ".ts",
+    "basename": "security.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 1901,
+    "mtimeMs": 1779374711743,
+    "hashSha256": "99ff60dcd08fbcd31dcd170477eccbab514752b77442fd41b07ed49d472bb00c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/ToolRegistry.ts",
+    "extension": ".ts",
+    "basename": "ToolRegistry.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 1337,
+    "mtimeMs": 1777924926713,
+    "hashSha256": "ad72000d109f591702b5de30ad2196e984050b43e783087c7c8c898697bdf60f",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/src/tools/WorkspaceTools.ts",
+    "extension": ".ts",
+    "basename": "WorkspaceTools.ts",
+    "dirname": "apps/agent-runtime/src/tools",
+    "sizeBytes": 6542,
+    "mtimeMs": 1778709482016,
+    "hashSha256": "b6a23c03d19f96749ed75c2905df2f4003de4e8233e2c27f9af8a037688a2fa7",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/agent-runtime/tsconfig.json",
+    "extension": ".json",
+    "basename": "tsconfig.json",
+    "dirname": "apps/agent-runtime",
+    "sizeBytes": 304,
+    "mtimeMs": 1777395550168,
+    "hashSha256": "f8e63710bc4802e7da5e7f79153ca877564d22f3a256a918a800b67efead82ab",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config"
+    ]
+  },
+  {
+    "path": "apps/desktop/index.html",
+    "extension": ".html",
+    "basename": "index.html",
+    "dirname": "apps/desktop",
+    "sizeBytes": 369,
+    "mtimeMs": 1779129001423,
+    "hashSha256": "8226311739001404f918522863cc2b70e36777319a224ae8ff5835cf13487e29",
+    "language": "HTML",
+    "isText": true,
+    "roles": [
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/desktop/package.json",
+    "extension": ".json",
+    "basename": "package.json",
+    "dirname": "apps/desktop",
+    "sizeBytes": 916,
+    "mtimeMs": 1779014681954,
+    "hashSha256": "4b9acfe8848d8bcae0472e275fd3eb366d699f40db387ad5d43a456f8ac94fe1",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config",
+      "package",
+      "build"
+    ]
+  },
+  {
+    "path": "apps/desktop/scripts/dev-or-reuse.mjs",
+    "extension": ".mjs",
+    "basename": "dev-or-reuse.mjs",
+    "dirname": "apps/desktop/scripts",
+    "sizeBytes": 2660,
+    "mtimeMs": 1779214425861,
+    "hashSha256": "a0f152a1b0001079bee7b76cfe6cfe2383d6383373f0822ad242cc02d806f68d",
+    "language": "JavaScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/scripts/run-project-smoke.ts",
+    "extension": ".ts",
+    "basename": "run-project-smoke.ts",
+    "dirname": "apps/desktop/scripts",
+    "sizeBytes": 13291,
+    "mtimeMs": 1778969806605,
+    "hashSha256": "5eb3a1a6d4513acbbf9f85c20c20e9398e06a95975b0a7a58c30014c691aa05d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/build.rs",
+    "extension": ".rs",
+    "basename": "build.rs",
+    "dirname": "apps/desktop/src-tauri",
+    "sizeBytes": 40,
+    "mtimeMs": 1777394604453,
+    "hashSha256": "6aeeab41bc35efde4e3c2b644a6248f7fc06d24ae30b75c0d33491cbb0c1fa31",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source",
+      "build"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/capabilities/main.json",
+    "extension": ".json",
+    "basename": "main.json",
+    "dirname": "apps/desktop/src-tauri/capabilities",
+    "sizeBytes": 215,
+    "mtimeMs": 1777404126739,
+    "hashSha256": "7dce35da90b6f385df2a6dcb9e44c52fc2236db63288c10202cf385946429123",
+    "isText": true,
+    "roles": [
+      "other"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/Cargo.lock",
+    "extension": ".lock",
+    "basename": "Cargo.lock",
+    "dirname": "apps/desktop/src-tauri",
+    "sizeBytes": 135028,
+    "mtimeMs": 1777925669554,
+    "hashSha256": "5436b2c4241c5867d3c63acfbbb3e2c17c0ae3d5ea613656359dc2bbbc6b5dcb",
+    "isText": true,
+    "roles": [
+      "dependency"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/Cargo.toml",
+    "extension": ".toml",
+    "basename": "Cargo.toml",
+    "dirname": "apps/desktop/src-tauri",
+    "sizeBytes": 883,
+    "mtimeMs": 1779013957518,
+    "hashSha256": "79395c2d34e35d53d490ab184b7a0635e8e18c67c511c412a53966d47c07d60e",
+    "language": "TOML",
+    "isText": true,
+    "roles": [
+      "config",
+      "package",
+      "build"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml",
+    "extension": ".xml",
+    "basename": "ic_launcher.xml",
+    "dirname": "apps/desktop/src-tauri/icons/android/mipmap-anydpi-v26",
+    "sizeBytes": 261,
+    "mtimeMs": 1779128887676,
+    "hashSha256": "760d4b8a06bf7163dd010c33ad2cac9e4a75fa0177afaba042f83e311eef0c3e",
+    "language": "XML",
+    "isText": true,
+    "roles": [
+      "other"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/icons/android/values/ic_launcher_background.xml",
+    "extension": ".xml",
+    "basename": "ic_launcher_background.xml",
+    "dirname": "apps/desktop/src-tauri/icons/android/values",
+    "sizeBytes": 115,
+    "mtimeMs": 1779128887675,
+    "hashSha256": "0687336f0ccc6f7ee09c7c95110667c63b75931238df779a21af401fb864cd34",
+    "language": "XML",
+    "isText": true,
+    "roles": [
+      "other"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/bin/runtime_bridge_smoke.rs",
+    "extension": ".rs",
+    "basename": "runtime_bridge_smoke.rs",
+    "dirname": "apps/desktop/src-tauri/src/bin",
+    "sizeBytes": 5516,
+    "mtimeMs": 1779045934501,
+    "hashSha256": "c85f713fd3a964eedb153100053bb9c673555f26b4b072930b95f83635fd05e2",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/git.rs",
+    "extension": ".rs",
+    "basename": "git.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 846,
+    "mtimeMs": 1777399513429,
+    "hashSha256": "9afee9ce77aee79de6f21aceb1e4d343ba6308823297631ee980f56f57584541",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/mod.rs",
+    "extension": ".rs",
+    "basename": "mod.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 123,
+    "mtimeMs": 1777925420674,
+    "hashSha256": "d3d2c24c43d937f7cf92661116f7bc193364056970962f0a5c2472a9817a5540",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/model_provider.rs",
+    "extension": ".rs",
+    "basename": "model_provider.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 2265,
+    "mtimeMs": 1777399513429,
+    "hashSha256": "f0a35d5fb42d6e9a5f83ecd743a1c048864179599e89d602dc3abcb4f12fd452",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/patch.rs",
+    "extension": ".rs",
+    "basename": "patch.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 7677,
+    "mtimeMs": 1778861009823,
+    "hashSha256": "19453e85d23e31cd7d5d45eb5b629ba3eb3e7a7db543080eac2481df29270726",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/sessions.rs",
+    "extension": ".rs",
+    "basename": "sessions.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 5862,
+    "mtimeMs": 1779123899728,
+    "hashSha256": "7089a6b3049df34ec09ac612ee5e1b0ee1f5ad556b000f41384cde90b0e47bb7",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/system.rs",
+    "extension": ".rs",
+    "basename": "system.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 3004,
+    "mtimeMs": 1779214690696,
+    "hashSha256": "bb4c30cf2b8236e0aa50d53568ed01e8534d124315f1a9a455104cf12c21eb92",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/terminal.rs",
+    "extension": ".rs",
+    "basename": "terminal.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 6275,
+    "mtimeMs": 1778952548318,
+    "hashSha256": "c6f111b5dae89679b46e272600d544b7b831f541b6474b2919b3b01e67c1de48",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/commands/workspace.rs",
+    "extension": ".rs",
+    "basename": "workspace.rs",
+    "dirname": "apps/desktop/src-tauri/src/commands",
+    "sizeBytes": 2320,
+    "mtimeMs": 1777588371799,
+    "hashSha256": "38caae4e2b8165d1aab018987857bb97c2d82400445fd646f7cd07204eed4e25",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/db/mod.rs",
+    "extension": ".rs",
+    "basename": "mod.rs",
+    "dirname": "apps/desktop/src-tauri/src/db",
+    "sizeBytes": 74590,
+    "mtimeMs": 1779123889647,
+    "hashSha256": "89db03d24bd67d2310abf756dc7d28ce1aa6bc260b11e31cc055578d599349d4",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/lib.rs",
+    "extension": ".rs",
+    "basename": "lib.rs",
+    "dirname": "apps/desktop/src-tauri/src",
+    "sizeBytes": 2856,
+    "mtimeMs": 1779175952526,
+    "hashSha256": "c077e18435172c37bd190801246a3e3ab20e1f89b1dcea645e8a0096e53b3179",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/main.rs",
+    "extension": ".rs",
+    "basename": "main.rs",
+    "dirname": "apps/desktop/src-tauri/src",
+    "sizeBytes": 47,
+    "mtimeMs": 1777395201937,
+    "hashSha256": "9b94333ecc2289f88906d74bafd15aab3bb0e9dc8f15cf5997a412e741e2ced4",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/models/mod.rs",
+    "extension": ".rs",
+    "basename": "mod.rs",
+    "dirname": "apps/desktop/src-tauri/src/models",
+    "sizeBytes": 7367,
+    "mtimeMs": 1779045915651,
+    "hashSha256": "78dc3b29ebcc1aea31b77540c9b03177c4d169a72411ff55ed43e197c48154da",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/security/mod.rs",
+    "extension": ".rs",
+    "basename": "mod.rs",
+    "dirname": "apps/desktop/src-tauri/src/security",
+    "sizeBytes": 397,
+    "mtimeMs": 1777394604454,
+    "hashSha256": "602e8164d85ed15dcfc8c2fd2ea4686ad224e20f7d14861d5d31e9e24b309160",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/command_policy.rs",
+    "extension": ".rs",
+    "basename": "command_policy.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 9793,
+    "mtimeMs": 1778953223389,
+    "hashSha256": "6b4ec564f37aab5d66b4e3ee3968aba5cb43fc7a7bfa8c97809b9602e29ebdfd",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/git.rs",
+    "extension": ".rs",
+    "basename": "git.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 6347,
+    "mtimeMs": 1778860639549,
+    "hashSha256": "6c8fa51116a5d5f1df6c37daffbf9adb3014f208729a27270c8abb7ec850ba52",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/mod.rs",
+    "extension": ".rs",
+    "basename": "mod.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 151,
+    "mtimeMs": 1777588362596,
+    "hashSha256": "4c05482101a13a244823c50b52c17a7425b89a746f5c57d72d905e60f83b0bd9",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/model_provider.rs",
+    "extension": ".rs",
+    "basename": "model_provider.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 7990,
+    "mtimeMs": 1777399513440,
+    "hashSha256": "1b2c32c33d6baf5ed18ad0e5d7d0fa0f4c7019fa1869639fb4ee551c1a8aa0e7",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/patch.rs",
+    "extension": ".rs",
+    "basename": "patch.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 6426,
+    "mtimeMs": 1778861001587,
+    "hashSha256": "d8adfc92f899f9f1094165b0e1675caddc60d0437228f1297a07b015b9c089e8",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/paths.rs",
+    "extension": ".rs",
+    "basename": "paths.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 395,
+    "mtimeMs": 1777588338675,
+    "hashSha256": "5b8d5a0204266ce63148e9bba7fc1de02ef71148ff9adc823f3ab39ff3319047",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/project_index.rs",
+    "extension": ".rs",
+    "basename": "project_index.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 4678,
+    "mtimeMs": 1779134007032,
+    "hashSha256": "9162c24924aab804c507d465d3f755b622d04e115393040d09ae5e0617c4ce17",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/terminal.rs",
+    "extension": ".rs",
+    "basename": "terminal.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 29504,
+    "mtimeMs": 1779046422519,
+    "hashSha256": "23166becf0ea689803b26f42e05fcb08db2bf04bc9a1231a61e090ccc1a96ca8",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/src/services/workspace.rs",
+    "extension": ".rs",
+    "basename": "workspace.rs",
+    "dirname": "apps/desktop/src-tauri/src/services",
+    "sizeBytes": 6148,
+    "mtimeMs": 1779134002508,
+    "hashSha256": "583975fb61eb066c0f6795c794af15cdbca6d9318ac0a307612f2ddc11156222",
+    "language": "Rust",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src-tauri/tauri.conf.json",
+    "extension": ".json",
+    "basename": "tauri.conf.json",
+    "dirname": "apps/desktop/src-tauri",
+    "sizeBytes": 777,
+    "mtimeMs": 1779129010792,
+    "hashSha256": "db20e3b0bd19986666ea90dd57829d4cc5582bf1b53c65c4698ac32f95b15536",
+    "isText": true,
+    "roles": [
+      "config"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/app/activityStream.ts",
+    "extension": ".ts",
+    "basename": "activityStream.ts",
+    "dirname": "apps/desktop/src/app",
+    "sizeBytes": 5821,
+    "mtimeMs": 1779012424762,
+    "hashSha256": "ec1efdb29884f6609075372f2baf6d64ee47ad48e6d0405c7b632a45cbf9704c",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/app/App.tsx",
+    "extension": ".tsx",
+    "basename": "App.tsx",
+    "dirname": "apps/desktop/src/app",
+    "sizeBytes": 197574,
+    "mtimeMs": 1779295614052,
+    "hashSha256": "c874e26425e49b391cdd06b202fc84e244164094f16279d1209e94b23c4664de",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/app/styles.css",
+    "extension": ".css",
+    "basename": "styles.css",
+    "dirname": "apps/desktop/src/app",
+    "sizeBytes": 44187,
+    "mtimeMs": 1779213746733,
+    "hashSha256": "9db804ea701c6b41b42efea8d73b0c79e6739be047afd8f3241077425bc8aa42",
+    "language": "CSS",
+    "isText": true,
+    "roles": [
+      "other"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/lib/agentRuntime.ts",
+    "extension": ".ts",
+    "basename": "agentRuntime.ts",
+    "dirname": "apps/desktop/src/lib",
+    "sizeBytes": 4865,
+    "mtimeMs": 1778884638175,
+    "hashSha256": "cb979c7e466ecb31072e324ebb774397ee934360580e64a0c6cf27e54df39564",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/lib/tauri.ts",
+    "extension": ".ts",
+    "basename": "tauri.ts",
+    "dirname": "apps/desktop/src/lib",
+    "sizeBytes": 5466,
+    "mtimeMs": 1779175958067,
+    "hashSha256": "4af960353a395b33a6a70667354273cde49031f62917755ca770ce953806e66e",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/lib/terminalOrchestrator.ts",
+    "extension": ".ts",
+    "basename": "terminalOrchestrator.ts",
+    "dirname": "apps/desktop/src/lib",
+    "sizeBytes": 2040,
+    "mtimeMs": 1779045959926,
+    "hashSha256": "6186e5ec7b02196f4efc58b14c2eff4e6cc0a6c7c90c35cf2f43f0c09d18db8b",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/main.tsx",
+    "extension": ".tsx",
+    "basename": "main.tsx",
+    "dirname": "apps/desktop/src",
+    "sizeBytes": 263,
+    "mtimeMs": 1777394905089,
+    "hashSha256": "8d58864c501e9cd8c6fb334fc09fc3a312c9c7d4c77c577bd099c6b7e80bb2f2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/types/tauri.ts",
+    "extension": ".ts",
+    "basename": "tauri.ts",
+    "dirname": "apps/desktop/src/types",
+    "sizeBytes": 94,
+    "mtimeMs": 1777394905089,
+    "hashSha256": "0b9ee510792a3376af18588a6ea5319d07117800739df41cced9f3c8e822ae75",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "apps/desktop/src/vite-env.d.ts",
+    "extension": ".ts",
+    "basename": "vite-env.d.ts",
+    "dirname": "apps/desktop/src",
+    "sizeBytes": 38,
+    "mtimeMs": 1777395968729,
+    "hashSha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "config"
+    ]
+  },
+  {
+    "path": "apps/desktop/tsconfig.json",
+    "extension": ".json",
+    "basename": "tsconfig.json",
+    "dirname": "apps/desktop",
+    "sizeBytes": 527,
+    "mtimeMs": 1777394905088,
+    "hashSha256": "83efc1798334967d5a907f26b8cba31fa213f16b5ac0ed5c02fd38e7cf0ceb66",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config"
+    ]
+  },
+  {
+    "path": "apps/desktop/vite.config.ts",
+    "extension": ".ts",
+    "basename": "vite.config.ts",
+    "dirname": "apps/desktop",
+    "sizeBytes": 414,
+    "mtimeMs": 1779213946509,
+    "hashSha256": "327a94f0c87338c178d79499dff3f80050d8e182be34bbadad1d7b154176e619",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "config",
+      "build"
+    ]
+  },
+  {
+    "path": "docs/agent-contracts.md",
+    "extension": ".md",
+    "basename": "agent-contracts.md",
+    "dirname": "docs",
+    "sizeBytes": 2381,
+    "mtimeMs": 1777396734535,
+    "hashSha256": "f9f21ee3d7677eb1cc918d5455837c03d9e8847b9f94d4952683085c457c45e0",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture.md",
+    "extension": ".md",
+    "basename": "architecture.md",
+    "dirname": "docs",
+    "sizeBytes": 9331,
+    "mtimeMs": 1779572571392,
+    "hashSha256": "ac245d4c1b6ba3a4855850517990f2375bfa56dad8645cecda5837725044c7bc",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/agentic-coding-factory.md",
+    "extension": ".md",
+    "basename": "agentic-coding-factory.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 4184,
+    "mtimeMs": 1779390703993,
+    "hashSha256": "299e6cb1ad1f6da5068ebb9ba45e34a6654c16a1f642415aaf6b1eae9c063cb8",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/internal-swarm-autopilot.md",
+    "extension": ".md",
+    "basename": "internal-swarm-autopilot.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 6772,
+    "mtimeMs": 1779572584088,
+    "hashSha256": "06d6040da9e2cf79848d200b42db8e92b289ff475d45d4943e555ae2d5144a58",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/memory-and-indexing.md",
+    "extension": ".md",
+    "basename": "memory-and-indexing.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 5669,
+    "mtimeMs": 1779392235586,
+    "hashSha256": "bd7e72efc9c08aef63e569da01c9a86e8be4f39bd4c0514980d1c3ace181dc2d",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/phase-1-memory-indexing-plan.md",
+    "extension": ".md",
+    "basename": "phase-1-memory-indexing-plan.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 3893,
+    "mtimeMs": 1779372088774,
+    "hashSha256": "31882b30062232f81089b4139776b6907e0f223dff92587a684babf8684fd9ed",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/phase-2-orchestrator-taskgraph-plan.md",
+    "extension": ".md",
+    "basename": "phase-2-orchestrator-taskgraph-plan.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 3066,
+    "mtimeMs": 1779373069504,
+    "hashSha256": "95aa8ce83e1d1d5d7dcc5af473c4242c6e6c5775c6aff6a931819d3b7722f58b",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/phase-3-swarm-verification-safety-plan.md",
+    "extension": ".md",
+    "basename": "phase-3-swarm-verification-safety-plan.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 7294,
+    "mtimeMs": 1779374187531,
+    "hashSha256": "075f726c8af3787c1dcb24650ac7cb0ae55e90ab04823f72e1040b31bd56e5a7",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/phase-4-scale-intelligence-hardening-plan.md",
+    "extension": ".md",
+    "basename": "phase-4-scale-intelligence-hardening-plan.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 4900,
+    "mtimeMs": 1779389882618,
+    "hashSha256": "620abc01a420070be3555d2bf1780cc489a221c7437b2247e8a0cc4740a47d7b",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md",
+    "extension": ".md",
+    "basename": "phase-6-swarm-autopilot-trial-lab-plan.md",
+    "dirname": "docs/architecture",
+    "sizeBytes": 6110,
+    "mtimeMs": 1779571724808,
+    "hashSha256": "f7f3fb28eed0c71899d4913e4f8df2793e0930808cd1322de703396879efb341",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/extension/add-agent-role.md",
+    "extension": ".md",
+    "basename": "add-agent-role.md",
+    "dirname": "docs/extension",
+    "sizeBytes": 1488,
+    "mtimeMs": 1779390749393,
+    "hashSha256": "09c2962641acb382dfc71c4b5830e1ab4a4718c5d7d831d233e9f49683db6661",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/module-1-status.md",
+    "extension": ".md",
+    "basename": "module-1-status.md",
+    "dirname": "docs",
+    "sizeBytes": 3075,
+    "mtimeMs": 1777395114786,
+    "hashSha256": "51b9937fee15b51b6d27771d0e23d15cfc6ab85c0e57907dc1b3b19beb02b502",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/module-2-status.md",
+    "extension": ".md",
+    "basename": "module-2-status.md",
+    "dirname": "docs",
+    "sizeBytes": 3500,
+    "mtimeMs": 1778755345777,
+    "hashSha256": "116b542adc2c04dbd3687ddb8e01fdbed87eeb2cc591d0d913ae73d881e94608",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/module-3-status.md",
+    "extension": ".md",
+    "basename": "module-3-status.md",
+    "dirname": "docs",
+    "sizeBytes": 3184,
+    "mtimeMs": 1778755345778,
+    "hashSha256": "1ab6c0f35f1764289c6a81cd40e1b2f93f97d09bb9079a5485d68c692a5d962a",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/operations/debugging.md",
+    "extension": ".md",
+    "basename": "debugging.md",
+    "dirname": "docs/operations",
+    "sizeBytes": 1827,
+    "mtimeMs": 1779390740626,
+    "hashSha256": "32b8380819cbc98a560a2f4d44e75dee6ccf176c8f2d84914075c5c6af650780",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/orchestration-flow.md",
+    "extension": ".md",
+    "basename": "orchestration-flow.md",
+    "dirname": "docs",
+    "sizeBytes": 1810,
+    "mtimeMs": 1778755345776,
+    "hashSha256": "3f83f1b3ce72a5fb2f37fe3055cb1b1188ab751c779e9e321e741d00588910eb",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/release-candidate-status.md",
+    "extension": ".md",
+    "basename": "release-candidate-status.md",
+    "dirname": "docs",
+    "sizeBytes": 5645,
+    "mtimeMs": 1778883027300,
+    "hashSha256": "c7999795b38c2aab29bb959192783512f5d6ca891dbd3729fc28a9ac5c62b211",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/reliability-audit.md",
+    "extension": ".md",
+    "basename": "reliability-audit.md",
+    "dirname": "docs",
+    "sizeBytes": 24006,
+    "mtimeMs": 1778863462982,
+    "hashSha256": "e29cfa0f9f0e79ff3fb0d65d5a033ec4ee389a986b531c957920dfaf7ece196a",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/security-model.md",
+    "extension": ".md",
+    "basename": "security-model.md",
+    "dirname": "docs",
+    "sizeBytes": 3895,
+    "mtimeMs": 1778755345775,
+    "hashSha256": "f2717ac34dd0c47d5f1e36721fcab91c6e6872051cc8768a7ba9bb14dbea7f0e",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/usage/campaigns.md",
+    "extension": ".md",
+    "basename": "campaigns.md",
+    "dirname": "docs/usage",
+    "sizeBytes": 1083,
+    "mtimeMs": 1779390728636,
+    "hashSha256": "d42bc2d19938fc67031285fc6fb67893349bc01533e0a1fcde6f81d342a99e23",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "docs/usage/quickstart.md",
+    "extension": ".md",
+    "basename": "quickstart.md",
+    "dirname": "docs/usage",
+    "sizeBytes": 1364,
+    "mtimeMs": 1779390720389,
+    "hashSha256": "0e4498c8999a18e7d3fda1203dc3662e5dd3dd111442ed0f88c7e27635747176",
+    "language": "Markdown",
+    "isText": true,
+    "roles": [
+      "doc"
+    ]
+  },
+  {
+    "path": "package-lock.json",
+    "extension": ".json",
+    "basename": "package-lock.json",
+    "dirname": ".",
+    "sizeBytes": 108480,
+    "mtimeMs": 1777403606859,
+    "hashSha256": "e8bf037c68929e0e4e29d941d7e1472220652f3705f75c4d3e8908853f19ab26",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "dependency"
+    ]
+  },
+  {
+    "path": "package.json",
+    "extension": ".json",
+    "basename": "package.json",
+    "dirname": ".",
+    "sizeBytes": 6315,
+    "mtimeMs": 1779572697899,
+    "hashSha256": "33693ab0bdff721ae5812e7a84a1420a5b5ba5702be67cbf8dd0048e82e064ae",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config",
+      "package",
+      "build"
+    ]
+  },
+  {
+    "path": "packages/protocol/package.json",
+    "extension": ".json",
+    "basename": "package.json",
+    "dirname": "packages/protocol",
+    "sizeBytes": 426,
+    "mtimeMs": 1777394548818,
+    "hashSha256": "9e7d35e83c2dd54efa68ce6ce1baf885b0c923472a60e8990c8440b91da79646",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config",
+      "package",
+      "build"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/agent-runtime.ts",
+    "extension": ".ts",
+    "basename": "agent-runtime.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 6733,
+    "mtimeMs": 1779047772055,
+    "hashSha256": "70b06c3cb2b73dec7629872594bcd99c537466cde5d740245b61a48b518e7c0d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/agents.ts",
+    "extension": ".ts",
+    "basename": "agents.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 1868,
+    "mtimeMs": 1778836526653,
+    "hashSha256": "5a1610860fb6f74c50a02ae1d81dec67e6196fad08339819278bef9b1c6badc2",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/approvals.ts",
+    "extension": ".ts",
+    "basename": "approvals.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 9293,
+    "mtimeMs": 1779045878436,
+    "hashSha256": "5626fc840c71f908a4afb3994027095feefee8ac474c838522cc8c1b0c63cc22",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/events.ts",
+    "extension": ".ts",
+    "basename": "events.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 5353,
+    "mtimeMs": 1778856081068,
+    "hashSha256": "fd48c08b69ad967e483ebf74885ba07ed093729fdb36fe989cbc422c8119c568",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/index.ts",
+    "extension": ".ts",
+    "basename": "index.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 311,
+    "mtimeMs": 1777396246184,
+    "hashSha256": "c96433a83487bb570a6b1642cbf7f0f1d2068c6490a8c3ff45c93dc85813550d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source",
+      "entrypoint"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/models.ts",
+    "extension": ".ts",
+    "basename": "models.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 24263,
+    "mtimeMs": 1779565456127,
+    "hashSha256": "91cebac9428abf1922a956e266ae98ea2f7f9f75277b656d2a9600697e78c0d0",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/orchestration.ts",
+    "extension": ".ts",
+    "basename": "orchestration.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 7962,
+    "mtimeMs": 1779128161787,
+    "hashSha256": "a59849e32ecffb4fccb3deedc65c72afb65febeaf03fc3ccfbcfad922facae5a",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/patch.ts",
+    "extension": ".ts",
+    "basename": "patch.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 984,
+    "mtimeMs": 1779045967992,
+    "hashSha256": "35275b7ea1588045840ca0ec60bb9db5ad68f2658ccce24aba2bd4699e36ae64",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/sessions.ts",
+    "extension": ".ts",
+    "basename": "sessions.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 230,
+    "mtimeMs": 1777395997854,
+    "hashSha256": "6350079be82c73a51baabd3ab2746ebcccc3c891845756fe3b006dbbefa3ee5d",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/task-graph.ts",
+    "extension": ".ts",
+    "basename": "task-graph.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 569,
+    "mtimeMs": 1777396246182,
+    "hashSha256": "fe6d7ff245e361de049414766848feee3ea8b3c8fd0ea7ed3631b93f403c1505",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/src/tools.ts",
+    "extension": ".ts",
+    "basename": "tools.ts",
+    "dirname": "packages/protocol/src",
+    "sizeBytes": 754,
+    "mtimeMs": 1777395997855,
+    "hashSha256": "03b8ef6d109d342c57e3589d131c4aca0a505f12a0d60834394f86d17f617fac",
+    "language": "TypeScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  },
+  {
+    "path": "packages/protocol/tsconfig.json",
+    "extension": ".json",
+    "basename": "tsconfig.json",
+    "dirname": "packages/protocol",
+    "sizeBytes": 278,
+    "mtimeMs": 1777394548818,
+    "hashSha256": "c7fc09423b4437471c90f3003427aeac4c68f25e42e97332da49abd944026772",
+    "language": "JSON",
+    "isText": true,
+    "roles": [
+      "config"
+    ]
+  },
+  {
+    "path": "scripts/launch-desktop.mjs",
+    "extension": ".mjs",
+    "basename": "launch-desktop.mjs",
+    "dirname": "scripts",
+    "sizeBytes": 5160,
+    "mtimeMs": 1779216249198,
+    "hashSha256": "5e3898dac68daae22241d5249ae08f6fe68d2228f9236e1d31cfda8226095a64",
+    "language": "JavaScript",
+    "isText": true,
+    "roles": [
+      "source"
+    ]
+  }
+]

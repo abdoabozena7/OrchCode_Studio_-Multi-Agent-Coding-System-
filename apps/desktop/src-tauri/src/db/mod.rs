@@ -1969,10 +1969,14 @@ fn add_column_if_missing(
 }
 
 fn app_database_path() -> PathBuf {
-    dirs_next::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("OrchCodeStudio")
-        .join("state.sqlite")
+    let root = dirs_next::data_local_dir().unwrap_or_else(std::env::temp_dir);
+    let hivo_path = root.join("HivoStudio").join("state.sqlite");
+    let legacy_path = root.join("OrchCodeStudio").join("state.sqlite");
+    if !hivo_path.exists() && legacy_path.exists() {
+        legacy_path
+    } else {
+        hivo_path
+    }
 }
 
 fn provider_type_to_str(provider_type: &ModelProviderType) -> &'static str {

@@ -1,5 +1,5 @@
 {
-  "name": "@orchcode/desktop",
+  "name": "@hivo/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@orchcode/protocol": "file:../../packages/protocol",
+    "@hivo/protocol": "file:../../packages/protocol",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "lucide-react": "^0.468.0",

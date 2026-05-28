@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "swarm_experiment_2c839a12-744d-47bd-ad46-5b0759f8d3b1",
+  "title": "Scheduler Scale Trial",
+  "description": "Processes 300 read-only work items with 300 logical mock agents and verifies executor caps stay narrow.",
+  "scenario_type": "scheduler_stress",
+  "tasks_to_test": [
+    {
+      "id": "scheduler_scale_300",
+      "title": "300 logical read-only workers",
+      "input_goal": "Process 300 read-only scout work items with mock agents.",
+      "expected": {
+        "expected_complexity": "huge",
+        "expected_agent_range": [
+          300,
+          300
+        ],
+        "expected_executor_limit": 0,
+        "min_read_only_ratio": 1
+      }
+    }
+  ],
+  "modes_to_compare": [
+    "autopilot-huge-readonly"
+  ],
+  "expected_staffing_behavior": [
+    {
+      "expected_complexity": "huge",
+      "expected_agent_range": [
+        300,
+        300
+      ],
+      "expected_executor_limit": 0,
+      "min_read_only_ratio": 1
+    }
+  ],
+  "created_at": "2026-05-23T21:44:40.306Z",
+  "status": "succeeded",
+  "config": {
+    "uses_mock_agents": true,
+    "max_logical_agents": 300,
+    "read_only": true
+  },
+  "results_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_2c839a12-744d-47bd-ad46-5b0759f8d3b1\\runs.json",
+  "report_ref": "D:\\projects\\Ai\\Hivo_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_2c839a12-744d-47bd-ad46-5b0759f8d3b1\\trial_report.md"
+}

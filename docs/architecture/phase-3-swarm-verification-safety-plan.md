@@ -107,7 +107,7 @@ Events in `events.jsonl` record run, task, lock, agent, output validation, patch
 - Unit tests for review consolidation and repair task creation limits.
 - Unit tests for validation runner command selection, safe-command filtering, log persistence, and failure summaries.
 - Existing agent-runtime tests must still pass.
-- Run `npm run test -w @orchcode/agent-runtime`.
+- Run `npm run test -w @hivo/agent-runtime`.
 - Run root `npm run typecheck` and `npm run build`.
 - Run `cargo check`.
 - Rebuild repository memory with `npm run memory:index -- --json`.

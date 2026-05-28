@@ -46,6 +46,66 @@ import type {
 
 export type AgentRuntimeMode = "demo_mock" | "real_provider";
 
+export type ActiveProviderSource =
+  | "runtime_default"
+  | "desktop_saved_provider"
+  | "session_override"
+  | "explicit_cli"
+  | "unknown";
+
+export type ProviderPromptLatency = {
+  requestId: string;
+  requestType: "structured" | "text";
+  providerName: string;
+  modelName?: string;
+  latencyMs: number;
+  status: "success" | "failure" | "timeout";
+  errorSummary?: string;
+};
+
+export type ProviderTruthTelemetry = {
+  providerMode: AgentRuntimeMode;
+  providerName: string;
+  modelName?: string;
+  providerBaseUrl?: string;
+  providerRequestCount: number;
+  mockProviderRequestCount: number;
+  realProviderRequestCount: number;
+  providerResponseCount: number;
+  providerFailureCount: number;
+  providerTimeoutCount: number;
+  totalProviderLatencyMs: number;
+  perPromptProviderLatencyMs: ProviderPromptLatency[];
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+  deterministicOnly: boolean;
+  mockProviderUsed: boolean;
+  realProviderUsed: boolean;
+  activeProviderSource: ActiveProviderSource;
+  updatedAt: string;
+};
+
+export type EvidenceFileTier =
+  | "source_code"
+  | "test"
+  | "docs"
+  | "generated"
+  | "runtime_state"
+  | "config";
+
+export type EvidenceTruthReport = {
+  topEvidenceFiles: string[];
+  evidenceFilesByTier: Record<EvidenceFileTier, string[]>;
+  excludedEvidenceCandidates: string[];
+  exclusionReasons: Record<string, string>;
+  finalEvidenceFilesActuallyUsed: string[];
+  generatedEvidenceExcludedCount: number;
+  generatedEvidenceIncludedCount: number;
+  generatedEvidenceIncluded: boolean;
+  allowGeneratedEvidence: boolean;
+  updatedAt: string;
+};
+
 export type AgentLifecycleStage =
   | "INTAKE"
   | "THINK"
@@ -159,6 +219,9 @@ export type AgentRuntimeSession = {
   mode: AgentRuntimeMode;
   trustProfile: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
+  activeProviderSource?: ActiveProviderSource;
+  providerTelemetry?: ProviderTruthTelemetry;
+  evidenceReport?: EvidenceTruthReport;
   executionMode: RuntimeExecutionMode;
   resolvedExecutionMode?: Exclude<RuntimeExecutionMode, "auto_mode">;
   accessProfile: AccessProfile;
@@ -215,6 +278,7 @@ export type CreateRuntimeSessionRequest = {
   mode: AgentRuntimeMode;
   trustProfile?: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
+  activeProviderSource?: ActiveProviderSource;
   sessionToken?: string;
   sessionTokenExpiresAt?: string;
   executionMode?: RuntimeExecutionMode;

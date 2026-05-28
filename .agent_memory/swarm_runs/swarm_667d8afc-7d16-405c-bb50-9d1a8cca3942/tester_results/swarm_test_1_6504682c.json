@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_test_1_6504682c",
+  "status": "succeeded",
+  "summary": "TesterAgent completed test work for Change copy text in docs/architecture.md.",
+  "relevant_files": [],
+  "findings": [
+    "test work item used schema TesterOutput."
+  ],
+  "risks": [
+    "high risk work requires review evidence."
+  ],
+  "unknowns": [],
+  "validation_passed": true,
+  "structured_output_valid": true,
+  "confidence": 0.72
+}

@@ -11,8 +11,8 @@ import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
 test("runtime session state is restored from durable snapshots across restarts", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-persist-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-persist-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-persist-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-persist-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "persist me\n", "utf8");
 
@@ -42,8 +42,8 @@ test("runtime session state is restored from durable snapshots across restarts",
 });
 
 test("session manager validates hashed session tokens without storing the raw token", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-token-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-token-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-token-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-token-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "token me\n", "utf8");
 
@@ -69,8 +69,8 @@ test("session manager validates hashed session tokens without storing the raw to
 });
 
 test("run engine includes concrete file excerpts in provider prompts", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-grounding-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-grounding-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-grounding-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-grounding-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
   await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
   await writeFile(path.join(workspace, "src", "App.tsx"), "export const marker = 42;\nexport function App(){ return null; }\n", "utf8");

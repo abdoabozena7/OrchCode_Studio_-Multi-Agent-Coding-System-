@@ -1,13 +1,13 @@
 [package]
-name = "orchcode-desktop"
+name = "hivo-desktop"
 version = "0.1.0"
 description = "Local desktop coding agent foundation"
-authors = ["OrchCode Studio"]
+authors = ["Hivo Studio"]
 edition = "2021"
-default-run = "orchcode-desktop"
+default-run = "hivo-desktop"
 
 [lib]
-name = "orchcode_desktop_lib"
+name = "hivo_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

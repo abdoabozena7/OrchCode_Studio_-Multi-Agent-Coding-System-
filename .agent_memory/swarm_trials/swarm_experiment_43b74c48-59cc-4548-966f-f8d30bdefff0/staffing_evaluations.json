@@ -1,0 +1,305 @@
+[
+  {
+    "schema_version": 1,
+    "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+    "expected_complexity": "large",
+    "expected_repo_scope": "multiple_modules",
+    "expected_risk_level": "critical",
+    "expected_agent_range": [
+      1,
+      300
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [
+      "AuthSecurityReviewerAgent",
+      "APICompatibilityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_71d9af98-fd71-4fd9-bbb6-7975cf09646f",
+      "swarm_run_id": "swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0",
+      "task_complexity": "large",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 65,
+      "max_parallel_agents": 18,
+      "scout_count": 21,
+      "planner_count": 3,
+      "architect_count": 3,
+      "executor_count": 1,
+      "reviewer_count": 20,
+      "tester_count": 5,
+      "integrator_count": 2,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "api_compatibility_reviewer",
+          "role": "APICompatibilityReviewerAgent",
+          "purpose": "Review public API and protocol compatibility risks.",
+          "trigger": "public API compatibility indicators were present",
+          "read_only": true,
+          "output_schema": "APICompatibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 21,
+        "PlannerAgent": 3,
+        "ArchitectAgent": 3,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 20,
+        "TesterAgent": 5,
+        "IntegratorAgent": 2,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 3,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 3,
+        "AuthSecurityReviewerAgent": 1,
+        "APICompatibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 22,
+      "tester_limit": 5,
+      "read_only_ratio": 0.97,
+      "write_agent_limit": 2,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as large with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+        "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:45:08.336Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as large with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+      "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+    "expected_complexity": "large",
+    "expected_repo_scope": "multiple_modules",
+    "expected_risk_level": "critical",
+    "expected_agent_range": [
+      1,
+      300
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [
+      "AuthSecurityReviewerAgent",
+      "APICompatibilityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_e708e803-e19d-4c78-8393-d663008f3898",
+      "swarm_run_id": "swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0",
+      "task_complexity": "large",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 65,
+      "max_parallel_agents": 18,
+      "scout_count": 21,
+      "planner_count": 3,
+      "architect_count": 3,
+      "executor_count": 1,
+      "reviewer_count": 20,
+      "tester_count": 5,
+      "integrator_count": 2,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "api_compatibility_reviewer",
+          "role": "APICompatibilityReviewerAgent",
+          "purpose": "Review public API and protocol compatibility risks.",
+          "trigger": "public API compatibility indicators were present",
+          "read_only": true,
+          "output_schema": "APICompatibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 21,
+        "PlannerAgent": 3,
+        "ArchitectAgent": 3,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 20,
+        "TesterAgent": 5,
+        "IntegratorAgent": 2,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 3,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 3,
+        "AuthSecurityReviewerAgent": 1,
+        "APICompatibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 22,
+      "tester_limit": 5,
+      "read_only_ratio": 0.97,
+      "write_agent_limit": 2,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as large with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+        "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:45:08.337Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as large with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+      "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  },
+  {
+    "schema_version": 1,
+    "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+    "expected_complexity": "large",
+    "expected_repo_scope": "multiple_modules",
+    "expected_risk_level": "critical",
+    "expected_agent_range": [
+      1,
+      300
+    ],
+    "expected_executor_limit": 1,
+    "expected_specialists": [
+      "AuthSecurityReviewerAgent",
+      "APICompatibilityReviewerAgent"
+    ],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_5f1f6006-aecb-48a5-ba1f-874c0b495db8",
+      "swarm_run_id": "swarm_experiment_43b74c48-59cc-4548-966f-f8d30bdefff0",
+      "task_complexity": "large",
+      "repo_scope": "multiple_modules",
+      "risk_level": "critical",
+      "recommended_total_logical_agents": 65,
+      "max_parallel_agents": 18,
+      "scout_count": 21,
+      "planner_count": 3,
+      "architect_count": 3,
+      "executor_count": 1,
+      "reviewer_count": 20,
+      "tester_count": 5,
+      "integrator_count": 2,
+      "specialist_agents": [
+        {
+          "id": "auth_security_reviewer",
+          "role": "AuthSecurityReviewerAgent",
+          "purpose": "Review authentication, authorization, secret handling, and security-sensitive changes.",
+          "trigger": "security/authentication indicators were present",
+          "read_only": true,
+          "output_schema": "SecurityReviewOutput"
+        },
+        {
+          "id": "api_compatibility_reviewer",
+          "role": "APICompatibilityReviewerAgent",
+          "purpose": "Review public API and protocol compatibility risks.",
+          "trigger": "public API compatibility indicators were present",
+          "read_only": true,
+          "output_schema": "APICompatibilityReviewOutput"
+        }
+      ],
+      "role_counts": {
+        "ScoutAgent": 21,
+        "PlannerAgent": 3,
+        "ArchitectAgent": 3,
+        "ExecutorAgent": 1,
+        "ReviewerAgent": 20,
+        "TesterAgent": 5,
+        "IntegratorAgent": 2,
+        "ReporterAgent": 1,
+        "RiskAnalyzerAgent": 3,
+        "MemoryUpdaterAgent": 1,
+        "ContextBuilderAgent": 3,
+        "AuthSecurityReviewerAgent": 1,
+        "APICompatibilityReviewerAgent": 1
+      },
+      "executor_limit": 1,
+      "reviewer_limit": 22,
+      "tester_limit": 5,
+      "read_only_ratio": 0.97,
+      "write_agent_limit": 2,
+      "validation_level": "exhaustive",
+      "requires_human_approval": true,
+      "reasoning": [
+        "Classified task as large with multiple_modules scope and critical risk.",
+        "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+        "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+        "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+        "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+      ],
+      "confidence": 0.8,
+      "downgrade_conditions": [
+        "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+        "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+        "Use a single executor when write scopes overlap or sensitive files are involved."
+      ],
+      "escalation_conditions": [
+        "Escalate scouts and reviewers when relevant modules remain unknown.",
+        "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+        "Require human approval when high-risk files or critical safety gates are involved."
+      ],
+      "created_at": "2026-05-23T21:45:08.337Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Classified task as large with multiple_modules scope and critical risk.",
+      "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+      "Repository index reports 249 indexed file(s); 24 candidate relevant file(s) were selected.",
+      "Created dynamic specialists only for matched evidence: AuthSecurityReviewerAgent: security/authentication indicators were present; APICompatibilityReviewerAgent: public API compatibility indicators were present.",
+      "The system selected 65 logical agents automatically; the user did not need to provide an agent count."
+    ],
+    "deviations": []
+  }
+]

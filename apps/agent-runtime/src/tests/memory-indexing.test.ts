@@ -16,7 +16,7 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { DecisionRecord, TaskHistoryRecord } from "../memory/types.js";
 
 test("repository indexer creates memory files and ignores generated/vendor directories", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-memory-index");
+  const workspace = await createFixtureWorkspace("hivo-memory-index");
   try {
     const snapshot = await rebuildRepoIndex(workspace, { now: fixedNow });
     const memoryPaths = resolveMemoryPaths(workspace);
@@ -51,7 +51,7 @@ test("repository indexer creates memory files and ignores generated/vendor direc
 });
 
 test("command inventory detects package scripts and classifies validation commands", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-memory-commands");
+  const workspace = await createFixtureWorkspace("hivo-memory-commands");
   try {
     const snapshot = await rebuildRepoIndex(workspace, { now: fixedNow });
     const commands = snapshot.commandInventory.commands;
@@ -68,7 +68,7 @@ test("command inventory detects package scripts and classifies validation comman
 });
 
 test("memory append APIs and relevant-file lookup work from generated summaries", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-memory-apis");
+  const workspace = await createFixtureWorkspace("hivo-memory-apis");
   try {
     await rebuildRepoIndex(workspace, { now: fixedNow });
     const decision = await appendDecision(workspace, {
@@ -96,7 +96,7 @@ test("memory append APIs and relevant-file lookup work from generated summaries"
 });
 
 test("index rebuilds are repeatable for stable file metadata and do not break existing workspace tools", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-memory-repeatable");
+  const workspace = await createFixtureWorkspace("hivo-memory-repeatable");
   try {
     const first = await rebuildRepoIndex(workspace, { now: fixedNow });
     const second = await rebuildRepoIndex(workspace, { now: fixedNow });

@@ -12,7 +12,7 @@ import type {
   ReconciliationReport,
   ReviewGateSummary,
   VerificationResult
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { EventBus } from "../runtime/EventBus.js";
 import { createDurableRuntimeEvent } from "../runtime/DurableRuntimeEvents.js";
 import { replaySessionFromDurableEvents } from "../runtime/SessionReplay.js";
@@ -284,8 +284,8 @@ function event(
 }
 
 async function createSeedFixture() {
-  const workspace = path.join(os.tmpdir(), `orchcode-replay-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-replay-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-replay-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-replay-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   const manager = new SessionManager(storageDir, new EventBus(), {
     runtimeEventLoader: async () => []

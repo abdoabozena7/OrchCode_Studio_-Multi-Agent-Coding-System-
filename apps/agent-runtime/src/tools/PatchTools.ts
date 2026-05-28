@@ -1,6 +1,6 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PatchProposal, PatchValidationResult, WorkerCapabilityGrant } from "@orchcode/protocol";
+import type { PatchProposal, PatchValidationResult, WorkerCapabilityGrant } from "@hivo/protocol";
 import { assertGrantAllowsTool, resolveInsideWorkspace } from "./security.js";
 
 export class PatchTools {

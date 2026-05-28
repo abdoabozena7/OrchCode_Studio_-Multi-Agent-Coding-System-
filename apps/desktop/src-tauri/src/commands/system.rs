@@ -54,7 +54,7 @@ fn spawn_dev_launcher() -> Result<(), std::io::Error> {
     #[cfg(target_os = "windows")]
     {
         let script = format!(
-            "Start-Sleep -Seconds 3; Set-Location -LiteralPath '{}'; $env:ORCHCODE_DEV_FRESH='1'; & npm.cmd run dev -- --fresh",
+            "Start-Sleep -Seconds 3; Set-Location -LiteralPath '{}'; $env:HIVO_DEV_FRESH='1'; & npm.cmd run dev -- --fresh",
             escape_powershell_single_quotes(&repo_root.to_string_lossy())
         );
         Command::new("cmd")
@@ -75,14 +75,14 @@ fn spawn_dev_launcher() -> Result<(), std::io::Error> {
 
     #[cfg(target_os = "macos")]
     {
-        let script = format!("sleep 2; cd '{}' && ORCHCODE_DEV_FRESH=1 npm run dev -- --fresh", escape_shell_single_quotes(&repo_root.to_string_lossy()));
+        let script = format!("sleep 2; cd '{}' && HIVO_DEV_FRESH=1 npm run dev -- --fresh", escape_shell_single_quotes(&repo_root.to_string_lossy()));
         Command::new("sh").args(["-lc", &script]).spawn()?;
         return Ok(());
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let script = format!("sleep 2; cd '{}' && ORCHCODE_DEV_FRESH=1 npm run dev -- --fresh", escape_shell_single_quotes(&repo_root.to_string_lossy()));
+        let script = format!("sleep 2; cd '{}' && HIVO_DEV_FRESH=1 npm run dev -- --fresh", escape_shell_single_quotes(&repo_root.to_string_lossy()));
         Command::new("sh").args(["-lc", &script]).spawn()?;
         return Ok(());
     }

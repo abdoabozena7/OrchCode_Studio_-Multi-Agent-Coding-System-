@@ -1,4 +1,4 @@
-import type { TaskNode } from "@orchcode/protocol";
+import type { TaskNode } from "@hivo/protocol";
 import { BaseWorker, type WorkerContext } from "./BaseWorker.js";
 
 export class ArchitectAgent extends BaseWorker {

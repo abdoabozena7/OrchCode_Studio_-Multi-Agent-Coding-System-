@@ -40,7 +40,7 @@ test("Phase 3 structured output validation and repair are explicit", () => {
 });
 
 test("patch safety rejects scope violations and forbidden files", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-patch-safety");
+  const workspace = await createFixtureWorkspace("hivo-patch-safety");
   try {
     const task = createTask("run_scope", {
       allowed_files_to_edit: ["src/allowed.ts"],
@@ -71,7 +71,7 @@ test("patch safety rejects scope violations and forbidden files", async () => {
 });
 
 test("file locks acquire, release, and block overlapping scopes", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-locks");
+  const workspace = await createFixtureWorkspace("hivo-locks");
   try {
     const locks = new OrchestrationFileLockManager(workspace, 60_000);
     const first = locks.acquire("run_lock", "task_a", ["src/allowed.ts"]);
@@ -87,7 +87,7 @@ test("file locks acquire, release, and block overlapping scopes", async () => {
 });
 
 test("scheduler separates overlapping tasks and admits disjoint tasks", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-scheduler");
+  const workspace = await createFixtureWorkspace("hivo-scheduler");
   try {
     const locks = new OrchestrationFileLockManager(workspace, 60_000);
     const overlapping = selectSchedulableTasks(workspace, [
@@ -108,7 +108,7 @@ test("scheduler separates overlapping tasks and admits disjoint tasks", async ()
 });
 
 test("validation failure can create a repair task and repair limits stop loops", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-validation-repair");
+  const workspace = await createFixtureWorkspace("hivo-validation-repair");
   try {
     const store = new OrchestrationArtifactStore(workspace);
     const task = createTask("run_repair", {
@@ -191,7 +191,7 @@ test("patch fingerprint tracker detects identical repeated failures", () => {
 });
 
 test("review result consolidation escalates scope violations to repair", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-review");
+  const workspace = await createFixtureWorkspace("hivo-review");
   try {
     const task = createTask("run_review", {
       allowed_files_to_edit: ["src/allowed.ts"],
@@ -227,7 +227,7 @@ test("review result consolidation escalates scope violations to repair", async (
 });
 
 test("task events are written with typed lifecycle events", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-events");
+  const workspace = await createFixtureWorkspace("hivo-events");
   try {
     const store = new OrchestrationArtifactStore(workspace);
     const manager = new TaskGraphManager("run_events", workspace, store);
@@ -247,7 +247,7 @@ test("task events are written with typed lifecycle events", async () => {
 });
 
 test("file snapshots can restore unsafe direct edits", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-restore");
+  const workspace = await createFixtureWorkspace("hivo-restore");
   try {
     const filePath = path.join(workspace, "src", "allowed.ts");
     const snapshots = await captureFileSnapshots(workspace, ["src/allowed.ts"]);

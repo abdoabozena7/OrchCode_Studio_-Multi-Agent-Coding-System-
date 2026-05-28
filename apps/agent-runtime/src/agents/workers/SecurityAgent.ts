@@ -1,4 +1,4 @@
-import type { CommandRequest, PatchProposal, ReviewResult, TaskNode } from "@orchcode/protocol";
+import type { CommandRequest, PatchProposal, ReviewResult, TaskNode } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import { BaseWorker, type WorkerContext } from "./BaseWorker.js";
 

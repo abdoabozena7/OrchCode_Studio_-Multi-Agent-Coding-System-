@@ -2,14 +2,14 @@
 
 ## Current Architecture Summary
 
-OrchCode Studio is a Windows-first Tauri desktop application with a React/Vite frontend, a Rust backend/core, a shared TypeScript protocol package, and a TypeScript agent runtime service.
+Hivo Studio is a Windows-first Tauri desktop application with a React/Vite frontend, a Rust backend/core, a shared TypeScript protocol package, and a TypeScript agent runtime service.
 
 - `apps/desktop` contains the operator console UI and Tauri bridge.
 - `apps/desktop/src-tauri` owns workspace access, terminal authority, command policy, patch application, git state, SQLite persistence, and a shallow `ProjectIndexService`.
 - `apps/agent-runtime` owns runtime sessions, LLM providers, tool requests, orchestration objects, project intake, context building, patch proposals, and SSE/HTTP endpoints.
 - `packages/protocol` owns shared TypeScript contracts.
 
-The existing agent runtime already performs temporary read-only workspace scans through `WorkspaceTools`, `ProjectIntake`, and `LargeProjectContextBuilder`, but those results are not written as durable repository memory. Runtime sessions persist separately under `.orchcode-agent-runtime`.
+The existing agent runtime already performs temporary read-only workspace scans through `WorkspaceTools`, `ProjectIntake`, and `LargeProjectContextBuilder`, but those results are not written as durable repository memory. Runtime sessions persist separately under `.hivo-agent-runtime`.
 
 ## What Will Be Added
 
@@ -42,14 +42,14 @@ Phase 1 adds a file-backed project memory layer that can be rebuilt on demand:
 ## How Current Behavior Is Preserved
 
 - The existing HTTP runtime and desktop app entrypoints are not replaced.
-- Existing session persistence under `.orchcode-agent-runtime` remains unchanged.
+- Existing session persistence under `.hivo-agent-runtime` remains unchanged.
 - Existing workspace tools remain read-only and continue to use their current guards.
 - The new memory layer is invoked through explicit service calls or CLI commands; it does not automatically alter runtime turn behavior in Phase 1.
 - The implementation avoids new heavy dependencies and uses Node/TypeScript standard library APIs.
 
 ## Validation Strategy
 
-- Run the new memory tests through the existing `@orchcode/agent-runtime` test command.
+- Run the new memory tests through the existing `@hivo/agent-runtime` test command.
 - Run TypeScript build/typecheck paths already defined by package scripts.
 - Run the new repository index command against this repository.
 - Inspect generated `.agent_memory` files for expected layout, ignored directories, command inventory, and index summaries.

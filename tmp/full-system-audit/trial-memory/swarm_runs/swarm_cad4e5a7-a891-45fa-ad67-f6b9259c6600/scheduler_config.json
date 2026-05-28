@@ -1,0 +1,11 @@
+{
+  "max_parallel_agents": 6,
+  "max_parallel_read_only_agents": 6,
+  "executor_limit": 1,
+  "write_agent_limit": 1,
+  "reviewer_limit": 3,
+  "tester_limit": 1,
+  "risk_level": "high",
+  "validation_level": "strict",
+  "backpressure_failure_threshold": 1
+}

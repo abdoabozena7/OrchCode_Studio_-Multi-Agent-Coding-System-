@@ -1,0 +1,48 @@
+- banner:
+  - button "Toggle sidebar":
+  - img "OrchCode Studio"
+  - button "Restart Latest":
+    - generic: Restart Latest
+  - button "Settings":
+    - generic: Settings
+- complementary:
+  - button "New chat":
+    - generic: New chat
+  - textbox "D:\\\\projects\\\\my-app"
+  - button "Pick workspace folder":
+  - generic: Projects
+  - button "Collapse all projects":
+  - button "Start a new chat":
+  - generic: Your active workspace will appear here.
+  - button "Settings":
+    - generic: Settings
+- button "Resize sidebar"
+- main:
+  - button "Select workspace":
+    - generic: Select workspace
+  - button "Toggle details panel":
+  - button "Toggle diff panel":
+  - button "Toggle terminal":
+  - button "Explore workspace files" [disabled]:
+  - paragraph: Open a workspace to begin
+  - heading "What should we build?" [level=1]
+  - textbox "Ask local Codex to create or edit a project with Ollama..."
+  - button "Plan mode":
+    - generic: Plan mode
+  - button "RTL":
+    - generic: RTL
+  - button "Full Access":
+    - generic: Full Access
+  - button "Write a message first" [disabled]:
+  - button "Open workspace":
+    - generic: Open workspace
+  - button "Details":
+    - generic: Details
+  - strong: Full Access is on
+  - generic: Validated file changes apply automatically, and requested setup/dev/test/network/background commands can run without another prompt.
+  - button "Dismiss full access notice":
+  - button "Explain this project to me":
+    - text: Explain this project to me
+  - button "Analyze the workspace and suggest the safest first change":
+    - text: Analyze the workspace and suggest the safest first change
+  - paragraph: Select a workspace and start from the composer.

@@ -1,3 +1,3 @@
 fn main() {
-    orchcode_desktop_lib::run();
+    hivo_desktop_lib::run();
 }

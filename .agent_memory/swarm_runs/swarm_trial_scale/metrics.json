@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "swarm_run_id": "swarm_trial_scale",
+  "staffing_plan_ref": "staffing_plan.json",
+  "effective_total_logical_agents": 300,
+  "peak_active_agents": 300,
+  "role_distribution": {
+    "ScoutAgent": 300
+  },
+  "executor_peak_count": 0,
+  "reviewer_peak_count": 0,
+  "scout_peak_count": 300,
+  "work_items_created": 300,
+  "work_items_completed": 300,
+  "work_items_failed": 0,
+  "read_only_items": 300,
+  "edit_items": 0,
+  "review_items": 0,
+  "validation_items": 0,
+  "lock_wait_count": 0,
+  "retries": 0,
+  "repair_tasks": 0,
+  "invalid_structured_outputs": 0,
+  "consensus_groups": 0,
+  "validation_pass_rate": 1,
+  "conflicts_detected": 0,
+  "approval_gates_triggered": 0,
+  "generated_at": "2026-05-23T21:44:42.587Z"
+}

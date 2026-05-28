@@ -385,15 +385,23 @@ body.resizing-sidebar * {
   gap: 10px;
   min-height: 0;
   max-height: none;
+  align-content: start;
+  grid-auto-rows: max-content;
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 8px;
   scrollbar-gutter: stable;
 }
 
+.sidebar-section > .sidebar-empty {
+  align-self: start;
+}
+
 .project-group {
   display: grid;
   gap: 6px;
+  align-content: start;
+  align-self: start;
 }
 
 .project-group-header {
@@ -601,11 +609,13 @@ body.resizing-sidebar * {
   display: grid;
   gap: 8px;
   text-align: center;
+  justify-items: center;
 }
 
 .session-active .hero-copy {
   width: min(920px, 100%);
   justify-self: center;
+  justify-items: start;
   text-align: left;
   gap: 2px;
 }
@@ -617,6 +627,21 @@ body.resizing-sidebar * {
   line-height: 1.06;
   letter-spacing: 0;
   font-weight: 500;
+}
+
+.hero-brand-mark {
+  width: 86px;
+  height: 86px;
+  border-radius: 20px;
+  object-fit: cover;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.hero-slogan {
+  margin: 0;
+  color: #f0cc5f;
+  font-size: var(--text-18);
+  line-height: 1.35;
 }
 
 .hero-eyebrow {
@@ -724,7 +749,7 @@ body.resizing-sidebar * {
 }
 
 .spin-icon {
-  animation: orchcode-spin 0.85s linear infinite;
+  animation: hivo-spin 0.85s linear infinite;
 }
 
 .composer-footer {
@@ -842,6 +867,30 @@ body.resizing-sidebar * {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.hivo-mascot {
+  position: fixed;
+  right: 22px;
+  bottom: 18px;
+  z-index: 24;
+  width: clamp(82px, 8vw, 128px);
+  aspect-ratio: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.34));
+  animation: hivo-float 3.4s ease-in-out infinite;
+}
+
+.hivo-mascot.raised {
+  bottom: min(38vh, 340px);
+}
+
+.hivo-mascot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 28%;
+  object-fit: cover;
 }
 
 .starter-list {
@@ -972,7 +1021,7 @@ body.resizing-sidebar * {
   height: 16px;
   border-radius: 999px;
   background: rgba(73, 182, 229, 0.9);
-  animation: orchcode-caret 1s steps(1, end) infinite;
+  animation: hivo-caret 1s steps(1, end) infinite;
 }
 
 .pending-assistant-entry {
@@ -992,7 +1041,7 @@ body.resizing-sidebar * {
   height: 8px;
   border-radius: 999px;
   background: rgba(73, 182, 229, 0.7);
-  animation: orchcode-bounce 0.9s ease-in-out infinite;
+  animation: hivo-bounce 0.9s ease-in-out infinite;
 }
 
 .typing-indicator span:nth-child(2) {
@@ -2499,6 +2548,33 @@ body.resizing-sidebar * {
   gap: 10px;
 }
 
+.settings-preferences {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.settings-preferences h3 {
+  margin: 0;
+  font-size: var(--text-16);
+}
+
+.toggle-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  color: var(--muted);
+}
+
+.toggle-setting input {
+  width: auto;
+  accent-color: var(--primary);
+}
+
 .preset-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 16px 0;
@@ -2547,7 +2623,7 @@ body.resizing-sidebar * {
   border: 1px solid rgba(217, 119, 6, 0.34);
 }
 
-@keyframes orchcode-spin {
+@keyframes hivo-spin {
   from {
     transform: rotate(0deg);
   }
@@ -2557,7 +2633,7 @@ body.resizing-sidebar * {
   }
 }
 
-@keyframes orchcode-caret {
+@keyframes hivo-caret {
   0%,
   49% {
     opacity: 1;
@@ -2569,7 +2645,7 @@ body.resizing-sidebar * {
   }
 }
 
-@keyframes orchcode-bounce {
+@keyframes hivo-bounce {
   0%,
   80%,
   100% {
@@ -2580,5 +2656,22 @@ body.resizing-sidebar * {
   40% {
     transform: translateY(-4px);
     opacity: 1;
+  }
+}
+
+@keyframes hivo-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+
+  50% {
+    transform: translateY(-8px) rotate(1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hivo-mascot {
+    animation: none;
   }
 }

@@ -6,7 +6,7 @@ import type {
   RunToGreenDiagnosis,
   RunToGreenSelectedCommand,
   RunToGreenState
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import type { LaunchRecommendation } from "./ProjectLaunchInference.js";
 
 type CommandSelectionInput = {

@@ -7,9 +7,9 @@ import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
 test("run this project completes with a preview-ready result for static module workspaces without scripts", async () => {
-  process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS = "1";
-  const workspace = path.join(os.tmpdir(), `orchcode-run-static-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run-static-storage-${Date.now()}`);
+  process.env.HIVO_DISABLE_BACKGROUND_COMMANDS = "1";
+  const workspace = path.join(os.tmpdir(), `hivo-run-static-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run-static-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(
     path.join(workspace, "index.html"),
@@ -48,13 +48,13 @@ test("run this project completes with a preview-ready result for static module w
   await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
-  delete process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS;
+  delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
 });
 
 test("run this project prefers package manager dev scripts in package.json workspaces", async () => {
-  process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS = "1";
-  const workspace = path.join(os.tmpdir(), `orchcode-run-package-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-run-package-storage-${Date.now()}`);
+  process.env.HIVO_DISABLE_BACKGROUND_COMMANDS = "1";
+  const workspace = path.join(os.tmpdir(), `hivo-run-package-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run-package-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(
     path.join(workspace, "package.json"),
@@ -81,12 +81,12 @@ test("run this project prefers package manager dev scripts in package.json works
   await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
-  delete process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS;
+  delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
 });
 
 test("explain this project stays in simple mode and emits ordered progress without patch proposals", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-explain-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-explain-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-explain-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-explain-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
   await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
@@ -115,8 +115,8 @@ test("explain this project stays in simple mode and emits ordered progress witho
 });
 
 test("arabic explain requests stay inspect-only and answer in chat", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-arabic-explain-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-arabic-explain-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-arabic-explain-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-arabic-explain-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
 
@@ -140,8 +140,8 @@ test("arabic explain requests stay inspect-only and answer in chat", async () =>
 });
 
 test("mixed Arabic dataset realtime question is inspect-only and does not create a patch proposal", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-arabic-dataset-realtime-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-arabic-dataset-realtime-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-arabic-dataset-realtime-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-arabic-dataset-realtime-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "services"), { recursive: true });
   await mkdir(path.join(workspace, "dashboard_ui", "src"), { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# Big data dashboard\n\nReads a CSV dataset and renders snapshots.\n", "utf8");
@@ -176,8 +176,8 @@ test("mixed Arabic dataset realtime question is inspect-only and does not create
 });
 
 test("Arabic inspect regression prompts answer from evidence without patch proposals", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-arabic-inspect-regression-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-arabic-inspect-regression-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-arabic-inspect-regression-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-arabic-inspect-regression-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "frontend", "src"), { recursive: true });
   await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# Retention ML Dashboard\n\nFastAPI backend and React-style frontend for customer risk scoring.\n", "utf8");
@@ -228,13 +228,14 @@ test("Arabic inspect regression prompts answer from evidence without patch propo
     const session = runtime.getSession(created.sessionId);
     const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
     const answerArtifact = session?.artifacts.find((artifact) => artifact.type === "project_explain_answer");
+    const artifactTypes = new Set(session?.artifacts.map((artifact) => artifact.type) ?? []);
 
     assert.equal(session?.runMode, "inspect_only");
     assert.equal(session?.patchProposals.length, 0);
     assert.equal(session?.commandRequests.length, 0);
     assert.ok(session?.explainReport);
     assert.match(assistantMessage, prompt.expected);
-    assert.match(assistantMessage, /orchcode-file:/);
+    assert.match(assistantMessage, /hivo-file:/);
     assert.ok(answerArtifact?.payload && "intent" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "questionUnderstanding" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "queryPlan" in answerArtifact.payload);
@@ -244,8 +245,16 @@ test("Arabic inspect regression prompts answer from evidence without patch propo
     assert.ok(answerArtifact?.payload && "evidenceRefs" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "negativeEvidence" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "structuredFacts" in answerArtifact.payload);
+    assert.ok(answerArtifact?.payload && "readLaneRun" in answerArtifact.payload);
+    assert.ok(answerArtifact?.payload && "readLaneArtifacts" in answerArtifact.payload);
+    assert.ok(answerArtifact?.payload && "laneSynthesizedGraph" in answerArtifact.payload);
+    assert.ok(answerArtifact?.payload && "evidenceReview" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "fallbackUsed" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "confidence" in answerArtifact.payload);
+    assert.ok(artifactTypes.has("concept_resolution"));
+    assert.ok(artifactTypes.has("investigation_graph"));
+    assert.ok(artifactTypes.has("mechanism_chain"));
+    assert.ok(artifactTypes.has("evidence_tiers"));
   }
 
   await app.close();
@@ -254,8 +263,8 @@ test("Arabic inspect regression prompts answer from evidence without patch propo
 });
 
 test("modify requests still go through patch proposal flow with ordered reasoning", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-modify-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-modify-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-modify-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-modify-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "change me\n", "utf8");
 

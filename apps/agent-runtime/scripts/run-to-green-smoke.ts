@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { AgentRuntimeSession } from "@orchcode/protocol";
+import type { AgentRuntimeSession } from "@hivo/protocol";
 import { loadConfig } from "../src/config.js";
 import type { LlmProvider, LlmRequest } from "../src/llm/LlmProvider.js";
 import { AgentRuntime } from "../src/runtime/AgentRuntime.js";
@@ -21,7 +21,7 @@ type WorkspaceFixture = {
 };
 
 async function main() {
-  process.env.ORCHCODE_DISABLE_BACKGROUND_COMMANDS = "1";
+  process.env.HIVO_DISABLE_BACKGROUND_COMMANDS = "1";
   const results: Array<{ scenario: string; snapshot: Record<string, unknown> }> = [];
 
   const staticScenario = await runStaticWorkspaceScenario();
@@ -259,8 +259,8 @@ async function executeRealShellCommand(command: string, cwd: string) {
 }
 
 async function createWorkspaceFixture(label: string): Promise<WorkspaceFixture> {
-  const workspace = path.join(os.tmpdir(), `orchcode-smoke-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-smoke-${label}-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const workspace = path.join(os.tmpdir(), `hivo-smoke-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-smoke-${label}-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(workspace, { recursive: true });
   return {
     workspace,

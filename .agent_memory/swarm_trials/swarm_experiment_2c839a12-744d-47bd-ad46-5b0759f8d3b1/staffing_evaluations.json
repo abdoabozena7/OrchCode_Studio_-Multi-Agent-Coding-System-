@@ -1,0 +1,63 @@
+[
+  {
+    "schema_version": 1,
+    "input_goal": "Process 300 read-only scout work items with mock agents.",
+    "expected_complexity": "huge",
+    "expected_agent_range": [
+      300,
+      300
+    ],
+    "expected_executor_limit": 0,
+    "expected_specialists": [],
+    "actual_staffing_plan": {
+      "schema_version": 1,
+      "id": "staffing_swarm_trial_scale",
+      "swarm_run_id": "swarm_trial_scale",
+      "task_complexity": "huge",
+      "repo_scope": "whole_repo",
+      "risk_level": "low",
+      "recommended_total_logical_agents": 300,
+      "max_parallel_agents": 300,
+      "scout_count": 300,
+      "planner_count": 0,
+      "architect_count": 0,
+      "executor_count": 0,
+      "reviewer_count": 0,
+      "tester_count": 0,
+      "integrator_count": 0,
+      "specialist_agents": [],
+      "role_counts": {
+        "ScoutAgent": 300,
+        "PlannerAgent": 0,
+        "ArchitectAgent": 0,
+        "ExecutorAgent": 0,
+        "ReviewerAgent": 0,
+        "TesterAgent": 0,
+        "IntegratorAgent": 0,
+        "ReporterAgent": 0,
+        "RiskAnalyzerAgent": 0,
+        "MemoryUpdaterAgent": 0,
+        "ContextBuilderAgent": 0
+      },
+      "executor_limit": 0,
+      "reviewer_limit": 0,
+      "tester_limit": 0,
+      "read_only_ratio": 1,
+      "write_agent_limit": 0,
+      "validation_level": "none",
+      "requires_human_approval": false,
+      "reasoning": [
+        "Scheduler scale trial uses mock read-only work to prove 300 logical agent handling."
+      ],
+      "confidence": 0.9,
+      "downgrade_conditions": [],
+      "escalation_conditions": [],
+      "created_at": "2026-05-23T21:44:40.310Z"
+    },
+    "pass_fail": "pass",
+    "reasoning": [
+      "Scheduler scale trial uses mock read-only work to prove 300 logical agent handling."
+    ],
+    "deviations": []
+  }
+]

@@ -1,0 +1,108 @@
+{
+  "sessionId": "session_b464e3bc-ce7f-40da-8973-c50c1a9c07c6",
+  "mode": "real_provider",
+  "configuredProvider": {
+    "providerType": "ollama",
+    "providerName": "Ollama",
+    "baseUrl": "http://127.0.0.1:11434",
+    "selectedModel": "qwen2.5-coder:7b",
+    "isValid": true
+  },
+  "providerTelemetry": {
+    "providerMode": "real_provider",
+    "providerName": "Ollama",
+    "modelName": "qwen2.5-coder:7b",
+    "providerBaseUrl": "http://127.0.0.1:11434",
+    "providerRequestCount": 2,
+    "mockProviderRequestCount": 0,
+    "realProviderRequestCount": 2,
+    "providerResponseCount": 2,
+    "providerFailureCount": 0,
+    "providerTimeoutCount": 0,
+    "totalProviderLatencyMs": 61823,
+    "perPromptProviderLatencyMs": [
+      {
+        "requestId": "provider_1779623058194_1",
+        "requestType": "structured",
+        "latencyMs": 26412,
+        "status": "success",
+        "providerName": "Ollama",
+        "modelName": "qwen2.5-coder:7b"
+      },
+      {
+        "requestId": "provider_1779623084612_2",
+        "requestType": "structured",
+        "latencyMs": 35411,
+        "status": "success",
+        "providerName": "Ollama",
+        "modelName": "qwen2.5-coder:7b"
+      }
+    ],
+    "fallbackUsed": true,
+    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided orchcode-file link.; answer mentions unsupported project/domain claim(s): dataset; usedEvidenceRefs contains an unknown ref: [src/clustering.py:1](orchcode-file:src%2Fclustering.py:1)",
+    "deterministicOnly": false,
+    "mockProviderUsed": false,
+    "realProviderUsed": true,
+    "activeProviderSource": "explicit_cli",
+    "updatedAt": "2026-05-24T11:45:20.032Z"
+  },
+  "evidenceReport": {
+    "topEvidenceFiles": [
+      "src/clustering.py",
+      "package.json"
+    ],
+    "evidenceFilesByTier": {
+      "source_code": [
+        "src/clustering.py"
+      ],
+      "test": [],
+      "docs": [],
+      "generated": [],
+      "runtime_state": [],
+      "config": [
+        "package.json"
+      ]
+    },
+    "excludedEvidenceCandidates": [
+      "tmp/root-cause-audit/explain-repro-results.json"
+    ],
+    "exclusionReasons": {
+      "tmp/root-cause-audit/explain-repro-results.json": "generated_artifact_excluded_by_default"
+    },
+    "finalEvidenceFilesActuallyUsed": [
+      "src/clustering.py"
+    ],
+    "generatedEvidenceExcludedCount": 1,
+    "generatedEvidenceIncludedCount": 0,
+    "generatedEvidenceIncluded": false,
+    "allowGeneratedEvidence": false,
+    "updatedAt": "2026-05-24T11:45:20.031Z"
+  },
+  "answerContract": {
+    "realProviderAnswered": false,
+    "deterministicFallbackAnswered": true,
+    "providerTimeoutInvolved": false,
+    "providerRequestCount": 2,
+    "providerResponseCount": 2,
+    "fallbackUsed": true,
+    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided orchcode-file link.; answer mentions unsupported project/domain claim(s): dataset; usedEvidenceRefs contains an unknown ref: [src/clustering.py:1](orchcode-file:src%2Fclustering.py:1)",
+    "finalEvidenceFilesActuallyUsed": [
+      "src/clustering.py"
+    ],
+    "generatedArtifactsExcluded": true
+  },
+  "answerPreview": "## Summary\nThis answer is centered on `dbscan`, not the whole project pipeline. The strongest implementation evidence is [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n\n## Concept Flow\n### 1. dbscan implementation: apply_dbscan\n- What happens: The code applies DBSCAN through DBSCAN(eps=0.35, min_samples=5), fit_predict(features); this is the density-clustering step proven by the implementation snippet.\n- Evidence role: implementation (Snippet contains a direct target algorithm/library call in the owner body.).\n- Input data: `features`.\n- Parameters/arguments: `eps=0.35`, `min_samples=5`, `features`.\n- Output: `labels`, `noise_mask`, `clean_features`.\n- Related downstream/upstream names: `noise_mask`, `features`, `labels`.\n- Evidence: [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n\n## Direct Answers\n- Where: [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n- Evidence roles: direct implementation is available and preferred over orchestration, downstream, tests, docs, or visualization evidence.\n- Parameters: `eps=0.35`, `min_samples=5`, `features`.\n- Outputs/assigned values: `labels`, `noise_mask`, `clean_features`.\n- Persistence/storage: not prove",
+  "artifactTypes": [
+    "project_intake",
+    "context_pack",
+    "project_explain_report",
+    "concept_resolution",
+    "investigation_graph",
+    "mechanism_chain",
+    "evidence_tiers",
+    "provider_truth",
+    "evidence_report",
+    "verification",
+    "project_explain_answer"
+  ]
+}

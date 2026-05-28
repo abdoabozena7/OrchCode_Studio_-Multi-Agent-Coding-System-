@@ -93,7 +93,7 @@ test("role registry contains all required Phase 2 roles with real contracts", ()
 });
 
 test("task graph manager enforces auditable status transitions", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-graph");
+  const workspace = await createFixtureWorkspace("hivo-graph");
   try {
     const store = new OrchestrationArtifactStore(workspace);
     const manager = new TaskGraphManager("run_test", workspace, store);
@@ -124,7 +124,7 @@ test("task graph manager enforces auditable status transitions", async () => {
 });
 
 test("context pack builder creates bounded context from fake Phase 1 memory data", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-context");
+  const workspace = await createFixtureWorkspace("hivo-context");
   try {
     await writeFakeMemory(workspace);
     const builder = new ContextPackBuilder(workspace, { maxFiles: 2, maxChars: 700 });
@@ -143,7 +143,7 @@ test("context pack builder creates bounded context from fake Phase 1 memory data
 });
 
 test("orchestrator creates a run, tasks, artifacts, executor invocation, and final report", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-orchestrator");
+  const workspace = await createFixtureWorkspace("hivo-orchestrator");
   try {
     const result = await new CoreOrchestrator({
       workspacePath: workspace,
@@ -167,7 +167,7 @@ test("orchestrator creates a run, tasks, artifacts, executor invocation, and fin
 });
 
 test("old simple SeniorCodingAgent path still works alongside Phase 2", async () => {
-  const workspace = await createFixtureWorkspace("orchcode-simple-agent");
+  const workspace = await createFixtureWorkspace("hivo-simple-agent");
   try {
     const sessionManager = new SessionManager(path.join(workspace, ".runtime-test"), new EventBus(), {
       runtimeEventLoader: async () => []

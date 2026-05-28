@@ -1,4 +1,4 @@
-import type { BusinessBrief, ProductBrief, TechnicalPlan, TaskGraph, WorkerOutput, ReviewResult } from "@orchcode/protocol";
+import type { BusinessBrief, ProductBrief, TechnicalPlan, TaskGraph, WorkerOutput, ReviewResult } from "@hivo/protocol";
 
 export type ValidationResult = {
   valid: boolean;

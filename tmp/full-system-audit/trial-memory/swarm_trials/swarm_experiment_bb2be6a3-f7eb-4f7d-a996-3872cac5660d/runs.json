@@ -1,0 +1,123 @@
+[
+  {
+    "schema_version": 1,
+    "id": "experiment_run_0993ef25-54e4-4fc0-b6ad-89198aec772d",
+    "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+    "input_goal": "Explain architecture without editing",
+    "mode": "baseline-simple",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "failed",
+    "effective_total_logical_agents": 1,
+    "role_distribution": {
+      "baseline-simple": 1
+    },
+    "started_at": "2026-05-24T10:33:05.269Z",
+    "finished_at": "2026-05-24T10:33:05.269Z"
+  },
+  {
+    "schema_version": 1,
+    "id": "experiment_run_4e4105d1-47a8-42de-8b29-9230d6e8ef39",
+    "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+    "input_goal": "Explain architecture without editing",
+    "mode": "orchestrated",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "effective_total_logical_agents": 6,
+    "role_distribution": {
+      "baseline-simple": 6
+    },
+    "started_at": "2026-05-24T10:33:05.269Z",
+    "finished_at": "2026-05-24T10:33:05.269Z"
+  },
+  {
+    "schema_version": 1,
+    "id": "experiment_run_bc7d4e00-6b1b-42da-b033-141b45f0856c",
+    "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+    "input_goal": "Explain architecture without editing",
+    "mode": "autopilot-fast",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "staffing_plan_ref": "staffing_e53f4ac6-9c2f-4ad6-bf1c-9c1b2f72bbce",
+    "effective_total_logical_agents": 9,
+    "role_distribution": {
+      "ScoutAgent": 2,
+      "PlannerAgent": 1,
+      "ArchitectAgent": 0,
+      "ExecutorAgent": 1,
+      "ReviewerAgent": 2,
+      "TesterAgent": 1,
+      "IntegratorAgent": 0,
+      "ReporterAgent": 1,
+      "RiskAnalyzerAgent": 0,
+      "MemoryUpdaterAgent": 0,
+      "ContextBuilderAgent": 0,
+      "DocumentationReviewerAgent": 1
+    },
+    "started_at": "2026-05-24T10:33:05.269Z",
+    "finished_at": "2026-05-24T10:33:05.269Z"
+  },
+  {
+    "schema_version": 1,
+    "id": "experiment_run_fb424e9c-b1d1-4ef5-93f3-ce0e052583cd",
+    "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+    "input_goal": "Explain architecture without editing",
+    "mode": "autopilot-deep",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "staffing_plan_ref": "staffing_14988842-82a0-43b4-8db1-0649bc1dfb47",
+    "effective_total_logical_agents": 9,
+    "role_distribution": {
+      "ScoutAgent": 2,
+      "PlannerAgent": 1,
+      "ArchitectAgent": 0,
+      "ExecutorAgent": 1,
+      "ReviewerAgent": 2,
+      "TesterAgent": 1,
+      "IntegratorAgent": 0,
+      "ReporterAgent": 1,
+      "RiskAnalyzerAgent": 0,
+      "MemoryUpdaterAgent": 0,
+      "ContextBuilderAgent": 0,
+      "DocumentationReviewerAgent": 1
+    },
+    "started_at": "2026-05-24T10:33:05.270Z",
+    "finished_at": "2026-05-24T10:33:05.270Z"
+  },
+  {
+    "schema_version": 1,
+    "id": "experiment_run_4044a245-2c69-4779-b176-5948b5b05d6a",
+    "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+    "input_goal": "Explain architecture without editing",
+    "mode": "autopilot-exhaustive",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "staffing_plan_ref": "staffing_a585a0b3-a727-4705-9b96-5d6dc931dacf",
+    "effective_total_logical_agents": 9,
+    "role_distribution": {
+      "ScoutAgent": 2,
+      "PlannerAgent": 1,
+      "ArchitectAgent": 0,
+      "ExecutorAgent": 1,
+      "ReviewerAgent": 2,
+      "TesterAgent": 1,
+      "IntegratorAgent": 0,
+      "ReporterAgent": 1,
+      "RiskAnalyzerAgent": 0,
+      "MemoryUpdaterAgent": 0,
+      "ContextBuilderAgent": 0,
+      "DocumentationReviewerAgent": 1
+    },
+    "started_at": "2026-05-24T10:33:05.270Z",
+    "finished_at": "2026-05-24T10:33:05.270Z"
+  }
+]

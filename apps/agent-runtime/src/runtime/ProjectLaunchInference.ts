@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { PreviewRecommendation } from "@orchcode/protocol";
+import type { PreviewRecommendation } from "@hivo/protocol";
 import type { WorkspaceTools } from "../tools/WorkspaceTools.js";
 
 export type LaunchConfidence = "low" | "medium" | "high";

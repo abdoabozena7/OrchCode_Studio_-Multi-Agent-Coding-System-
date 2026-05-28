@@ -111,7 +111,7 @@ function formatHuman(value: unknown): string {
 }
 
 function printHelp() {
-  console.log(`OrchCode campaign CLI
+  console.log(`Hivo campaign CLI
 
 Commands:
   create "<goal>"          Create a campaign

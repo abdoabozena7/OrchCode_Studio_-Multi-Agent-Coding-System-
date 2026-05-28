@@ -5,4 +5,4 @@ const config = loadConfig();
 const { app } = await buildServer(config);
 
 await app.listen({ host: config.host, port: config.port });
-console.log(`OrchCode agent runtime listening on http://${config.host}:${config.port} (${config.defaultMode} mode)`);
+console.log(`Hivo agent runtime listening on http://${config.host}:${config.port} (${config.defaultMode} mode)`);

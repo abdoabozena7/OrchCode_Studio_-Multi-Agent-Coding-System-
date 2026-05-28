@@ -1,4 +1,4 @@
-import type { TaskGraph, TaskNode } from "@orchcode/protocol";
+import type { TaskGraph, TaskNode } from "@hivo/protocol";
 import { FileLockManager } from "./FileLockManager.js";
 import { getReadyTasks, markTask } from "./TaskGraph.js";
 

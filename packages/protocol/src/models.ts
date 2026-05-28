@@ -424,7 +424,7 @@ export type ProjectSignalType =
   | "source_directories"
   | "tests"
   | "docs"
-  | "previous_orchcode_state"
+  | "previous_hivo_state"
   | "existing_todos"
   | "existing_build_scripts"
   | "current_git_changes";
@@ -467,6 +467,10 @@ export type ProjectContextPack = {
   knownRisks: string[];
   unknowns: string[];
   guardrails: ProjectEditGuardrails;
+  targetMechanismChain?: string[];
+  confirmedRelevantFiles?: string[];
+  missingEvidenceLinks?: string[];
+  safeEditSurface?: string[];
 };
 
 export type ProjectExplainEvidenceRef = {
@@ -693,6 +697,10 @@ export type ModuleExecutionPlan = {
   unknowns: string[];
   stopConditions: string[];
   approvalRequiredReasons: string[];
+  targetMechanismChain?: string[];
+  confirmedRelevantFiles?: string[];
+  missingEvidenceLinks?: string[];
+  safeEditSurface?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -923,6 +931,12 @@ export type ArtifactType =
   | "project_intake"
   | "project_explain_report"
   | "project_explain_answer"
+  | "provider_truth"
+  | "evidence_report"
+  | "concept_resolution"
+  | "investigation_graph"
+  | "mechanism_chain"
+  | "evidence_tiers"
   | "context_pack"
   | "module_plan"
   | "module_execution_summary"

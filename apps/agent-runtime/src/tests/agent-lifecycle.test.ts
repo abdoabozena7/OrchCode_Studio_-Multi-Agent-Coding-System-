@@ -7,8 +7,8 @@ import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 
 test("agent lifecycle creates plan, tool calls, command request, and patch proposal", async () => {
-  const workspace = path.join(os.tmpdir(), `orchcode-agent-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `orchcode-agent-storage-${Date.now()}`);
+  const workspace = path.join(os.tmpdir(), `hivo-agent-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-agent-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
   await writeFile(path.join(workspace, "README.md"), "test fixture\n", "utf8");

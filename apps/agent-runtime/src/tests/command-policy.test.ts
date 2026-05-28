@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accessProfileDefaults } from "@orchcode/protocol";
+import { accessProfileDefaults } from "@hivo/protocol";
 import { classifyCommandRisk } from "../tools/CommandPolicy.js";
 
 test("command policy classifies safe, medium, and dangerous commands", () => {

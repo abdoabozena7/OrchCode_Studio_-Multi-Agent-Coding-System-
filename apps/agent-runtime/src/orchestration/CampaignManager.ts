@@ -7,12 +7,17 @@ import { assessIndexFreshness } from "../memory/IndexFreshness.js";
 import { CoreOrchestrator } from "./Orchestrator.js";
 import { ORCHESTRATION_SCHEMA_VERSION, type Campaign, type CampaignMetrics, type CampaignMilestone } from "./OrchestrationModels.js";
 import type { ExecutionMode } from "./OrchestrationConfig.js";
+import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 
 export class CampaignManager {
+  private readonly metadata: FactoryMetadataAdapter;
+
   constructor(
     private readonly workspacePath: string,
     private readonly memoryDir?: string
-  ) {}
+  ) {
+    this.metadata = new FactoryMetadataAdapter(workspacePath, memoryDir);
+  }
 
   async create(goal: string) {
     const now = new Date().toISOString();
@@ -145,7 +150,9 @@ export class CampaignManager {
   private async save(campaign: Campaign) {
     const dir = await this.campaignDir(campaign.id);
     await mkdir(dir, { recursive: true });
-    await writeJson(path.join(dir, "campaign.json"), campaign);
+    const artifactRef = path.join(dir, "campaign.json");
+    await writeJson(artifactRef, campaign);
+    await this.metadata.recordCampaignSaved(campaign, artifactRef);
   }
 
   private async writeReport(campaign: Campaign) {
@@ -165,6 +172,13 @@ export class CampaignManager {
     };
     const reportPath = path.join(reportsDir, "final_report.json");
     await writeJson(reportPath, report);
+    await this.metadata.recordArtifactSaved({
+      campaignId: campaign.id,
+      kind: "campaign_report",
+      artifactRef: reportPath,
+      status: campaign.status,
+      metadata: { run_count: campaign.runs.length, milestone_count: campaign.milestones.length }
+    });
     campaign.final_report_ref = reportPath;
     await this.save(campaign);
     return report;
@@ -183,7 +197,20 @@ export class CampaignManager {
     };
     const dir = await this.campaignDir(campaign.id);
     await mkdir(path.join(dir, "metrics"), { recursive: true });
-    await writeJson(path.join(dir, "metrics", "campaign_metrics.json"), metrics);
+    const metricsPath = path.join(dir, "metrics", "campaign_metrics.json");
+    await writeJson(metricsPath, metrics);
+    await this.metadata.recordCampaignMetricSaved({
+      campaignId: campaign.id,
+      status: campaign.status,
+      generatedAt: metrics.generated_at,
+      artifactRef: metricsPath,
+      metadata: {
+        runs: metrics.runs,
+        milestones_total: metrics.milestones_total,
+        milestones_completed: metrics.milestones_completed,
+        milestones_failed: metrics.milestones_failed
+      }
+    });
     return metrics;
   }
 
@@ -197,7 +224,16 @@ export class CampaignManager {
       created_at: new Date().toISOString(),
       payload
     };
-    await writeFile(path.join(dir, "events.jsonl"), `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: existsSync(path.join(dir, "events.jsonl")) ? "a" : "w" });
+    const eventsPath = path.join(dir, "events.jsonl");
+    await writeFile(eventsPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: existsSync(eventsPath) ? "a" : "w" });
+    await this.metadata.recordArtifactSaved({
+      campaignId,
+      kind: "campaign_events",
+      artifactRef: eventsPath,
+      status: type,
+      createdAt: event.created_at,
+      updatedAt: event.created_at
+    });
   }
 
   private async campaignDir(campaignId: string) {

@@ -1,5 +1,5 @@
 {
-  "name": "@orchcode/agent-runtime",
+  "name": "@hivo/agent-runtime",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -23,6 +23,18 @@
     "memory:decisions": "tsx src/memory/cli.ts memory decisions --workspace ../..",
     "memory:failed-attempts": "tsx src/memory/cli.ts memory failed-attempts --workspace ../..",
     "memory:explain-task": "tsx src/memory/cli.ts memory explain-task --workspace ../..",
+    "agent:run": "tsx src/orchestration/cli.ts agent run --workspace ../..",
+    "agent:plan": "tsx src/orchestration/cli.ts agent plan --workspace ../..",
+    "agent:inspect-run": "tsx src/orchestration/cli.ts agent inspect-run --workspace ../..",
+    "agent:report": "tsx src/orchestration/cli.ts agent report --workspace ../..",
+    "agent:resume": "tsx src/orchestration/cli.ts agent resume --workspace ../..",
+    "agent:trial:architecture-scan": "tsx src/orchestration/cli.ts agent trial architecture-scan --workspace ../..",
+    "agent:trial:test-discovery": "tsx src/orchestration/cli.ts agent trial test-discovery --workspace ../..",
+    "agent:trial:staffing-eval": "tsx src/orchestration/cli.ts agent trial staffing-eval --workspace ../..",
+    "agent:trial:scheduler-scale": "tsx src/orchestration/cli.ts agent trial scheduler-scale --workspace ../..",
+    "agent:trial:compare": "tsx src/orchestration/cli.ts agent trial compare --workspace ../..",
+    "agent:trial:small-safe-fix": "tsx src/orchestration/cli.ts agent trial small-safe-fix --workspace ../..",
+    "agent:trial:huge-readonly-scan": "tsx src/orchestration/cli.ts agent trial huge-readonly-scan --workspace ../..",
     "agentic:run": "tsx src/orchestration/cli.ts run-agentic-task --workspace ../..",
     "agentic:plan": "tsx src/orchestration/cli.ts plan-task --workspace ../..",
     "agentic:resume-run": "tsx src/orchestration/cli.ts resume-run --workspace ../..",
@@ -48,10 +60,11 @@
     "campaign:metrics": "tsx src/orchestration/campaign-cli.ts metrics --workspace ../..",
     "eval:phase4": "tsx src/evals/cli.ts --workspace ../..",
     "smoke:run-to-green": "tsx scripts/run-to-green-smoke.ts",
+    "smoke:inspect-provider-truth": "tsx scripts/inspect-provider-truth-smoke.ts",
     "smoke:python-pygame-fallback": "tsx scripts/python-pygame-fallback-smoke.ts"
   },
   "dependencies": {
-    "@orchcode/protocol": "file:../../packages/protocol",
+    "@hivo/protocol": "file:../../packages/protocol",
     "fastify": "^5.2.1",
     "tsx": "^4.19.2"
   },

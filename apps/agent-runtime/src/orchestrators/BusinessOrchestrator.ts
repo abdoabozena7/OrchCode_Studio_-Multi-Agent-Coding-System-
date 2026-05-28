@@ -1,4 +1,4 @@
-import type { BusinessBrief, ProductBrief } from "@orchcode/protocol";
+import type { BusinessBrief, ProductBrief } from "@hivo/protocol";
 
 export class BusinessOrchestrator {
   createBrief(productBrief: ProductBrief): BusinessBrief {

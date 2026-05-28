@@ -22,10 +22,11 @@ import type {
   RuntimeProgressStage,
   ToolIntent,
   VerificationResult
-} from "@orchcode/protocol";
-import { accessProfileDefaults } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { accessProfileDefaults } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
 import type { LlmProvider } from "../llm/LlmProvider.js";
+import type { ProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { runPatchIntentSchema, runPlanSchema, runVerificationSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
@@ -86,7 +87,8 @@ type RunVerificationModel = {
 export class RunEngine {
   constructor(
     private readonly provider: LlmProvider,
-    private readonly sessionManager: SessionManager
+    private readonly sessionManager: SessionManager,
+    private readonly options: { providerTelemetry?: ProviderTelemetryRecorder } = {}
   ) {}
 
   async runTurn(
@@ -913,9 +915,30 @@ export class RunEngine {
     const validationErrors = questionResult.validationErrors;
     const evidenceRefs = questionResult.evidenceRefs;
     const fallbackUsed = questionResult.fallbackUsed;
+    if (fallbackUsed) {
+      this.options.providerTelemetry?.markFallback(questionResult.fallbackReason ?? "inspect_explain_deterministic_fallback");
+    }
+    const providerTelemetry = this.options.providerTelemetry?.snapshot();
+    const evidenceReport = questionResult.evidenceReport;
+    const answerContract = {
+      realProviderAnswered: Boolean(providerTelemetry?.realProviderUsed && providerTelemetry.providerResponseCount > 0 && !providerTelemetry.fallbackUsed),
+      deterministicFallbackAnswered: Boolean(providerTelemetry?.deterministicOnly || providerTelemetry?.fallbackUsed || fallbackUsed),
+      providerTimeoutInvolved: Boolean(providerTelemetry?.providerTimeoutCount),
+      providerRequestCount: providerTelemetry?.providerRequestCount ?? 0,
+      providerResponseCount: providerTelemetry?.providerResponseCount ?? 0,
+      fallbackUsed: providerTelemetry?.fallbackUsed ?? fallbackUsed,
+      fallbackReason: providerTelemetry?.fallbackReason ?? questionResult.fallbackReason,
+      finalEvidenceFilesActuallyUsed: evidenceReport.finalEvidenceFilesActuallyUsed,
+      generatedArtifactsExcluded: evidenceReport.generatedEvidenceExcludedCount > 0
+    };
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.explainReport = questionResult.augmentedReport;
+      draft.providerTelemetry = providerTelemetry;
+      draft.evidenceReport = evidenceReport;
+      if (providerTelemetry?.fallbackUsed && !draft.reasoningSummaries.some((entry) => entry.includes("Provider truth: fallback was used"))) {
+        draft.reasoningSummaries.push(`Provider truth: fallback was used (${providerTelemetry.fallbackReason ?? "reason unavailable"}).`);
+      }
     });
 
     await this.addArtifact(sessionId, "project_explain_report", "Project explain report", questionResult.augmentedReport.overview, {
@@ -929,16 +952,107 @@ export class RunEngine {
       openedFiles: questionResult.openedFiles,
       evidenceRefs,
       negativeEvidence: questionResult.negativeEvidence,
+      suppressedNegativeQueries: questionResult.suppressedNegativeQueries,
+      targetConcept: questionResult.questionUnderstanding.targetConcept,
+      requestedFacets: questionResult.questionUnderstanding.requestedFacets,
+      conceptResolution: questionResult.conceptResolution,
+      evidenceBuckets: questionResult.evidenceBuckets,
+      targetEvidenceValidation: questionResult.targetEvidenceValidation,
+      literalSearch: questionResult.literalSearch,
+      aliasSearch: questionResult.aliasSearch,
+      behavioralSearch: questionResult.behavioralSearch,
+      architecturalPatternSearch: questionResult.architecturalPatternSearch,
+      rejectedGeneralEvidence: questionResult.rejectedGeneralEvidence,
+      userVisibleNegativeEvidence: questionResult.userVisibleNegativeEvidence,
+      projectIntelligenceGraphSummary: questionResult.projectIntelligenceGraphSummary,
+      mechanismChain: questionResult.mechanismChain,
+      mechanismEvidence: questionResult.mechanismEvidence,
+      mechanismCoverageValidation: questionResult.mechanismCoverageValidation,
+      statusOnlyEvidence: questionResult.statusOnlyEvidence,
+      contextOnlyEvidence: questionResult.contextOnlyEvidence,
+      testEndpointExpectations: questionResult.testEndpointExpectations,
+      targetScopedStorageEvidence: questionResult.targetScopedStorageEvidence,
+      generalStorageEvidence: questionResult.generalStorageEvidence,
+      mechanismExpansionTrace: questionResult.mechanismExpansionTrace,
+      rejectedMechanismEvidence: questionResult.rejectedMechanismEvidence,
+      missingMechanismLinks: questionResult.missingMechanismLinks,
+      graphExpansionTrace: questionResult.graphExpansionTrace,
+      implementationEvidence: questionResult.implementationEvidence,
+      evidenceGroups: questionResult.evidenceGroups,
+      canonicalActions: questionResult.canonicalActions,
+      artifactPreparationEvidence: questionResult.artifactPreparationEvidence,
+      evidenceRoles: questionResult.evidenceRoles,
+      semanticEvidenceRoles: questionResult.semanticEvidenceRoles,
+      suppressedEvidence: questionResult.suppressedEvidence,
+      conceptFlow: questionResult.conceptFlow,
+      coverageValidation: questionResult.coverageValidation,
+      roleClassificationValidation: questionResult.roleClassificationValidation,
+      languageValidation: questionResult.languageValidation,
+      dedupeValidation: questionResult.dedupeValidation,
+      outputCleanupValidation: questionResult.outputCleanupValidation,
+      cleanedOutputs: questionResult.cleanedOutputs,
       structuredFacts: questionResult.structuredFacts,
+      detailLevel: questionResult.questionUnderstanding.detailLevel,
+      wantsCodeExamples: questionResult.questionUnderstanding.wantsCodeExamples,
+      wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
+      answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
       fallbackUsed,
-      confidence: questionResult.confidence
+      confidence: questionResult.confidence,
+      concept_resolution: questionResult.conceptResolution,
+      investigation_graph: questionResult.projectIntelligenceGraph,
+      mechanism_chain: questionResult.mechanismChain,
+      evidence_tiers: questionResult.evidenceTiers,
+      readLaneRun: questionResult.readLaneRun,
+      readLaneArtifacts: questionResult.readLaneArtifacts,
+      laneSynthesizedGraph: questionResult.laneSynthesizedGraph,
+      evidenceReview: questionResult.evidenceReview,
+      providerTelemetry,
+      evidenceReport,
+      answerContract
+    });
+
+    await this.addArtifact(sessionId, "concept_resolution", "Concept resolution", `${questionResult.questionUnderstanding.targetConcept}: ${questionResult.conceptResolution.resolutionStatus}`, {
+      concept_resolution: questionResult.conceptResolution,
+      investigationConceptResolution: questionResult.investigationConceptResolution
+    });
+
+    await this.addArtifact(sessionId, "investigation_graph", "Investigation graph", `${questionResult.projectIntelligenceGraph.summary.evidenceCount} evidence item(s), ${questionResult.projectIntelligenceGraph.summary.edgeCount} edge(s).`, {
+      investigation_graph: questionResult.projectIntelligenceGraph,
+      projectIntelligenceGraphSummary: questionResult.projectIntelligenceGraphSummary
+    });
+
+    await this.addArtifact(sessionId, "mechanism_chain", "Mechanism chain", `${questionResult.mechanismChain.status} with ${questionResult.mechanismChain.steps.length} link(s).`, {
+      mechanism_chain: questionResult.mechanismChain,
+      mechanismCoverageValidation: questionResult.mechanismCoverageValidation,
+      missingMechanismLinks: questionResult.missingMechanismLinks
+    });
+
+    await this.addArtifact(sessionId, "evidence_tiers", "Evidence tiers", `${questionResult.evidenceTiers.directTargetEvidence.length} direct, ${questionResult.evidenceTiers.architecturalPatternEvidence.length} architectural evidence item(s).`, {
+      evidence_tiers: questionResult.evidenceTiers,
+      rejectedGeneralEvidence: questionResult.rejectedGeneralEvidence,
+      userVisibleNegativeEvidence: questionResult.userVisibleNegativeEvidence,
+      evidenceReport
+    });
+
+    if (providerTelemetry) {
+      await this.addArtifact(sessionId, "provider_truth", "Provider truth", describeProviderTruth(providerTelemetry), {
+        providerTelemetry,
+        answerContract
+      });
+    }
+
+    await this.addArtifact(sessionId, "evidence_report", "Evidence report", `${evidenceReport.finalEvidenceFilesActuallyUsed.length} evidence file(s) used, ${evidenceReport.generatedEvidenceExcludedCount} generated/runtime candidate(s) excluded.`, {
+      evidenceReport
     });
 
     const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
       { name: "Workspace inventory", status: "passed", detail: `Scanned ${questionResult.augmentedReport.contextPack.inventory.scannedFiles} file(s), ignored ${questionResult.augmentedReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).` },
+      { name: "Inspect read lanes", status: "passed", detail: `Ran ${questionResult.readLaneArtifacts.length} read lane(s); synthesized graph is ${questionResult.laneSynthesizedGraph.status} with ${questionResult.laneSynthesizedGraph.provenLinks.length} proven link(s) and ${questionResult.laneSynthesizedGraph.missingLinks.length} missing link(s).` },
       { name: "Universal evidence search", status: "passed", detail: `Ran ${questionResult.searchIterations.length} bounded search iteration(s), opened ${questionResult.openedFiles.length} file(s), collected ${questionResult.positiveEvidence.length} evidence item(s).` },
+      { name: "Evidence hygiene", status: "passed", detail: `Used ${evidenceReport.finalEvidenceFilesActuallyUsed.length} final evidence file(s); excluded ${evidenceReport.generatedEvidenceExcludedCount} generated/runtime candidate(s).` },
       { name: "Module map", status: "passed", detail: `Mapped ${questionResult.augmentedReport.moduleMap.length} module(s) with ${questionResult.augmentedReport.contextPack.readBudget.sampledFiles} sampled file(s).` },
+      { name: "Provider truth", status: "passed", detail: providerTelemetry ? describeProviderTruth(providerTelemetry) : "Provider telemetry was not attached to this RunEngine invocation." },
       { name: "Evidence-grounded answer", status: "passed", detail: fallbackUsed ? "Provider output was revised or replaced with a deterministic evidence-grounded answer." : "Generated by the configured provider from the evidence report." },
       { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
     ]);
@@ -954,7 +1068,50 @@ export class RunEngine {
       openedFiles: questionResult.openedFiles,
       evidenceRefs,
       negativeEvidence: questionResult.negativeEvidence,
+      suppressedNegativeQueries: questionResult.suppressedNegativeQueries,
+      targetConcept: questionResult.questionUnderstanding.targetConcept,
+      requestedFacets: questionResult.questionUnderstanding.requestedFacets,
+      conceptResolution: questionResult.conceptResolution,
+      evidenceBuckets: questionResult.evidenceBuckets,
+      targetEvidenceValidation: questionResult.targetEvidenceValidation,
+      literalSearch: questionResult.literalSearch,
+      aliasSearch: questionResult.aliasSearch,
+      behavioralSearch: questionResult.behavioralSearch,
+      architecturalPatternSearch: questionResult.architecturalPatternSearch,
+      rejectedGeneralEvidence: questionResult.rejectedGeneralEvidence,
+      userVisibleNegativeEvidence: questionResult.userVisibleNegativeEvidence,
+      projectIntelligenceGraphSummary: questionResult.projectIntelligenceGraphSummary,
+      mechanismChain: questionResult.mechanismChain,
+      mechanismEvidence: questionResult.mechanismEvidence,
+      mechanismCoverageValidation: questionResult.mechanismCoverageValidation,
+      statusOnlyEvidence: questionResult.statusOnlyEvidence,
+      contextOnlyEvidence: questionResult.contextOnlyEvidence,
+      testEndpointExpectations: questionResult.testEndpointExpectations,
+      targetScopedStorageEvidence: questionResult.targetScopedStorageEvidence,
+      generalStorageEvidence: questionResult.generalStorageEvidence,
+      mechanismExpansionTrace: questionResult.mechanismExpansionTrace,
+      rejectedMechanismEvidence: questionResult.rejectedMechanismEvidence,
+      missingMechanismLinks: questionResult.missingMechanismLinks,
+      graphExpansionTrace: questionResult.graphExpansionTrace,
+      implementationEvidence: questionResult.implementationEvidence,
+      evidenceGroups: questionResult.evidenceGroups,
+      canonicalActions: questionResult.canonicalActions,
+      artifactPreparationEvidence: questionResult.artifactPreparationEvidence,
+      evidenceRoles: questionResult.evidenceRoles,
+      semanticEvidenceRoles: questionResult.semanticEvidenceRoles,
+      suppressedEvidence: questionResult.suppressedEvidence,
+      conceptFlow: questionResult.conceptFlow,
+      coverageValidation: questionResult.coverageValidation,
+      roleClassificationValidation: questionResult.roleClassificationValidation,
+      languageValidation: questionResult.languageValidation,
+      dedupeValidation: questionResult.dedupeValidation,
+      outputCleanupValidation: questionResult.outputCleanupValidation,
+      cleanedOutputs: questionResult.cleanedOutputs,
       structuredFacts: questionResult.structuredFacts,
+      detailLevel: questionResult.questionUnderstanding.detailLevel,
+      wantsCodeExamples: questionResult.questionUnderstanding.wantsCodeExamples,
+      wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
+      answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
       fallbackUsed,
       confidence: questionResult.confidence,
@@ -962,7 +1119,18 @@ export class RunEngine {
       unsupportedOrUnclearParts: validationErrors,
       revisionCount: questionResult.revisionCount,
       validationWarnings: questionResult.validationWarnings,
-      grounding: questionResult.grounding
+      grounding: questionResult.grounding,
+      concept_resolution: questionResult.conceptResolution,
+      investigation_graph: questionResult.projectIntelligenceGraph,
+      mechanism_chain: questionResult.mechanismChain,
+      evidence_tiers: questionResult.evidenceTiers,
+      readLaneRun: questionResult.readLaneRun,
+      readLaneArtifacts: questionResult.readLaneArtifacts,
+      laneSynthesizedGraph: questionResult.laneSynthesizedGraph,
+      evidenceReview: questionResult.evidenceReview,
+      providerTelemetry,
+      evidenceReport,
+      answerContract
     });
 
     await this.finish(sessionId, "completed", "DONE", {
@@ -1026,7 +1194,7 @@ export class RunEngine {
     ].join("\n");
     try {
       const generated = await this.provider.generateStructured<Partial<RunPlanModel>>(
-        { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent.", userPrompt: prompt },
+        { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent. Any title field you return must be at most four words.", userPrompt: prompt },
         runPlanSchema
       );
       const validation = validateStructuredOutput(generated, runPlanSchema);
@@ -1092,7 +1260,7 @@ export class RunEngine {
     ].join("\n");
     try {
       const generated = await this.provider.generateStructured<Partial<RunPatchIntentModel>>(
-        { systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only.", userPrompt: prompt },
+        { systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only. Any title field you return must be at most four words.", userPrompt: prompt },
         runPatchIntentSchema
       );
       const validation = validateStructuredOutput(generated, runPatchIntentSchema);
@@ -2018,6 +2186,16 @@ function toAgentPlan(plan: RunPlanModel): AgentPlan {
   };
 }
 
+function describeProviderTruth(telemetry: NonNullable<AgentRuntimeSession["providerTelemetry"]>) {
+  const providerKind = telemetry.mockProviderUsed
+    ? "mock"
+    : telemetry.realProviderUsed
+      ? "real"
+      : "unknown";
+  const fallback = telemetry.fallbackUsed ? `fallback yes${telemetry.fallbackReason ? ` (${telemetry.fallbackReason})` : ""}` : "fallback no";
+  return `Provider ${providerKind}: ${telemetry.providerName}${telemetry.modelName ? `/${telemetry.modelName}` : ""}; calls ${telemetry.providerRequestCount}/${telemetry.providerResponseCount}/${telemetry.providerFailureCount}/${telemetry.providerTimeoutCount} request/response/error/timeout; ${fallback}.`;
+}
+
 function createRunSummary(session: AgentRuntimeSession, verification: VerificationResult): RunSummary {
   return buildDiffAwareRunSummary(
     session,
@@ -2591,7 +2769,7 @@ function inferProjectBaseName(message: string) {
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
     .filter((word) => word.length > 2 && !["create", "new", "make", "build", "project", "app", "with", "for"].includes(word));
-  return (words.slice(0, 3).join("-") || "orchcode-project").replace(/^-+|-+$/g, "");
+  return (words.slice(0, 3).join("-") || "hivo-project").replace(/^-+|-+$/g, "");
 }
 
 function inferSimpleFileWriteRequest(message: string): { path: string; content: string } | null {

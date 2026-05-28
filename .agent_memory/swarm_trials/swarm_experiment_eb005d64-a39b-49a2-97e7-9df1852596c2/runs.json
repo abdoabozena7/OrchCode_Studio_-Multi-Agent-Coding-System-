@@ -1,0 +1,34 @@
+[
+  {
+    "schema_version": 1,
+    "id": "experiment_run_9df55bbf-9da0-4329-ae27-4f8b4d2fdea2",
+    "experiment_id": "swarm_experiment_eb005d64-a39b-49a2-97e7-9df1852596c2",
+    "input_goal": "swarm_9f40b144-f846-46ec-b7cc-a6adc98f19a7",
+    "mode": "autopilot-exhaustive",
+    "uses_mock_agents": true,
+    "uses_real_model": false,
+    "uses_real_repo": true,
+    "status": "succeeded",
+    "staffing_plan_ref": "staffing_6982665a-b654-4366-95e4-a20662f2931c",
+    "effective_total_logical_agents": 300,
+    "role_distribution": {
+      "ScoutAgent": 178,
+      "ContextBuilderAgent": 15,
+      "PlannerAgent": 10,
+      "ArchitectAgent": 6,
+      "RiskAnalyzerAgent": 5,
+      "ReviewerAgent": 74,
+      "TesterAgent": 7,
+      "IntegratorAgent": 1,
+      "MemoryUpdaterAgent": 1,
+      "ReporterAgent": 1,
+      "TestCoverageReviewerAgent": 1,
+      "DocumentationReviewerAgent": 1
+    },
+    "started_at": "2026-05-23T21:45:15.726Z",
+    "finished_at": "2026-05-23T21:45:15.726Z",
+    "metrics_ref": "metrics.json",
+    "artifacts_ref": "swarm_9f40b144-f846-46ec-b7cc-a6adc98f19a7",
+    "final_report_ref": "final_report.md"
+  }
+]

@@ -3,8 +3,9 @@ import type {
   DurableRuntimeEventActor,
   DurableRuntimeEventAuthority,
   DurableRuntimeEventType
-} from "@orchcode/protocol";
-import { isDurableRuntimeEventType } from "@orchcode/protocol";
+} from "@hivo/protocol";
+import { isDurableRuntimeEventType } from "@hivo/protocol";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { access } from "node:fs/promises";
@@ -133,16 +134,21 @@ export async function listDurableRuntimeEventsFromSqlite(sessionId: string): Pro
 }
 
 function resolveDesktopStateDatabasePath() {
-  if (process.env.ORCHCODE_DESKTOP_STATE_DB) {
-    return process.env.ORCHCODE_DESKTOP_STATE_DB;
+  if (process.env.HIVO_DESKTOP_STATE_DB || process.env.ORCHCODE_DESKTOP_STATE_DB) {
+    return process.env.HIVO_DESKTOP_STATE_DB ?? process.env.ORCHCODE_DESKTOP_STATE_DB;
   }
+  const resolveExistingOrNew = (root: string) => {
+    const hivoPath = path.join(root, "HivoStudio", "state.sqlite");
+    const legacyPath = path.join(root, "OrchCodeStudio", "state.sqlite");
+    return !existsSync(hivoPath) && existsSync(legacyPath) ? legacyPath : hivoPath;
+  };
   if (process.platform === "win32") {
     const root = process.env.LOCALAPPDATA;
-    return root ? path.join(root, "OrchCodeStudio", "state.sqlite") : undefined;
+    return root ? resolveExistingOrNew(root) : undefined;
   }
   if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "OrchCodeStudio", "state.sqlite");
+    return resolveExistingOrNew(path.join(os.homedir(), "Library", "Application Support"));
   }
   const dataHome = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share");
-  return path.join(dataHome, "OrchCodeStudio", "state.sqlite");
+  return resolveExistingOrNew(dataHome);
 }

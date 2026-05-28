@@ -11,7 +11,7 @@ import type {
   ReviewGateSummary,
   RunSummary,
   VerificationResult
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { randomId } from "./SessionManager.js";
 
 type VerificationLike = Pick<VerificationResult, "status" | "summary" | "checks">;
@@ -433,8 +433,8 @@ export function buildReconciliationReport(
   session: AgentRuntimeSession,
   patchId: string,
   snapshot?: {
-    before?: import("@orchcode/protocol").WorkspaceDiffSnapshot;
-    after?: import("@orchcode/protocol").WorkspaceDiffSnapshot;
+    before?: import("@hivo/protocol").WorkspaceDiffSnapshot;
+    after?: import("@hivo/protocol").WorkspaceDiffSnapshot;
   }
 ): ReconciliationReport {
   const patch = session.patchProposals.find((candidate) => candidate.id === patchId);

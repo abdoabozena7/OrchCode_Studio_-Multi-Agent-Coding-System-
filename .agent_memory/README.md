@@ -1,6 +1,6 @@
 # Agent Memory
 
-This directory stores durable local project memory for OrchCode.
+This directory stores durable local project memory for Hivo.
 
 Committed files:
 

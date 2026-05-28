@@ -7,7 +7,7 @@ import type {
   ProjectExplainSection,
   ProjectIntake,
   ProjectMap
-} from "@orchcode/protocol";
+} from "@hivo/protocol";
 import { isSecretCandidate, resolveInsideWorkspace } from "../tools/security.js";
 import {
   extractRequestedConcept,
@@ -18,6 +18,10 @@ import {
 import {
   inferWorkspaceIntent
 } from "./WorkspaceReasoningPipeline.js";
+import {
+  evidencePathDecision,
+  shouldIgnoreEvidenceDirectory
+} from "./EvidenceHygiene.js";
 
 export type ProjectExplainSettings = {
   maxExplainFiles: number;
@@ -178,7 +182,7 @@ const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|ts
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
   const settings = { ...DEFAULT_EXPLAIN_SETTINGS, ...input.settings };
   const workspaceRoot = resolveInsideWorkspace(input.workspacePath);
-  const inventory = collectInventory(workspaceRoot, settings.maxExplainFiles);
+  const inventory = collectInventory(workspaceRoot, settings.maxExplainFiles, input.message);
   const modules = buildModules(inventory, input.projectMap, input.intake, settings, input.message);
   const sampledFiles = readSampledFiles(workspaceRoot, inventory, modules, input, settings);
   const sampledByPath = new Map(sampledFiles.map((sample) => [sample.path, sample]));
@@ -283,7 +287,7 @@ function scoreSection(section: ProjectExplainSection, normalizedMessage: string)
   if (/api route|service function|domain class|decision|action|http\/api|orchestr|pipeline|retriev|classification|model|algorithm|ingest|cluster|forecast|formula|numeric threshold|agent weight|project scripts|test|requested concept|react route|ui view collection|navigation item|static page section/i.test(title)) score += 60;
   if (/event|render|export|manifest/i.test(title)) score += 20;
   if (/dom wiring|html loads|css rule|dependency import|readable file sample/i.test(title)) score -= 40;
-  if (/agent_proposal|agent-proposal|proposal|orchcode/i.test(pathText)) score -= 100;
+  if (/agent_proposal|agent-proposal|proposal|hivo/i.test(pathText)) score -= 100;
   return score;
 }
 
@@ -550,10 +554,10 @@ function snippetAround(lines: string[], lineIndex: number, radius: number) {
 }
 
 function formatFileLineLink(filePath: string, line: number) {
-  return `[${filePath}:${line}](orchcode-file:${encodeURIComponent(filePath)}:${line})`;
+  return `[${filePath}:${line}](hivo-file:${encodeURIComponent(filePath)}:${line})`;
 }
 
-function collectInventory(workspaceRoot: string, maxFiles: number): Inventory {
+function collectInventory(workspaceRoot: string, maxFiles: number, message: string): Inventory {
   const files: InventoryFile[] = [];
   const rootCounts = new Map<string, number>();
   const ignoredDirectories = new Set<string>();
@@ -577,7 +581,7 @@ function collectInventory(workspaceRoot: string, maxFiles: number): Inventory {
       const relativePath = normalizePath(path.join(relativeDir, entry.name));
       if (entry.isDirectory()) {
         totalDirectories += 1;
-        if (shouldIgnoreDirectory(entry.name, relativePath)) {
+        if (shouldIgnoreDirectory(entry.name, relativePath) || shouldIgnoreEvidenceDirectory(relativePath, message)) {
           ignoredDirectories.add(relativePath);
           continue;
         }
@@ -1318,10 +1322,11 @@ function extractQuotedValue(value: string) {
 }
 
 function shouldIncludeAgentArtifact(filePath: string, message: string) {
+  if (evidencePathDecision(filePath, message).excluded) return false;
   const normalizedPath = filePath.toLowerCase();
   const normalizedMessage = message.toLowerCase();
-  if (!/(agent[_-]?proposal|agent\.proposal|orchcode|work[_-]?journal|decision)/i.test(normalizedPath)) {
+  if (!/(agent[_-]?proposal|agent\.proposal|hivo|work[_-]?journal|decision)/i.test(normalizedPath)) {
     return true;
   }
-  return /\b(agent|proposal|orchcode|journal|decision)\b/i.test(normalizedMessage) || /(اقتراح|اورك|أورك|وكيل|اجينت)/.test(normalizedMessage);
+  return /\b(agent|proposal|hivo|journal|decision)\b/i.test(normalizedMessage) || /(اقتراح|اورك|أورك|وكيل|اجينت)/.test(normalizedMessage);
 }

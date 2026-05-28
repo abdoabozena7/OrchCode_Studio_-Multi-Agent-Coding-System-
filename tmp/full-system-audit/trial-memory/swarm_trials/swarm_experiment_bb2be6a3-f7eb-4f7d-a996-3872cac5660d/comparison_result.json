@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_bb2be6a3-f7eb-4f7d-a996-3872cac5660d",
+  "baseline_mode": "baseline-simple",
+  "compared_modes": [
+    "orchestrated",
+    "autopilot-fast",
+    "autopilot-deep",
+    "autopilot-exhaustive"
+  ],
+  "success_rates": {
+    "baseline-simple": 0.55,
+    "orchestrated": 0.68,
+    "autopilot-fast": 0.8,
+    "autopilot-deep": 0.8,
+    "autopilot-exhaustive": 0.8
+  },
+  "validation_pass_rates": {
+    "baseline-simple": 0.52,
+    "orchestrated": 0.65,
+    "autopilot-fast": 0.77,
+    "autopilot-deep": 0.77,
+    "autopilot-exhaustive": 0.77
+  },
+  "average_duration": {
+    "baseline-simple": 140,
+    "orchestrated": 240,
+    "autopilot-fast": 228,
+    "autopilot-deep": 228,
+    "autopilot-exhaustive": 228
+  },
+  "average_work_items": {
+    "baseline-simple": 1,
+    "orchestrated": 4,
+    "autopilot-fast": 8,
+    "autopilot-deep": 8,
+    "autopilot-exhaustive": 8
+  },
+  "conflict_rates": {
+    "baseline-simple": 0.08,
+    "orchestrated": 0.08,
+    "autopilot-fast": 0.15,
+    "autopilot-deep": 0.15,
+    "autopilot-exhaustive": 0.15
+  },
+  "repair_rates": {
+    "baseline-simple": 0.04,
+    "orchestrated": 0.04,
+    "autopilot-fast": 0.12,
+    "autopilot-deep": 0.12,
+    "autopilot-exhaustive": 0.12
+  },
+  "review_findings": {
+    "baseline-simple": 0,
+    "orchestrated": 1,
+    "autopilot-fast": 3,
+    "autopilot-deep": 3,
+    "autopilot-exhaustive": 3
+  },
+  "coverage_of_relevant_files": {
+    "baseline-simple": 0.32,
+    "orchestrated": 0.52,
+    "autopilot-fast": 0.57,
+    "autopilot-deep": 0.57,
+    "autopilot-exhaustive": 0.57
+  },
+  "duplicate_work_rate": {
+    "baseline-simple": 0.03,
+    "orchestrated": 0.08,
+    "autopilot-fast": 0,
+    "autopilot-deep": 0,
+    "autopilot-exhaustive": 0
+  },
+  "useful_finding_rate": {
+    "baseline-simple": 0.32,
+    "orchestrated": 0.44,
+    "autopilot-fast": 0.52,
+    "autopilot-deep": 0.52,
+    "autopilot-exhaustive": 0.52
+  },
+  "staffing_accuracy": {
+    "baseline-simple": 0.52,
+    "orchestrated": 0.68,
+    "autopilot-fast": 0.85,
+    "autopilot-deep": 0.85,
+    "autopilot-exhaustive": 0.85
+  },
+  "recommendation": "autopilot-fast has the strongest measured usefulness/coverage tradeoff for this complex or risky goal.",
+  "mode_metrics": {
+    "baseline-simple": {
+      "success_rate": 0.55,
+      "validation_pass_rate": 0.52,
+      "average_duration_ms": 140,
+      "average_work_items": 1,
+      "conflict_rate": 0.08,
+      "repair_rate": 0.04,
+      "review_findings": 0,
+      "coverage_of_relevant_files": 0.32,
+      "duplicate_work_rate": 0.03,
+      "useful_finding_rate": 0.32,
+      "selected_agents": 1,
+      "executor_limit": 1
+    },
+    "orchestrated": {
+      "success_rate": 0.68,
+      "validation_pass_rate": 0.65,
+      "average_duration_ms": 240,
+      "average_work_items": 4,
+      "conflict_rate": 0.08,
+      "repair_rate": 0.04,
+      "review_findings": 1,
+      "coverage_of_relevant_files": 0.52,
+      "duplicate_work_rate": 0.08,
+      "useful_finding_rate": 0.44,
+      "selected_agents": 6,
+      "executor_limit": 2
+    },
+    "autopilot-fast": {
+      "success_rate": 0.8,
+      "validation_pass_rate": 0.77,
+      "average_duration_ms": 228,
+      "average_work_items": 8,
+      "conflict_rate": 0.15,
+      "repair_rate": 0.12,
+      "review_findings": 3,
+      "coverage_of_relevant_files": 0.57,
+      "duplicate_work_rate": 0,
+      "useful_finding_rate": 0.52,
+      "selected_agents": 9,
+      "executor_limit": 1
+    },
+    "autopilot-deep": {
+      "success_rate": 0.8,
+      "validation_pass_rate": 0.77,
+      "average_duration_ms": 228,
+      "average_work_items": 8,
+      "conflict_rate": 0.15,
+      "repair_rate": 0.12,
+      "review_findings": 3,
+      "coverage_of_relevant_files": 0.57,
+      "duplicate_work_rate": 0,
+      "useful_finding_rate": 0.52,
+      "selected_agents": 9,
+      "executor_limit": 1
+    },
+    "autopilot-exhaustive": {
+      "success_rate": 0.8,
+      "validation_pass_rate": 0.77,
+      "average_duration_ms": 228,
+      "average_work_items": 8,
+      "conflict_rate": 0.15,
+      "repair_rate": 0.12,
+      "review_findings": 3,
+      "coverage_of_relevant_files": 0.57,
+      "duplicate_work_rate": 0,
+      "useful_finding_rate": 0.52,
+      "selected_agents": 9,
+      "executor_limit": 1
+    }
+  }
+}

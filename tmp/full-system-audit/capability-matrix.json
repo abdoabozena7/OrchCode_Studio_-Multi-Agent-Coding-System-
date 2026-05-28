@@ -1,0 +1,603 @@
+[
+  {
+    "phase": 1,
+    "capability": "persistent memory",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Project memory and repo index files exist under .agent_memory; CLI commands inspect and refresh them.",
+    "wired": "Swarm/CLI uses memory; desktop RunEngine ProjectIntake reads live workspace instead of the committed repo index.",
+    "ui": "No direct UI surface for memory freshness or memory contents was verified.",
+    "cli": "memory:index-status, memory:inspect, memory:show-commands passed.",
+    "provider": "none",
+    "mocks": "no model required",
+    "evidence": [
+      ".agent_memory/README.md",
+      "apps/agent-runtime/src/memory/RepoIndexer.ts",
+      "tmp/full-system-audit/command-logs/memory-inspect.log"
+    ]
+  },
+  {
+    "phase": 1,
+    "capability": "repository indexing",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Repo index totals reported 249 indexed files and fresh status before audit.",
+    "wired": "Used by swarm planner/trial lab; not the normal desktop inspect/run intake path.",
+    "ui": "not visible",
+    "cli": "memory:index-status passed",
+    "provider": "none",
+    "mocks": "none",
+    "evidence": [
+      "apps/agent-runtime/src/memory/RepoIndexer.ts",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:300",
+      "tmp/full-system-audit/command-logs/memory-index-status.log"
+    ]
+  },
+  {
+    "phase": 1,
+    "capability": "command inventory",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Command inventory exists and is reported, but duplicate/noisy command entries were observed.",
+    "wired": "Used by swarm validation command selection, not primary run-to-green command selection.",
+    "ui": "not visible",
+    "cli": "memory:show-commands passed",
+    "provider": "none",
+    "mocks": "none",
+    "evidence": [
+      "apps/agent-runtime/src/memory/CommandInventory.ts",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:362",
+      "tmp/full-system-audit/command-logs/memory-show-commands.log"
+    ]
+  },
+  {
+    "phase": 2,
+    "capability": "orchestrator",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "CoreOrchestrator and CLI commands exist; tests pass.",
+    "wired": "Desktop normal submit goes through AgentRuntime/RunEngine unless auto-mode selects orchestration; no UI control for campaigns/swarm was verified.",
+    "ui": "not directly visible in Vite DOM",
+    "cli": "run-agentic-task/plan-task and agent plan available",
+    "provider": "mostly mock/deterministic in tests",
+    "mocks": "unit tests use mock providers",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/Orchestrator.ts",
+      "apps/agent-runtime/src/orchestration/cli.ts:48",
+      "tmp/full-system-audit/command-logs/agent-plan.log"
+    ]
+  },
+  {
+    "phase": 2,
+    "capability": "task graph",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Task graph manager, scheduler package, and orchestration task artifacts exist.",
+    "wired": "CLI/campaign path; main desktop run-to-green creates runtime task state, not full task graph UX.",
+    "ui": "generic details/activity only",
+    "cli": "agent plan emits work graph artifacts",
+    "provider": "none required",
+    "mocks": "worker execution often mock",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/TaskGraphManager.ts",
+      "apps/agent-runtime/src/scheduler/TaskGraph.ts",
+      "tmp/full-system-audit/command-logs/agent-plan.log"
+    ]
+  },
+  {
+    "phase": 2,
+    "capability": "context packs",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "RunEngine stores context_pack artifact; ContextPackBuilder exists for orchestration.",
+    "wired": "Inspect/run creates artifacts, but UI does not make context packs a first-class operator view.",
+    "ui": "not surfaced in captured startup DOM",
+    "cli": "show-context-pack exists",
+    "provider": "not inherently",
+    "mocks": "none",
+    "evidence": [
+      "apps/agent-runtime/src/runtime/RunEngine.ts:92",
+      "apps/agent-runtime/src/orchestration/ContextPackBuilder.ts",
+      "apps/agent-runtime/src/orchestration/cli.ts:104"
+    ]
+  },
+  {
+    "phase": 3,
+    "capability": "safety",
+    "claimed": true,
+    "status": "Real and wired",
+    "implemented": "Rust command policy and patch path guards exist; risky command smoke blocked git push.",
+    "wired": "Desktop command execution uses Rust execute_approved_command.",
+    "ui": "Full Access visible; command approvals inferred from source/smoke, not native E2E.",
+    "cli": "smoke:desktop-run-project passed",
+    "provider": "none",
+    "mocks": "smoke uses temp workspaces",
+    "evidence": [
+      "apps/desktop/src-tauri/src/services/command_policy.rs",
+      "apps/desktop/src-tauri/src/commands/terminal.rs:33",
+      "tmp/full-system-audit/command-logs/smoke-desktop-run-project.log"
+    ]
+  },
+  {
+    "phase": 3,
+    "capability": "review",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "ReviewLoop, reviewer agents, and review schemas exist.",
+    "wired": "Orchestration/swarm paths create review artifacts; desktop edit loop not proven to invoke real review agents.",
+    "ui": "not first-class in startup DOM",
+    "cli": "orchestration CLI",
+    "provider": "mock or deterministic in tests",
+    "mocks": "many tests",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/ReviewLoop.ts",
+      "apps/agent-runtime/src/agents/workers/ReviewerAgent.ts",
+      "apps/agent-runtime/src/schemas/reviewSchema.ts"
+    ]
+  },
+  {
+    "phase": 3,
+    "capability": "verification",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Run-to-green verification states and validation runner exist; package-script smoke ran npm test through Rust.",
+    "wired": "Run-to-green command result continues after frontend/Rust report-back; static projects show unavailable/not_run.",
+    "ui": "activity stream can show verification passed/pending",
+    "cli": "smoke:run-to-green passed",
+    "provider": "none for run-to-green",
+    "mocks": "fixture workspaces",
+    "evidence": [
+      "apps/agent-runtime/src/runtime/RunToGreen.ts",
+      "apps/agent-runtime/src/orchestration/ValidationRunner.ts",
+      "tmp/full-system-audit/command-logs/smoke-run-to-green.log"
+    ]
+  },
+  {
+    "phase": 3,
+    "capability": "file locks",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Orchestration and swarm file lock managers exist.",
+    "wired": "Swarm scheduler uses lock manager; desktop single-run patch path does not prove lock-aware multi-writer execution.",
+    "ui": "not visible",
+    "cli": "swarm scheduler",
+    "provider": "none",
+    "mocks": "scheduler workers default mock",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/FileLockManager.ts",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:143"
+    ]
+  },
+  {
+    "phase": 3,
+    "capability": "repair loops",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Run-to-green repair and swarm repair item creation exist.",
+    "wired": "Run-to-green can select alternate command in tests; swarm repair is scheduler-level with mock workers.",
+    "ui": "not proven natively",
+    "cli": "tests/smoke",
+    "provider": "repair patch may use provider in edit path",
+    "mocks": "tests use RepairProvider and mock workers",
+    "evidence": [
+      "apps/agent-runtime/src/runtime/RunToGreen.ts",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:352",
+      "apps/agent-runtime/src/tests/run-to-green.test.ts"
+    ]
+  },
+  {
+    "phase": 4,
+    "capability": "campaigns",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Campaign CLI/manager exists.",
+    "wired": "No desktop operator console campaign UX verified.",
+    "ui": "not visible",
+    "cli": "campaign scripts exist in package.json",
+    "provider": "unknown",
+    "mocks": "likely fixture-driven",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/CampaignManager.ts",
+      "apps/agent-runtime/src/orchestration/campaign-cli.ts",
+      "package.json"
+    ]
+  },
+  {
+    "phase": 4,
+    "capability": "resumable runs",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "sessions.json snapshots, durable runtime_events replay, and localStorage session restore path exist.",
+    "wired": "Runtime replay prefers SQLite when present but snapshot fallback still warns not authoritative.",
+    "ui": "recent session restore path exists; native E2E not verified.",
+    "cli": "resume-run and agent resume exist",
+    "provider": "none",
+    "mocks": "tests",
+    "evidence": [
+      "apps/agent-runtime/src/runtime/SessionManager.ts:664",
+      "apps/agent-runtime/src/runtime/SessionManager.ts:796",
+      "apps/desktop/src/app/App.tsx:825"
+    ]
+  },
+  {
+    "phase": 4,
+    "capability": "execution modes",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "fast/deep/exhaustive and auto mode exist in orchestration/swarm.",
+    "wired": "Desktop composer has Plan mode, Full Access; no explicit fast/deep/exhaustive UX captured.",
+    "ui": "startup DOM shows Plan mode and Full Access only.",
+    "cli": "--mode <auto|fast|deep|exhaustive>",
+    "provider": "none",
+    "mocks": "none",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/cli.ts:421",
+      "apps/desktop/src/app/App.tsx",
+      "tmp/full-system-audit/screenshots/desktop-vite-dom-snapshot.txt"
+    ]
+  },
+  {
+    "phase": 4,
+    "capability": "memory learning",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "decisions/lessons/patterns JSONL and trial tuning records are appended.",
+    "wired": "Swarm trial writes tuning memory; normal desktop inspect/run does not visibly learn.",
+    "ui": "not visible",
+    "cli": "trial commands write memory",
+    "provider": "none",
+    "mocks": "trial scenarios mock",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:403",
+      "tmp/full-system-audit/trial-memory/swarm_staffing_lessons.jsonl"
+    ]
+  },
+  {
+    "phase": 4,
+    "capability": "metrics/evals foundation",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Metrics, eval CLI, Phase 4 eval exist.",
+    "wired": "CLI/test, not desktop.",
+    "ui": "not visible",
+    "cli": "eval and trial commands",
+    "provider": "mostly mock",
+    "mocks": "yes",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/Metrics.ts",
+      "apps/agent-runtime/src/evals/phase4.ts",
+      "apps/agent-runtime/src/evals/cli.ts"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "internal swarm autopilot",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "SwarmAutopilotRuntime plans/runs and writes artifacts.",
+    "wired": "CLI only for verified path; not connected to desktop inspect/explain/edit.",
+    "ui": "not visible",
+    "cli": "agent plan passed",
+    "provider": "default worker does not call provider",
+    "mocks": "defaultMockWorker",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:42",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:49",
+      "tmp/full-system-audit/command-logs/agent-plan.log"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "automatic StaffingPlan",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Planner selects counts, risk, specialists, executor caps.",
+    "wired": "CLI/trials; not desktop normal user path.",
+    "ui": "not visible",
+    "cli": "agent plan emitted 9 logical agents",
+    "provider": "none",
+    "mocks": "none for plan",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts:29",
+      "tmp/full-system-audit/command-logs/agent-plan.log"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "dynamic specialist agents",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Specialist descriptors are generated from evidence and marked read_only.",
+    "wired": "Planner artifacts only; default worker does not instantiate real specialist LLM workers.",
+    "ui": "not visible",
+    "cli": "agent plan produced DocumentationReviewerAgent",
+    "provider": "none",
+    "mocks": "worker execution mock",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts:14",
+      "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts:128",
+      "tmp/full-system-audit/command-logs/agent-plan.log"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "logical agents up to 300 when justified",
+    "claimed": true,
+    "status": "Mock/test-only",
+    "implemented": "Scheduler-scale trial creates 300 logical mock agents and 300 read-only work items.",
+    "wired": "trial lab only",
+    "ui": "not visible",
+    "cli": "scheduler-scale passed",
+    "provider": "no real model calls",
+    "mocks": "explicit mock agents",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:180",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:194",
+      "tmp/full-system-audit/command-logs/agent-trial-scheduler-scale.log"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "adaptive scheduler",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Scheduler leases, traces, executor caps, retries, repair items.",
+    "wired": "swarm CLI/trial; workers default mock.",
+    "ui": "not visible",
+    "cli": "scheduler-scale passed",
+    "provider": "none by default",
+    "mocks": "defaultMockWorker",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:31",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:87",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:506"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "fan-out/fan-in",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Work items and agent instances fan out; final report/consensus fan in.",
+    "wired": "swarm CLI/trial only.",
+    "ui": "not visible",
+    "cli": "trial artifacts",
+    "provider": "none by default",
+    "mocks": "default workers",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmFanInOut.ts",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:111"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "consensus",
+    "claimed": true,
+    "status": "Mock/test-only",
+    "implemented": "Consensus object is synthesized from review work item statuses.",
+    "wired": "swarm run artifacts only.",
+    "ui": "not visible",
+    "cli": "swarm final report",
+    "provider": "none",
+    "mocks": "findings derived from mock work item statuses",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:156",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:175"
+    ]
+  },
+  {
+    "phase": 5,
+    "capability": "swarm artifacts/metrics/traces",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Artifact store persists runs, plans, traces, metrics.",
+    "wired": "CLI/trial; not UI.",
+    "ui": "not visible",
+    "cli": "agent plan/trials",
+    "provider": "none",
+    "mocks": "content often mock",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmArtifactStore.ts",
+      "tmp/full-system-audit/trial-memory/swarm_runs"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "swarm trial lab",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Trial lab commands ran and wrote reports.",
+    "wired": "CLI only.",
+    "ui": "not visible",
+    "cli": "staffing-eval/scheduler-scale/compare passed",
+    "provider": "no model calls",
+    "mocks": "uses mock agents",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:54",
+      "tmp/full-system-audit/command-logs/agent-trial-staffing-eval.log"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "automatic staffing evals",
+    "claimed": true,
+    "status": "Mock/test-only",
+    "implemented": "Default scenarios evaluated against planner heuristics.",
+    "wired": "trial CLI only.",
+    "ui": "not visible",
+    "cli": "staffing-eval passed",
+    "provider": "none",
+    "mocks": "uses_mock_agents true",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:63",
+      "tmp/full-system-audit/command-logs/agent-trial-staffing-eval.log"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "scheduler stress tests",
+    "claimed": true,
+    "status": "Mock/test-only",
+    "implemented": "300 logical read-only work items processed by defaultMockWorker.",
+    "wired": "trial CLI only.",
+    "ui": "not visible",
+    "cli": "scheduler-scale passed",
+    "provider": "none",
+    "mocks": "explicit",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:196",
+      "apps/agent-runtime/src/orchestration/SwarmScheduler.ts:506",
+      "tmp/full-system-audit/command-logs/agent-trial-scheduler-scale.log"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "baseline vs autopilot comparison",
+    "claimed": true,
+    "status": "Mock/test-only",
+    "implemented": "Comparison command ran, but metrics are heuristic/synthetic in code.",
+    "wired": "trial CLI only.",
+    "ui": "not visible",
+    "cli": "compare passed",
+    "provider": "none",
+    "mocks": "synthetic metrics",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:647",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:658",
+      "tmp/full-system-audit/command-logs/agent-trial-compare.log"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "specialist evals",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Specialist scenarios/triggers exist.",
+    "wired": "trial/plan only; not real specialist model execution.",
+    "ui": "not visible",
+    "cli": "agent plan produced specialist",
+    "provider": "none",
+    "mocks": "yes",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SpecialistAgentFactory.ts",
+      "apps/agent-runtime/src/tests/swarm-trial-lab.test.ts"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "real-world safe trials",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "small-safe-fix trial command exists.",
+    "wired": "not run in this audit because user forbade fixes/behavior changes.",
+    "ui": "not visible",
+    "cli": "available",
+    "provider": "unknown",
+    "mocks": "likely mock workers",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/cli.ts:259",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "tuning feedback loop",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Trial writes tuning JSONL records with confidence/evidence count.",
+    "wired": "Trial memory only; defaults not automatically changed.",
+    "ui": "not visible",
+    "cli": "trial commands wrote audit memory",
+    "provider": "none",
+    "mocks": "yes",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:403",
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:438",
+      "tmp/full-system-audit/trial-memory/swarm_tuning_history.jsonl"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "report generation",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "Trial/swarm reports are generated as markdown/json artifacts.",
+    "wired": "CLI only.",
+    "ui": "not visible",
+    "cli": "trial reports",
+    "provider": "none",
+    "mocks": "content often based on mock data",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/SwarmTrialLab.ts:761",
+      "apps/agent-runtime/src/orchestration/SwarmRuntime.ts:181"
+    ]
+  },
+  {
+    "phase": 6,
+    "capability": "trial commands",
+    "claimed": true,
+    "status": "Real but not wired to main path",
+    "implemented": "CLI help lists trial commands and package scripts call them.",
+    "wired": "CLI only, not desktop.",
+    "ui": "not visible",
+    "cli": "staffing-eval/scheduler-scale/compare passed",
+    "provider": "none",
+    "mocks": "yes",
+    "evidence": [
+      "apps/agent-runtime/src/orchestration/cli.ts:388",
+      "package.json",
+      "tmp/full-system-audit/command-logs/agent-trial-scheduler-scale.log"
+    ]
+  },
+  {
+    "phase": "provider",
+    "capability": "real provider/Ollama support",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Ollama provider performs real /api/chat calls; direct smoke succeeded.",
+    "wired": "Desktop can create real_provider sessions when saved provider config is valid.",
+    "ui": "Provider config exists in DB; active session provider not visible in startup DOM.",
+    "cli": "real provider smoke script passed on tiny prompt",
+    "provider": "Ollama qwen2.5-coder:7b success for tiny prompt; inspect prompts timed out.",
+    "mocks": "default runtime is demo_mock",
+    "evidence": [
+      "apps/agent-runtime/src/llm/OllamaProvider.ts:45",
+      "apps/agent-runtime/src/config.ts:14",
+      "tmp/full-system-audit/real-provider-smoke.json"
+    ]
+  },
+  {
+    "phase": "runtime",
+    "capability": "inspect/explain deep answers",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "Runtime produced Arabic answers with citations and read-lane artifacts.",
+    "wired": "Desktop submit path can reach this runtime, but native UI was not E2E verified.",
+    "ui": "not tested through native window",
+    "cli": "audit script drove AgentRuntime directly",
+    "provider": "8 prompt calls timed out/aborted; deterministic fallback answered.",
+    "mocks": "not mock provider, but fallback-heavy",
+    "evidence": [
+      "apps/agent-runtime/src/runtime/UniversalProjectQuestionEngine.ts:321",
+      "apps/agent-runtime/src/runtime/LlmProjectExplainer.ts:53",
+      "tmp/full-system-audit/answers.json"
+    ]
+  },
+  {
+    "phase": "desktop",
+    "capability": "desktop operator console",
+    "claimed": true,
+    "status": "Partial",
+    "implemented": "React/Vite UI builds and startup DOM renders; Rust commands exist.",
+    "wired": "Native Tauri window not automated in audit; Vite web capture is not equivalent.",
+    "ui": "startup DOM captured; screenshot failed",
+    "cli": "desktop build passed",
+    "provider": "settings path in source",
+    "mocks": "not applicable",
+    "evidence": [
+      "apps/desktop/src/app/App.tsx",
+      "tmp/full-system-audit/screenshots/desktop-vite-dom-snapshot.txt",
+      "tmp/full-system-audit/screenshots/SCREENSHOT_UNAVAILABLE.md"
+    ]
+  }
+]

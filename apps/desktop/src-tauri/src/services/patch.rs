@@ -76,7 +76,7 @@ impl PatchService {
 }
 
 fn temp_patch_path() -> PathBuf {
-    std::env::temp_dir().join(format!("orchcode-patch-{}.diff", uuid::Uuid::new_v4()))
+    std::env::temp_dir().join(format!("hivo-patch-{}.diff", uuid::Uuid::new_v4()))
 }
 
 fn canonicalize_existing_ancestor(path: &Path, workspace: &Path) -> Result<PathBuf, String> {
@@ -116,8 +116,8 @@ mod tests {
         let workspace = temp_workspace_path("git-apply");
         fs::create_dir_all(&workspace).expect("workspace");
         run_git_ok(&workspace, &["init"]);
-        run_git_ok(&workspace, &["config", "user.email", "orchcode@example.com"]);
-        run_git_ok(&workspace, &["config", "user.name", "OrchCode"]);
+        run_git_ok(&workspace, &["config", "user.email", "hivo@example.com"]);
+        run_git_ok(&workspace, &["config", "user.name", "Hivo"]);
         fs::write(workspace.join("README.md"), "hello\n").expect("seed file");
         run_git_ok(&workspace, &["add", "README.md"]);
         run_git_ok(&workspace, &["commit", "-m", "seed"]);
@@ -148,7 +148,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_millis();
-        std::env::temp_dir().join(format!("orchcode-patch-{label}-{millis}"))
+        std::env::temp_dir().join(format!("hivo-patch-{label}-{millis}"))
     }
 
     fn run_git_ok(workspace: &Path, args: &[&str]) {

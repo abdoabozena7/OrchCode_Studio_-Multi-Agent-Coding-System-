@@ -1,4 +1,4 @@
-import type { PatchProposal } from "@orchcode/protocol";
+import type { PatchProposal } from "@hivo/protocol";
 
 type SnakeProposalOptions = {
   title?: string;

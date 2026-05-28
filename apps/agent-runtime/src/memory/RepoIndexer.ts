@@ -51,7 +51,7 @@ const IGNORED_DIRECTORIES = new Set([
   ".next",
   ".nox",
   ".nuxt",
-  ".orchcode-agent-runtime",
+  ".hivo-agent-runtime",
   ".playwright-cli",
   ".playwright-mcp",
   ".pytest_cache",
@@ -204,7 +204,10 @@ const BUILD_BASENAMES = new Set([
 export async function rebuildRepoIndex(workspacePath: string, options: RebuildRepoIndexOptions = {}): Promise<RepoMemorySnapshot> {
   const workspaceRoot = path.resolve(workspacePath);
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
-  const memoryPaths = await ensureMemoryLayout(workspaceRoot, options.memoryDir ?? process.env.ORCHCODE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR);
+  const memoryPaths = await ensureMemoryLayout(
+    workspaceRoot,
+    options.memoryDir ?? process.env.HIVO_MEMORY_DIR ?? process.env.ORCHCODE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR
+  );
   const collection = await collectFiles(workspaceRoot, {
     maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
   });
