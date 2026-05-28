@@ -89,6 +89,26 @@ import type {
   ValidationCandidateSummary,
   ValidationPreflightResult
 } from "./ValidationCandidateModels.js";
+import type {
+  PatchApplySandboxRequest,
+  PatchApplySandboxResult,
+  PatchSandboxBatch,
+  PatchSandboxSummary
+} from "./PatchApplySandboxModels.js";
+import type {
+  SandboxValidationBatch,
+  SandboxValidationRequest,
+  SandboxValidationResult,
+  SandboxValidationSummary
+} from "./SandboxValidationModels.js";
+import type {
+  IntegrationCandidateBatch,
+  IntegrationCandidateCreationRequest,
+  IntegrationCandidateSummary,
+  IntegrationRollbackRequirements,
+  PostIntegrationValidationPlan,
+  SandboxValidatedIntegrationCandidate
+} from "./SandboxIntegrationCandidateModels.js";
 import type { ValidationPlanDraft } from "./ValidationPreflightChecker.js";
 
 export type RunArtifactPaths = {
@@ -123,6 +143,9 @@ export type RunArtifactPaths = {
   dryRunWritersDir: string;
   patchReviewsDir: string;
   validationCandidatesDir: string;
+  patchApplySandboxDir: string;
+  sandboxValidationDir: string;
+  sandboxIntegrationCandidatesDir: string;
 };
 
 export class OrchestrationArtifactStore {
@@ -171,7 +194,10 @@ export class OrchestrationArtifactStore {
       executionPreparationDir: path.join(runDir, "execution_preparation"),
       dryRunWritersDir: path.join(runDir, "dry_run_writers"),
       patchReviewsDir: path.join(runDir, "patch_reviews"),
-      validationCandidatesDir: path.join(runDir, "validation_candidates")
+      validationCandidatesDir: path.join(runDir, "validation_candidates"),
+      patchApplySandboxDir: path.join(runDir, "patch_apply_sandbox"),
+      sandboxValidationDir: path.join(runDir, "sandbox_validation"),
+      sandboxIntegrationCandidatesDir: path.join(runDir, "integration_candidates")
     };
   }
 
@@ -204,6 +230,9 @@ export class OrchestrationArtifactStore {
     await mkdir(paths.dryRunWritersDir, { recursive: true });
     await mkdir(paths.patchReviewsDir, { recursive: true });
     await mkdir(paths.validationCandidatesDir, { recursive: true });
+    await mkdir(paths.patchApplySandboxDir, { recursive: true });
+    await mkdir(paths.sandboxValidationDir, { recursive: true });
+    await mkdir(paths.sandboxIntegrationCandidatesDir, { recursive: true });
     return paths;
   }
 
@@ -2077,6 +2106,323 @@ export class OrchestrationArtifactStore {
     return { batchRef, summaryRef };
   }
 
+  async savePatchApplySandboxResult(input: {
+    result: PatchApplySandboxResult;
+    request?: PatchApplySandboxRequest;
+    mainRepoIntegrity?: unknown;
+  }) {
+    const paths = await this.ensureRunLayout(input.result.run_id);
+    const id = sanitizeFilePart(input.result.sandbox_result_id);
+    const resultDir = path.join(paths.patchApplySandboxDir, id);
+    await mkdir(resultDir, { recursive: true });
+    const requestRef = path.join(resultDir, "sandbox_request.json");
+    const resultRef = path.join(resultDir, "dry_apply_result.json");
+    const conflictsRef = path.join(resultDir, "conflicts.json");
+    const failedHunksRef = path.join(resultDir, "failed_hunks.json");
+    const integrityRef = path.join(resultDir, "main_repo_integrity.json");
+    const summaryRef = path.join(resultDir, "sandbox_summary.md");
+    if (input.request) await writeJson(requestRef, sanitizeForArtifact(input.request));
+    await writeJson(conflictsRef, sanitizeForArtifact(input.result.conflicts));
+    await writeJson(failedHunksRef, sanitizeForArtifact(input.result.failed_hunks));
+    await writeJson(integrityRef, sanitizeForArtifact(input.mainRepoIntegrity ?? {
+      main_repo_modified: false,
+      validation_run: false,
+      integration_created: false
+    }));
+    const persisted: PatchApplySandboxResult = {
+      ...input.result,
+      artifact_ref: resultRef,
+      summary_ref: summaryRef,
+      sandbox_artifact_ref: resultDir
+    };
+    await writeJson(resultRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, patchApplySandboxResultSummaryMarkdown(persisted), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: input.result.run_id,
+      taskId: input.result.validation_candidate_id,
+      kind: "patch_apply_sandbox_result",
+      artifactRef: resultRef,
+      status: input.result.dry_apply_status,
+      createdAt: input.result.created_at,
+      updatedAt: input.result.created_at,
+      metadata: {
+        sandbox_result_id: input.result.sandbox_result_id,
+        validation_candidate_id: input.result.validation_candidate_id,
+        proposal_id: input.result.proposal_id,
+        conflict_count: input.result.conflicts.length,
+        failed_hunk_count: input.result.failed_hunks.length,
+        unsafe_finding_count: input.result.unsafe_findings.length,
+        main_repo_modified: false,
+        validation_run: false,
+        integration_created: false
+      }
+    });
+    await this.metadata.recordArtifactSaved({
+      runId: input.result.run_id,
+      kind: "patch_apply_sandbox_summary",
+      artifactRef: summaryRef,
+      status: "written",
+      createdAt: input.result.created_at,
+      updatedAt: input.result.created_at,
+      metadata: {
+        sandbox_result_id: input.result.sandbox_result_id,
+        dry_apply_status: input.result.dry_apply_status
+      }
+    });
+    return { resultDir, requestRef, resultRef, conflictsRef, failedHunksRef, integrityRef, summaryRef };
+  }
+
+  async savePatchApplySandboxBatch(batch: PatchSandboxBatch) {
+    const paths = await this.ensureRunLayout(batch.run_id);
+    const id = sanitizeFilePart(batch.batch_id);
+    const batchRef = path.join(paths.patchApplySandboxDir, `patch_apply_sandbox_batch_${id}.json`);
+    const summaryRef = path.join(paths.patchApplySandboxDir, `patch_apply_sandbox_summary_${id}.md`);
+    const persisted: PatchSandboxBatch = {
+      ...batch,
+      artifact_ref: batchRef,
+      summary_ref: summaryRef,
+      summary: {
+        ...batch.summary,
+        sandbox_summary_ref: summaryRef
+      }
+    };
+    await writeJson(batchRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, patchApplySandboxBatchSummaryMarkdown(persisted.summary), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: batch.run_id,
+      kind: "patch_apply_sandbox_batch",
+      artifactRef: batchRef,
+      status: "created",
+      createdAt: batch.created_at,
+      updatedAt: batch.created_at,
+      metadata: {
+        batch_id: batch.batch_id,
+        sandbox_result_count: batch.summary.sandbox_result_count,
+        dry_apply_passed_count: batch.summary.dry_apply_passed_count,
+        conflict_count: batch.summary.conflict_count,
+        no_validation_run: true,
+        no_patch_applied: true
+      }
+    });
+    await this.metadata.recordArtifactSaved({
+      runId: batch.run_id,
+      kind: "patch_apply_sandbox_summary",
+      artifactRef: summaryRef,
+      status: "written",
+      createdAt: batch.created_at,
+      updatedAt: batch.created_at,
+      metadata: {
+        batch_id: batch.batch_id,
+        summary_id: batch.summary.summary_id
+      }
+    });
+    return { batchRef, summaryRef };
+  }
+
+  async saveSandboxValidationLog(runId: string, sandboxValidationId: string, commandId: string, log: string) {
+    const paths = await this.ensureRunLayout(runId);
+    const logsDir = path.join(paths.sandboxValidationDir, sanitizeFilePart(sandboxValidationId), "logs");
+    await mkdir(logsDir, { recursive: true });
+    const logRef = path.join(logsDir, `${sanitizeFilePart(commandId)}.log`);
+    await writeFile(logRef, redactSecrets(log), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId,
+      kind: "sandbox_validation_log",
+      artifactRef: logRef,
+      status: "written",
+      metadata: { sandbox_validation_id: sandboxValidationId, command_id: commandId }
+    });
+    return logRef;
+  }
+
+  async saveSandboxValidationResult(input: {
+    result: SandboxValidationResult;
+    request?: SandboxValidationRequest;
+    commandExecutionPlan?: unknown;
+  }) {
+    const paths = await this.ensureRunLayout(input.result.run_id);
+    const id = sanitizeFilePart(input.result.sandbox_validation_id);
+    const resultDir = path.join(paths.sandboxValidationDir, id);
+    const logsDir = path.join(resultDir, "logs");
+    await mkdir(logsDir, { recursive: true });
+    const requestRef = path.join(resultDir, "validation_request.json");
+    const planRef = path.join(resultDir, "command_execution_plan.json");
+    const commandResultsRef = path.join(resultDir, "command_results.json");
+    const strictResultRef = path.join(resultDir, "strict_validation_result.json");
+    const resultRef = path.join(resultDir, "sandbox_validation_result.json");
+    const summaryRef = path.join(resultDir, "sandbox_validation_summary.md");
+    if (input.request) await writeJson(requestRef, sanitizeForArtifact(input.request));
+    await writeJson(planRef, sanitizeForArtifact(input.commandExecutionPlan ?? []));
+    await writeJson(commandResultsRef, sanitizeForArtifact(input.result.command_results));
+    await writeJson(strictResultRef, sanitizeForArtifact({
+      status: input.result.strict_validation_status,
+      required_command_count: input.result.required_command_count,
+      optional_command_count: input.result.optional_command_count,
+      passed_count: input.result.passed_count,
+      failed_count: input.result.failed_count,
+      blocked_count: input.result.blocked_count,
+      skipped_count: input.result.skipped_count,
+      timed_out_count: input.result.timed_out_count,
+      not_run_count: input.result.not_run_count
+    }));
+    const persisted: SandboxValidationResult = {
+      ...input.result,
+      artifact_ref: resultRef,
+      summary_ref: summaryRef,
+      logs_ref: logsDir
+    };
+    await writeJson(resultRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, sandboxValidationResultSummaryMarkdown(persisted), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: input.result.run_id,
+      kind: "sandbox_validation_result",
+      artifactRef: resultRef,
+      status: input.result.status,
+      createdAt: input.result.created_at,
+      updatedAt: input.result.created_at,
+      metadata: {
+        sandbox_validation_id: input.result.sandbox_validation_id,
+        sandbox_result_id: input.result.sandbox_result_id,
+        validation_candidate_id: input.result.validation_candidate_id,
+        strict_validation_status: input.result.strict_validation_status,
+        command_count: input.result.command_results.length,
+        no_main_repo_validation: true,
+        no_integration_created: true
+      }
+    });
+    return { resultDir, logsDir, requestRef, planRef, commandResultsRef, strictResultRef, resultRef, summaryRef };
+  }
+
+  async saveSandboxValidationBatch(batch: SandboxValidationBatch) {
+    const paths = await this.ensureRunLayout(batch.run_id);
+    const id = sanitizeFilePart(batch.batch_id);
+    const batchRef = path.join(paths.sandboxValidationDir, `sandbox_validation_batch_${id}.json`);
+    const summaryRef = path.join(paths.sandboxValidationDir, `sandbox_validation_summary_${id}.md`);
+    const persisted: SandboxValidationBatch = {
+      ...batch,
+      artifact_ref: batchRef,
+      summary_ref: summaryRef,
+      summary: {
+        ...batch.summary,
+        sandbox_validation_summary_ref: summaryRef
+      }
+    };
+    await writeJson(batchRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, sandboxValidationBatchSummaryMarkdown(persisted.summary), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: batch.run_id,
+      kind: "sandbox_validation_batch",
+      artifactRef: batchRef,
+      status: "created",
+      createdAt: batch.created_at,
+      updatedAt: batch.created_at,
+      metadata: {
+        batch_id: batch.batch_id,
+        sandbox_validation_count: batch.summary.sandbox_validation_count,
+        passed_count: batch.summary.sandbox_validation_passed_count,
+        no_main_repo_validation: true
+      }
+    });
+    return { batchRef, summaryRef };
+  }
+
+  async saveSandboxIntegrationCandidate(input: {
+    candidate: SandboxValidatedIntegrationCandidate;
+    request?: IntegrationCandidateCreationRequest;
+    input?: unknown;
+    rollbackRequirements?: IntegrationRollbackRequirements;
+    postIntegrationValidationPlan?: PostIntegrationValidationPlan;
+  }) {
+    const paths = await this.ensureRunLayout(input.candidate.run_id);
+    const id = sanitizeFilePart(input.candidate.integration_candidate_id);
+    const candidateDir = path.join(paths.sandboxIntegrationCandidatesDir, id);
+    await mkdir(candidateDir, { recursive: true });
+    const inputRef = path.join(candidateDir, "candidate_input.json");
+    const candidateRef = path.join(candidateDir, "integration_candidate.json");
+    const rollbackRef = path.join(candidateDir, "rollback_requirements.json");
+    const postValidationRef = path.join(candidateDir, "post_integration_validation_plan.json");
+    const summaryRef = path.join(candidateDir, "integration_candidate_summary.md");
+    await writeJson(inputRef, sanitizeForArtifact(input.request ?? input.input ?? {
+      sandbox_validation_id: input.candidate.sandbox_validation_id,
+      proposal_id: input.candidate.proposal_id,
+      review_id: input.candidate.review_id,
+      validation_candidate_id: input.candidate.validation_candidate_id
+    }));
+    const rollback = {
+      ...(input.rollbackRequirements ?? input.candidate.rollback_requirements),
+      artifact_ref: rollbackRef
+    };
+    const postValidation = {
+      ...(input.postIntegrationValidationPlan ?? input.candidate.post_integration_validation_plan),
+      artifact_ref: postValidationRef
+    };
+    const persisted: SandboxValidatedIntegrationCandidate = {
+      ...input.candidate,
+      artifact_ref: candidateRef,
+      rollback_requirements_ref: rollbackRef,
+      post_integration_validation_plan_ref: postValidationRef,
+      summary_ref: summaryRef,
+      rollback_requirements: rollback,
+      post_integration_validation_plan: postValidation
+    };
+    await writeJson(rollbackRef, sanitizeForArtifact(rollback));
+    await writeJson(postValidationRef, sanitizeForArtifact(postValidation));
+    await writeJson(candidateRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, sandboxIntegrationCandidateSummaryMarkdown(persisted), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: input.candidate.run_id,
+      kind: "sandbox_integration_candidate",
+      artifactRef: candidateRef,
+      status: input.candidate.status,
+      createdAt: input.candidate.created_at,
+      updatedAt: input.candidate.created_at,
+      metadata: {
+        integration_candidate_id: input.candidate.integration_candidate_id,
+        sandbox_validation_id: input.candidate.sandbox_validation_id,
+        strict_validation_status: input.candidate.strict_validation_status,
+        no_apply: true,
+        no_validation_run: true,
+        no_locks_acquired: true
+      }
+    });
+    return { candidateDir, inputRef, candidateRef, rollbackRef, postValidationRef, summaryRef };
+  }
+
+  async saveSandboxIntegrationCandidateBatch(batch: IntegrationCandidateBatch) {
+    const paths = await this.ensureRunLayout(batch.run_id);
+    const id = sanitizeFilePart(batch.batch_id);
+    const batchRef = path.join(paths.sandboxIntegrationCandidatesDir, `sandbox_integration_candidate_batch_${id}.json`);
+    const summaryRef = path.join(paths.sandboxIntegrationCandidatesDir, `sandbox_integration_candidate_summary_${id}.md`);
+    const persisted: IntegrationCandidateBatch = {
+      ...batch,
+      artifact_ref: batchRef,
+      summary_ref: summaryRef,
+      summary: {
+        ...batch.summary,
+        candidate_summary_ref: summaryRef
+      }
+    };
+    await writeJson(batchRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, sandboxIntegrationCandidateBatchSummaryMarkdown(persisted.summary), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: batch.run_id,
+      kind: "sandbox_integration_candidate_batch",
+      artifactRef: batchRef,
+      status: "created",
+      createdAt: batch.created_at,
+      updatedAt: batch.created_at,
+      metadata: {
+        batch_id: batch.batch_id,
+        integration_candidate_count: batch.summary.integration_candidate_count,
+        candidate_created_count: batch.summary.candidate_created_count,
+        no_apply: true,
+        no_validation_run: true,
+        no_locks_acquired: true
+      }
+    });
+    return { batchRef, summaryRef };
+  }
+
   async saveAgentTeamSummary(runId: string, id: string, value: string, metadata: Record<string, unknown> = {}) {
     const paths = await this.ensureRunLayout(runId);
     const filePath = path.join(paths.teamsDir, `team_summary_${id}.md`);
@@ -2584,6 +2930,127 @@ function validationCandidateBatchSummaryMarkdown(summary: ValidationCandidateSum
     `- rejected_count: ${summary.rejected_count}`,
     "",
     "No validation commands were run, no patches were applied, no locks were acquired, and no integration candidates were accepted."
+  ].join("\n");
+}
+
+function patchApplySandboxResultSummaryMarkdown(result: PatchApplySandboxResult) {
+  return [
+    `# Patch Apply Sandbox ${result.sandbox_result_id}`,
+    "",
+    `- status: ${result.dry_apply_status}`,
+    `- sandbox_mode: ${result.sandbox_mode}`,
+    `- validation_candidate_id: ${result.validation_candidate_id}`,
+    `- proposal_id: ${result.proposal_id}`,
+    `- review_id: ${result.review_id}`,
+    `- changed_files: ${result.changed_files.length ? result.changed_files.join(", ") : "none"}`,
+    `- conflict_count: ${result.conflicts.length}`,
+    `- failed_hunk_count: ${result.failed_hunks.length}`,
+    `- unsafe_finding_count: ${result.unsafe_findings.length}`,
+    `- main_repo_modified: ${result.main_repo_modified}`,
+    `- validation_run: ${result.validation_run}`,
+    `- integration_created: ${result.integration_created}`,
+    "",
+    "This is sandbox dry-apply preflight only. It does not apply patches to the main repository, run validation commands, mark validation passed, create integration candidates, or enable execution."
+  ].join("\n");
+}
+
+function patchApplySandboxBatchSummaryMarkdown(summary: PatchSandboxSummary) {
+  return [
+    `# Patch Apply Sandbox Summary ${summary.summary_id}`,
+    "",
+    `- patch_apply_sandbox_used: ${summary.patch_apply_sandbox_used}`,
+    `- sandbox_result_count: ${summary.sandbox_result_count}`,
+    `- dry_apply_passed_count: ${summary.dry_apply_passed_count}`,
+    `- dry_apply_failed_count: ${summary.dry_apply_failed_count}`,
+    `- conflict_count: ${summary.conflict_count}`,
+    `- failed_hunk_count: ${summary.failed_hunk_count}`,
+    `- sandbox_unavailable_count: ${summary.sandbox_unavailable_count}`,
+    `- unsafe_patch_count: ${summary.unsafe_patch_count}`,
+    `- blocked_count: ${summary.blocked_count}`,
+    `- main_repo_integrity_ok: ${summary.main_repo_integrity_ok}`,
+    "",
+    "No validation commands were run, no patches were applied to the main repository, and no integration candidates were accepted."
+  ].join("\n");
+}
+
+function sandboxValidationResultSummaryMarkdown(result: SandboxValidationResult) {
+  return [
+    `# Sandbox Validation ${result.sandbox_validation_id}`,
+    "",
+    `- status: ${result.status}`,
+    `- strict_validation_status: ${result.strict_validation_status}`,
+    `- sandbox_result_id: ${result.sandbox_result_id}`,
+    `- validation_candidate_id: ${result.validation_candidate_id}`,
+    `- proposal_id: ${result.proposal_id}`,
+    `- review_id: ${result.review_id}`,
+    `- command_count: ${result.command_results.length}`,
+    `- required_command_count: ${result.required_command_count}`,
+    `- optional_command_count: ${result.optional_command_count}`,
+    `- passed_count: ${result.passed_count}`,
+    `- failed_count: ${result.failed_count}`,
+    `- blocked_count: ${result.blocked_count}`,
+    `- skipped_count: ${result.skipped_count}`,
+    `- timed_out_count: ${result.timed_out_count}`,
+    `- not_run_count: ${result.not_run_count}`,
+    "",
+    "This is sandbox-only validation. Commands were not run in the main repository, patches were not applied to the main repository, and no integration candidate was accepted."
+  ].join("\n");
+}
+
+function sandboxValidationBatchSummaryMarkdown(summary: SandboxValidationSummary) {
+  return [
+    `# Sandbox Validation Summary ${summary.summary_id}`,
+    "",
+    `- sandbox_validation_used: ${summary.sandbox_validation_used}`,
+    `- sandbox_validation_count: ${summary.sandbox_validation_count}`,
+    `- sandbox_validation_passed_count: ${summary.sandbox_validation_passed_count}`,
+    `- sandbox_validation_failed_count: ${summary.sandbox_validation_failed_count}`,
+    `- sandbox_validation_blocked_count: ${summary.sandbox_validation_blocked_count}`,
+    `- sandbox_validation_partial_count: ${summary.sandbox_validation_partial_count}`,
+    `- sandbox_validation_summary_ref: ${summary.sandbox_validation_summary_ref ?? "n/a"}`,
+    "",
+    "Sandbox validation results are pre-integration evidence only. They do not mark the run succeeded or create accepted integration candidates."
+  ].join("\n");
+}
+
+function sandboxIntegrationCandidateSummaryMarkdown(candidate: SandboxValidatedIntegrationCandidate) {
+  return [
+    `# Sandbox Integration Candidate ${candidate.integration_candidate_id}`,
+    "",
+    `- status: ${candidate.status}`,
+    `- proposal_id: ${candidate.proposal_id}`,
+    `- review_id: ${candidate.review_id}`,
+    `- validation_candidate_id: ${candidate.validation_candidate_id}`,
+    `- sandbox_result_id: ${candidate.sandbox_result_id}`,
+    `- sandbox_validation_id: ${candidate.sandbox_validation_id}`,
+    `- strict_validation_status: ${candidate.strict_validation_status}`,
+    `- approval_required: ${candidate.approval_required}`,
+    `- risk_level: ${candidate.risk_level}`,
+    `- changed_files: ${candidate.changed_files.join(", ") || "none"}`,
+    `- required_file_locks: ${candidate.required_file_locks.join(", ") || "none"}`,
+    `- required_module_locks: ${candidate.required_module_locks.join(", ") || "none"}`,
+    `- required_semantic_locks: ${candidate.required_semantic_locks.join(", ") || "none"}`,
+    `- blockers: ${candidate.blockers.length}`,
+    `- warnings: ${candidate.warnings.length}`,
+    "",
+    "This is integration candidacy only. It does not apply the patch, run validation, acquire locks, or integrate automatically."
+  ].join("\n");
+}
+
+function sandboxIntegrationCandidateBatchSummaryMarkdown(summary: IntegrationCandidateSummary) {
+  return [
+    `# Sandbox Integration Candidate Summary ${summary.summary_id}`,
+    "",
+    `- sandbox_integration_candidate_used: ${summary.sandbox_integration_candidate_used}`,
+    `- integration_candidate_count: ${summary.integration_candidate_count}`,
+    `- candidate_created_count: ${summary.candidate_created_count}`,
+    `- blocked_count: ${summary.blocked_count}`,
+    `- rejected_count: ${summary.rejected_count}`,
+    `- validation_failed_count: ${summary.validation_failed_count}`,
+    `- validation_blocked_count: ${summary.validation_blocked_count}`,
+    `- candidate_summary_ref: ${summary.candidate_summary_ref ?? "n/a"}`,
+    "",
+    "Candidate creation records future IntegrationManager inputs only. No apply, validation command, lock acquisition, or integration occurred."
   ].join("\n");
 }
 

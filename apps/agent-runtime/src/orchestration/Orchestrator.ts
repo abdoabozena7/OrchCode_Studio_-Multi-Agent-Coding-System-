@@ -22,6 +22,9 @@ import { ExecutionPreparationPlanner } from "./ExecutionPreparationPlanner.js";
 import { OneWriterDryRunExecutor } from "./OneWriterDryRunExecutor.js";
 import { PatchProposalReviewGate } from "./PatchProposalReviewGate.js";
 import { ValidationCandidateGate } from "./ValidationCandidateGate.js";
+import { PatchApplySandboxManager } from "./PatchApplySandboxManager.js";
+import { SandboxValidationRunner } from "./SandboxValidationRunner.js";
+import { SandboxIntegrationCandidateGate } from "./SandboxIntegrationCandidateGate.js";
 import { assessApprovalGate } from "./ApprovalGates.js";
 import { ContextPackBuilder } from "./ContextPackBuilder.js";
 import { FactoryMetadataStore, resolveFactoryMetadataDatabasePath } from "./FactoryMetadataStore.js";
@@ -578,7 +581,13 @@ export class CoreOrchestrator {
         enable_patch_proposal_review_gate: this.config.enable_patch_proposal_review_gate,
         patch_proposal_review_mode: this.config.patch_proposal_review_mode,
         enable_validation_candidate_gate: this.config.enable_validation_candidate_gate,
-        validation_candidate_mode: this.config.validation_candidate_mode
+        validation_candidate_mode: this.config.validation_candidate_mode,
+        enable_patch_apply_sandbox: this.config.enable_patch_apply_sandbox,
+        patch_apply_sandbox_mode: this.config.patch_apply_sandbox_mode,
+        enable_sandbox_validation: this.config.enable_sandbox_validation,
+        sandbox_validation_mode: this.config.sandbox_validation_mode,
+        enable_sandbox_integration_candidates: this.config.enable_sandbox_integration_candidates,
+        sandbox_integration_candidate_mode: this.config.sandbox_integration_candidate_mode
       },
       artifacts_path: paths.runDir
     };
@@ -1477,6 +1486,75 @@ export class CoreOrchestrator {
       traceWriter: this.traceWriter
     });
     await gate.createValidationCandidateBatch(runId);
+    await this.createPatchApplySandboxIfAllowed(runId, planOnly);
+  }
+
+  private async createPatchApplySandboxIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_patch_apply_sandbox || this.config.patch_apply_sandbox_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "patch_apply_sandbox_batch_completed",
+        lifecycle_stage: "planning",
+        summary: "Patch apply sandbox skipped by configuration.",
+        reason: "patch_apply_sandbox_disabled",
+        metadata_json: { run_id: runId, mode: this.config.patch_apply_sandbox_mode, plan_only: planOnly, no_validation_run: true, no_patch_applied: true }
+      });
+      return;
+    }
+    const manager = new PatchApplySandboxManager({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await manager.runDryApplyBatch(runId);
+    await this.runSandboxValidationIfAllowed(runId, planOnly);
+  }
+
+  private async runSandboxValidationIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_sandbox_validation || this.config.sandbox_validation_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "sandbox_validation_batch_completed",
+        lifecycle_stage: "validation",
+        summary: "Sandbox validation skipped by configuration.",
+        reason: "sandbox_validation_disabled",
+        metadata_json: { run_id: runId, mode: this.config.sandbox_validation_mode, plan_only: planOnly, no_main_repo_validation: true, no_integration_created: true }
+      });
+      return;
+    }
+    const runner = new SandboxValidationRunner({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await runner.runSandboxValidationBatch(runId);
+    await this.createSandboxIntegrationCandidatesIfAllowed(runId, planOnly);
+  }
+
+  private async createSandboxIntegrationCandidatesIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_sandbox_integration_candidates || this.config.sandbox_integration_candidate_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "sandbox_integration_candidate_batch_completed",
+        lifecycle_stage: "planning",
+        summary: "Sandbox integration candidate gate skipped by configuration.",
+        reason: "sandbox_integration_candidate_disabled",
+        metadata_json: { run_id: runId, mode: this.config.sandbox_integration_candidate_mode, plan_only: planOnly, no_apply: true, no_validation_run: true, no_locks_acquired: true }
+      });
+      return;
+    }
+    const gate = new SandboxIntegrationCandidateGate({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await gate.createCandidateBatch(runId);
   }
 
   private async createFinalReport(
@@ -1685,6 +1763,33 @@ export class CoreOrchestrator {
     report.environment_blocked_count = validationCandidateSummary.environment_blocked_count;
     report.validation_candidate_rejected_count = validationCandidateSummary.rejected_count;
     report.validation_candidate_summary_ref = validationCandidateSummary.validation_candidate_summary_ref;
+    const patchApplySummary = await this.patchApplySandboxReportSummary(run.id);
+    report.patch_apply_sandbox_used = patchApplySummary.patch_apply_sandbox_used;
+    report.sandbox_result_count = patchApplySummary.sandbox_result_count;
+    report.dry_apply_passed_count = patchApplySummary.dry_apply_passed_count;
+    report.dry_apply_failed_count = patchApplySummary.dry_apply_failed_count;
+    report.conflict_count = patchApplySummary.conflict_count;
+    report.failed_hunk_count = patchApplySummary.failed_hunk_count;
+    report.sandbox_unavailable_count = patchApplySummary.sandbox_unavailable_count;
+    report.main_repo_integrity_ok = patchApplySummary.main_repo_integrity_ok;
+    report.sandbox_summary_ref = patchApplySummary.sandbox_summary_ref;
+    const sandboxValidationSummary = await this.sandboxValidationReportSummary(run.id);
+    report.sandbox_validation_used = sandboxValidationSummary.sandbox_validation_used;
+    report.sandbox_validation_count = sandboxValidationSummary.sandbox_validation_count;
+    report.sandbox_validation_passed_count = sandboxValidationSummary.sandbox_validation_passed_count;
+    report.sandbox_validation_failed_count = sandboxValidationSummary.sandbox_validation_failed_count;
+    report.sandbox_validation_blocked_count = sandboxValidationSummary.sandbox_validation_blocked_count;
+    report.sandbox_validation_partial_count = sandboxValidationSummary.sandbox_validation_partial_count;
+    report.sandbox_validation_summary_ref = sandboxValidationSummary.sandbox_validation_summary_ref;
+    const sandboxIntegrationCandidateSummary = await this.sandboxIntegrationCandidateReportSummary(run.id);
+    report.sandbox_integration_candidate_used = sandboxIntegrationCandidateSummary.sandbox_integration_candidate_used;
+    report.integration_candidate_count = sandboxIntegrationCandidateSummary.integration_candidate_count;
+    report.candidate_created_count = sandboxIntegrationCandidateSummary.candidate_created_count;
+    report.candidate_blocked_count = sandboxIntegrationCandidateSummary.blocked_count;
+    report.candidate_rejected_count = sandboxIntegrationCandidateSummary.rejected_count;
+    report.candidate_validation_failed_count = sandboxIntegrationCandidateSummary.validation_failed_count;
+    report.candidate_validation_blocked_count = sandboxIntegrationCandidateSummary.validation_blocked_count;
+    report.candidate_summary_ref = sandboxIntegrationCandidateSummary.candidate_summary_ref;
     assertValid("FinalRunReport", report, validateFinalRunReport);
     const reportPath = await this.artifactStore.saveFinalReport(report);
     await this.artifactStore.appendEvent(this.event(run.id, "run.reported", `Final report written: ${reportPath}`, {
@@ -2181,6 +2286,135 @@ export class CoreOrchestrator {
           environment_blocked_count: Number(batch.environment_blocked_count),
           rejected_count: Number(batch.rejected_count),
           validation_candidate_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async patchApplySandboxReportSummary(runId: string) {
+    const empty = {
+      patch_apply_sandbox_used: false,
+      sandbox_result_count: 0,
+      dry_apply_passed_count: 0,
+      dry_apply_failed_count: 0,
+      conflict_count: 0,
+      failed_hunk_count: 0,
+      sandbox_unavailable_count: 0,
+      main_repo_integrity_ok: true,
+      sandbox_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          result_count: number;
+          dry_apply_passed_count: number;
+          dry_apply_failed_count: number;
+          conflict_count: number;
+          failed_hunk_count: number;
+          sandbox_unavailable_count: number;
+          main_repo_integrity_ok: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_patch_apply_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          patch_apply_sandbox_used: Number(batch.result_count) > 0,
+          sandbox_result_count: Number(batch.result_count),
+          dry_apply_passed_count: Number(batch.dry_apply_passed_count),
+          dry_apply_failed_count: Number(batch.dry_apply_failed_count),
+          conflict_count: Number(batch.conflict_count),
+          failed_hunk_count: Number(batch.failed_hunk_count),
+          sandbox_unavailable_count: Number(batch.sandbox_unavailable_count),
+          main_repo_integrity_ok: Number(batch.main_repo_integrity_ok) === 1,
+          sandbox_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async sandboxValidationReportSummary(runId: string) {
+    const empty = {
+      sandbox_validation_used: false,
+      sandbox_validation_count: 0,
+      sandbox_validation_passed_count: 0,
+      sandbox_validation_failed_count: 0,
+      sandbox_validation_blocked_count: 0,
+      sandbox_validation_partial_count: 0,
+      sandbox_validation_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          result_count: number;
+          passed_count: number;
+          failed_count: number;
+          blocked_count: number;
+          partial_count: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_sandbox_validation_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          sandbox_validation_used: Number(batch.result_count) > 0,
+          sandbox_validation_count: Number(batch.result_count),
+          sandbox_validation_passed_count: Number(batch.passed_count),
+          sandbox_validation_failed_count: Number(batch.failed_count),
+          sandbox_validation_blocked_count: Number(batch.blocked_count),
+          sandbox_validation_partial_count: Number(batch.partial_count),
+          sandbox_validation_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async sandboxIntegrationCandidateReportSummary(runId: string) {
+    const empty = {
+      sandbox_integration_candidate_used: false,
+      integration_candidate_count: 0,
+      candidate_created_count: 0,
+      blocked_count: 0,
+      rejected_count: 0,
+      validation_failed_count: 0,
+      validation_blocked_count: 0,
+      candidate_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          candidate_count: number;
+          candidate_created_count: number;
+          blocked_count: number;
+          rejected_count: number;
+          validation_failed_count: number;
+          validation_blocked_count: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_sandbox_integration_candidate_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          sandbox_integration_candidate_used: Number(batch.candidate_count) > 0,
+          integration_candidate_count: Number(batch.candidate_count),
+          candidate_created_count: Number(batch.candidate_created_count),
+          blocked_count: Number(batch.blocked_count),
+          rejected_count: Number(batch.rejected_count),
+          validation_failed_count: Number(batch.validation_failed_count),
+          validation_blocked_count: Number(batch.validation_blocked_count),
+          candidate_summary_ref: batch.summary_ref
         };
       } finally {
         store.close();

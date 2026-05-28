@@ -13,6 +13,9 @@ export type ExecutionPreparationMode = "off" | "report_only" | "prepare_only";
 export type OneWriterDryRunMode = "off" | "fake_provider" | "provider" | "auto";
 export type PatchProposalReviewMode = "off" | "deterministic" | "fake_provider" | "provider" | "auto";
 export type ValidationCandidateMode = "off" | "report_only" | "preflight";
+export type PatchApplySandboxMode = "off" | "simulate_only" | "temp_copy" | "git_worktree_if_available";
+export type SandboxValidationMode = "off" | "report_only" | "execute_safe_commands";
+export type SandboxIntegrationCandidateMode = "off" | "report_only" | "create_candidates";
 
 export type OrchestrationSafetyConfig = {
   execution_mode: ExecutionMode;
@@ -103,6 +106,26 @@ export type OrchestrationSafetyConfig = {
   require_command_inventory?: boolean;
   require_environment_readiness?: boolean;
   max_validation_candidates_per_run?: number;
+  enable_patch_apply_sandbox?: boolean;
+  patch_apply_sandbox_mode?: PatchApplySandboxMode;
+  sandbox_root?: string;
+  cleanup_sandbox_after_run?: boolean;
+  max_sandbox_apply_per_run?: number;
+  require_clean_main_worktree_for_sandbox?: boolean;
+  verify_main_repo_unmodified?: boolean;
+  enable_sandbox_validation?: boolean;
+  sandbox_validation_mode?: SandboxValidationMode;
+  max_sandbox_validation_per_run?: number;
+  sandbox_validation_command_timeout_ms?: number;
+  block_on_optional_command_failure?: boolean;
+  allow_network_in_sandbox_validation?: boolean;
+  allow_dependency_install_in_sandbox_validation?: boolean;
+  enable_sandbox_integration_candidates?: boolean;
+  sandbox_integration_candidate_mode?: SandboxIntegrationCandidateMode;
+  require_passed_sandbox_validation?: boolean;
+  require_post_integration_validation_plan?: boolean;
+  require_rollback_plan?: boolean;
+  max_integration_candidates_per_run?: number;
 };
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
@@ -193,7 +216,27 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   block_unknown_required_commands: true,
   require_command_inventory: false,
   require_environment_readiness: true,
-  max_validation_candidates_per_run: 12
+  max_validation_candidates_per_run: 12,
+  enable_patch_apply_sandbox: false,
+  patch_apply_sandbox_mode: "simulate_only",
+  sandbox_root: "",
+  cleanup_sandbox_after_run: true,
+  max_sandbox_apply_per_run: 12,
+  require_clean_main_worktree_for_sandbox: false,
+  verify_main_repo_unmodified: true,
+  enable_sandbox_validation: false,
+  sandbox_validation_mode: "report_only",
+  max_sandbox_validation_per_run: 12,
+  sandbox_validation_command_timeout_ms: 30_000,
+  block_on_optional_command_failure: false,
+  allow_network_in_sandbox_validation: false,
+  allow_dependency_install_in_sandbox_validation: false,
+  enable_sandbox_integration_candidates: false,
+  sandbox_integration_candidate_mode: "report_only",
+  require_passed_sandbox_validation: true,
+  require_post_integration_validation_plan: true,
+  require_rollback_plan: true,
+  max_integration_candidates_per_run: 12
 };
 
 export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<OrchestrationSafetyConfig>> = {
@@ -215,6 +258,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_one_writer_dry_run: false,
     enable_patch_proposal_review_gate: false,
     enable_validation_candidate_gate: false,
+    enable_patch_apply_sandbox: false,
+    enable_sandbox_validation: false,
+    enable_sandbox_integration_candidates: false,
     validation_level: "basic",
     require_human_approval_for_risky_files: true
   },
@@ -236,6 +282,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_one_writer_dry_run: false,
     enable_patch_proposal_review_gate: false,
     enable_validation_candidate_gate: false,
+    enable_patch_apply_sandbox: false,
+    enable_sandbox_validation: false,
+    enable_sandbox_integration_candidates: false,
     validation_level: "standard",
     require_human_approval_for_risky_files: true
   },
@@ -257,6 +306,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_one_writer_dry_run: false,
     enable_patch_proposal_review_gate: false,
     enable_validation_candidate_gate: false,
+    enable_patch_apply_sandbox: false,
+    enable_sandbox_validation: false,
+    enable_sandbox_integration_candidates: false,
     max_team_sub_plans_per_run: 24,
     max_team_sub_plan_tasks: 8,
     max_team_sub_plan_depth: 3,
@@ -365,7 +417,27 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     block_unknown_required_commands: envBool("HIVO_BLOCK_UNKNOWN_REQUIRED_COMMANDS", input.block_unknown_required_commands, DEFAULT_ORCHESTRATION_CONFIG.block_unknown_required_commands ?? true),
     require_command_inventory: envBool("HIVO_REQUIRE_COMMAND_INVENTORY", input.require_command_inventory, DEFAULT_ORCHESTRATION_CONFIG.require_command_inventory ?? false),
     require_environment_readiness: envBool("HIVO_REQUIRE_ENVIRONMENT_READINESS", input.require_environment_readiness, DEFAULT_ORCHESTRATION_CONFIG.require_environment_readiness ?? true),
-    max_validation_candidates_per_run: envNumber("HIVO_MAX_VALIDATION_CANDIDATES_PER_RUN", input.max_validation_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_validation_candidates_per_run ?? 12)
+    max_validation_candidates_per_run: envNumber("HIVO_MAX_VALIDATION_CANDIDATES_PER_RUN", input.max_validation_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_validation_candidates_per_run ?? 12),
+    enable_patch_apply_sandbox: envBool("HIVO_ENABLE_PATCH_APPLY_SANDBOX", input.enable_patch_apply_sandbox, DEFAULT_ORCHESTRATION_CONFIG.enable_patch_apply_sandbox ?? false),
+    patch_apply_sandbox_mode: envPatchApplySandboxMode("HIVO_PATCH_APPLY_SANDBOX_MODE", input.patch_apply_sandbox_mode ?? DEFAULT_ORCHESTRATION_CONFIG.patch_apply_sandbox_mode ?? "simulate_only"),
+    sandbox_root: envString("HIVO_PATCH_APPLY_SANDBOX_ROOT", input.sandbox_root, DEFAULT_ORCHESTRATION_CONFIG.sandbox_root ?? ""),
+    cleanup_sandbox_after_run: envBool("HIVO_CLEANUP_SANDBOX_AFTER_RUN", input.cleanup_sandbox_after_run, DEFAULT_ORCHESTRATION_CONFIG.cleanup_sandbox_after_run ?? true),
+    max_sandbox_apply_per_run: envNumber("HIVO_MAX_SANDBOX_APPLY_PER_RUN", input.max_sandbox_apply_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_sandbox_apply_per_run ?? 12),
+    require_clean_main_worktree_for_sandbox: envBool("HIVO_REQUIRE_CLEAN_MAIN_WORKTREE_FOR_SANDBOX", input.require_clean_main_worktree_for_sandbox, DEFAULT_ORCHESTRATION_CONFIG.require_clean_main_worktree_for_sandbox ?? false),
+    verify_main_repo_unmodified: envBool("HIVO_VERIFY_MAIN_REPO_UNMODIFIED", input.verify_main_repo_unmodified, DEFAULT_ORCHESTRATION_CONFIG.verify_main_repo_unmodified ?? true),
+    enable_sandbox_validation: envBool("HIVO_ENABLE_SANDBOX_VALIDATION", input.enable_sandbox_validation, DEFAULT_ORCHESTRATION_CONFIG.enable_sandbox_validation ?? false),
+    sandbox_validation_mode: envSandboxValidationMode("HIVO_SANDBOX_VALIDATION_MODE", input.sandbox_validation_mode ?? DEFAULT_ORCHESTRATION_CONFIG.sandbox_validation_mode ?? "report_only"),
+    max_sandbox_validation_per_run: envNumber("HIVO_MAX_SANDBOX_VALIDATION_PER_RUN", input.max_sandbox_validation_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_sandbox_validation_per_run ?? 12),
+    sandbox_validation_command_timeout_ms: envNumber("HIVO_SANDBOX_VALIDATION_COMMAND_TIMEOUT_MS", input.sandbox_validation_command_timeout_ms, DEFAULT_ORCHESTRATION_CONFIG.sandbox_validation_command_timeout_ms ?? 30_000),
+    block_on_optional_command_failure: envBool("HIVO_BLOCK_ON_OPTIONAL_COMMAND_FAILURE", input.block_on_optional_command_failure, DEFAULT_ORCHESTRATION_CONFIG.block_on_optional_command_failure ?? false),
+    allow_network_in_sandbox_validation: envBool("HIVO_ALLOW_NETWORK_IN_SANDBOX_VALIDATION", input.allow_network_in_sandbox_validation, DEFAULT_ORCHESTRATION_CONFIG.allow_network_in_sandbox_validation ?? false),
+    allow_dependency_install_in_sandbox_validation: envBool("HIVO_ALLOW_DEPENDENCY_INSTALL_IN_SANDBOX_VALIDATION", input.allow_dependency_install_in_sandbox_validation, DEFAULT_ORCHESTRATION_CONFIG.allow_dependency_install_in_sandbox_validation ?? false),
+    enable_sandbox_integration_candidates: envBool("HIVO_ENABLE_SANDBOX_INTEGRATION_CANDIDATES", input.enable_sandbox_integration_candidates, DEFAULT_ORCHESTRATION_CONFIG.enable_sandbox_integration_candidates ?? false),
+    sandbox_integration_candidate_mode: envSandboxIntegrationCandidateMode("HIVO_SANDBOX_INTEGRATION_CANDIDATE_MODE", input.sandbox_integration_candidate_mode ?? DEFAULT_ORCHESTRATION_CONFIG.sandbox_integration_candidate_mode ?? "report_only"),
+    require_passed_sandbox_validation: envBool("HIVO_REQUIRE_PASSED_SANDBOX_VALIDATION", input.require_passed_sandbox_validation, DEFAULT_ORCHESTRATION_CONFIG.require_passed_sandbox_validation ?? true),
+    require_post_integration_validation_plan: envBool("HIVO_REQUIRE_POST_INTEGRATION_VALIDATION_PLAN", input.require_post_integration_validation_plan, DEFAULT_ORCHESTRATION_CONFIG.require_post_integration_validation_plan ?? true),
+    require_rollback_plan: envBool("HIVO_REQUIRE_ROLLBACK_PLAN", input.require_rollback_plan, DEFAULT_ORCHESTRATION_CONFIG.require_rollback_plan ?? true),
+    max_integration_candidates_per_run: envNumber("HIVO_MAX_INTEGRATION_CANDIDATES_PER_RUN", input.max_integration_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_integration_candidates_per_run ?? 12)
   };
   validateOrchestrationConfig(config);
   return config;
@@ -402,6 +474,10 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     | "max_dry_run_proposals_per_run"
     | "max_patch_proposal_reviews_per_run"
     | "max_validation_candidates_per_run"
+    | "max_sandbox_apply_per_run"
+    | "max_sandbox_validation_per_run"
+    | "sandbox_validation_command_timeout_ms"
+    | "max_integration_candidates_per_run"
   >> = [
     "max_tasks_per_run",
     "max_supported_logical_agents",
@@ -430,7 +506,11 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     "max_preparation_plans_per_run",
     "max_dry_run_proposals_per_run",
     "max_patch_proposal_reviews_per_run",
-    "max_validation_candidates_per_run"
+    "max_validation_candidates_per_run",
+    "max_sandbox_apply_per_run",
+    "max_sandbox_validation_per_run",
+    "sandbox_validation_command_timeout_ms",
+    "max_integration_candidates_per_run"
   ];
   for (const key of numericKeys) {
     const minValue = key === "max_repair_rounds" ? 0 : 1;
@@ -455,6 +535,9 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   if (!["off", "fake_provider", "provider", "auto"].includes(config.one_writer_dry_run_mode ?? "off")) throw new Error("Invalid orchestration config one_writer_dry_run_mode");
   if (!["off", "deterministic", "fake_provider", "provider", "auto"].includes(config.patch_proposal_review_mode ?? "off")) throw new Error("Invalid orchestration config patch_proposal_review_mode");
   if (!["off", "report_only", "preflight"].includes(config.validation_candidate_mode ?? "off")) throw new Error("Invalid orchestration config validation_candidate_mode");
+  if (!["off", "simulate_only", "temp_copy", "git_worktree_if_available"].includes(config.patch_apply_sandbox_mode ?? "off")) throw new Error("Invalid orchestration config patch_apply_sandbox_mode");
+  if (!["off", "report_only", "execute_safe_commands"].includes(config.sandbox_validation_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_validation_mode");
+  if (!["off", "report_only", "create_candidates"].includes(config.sandbox_integration_candidate_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_integration_candidate_mode");
   if (!Number.isFinite(config.min_evidence_confidence) || config.min_evidence_confidence < 0 || config.min_evidence_confidence > 1) {
     throw new Error("Invalid orchestration config min_evidence_confidence");
   }
@@ -570,6 +653,24 @@ function envPatchProposalReviewMode(name: string, fallback: PatchProposalReviewM
 function envValidationCandidateMode(name: string, fallback: ValidationCandidateMode): ValidationCandidateMode {
   const raw = envRaw(name);
   if (raw === "off" || raw === "report_only" || raw === "preflight") return raw;
+  return fallback;
+}
+
+function envPatchApplySandboxMode(name: string, fallback: PatchApplySandboxMode): PatchApplySandboxMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "simulate_only" || raw === "temp_copy" || raw === "git_worktree_if_available") return raw;
+  return fallback;
+}
+
+function envSandboxValidationMode(name: string, fallback: SandboxValidationMode): SandboxValidationMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "report_only" || raw === "execute_safe_commands") return raw;
+  return fallback;
+}
+
+function envSandboxIntegrationCandidateMode(name: string, fallback: SandboxIntegrationCandidateMode): SandboxIntegrationCandidateMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "report_only" || raw === "create_candidates") return raw;
   return fallback;
 }
 

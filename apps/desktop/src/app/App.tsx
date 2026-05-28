@@ -1658,79 +1658,74 @@ export function App() {
             ) : null}
 
             <div className={`composer-shell ${rtlTextMode ? "rtl-text-mode" : ""}`} style={{ "--composer-scale": String(composerScale) } as CSSProperties}>
-              <textarea
-                ref={promptTextareaRef}
-                value={prompt}
-                onChange={(event) => {
-                  setPrompt(event.target.value);
-                  if (promptHistoryIndex !== null) {
-                    setPromptHistoryIndex(null);
-                  }
-                }}
-                onKeyDown={handlePromptKeyDown}
-                placeholder="Ask Hivo to create or edit a project with Ollama..."
-                rows={1}
-                dir={rtlTextMode ? "rtl" : "auto"}
-              />
-
-              <div className="composer-topline">
-                <div className="composer-select-row">
-                  <button
-                    className={`composer-chip plan-mode-chip ${thinkFirst ? "active-toggle" : ""}`}
-                    onClick={() => setThinkFirst((current) => !current)}
-                    type="button"
-                  >
-                    {thinkFirst ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                    <span>Plan mode</span>
-                  </button>
-                  <button
-                    className={`composer-chip ${rtlTextMode ? "active-toggle" : ""}`}
-                    onClick={() => setRtlTextMode((current) => !current)}
-                    type="button"
-                    title="Toggle RTL for Arabic text in the composer and chat messages"
-                    aria-pressed={rtlTextMode}
-                  >
-                    <Languages size={15} />
-                    <span>RTL</span>
-                  </button>
-                  <div className="access-menu-shell">
-                    <button className="composer-chip access-chip" onClick={() => setAccessMenuOpen((current) => !current)} type="button">
-                      <ShieldCheck size={14} />
-                      <span>{accessProfileLabel(accessProfile)}</span>
-                      <ChevronDown size={14} />
-                    </button>
-                    {accessMenuOpen ? (
-                      <div className="access-menu">
-                        {accessOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            className={`access-option ${isAccessOptionSelected(accessProfile, option.value) ? "selected" : ""}`}
-                            onClick={() => handleSelectAccessProfile(option)}
-                            type="button"
-                          >
-                            <strong>{option.label}</strong>
-                            <span>{option.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+              <div className="composer-input-frame">
+                <textarea
+                  ref={promptTextareaRef}
+                  value={prompt}
+                  onChange={(event) => {
+                    setPrompt(event.target.value);
+                    if (promptHistoryIndex !== null) {
+                      setPromptHistoryIndex(null);
+                    }
+                  }}
+                  onKeyDown={handlePromptKeyDown}
+                  placeholder="Ask Hivo to create or edit a project with Ollama..."
+                  rows={1}
+                  dir={rtlTextMode ? "rtl" : "auto"}
+                />
+                <div className="composer-input-actions">
+                  <div className="composer-input-left">
+                    <div className="access-menu-shell">
+                      <button className="composer-chip access-chip" onClick={() => setAccessMenuOpen((current) => !current)} type="button">
+                        <ShieldCheck size={14} />
+                        <span>{accessProfileLabel(accessProfile)}</span>
+                        <ChevronDown size={14} />
+                      </button>
+                      {accessMenuOpen ? (
+                        <div className="access-menu">
+                          {accessOptions.map((option) => (
+                            <button
+                              key={option.value}
+                              className={`access-option ${isAccessOptionSelected(accessProfile, option.value) ? "selected" : ""}`}
+                              onClick={() => handleSelectAccessProfile(option)}
+                              type="button"
+                            >
+                              <strong>{option.label}</strong>
+                              <span>{option.description}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
-                  <button
-                    className={`send-button ${hasPromptDraft ? "has-draft" : ""} ${agentBusy ? "is-busy" : ""}`}
-                    disabled={sendButtonDisabled}
-                    onClick={handleRunAgent}
-                    title={agentBusy ? "Working on your request" : hasPromptDraft ? "Send message" : "Write a message first"}
-                    type="button"
-                  >
-                    {agentBusy ? <LoaderCircle size={16} className="spin-icon" /> : hasPromptDraft ? <ArrowUp size={16} /> : <Play size={16} />}
-                  </button>
-                  {agentBusy && prompt.trim() ? (
-                    <button className="composer-chip" onClick={() => enqueuePrompt("steer")} type="button">
-                      <Workflow size={14} />
-                      <span>Steer</span>
+                  <div className="composer-input-right">
+                    <button
+                      className={`composer-chip ${rtlTextMode ? "active-toggle" : ""}`}
+                      onClick={() => setRtlTextMode((current) => !current)}
+                      type="button"
+                      title="Toggle RTL for Arabic text in the composer and chat messages"
+                      aria-pressed={rtlTextMode}
+                    >
+                      <Languages size={15} />
+                      <span>RTL</span>
                     </button>
-                  ) : null}
+                    {agentBusy && prompt.trim() ? (
+                      <button className="composer-chip" onClick={() => enqueuePrompt("steer")} type="button">
+                        <Workflow size={14} />
+                        <span>Steer</span>
+                      </button>
+                    ) : null}
+                    <button
+                      className={`send-button ${hasPromptDraft ? "has-draft" : ""} ${agentBusy ? "is-busy" : ""}`}
+                      disabled={sendButtonDisabled}
+                      onClick={handleRunAgent}
+                      title={agentBusy ? "Working on your request" : hasPromptDraft ? "Send message" : "Write a message first"}
+                      type="button"
+                    >
+                      {agentBusy ? <LoaderCircle size={16} className="spin-icon" /> : hasPromptDraft ? <ArrowUp size={16} /> : <Play size={16} />}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1742,6 +1737,14 @@ export function App() {
                 <button className="footer-pill" onClick={() => setActivityOpen(true)}>
                   <GitBranch size={14} />
                   <span>Details</span>
+                </button>
+                <button
+                  className={`footer-pill plan-mode-chip ${thinkFirst ? "active-toggle" : ""}`}
+                  onClick={() => setThinkFirst((current) => !current)}
+                  type="button"
+                >
+                  {thinkFirst ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                  <span>Plan mode</span>
                 </button>
               </div>
 

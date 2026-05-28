@@ -134,6 +134,12 @@ export type Run = {
     patch_proposal_review_mode?: "off" | "deterministic" | "fake_provider" | "provider" | "auto";
     enable_validation_candidate_gate?: boolean;
     validation_candidate_mode?: "off" | "report_only" | "preflight";
+    enable_patch_apply_sandbox?: boolean;
+    patch_apply_sandbox_mode?: "off" | "simulate_only" | "temp_copy" | "git_worktree_if_available";
+    enable_sandbox_validation?: boolean;
+    sandbox_validation_mode?: "off" | "report_only" | "execute_safe_commands";
+    enable_sandbox_integration_candidates?: boolean;
+    sandbox_integration_candidate_mode?: "off" | "report_only" | "create_candidates";
   };
   summary?: string;
   artifacts_path: string;
@@ -502,6 +508,30 @@ export type FinalRunReport = {
   environment_blocked_count?: number;
   validation_candidate_rejected_count?: number;
   validation_candidate_summary_ref?: string;
+  patch_apply_sandbox_used?: boolean;
+  sandbox_result_count?: number;
+  dry_apply_passed_count?: number;
+  dry_apply_failed_count?: number;
+  conflict_count?: number;
+  failed_hunk_count?: number;
+  sandbox_unavailable_count?: number;
+  main_repo_integrity_ok?: boolean;
+  sandbox_summary_ref?: string;
+  sandbox_validation_used?: boolean;
+  sandbox_validation_count?: number;
+  sandbox_validation_passed_count?: number;
+  sandbox_validation_failed_count?: number;
+  sandbox_validation_blocked_count?: number;
+  sandbox_validation_partial_count?: number;
+  sandbox_validation_summary_ref?: string;
+  sandbox_integration_candidate_used?: boolean;
+  integration_candidate_count?: number;
+  candidate_created_count?: number;
+  candidate_blocked_count?: number;
+  candidate_rejected_count?: number;
+  candidate_validation_failed_count?: number;
+  candidate_validation_blocked_count?: number;
+  candidate_summary_ref?: string;
 };
 
 export type OrchestratorEvent = {

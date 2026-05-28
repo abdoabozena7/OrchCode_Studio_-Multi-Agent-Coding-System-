@@ -1,5 +1,11 @@
 @import url("https://fonts.googleapis.com/css2?family=Delius+Swash+Caps&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
+@property --composer-rotation {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
 :root {
   --font-primary: "Delius Swash Caps", "Segoe UI", system-ui, sans-serif;
   --font-display: "Delius Swash Caps", "Segoe UI", system-ui, sans-serif;
@@ -653,11 +659,10 @@ body.resizing-sidebar * {
 .composer-shell {
   width: min(860px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 10px;
-  row-gap: 7px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   align-items: center;
-  padding: 10px 12px;
+  padding: 10px;
   border-radius: 16px;
   background: rgba(42, 39, 39, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -753,12 +758,13 @@ body.resizing-sidebar * {
 }
 
 .composer-footer {
-  grid-column: 1;
-  grid-row: 2;
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 4px;
 }
 
 .plan-mode-suggestion-row {
@@ -786,6 +792,14 @@ body.resizing-sidebar * {
   padding: 6px 10px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.015);
+  min-width: 0;
+}
+
+.footer-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .footer-pill-static {
@@ -2518,16 +2532,128 @@ body.resizing-sidebar * {
   background: rgba(255, 255, 255, 0.055);
 }
 
-.composer-shell textarea {
+.composer-input-frame {
+  --composer-border-size: 2px;
+  --composer-input-surface: rgba(49, 46, 46, 0.96);
+  --composer-focus-gradient: conic-gradient(
+    from var(--composer-rotation) at 52% 49% in oklab,
+    oklch(0.63 0.2 251.22) 27%,
+    oklch(0.67 0.21 25.81) 33%,
+    oklch(0.9 0.19 93.93) 41%,
+    oklch(0.79 0.25 150.49) 49%,
+    oklch(0.63 0.2 251.22) 65%,
+    oklch(0.72 0.21 150.89) 93%,
+    oklch(0.63 0.2 251.22)
+  );
   grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  position: relative;
+  padding: calc(var(--composer-border-size) + 8px);
+  border-radius: 14px;
+  background: var(--composer-input-surface);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.composer-input-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--composer-focus-gradient);
+  padding: var(--composer-border-size);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+
+.composer-input-frame::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  z-index: -1;
+  border-radius: calc(14px + 10px);
+  background: var(--composer-focus-gradient);
+  padding: calc(var(--composer-border-size) + 8px);
+  filter: blur(12px);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+
+.composer-input-frame:focus-within {
+  animation: composer-rotate 5s infinite linear;
+  box-shadow:
+    0 0 0 1px rgba(73, 182, 229, 0.2),
+    0 0 14px rgba(73, 182, 229, 0.34),
+    0 0 26px rgba(34, 211, 238, 0.18);
+}
+
+.composer-input-frame:focus-within::before {
+  animation: composer-rotate 5s infinite linear;
+  opacity: 1;
+}
+
+.composer-input-frame:focus-within::after {
+  animation: composer-rotate 5s infinite linear;
+  opacity: 0.7;
+}
+
+.composer-input-frame textarea {
+  display: block;
   border: 0;
-  background: rgba(255, 255, 255, 0.025);
+  border-radius: 10px;
+  background: var(--composer-input-surface);
   min-height: 42px;
   max-height: 180px;
   height: 42px;
-  padding: 9px 12px;
+  padding: 6px 4px;
   line-height: 1.45;
   overflow-y: hidden;
+}
+
+.composer-input-frame textarea:focus-visible {
+  outline: none;
+}
+
+.composer-input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer-input-left,
+.composer-input-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-input-left {
+  flex: 1 1 auto;
+}
+
+.composer-input-right {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.composer-input-actions .access-menu {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
 }
 
 .modal-title {
@@ -2633,6 +2759,12 @@ body.resizing-sidebar * {
   }
 }
 
+@keyframes composer-rotate {
+  to {
+    --composer-rotation: 360deg;
+  }
+}
+
 @keyframes hivo-caret {
   0%,
   49% {
@@ -2671,6 +2803,12 @@ body.resizing-sidebar * {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .composer-input-frame:focus-within,
+  .composer-input-frame:focus-within::before,
+  .composer-input-frame:focus-within::after {
+    animation: none;
+  }
+
   .hivo-mascot {
     animation: none;
   }

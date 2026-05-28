@@ -100,8 +100,23 @@ import type {
   ValidationCommandPreflight,
   ValidationEnvironmentReadiness
 } from "./ValidationCandidateModels.js";
+import type {
+  PatchApplySandboxResult,
+  PatchDryApplyConflict,
+  PatchSandboxBatch
+} from "./PatchApplySandboxModels.js";
+import type {
+  SandboxValidationBatch,
+  SandboxValidationCommandResult,
+  SandboxValidationResult
+} from "./SandboxValidationModels.js";
+import type {
+  IntegrationCandidateBatch,
+  IntegrationCandidateBlocker,
+  SandboxValidatedIntegrationCandidate
+} from "./SandboxIntegrationCandidateModels.js";
 
-export const FACTORY_METADATA_SCHEMA_VERSION = 20;
+export const FACTORY_METADATA_SCHEMA_VERSION = 23;
 export const FACTORY_METADATA_DATABASE_FILENAME = "factory_metadata.sqlite";
 
 type SqliteStatement = {
@@ -387,6 +402,51 @@ export type FactoryValidationEnvironmentPreflightRecordInput = {
 
 export type FactoryValidationCandidateBatchRecordInput = {
   batch: ValidationCandidateBatch;
+  artifactRef?: string;
+};
+
+export type FactoryPatchApplySandboxResultRecordInput = {
+  result: PatchApplySandboxResult;
+  artifactRef?: string;
+};
+
+export type FactoryPatchApplyConflictRecordInput = {
+  result: PatchApplySandboxResult;
+  conflict: PatchDryApplyConflict;
+};
+
+export type FactoryPatchApplySandboxBatchRecordInput = {
+  batch: PatchSandboxBatch;
+  artifactRef?: string;
+};
+
+export type FactorySandboxValidationResultRecordInput = {
+  result: SandboxValidationResult;
+  artifactRef?: string;
+};
+
+export type FactorySandboxValidationCommandRecordInput = {
+  result: SandboxValidationResult;
+  commandResult: SandboxValidationCommandResult;
+};
+
+export type FactorySandboxValidationBatchRecordInput = {
+  batch: SandboxValidationBatch;
+  artifactRef?: string;
+};
+
+export type FactorySandboxIntegrationCandidateRecordInput = {
+  candidate: SandboxValidatedIntegrationCandidate;
+  artifactRef?: string;
+};
+
+export type FactorySandboxIntegrationCandidateBlockerRecordInput = {
+  candidate: SandboxValidatedIntegrationCandidate;
+  blocker: IntegrationCandidateBlocker;
+};
+
+export type FactorySandboxIntegrationCandidateBatchRecordInput = {
+  batch: IntegrationCandidateBatch;
   artifactRef?: string;
 };
 
@@ -3712,6 +3772,416 @@ export class FactoryMetadataStore {
     );
   }
 
+  recordPatchApplySandboxResult(input: FactoryPatchApplySandboxResultRecordInput) {
+    const result = input.result;
+    const artifactRef = input.artifactRef ?? result.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_patch_apply_sandbox_results (
+        sandbox_result_id, run_id, validation_candidate_id, proposal_id, review_id,
+        patch_artifact_ref, sandbox_mode, sandbox_path_ref, sandbox_artifact_ref,
+        base_revision_ref, changed_files_json, dry_apply_status, conflict_count,
+        failed_hunk_count, unsafe_finding_count, main_repo_modified, validation_run,
+        integration_created, artifact_ref, summary_ref, trace_event_id,
+        metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sandbox_result_id) DO UPDATE SET
+        sandbox_path_ref = COALESCE(excluded.sandbox_path_ref, factory_patch_apply_sandbox_results.sandbox_path_ref),
+        sandbox_artifact_ref = COALESCE(excluded.sandbox_artifact_ref, factory_patch_apply_sandbox_results.sandbox_artifact_ref),
+        changed_files_json = excluded.changed_files_json,
+        dry_apply_status = excluded.dry_apply_status,
+        conflict_count = excluded.conflict_count,
+        failed_hunk_count = excluded.failed_hunk_count,
+        unsafe_finding_count = excluded.unsafe_finding_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_patch_apply_sandbox_results.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_patch_apply_sandbox_results.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_patch_apply_sandbox_results.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      result.sandbox_result_id,
+      result.run_id,
+      result.validation_candidate_id,
+      result.proposal_id,
+      result.review_id,
+      result.patch_artifact_ref,
+      result.sandbox_mode,
+      result.sandbox_path_ref,
+      result.sandbox_artifact_ref,
+      result.base_revision_ref,
+      JSON.stringify(result.changed_files),
+      result.dry_apply_status,
+      result.conflicts.length,
+      result.failed_hunks.length,
+      result.unsafe_findings.length,
+      0,
+      0,
+      0,
+      artifactRef,
+      result.summary_ref,
+      result.trace_event_id,
+      jsonMetadata(result.metadata_json),
+      result.created_at
+    );
+  }
+
+  recordPatchApplyConflict(input: FactoryPatchApplyConflictRecordInput) {
+    const conflict = input.conflict;
+    this.database.prepare(`
+      INSERT INTO factory_patch_apply_conflicts (
+        conflict_id, sandbox_result_id, validation_candidate_id, run_id,
+        proposal_id, path, conflict_type, severity, message, refs_json,
+        metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conflict_id) DO UPDATE SET
+        path = excluded.path,
+        conflict_type = excluded.conflict_type,
+        severity = excluded.severity,
+        message = excluded.message,
+        refs_json = excluded.refs_json,
+        metadata_json = excluded.metadata_json
+    `).run(
+      conflict.conflict_id,
+      input.result.sandbox_result_id,
+      conflict.validation_candidate_id,
+      input.result.run_id,
+      conflict.proposal_id,
+      conflict.path,
+      conflict.conflict_type,
+      conflict.severity,
+      conflict.message,
+      JSON.stringify(conflict.refs),
+      jsonMetadata(conflict.metadata_json),
+      conflict.created_at
+    );
+  }
+
+  recordPatchApplySandboxBatch(input: FactoryPatchApplySandboxBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_patch_apply_batches (
+        batch_id, run_id, validation_candidate_ids_json, result_count,
+        dry_apply_passed_count, dry_apply_failed_count, conflict_count,
+        failed_hunk_count, sandbox_unavailable_count, unsafe_patch_count,
+        blocked_count, main_repo_integrity_ok, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        validation_candidate_ids_json = excluded.validation_candidate_ids_json,
+        result_count = excluded.result_count,
+        dry_apply_passed_count = excluded.dry_apply_passed_count,
+        dry_apply_failed_count = excluded.dry_apply_failed_count,
+        conflict_count = excluded.conflict_count,
+        failed_hunk_count = excluded.failed_hunk_count,
+        sandbox_unavailable_count = excluded.sandbox_unavailable_count,
+        unsafe_patch_count = excluded.unsafe_patch_count,
+        blocked_count = excluded.blocked_count,
+        main_repo_integrity_ok = excluded.main_repo_integrity_ok,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_patch_apply_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_patch_apply_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_patch_apply_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.validation_candidate_ids),
+      batch.summary.sandbox_result_count,
+      batch.summary.dry_apply_passed_count,
+      batch.summary.dry_apply_failed_count,
+      batch.summary.conflict_count,
+      batch.summary.failed_hunk_count,
+      batch.summary.sandbox_unavailable_count,
+      batch.summary.unsafe_patch_count,
+      batch.summary.blocked_count,
+      batch.summary.main_repo_integrity_ok ? 1 : 0,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
+  recordSandboxValidationResult(input: FactorySandboxValidationResultRecordInput) {
+    const result = input.result;
+    const artifactRef = input.artifactRef ?? result.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_validation_results (
+        sandbox_validation_id, run_id, sandbox_result_id, validation_candidate_id,
+        proposal_id, review_id, patch_artifact_ref, sandbox_ref, commands_json,
+        strict_validation_status, status, required_command_count,
+        optional_command_count, passed_count, failed_count, blocked_count,
+        skipped_count, timed_out_count, not_run_count, finding_count,
+        logs_ref, artifact_ref, summary_ref, trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sandbox_validation_id) DO UPDATE SET
+        sandbox_ref = COALESCE(excluded.sandbox_ref, factory_sandbox_validation_results.sandbox_ref),
+        commands_json = excluded.commands_json,
+        strict_validation_status = excluded.strict_validation_status,
+        status = excluded.status,
+        required_command_count = excluded.required_command_count,
+        optional_command_count = excluded.optional_command_count,
+        passed_count = excluded.passed_count,
+        failed_count = excluded.failed_count,
+        blocked_count = excluded.blocked_count,
+        skipped_count = excluded.skipped_count,
+        timed_out_count = excluded.timed_out_count,
+        not_run_count = excluded.not_run_count,
+        finding_count = excluded.finding_count,
+        logs_ref = COALESCE(excluded.logs_ref, factory_sandbox_validation_results.logs_ref),
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_sandbox_validation_results.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_sandbox_validation_results.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_sandbox_validation_results.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      result.sandbox_validation_id,
+      result.run_id,
+      result.sandbox_result_id,
+      result.validation_candidate_id,
+      result.proposal_id,
+      result.review_id,
+      result.patch_artifact_ref,
+      result.sandbox_ref,
+      JSON.stringify(result.commands),
+      result.strict_validation_status,
+      result.status,
+      result.required_command_count,
+      result.optional_command_count,
+      result.passed_count,
+      result.failed_count,
+      result.blocked_count,
+      result.skipped_count,
+      result.timed_out_count,
+      result.not_run_count,
+      result.findings.length,
+      result.logs_ref,
+      artifactRef,
+      result.summary_ref,
+      result.trace_event_id,
+      jsonMetadata(result.metadata_json),
+      result.created_at
+    );
+  }
+
+  recordSandboxValidationCommand(input: FactorySandboxValidationCommandRecordInput) {
+    const command = input.commandResult;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_validation_commands (
+        command_result_id, sandbox_validation_id, run_id, sandbox_result_id,
+        validation_candidate_id, command, cwd, required, status, exit_code,
+        duration_ms, log_ref, summary, metadata_json, started_at, finished_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(command_result_id) DO UPDATE SET
+        cwd = excluded.cwd,
+        status = excluded.status,
+        exit_code = excluded.exit_code,
+        duration_ms = excluded.duration_ms,
+        log_ref = COALESCE(excluded.log_ref, factory_sandbox_validation_commands.log_ref),
+        summary = excluded.summary,
+        metadata_json = excluded.metadata_json,
+        finished_at = excluded.finished_at
+    `).run(
+      command.command_result_id,
+      command.sandbox_validation_id,
+      command.run_id,
+      command.sandbox_result_id,
+      command.validation_candidate_id,
+      command.command,
+      command.cwd,
+      command.required ? 1 : 0,
+      command.status,
+      command.exit_code,
+      command.duration_ms,
+      command.log_ref,
+      command.summary,
+      jsonMetadata(command.metadata_json),
+      command.started_at,
+      command.finished_at
+    );
+  }
+
+  recordSandboxValidationBatch(input: FactorySandboxValidationBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_validation_batches (
+        batch_id, run_id, sandbox_result_ids_json, result_count, passed_count,
+        failed_count, blocked_count, partial_count, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        sandbox_result_ids_json = excluded.sandbox_result_ids_json,
+        result_count = excluded.result_count,
+        passed_count = excluded.passed_count,
+        failed_count = excluded.failed_count,
+        blocked_count = excluded.blocked_count,
+        partial_count = excluded.partial_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_sandbox_validation_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_sandbox_validation_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_sandbox_validation_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.sandbox_result_ids),
+      batch.summary.sandbox_validation_count,
+      batch.summary.sandbox_validation_passed_count,
+      batch.summary.sandbox_validation_failed_count,
+      batch.summary.sandbox_validation_blocked_count,
+      batch.summary.sandbox_validation_partial_count,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
+  recordSandboxIntegrationCandidate(input: FactorySandboxIntegrationCandidateRecordInput) {
+    const candidate = input.candidate;
+    const artifactRef = input.artifactRef ?? candidate.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_integration_candidates (
+        integration_candidate_id, run_id, proposal_id, review_id,
+        validation_candidate_id, sandbox_result_id, sandbox_validation_id,
+        preparation_plan_id, proposed_node_id, patch_artifact_ref, patch_summary,
+        changed_files_json, required_file_locks_json, required_module_locks_json,
+        required_semantic_locks_json, review_ref, sandbox_apply_ref,
+        sandbox_validation_ref, strict_validation_status, rollback_requirements_ref,
+        post_integration_validation_plan_ref, risk_level, approval_required,
+        status, blocker_count, warning_count, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(integration_candidate_id) DO UPDATE SET
+        patch_summary = excluded.patch_summary,
+        changed_files_json = excluded.changed_files_json,
+        required_file_locks_json = excluded.required_file_locks_json,
+        required_module_locks_json = excluded.required_module_locks_json,
+        required_semantic_locks_json = excluded.required_semantic_locks_json,
+        review_ref = COALESCE(excluded.review_ref, factory_sandbox_integration_candidates.review_ref),
+        sandbox_apply_ref = COALESCE(excluded.sandbox_apply_ref, factory_sandbox_integration_candidates.sandbox_apply_ref),
+        sandbox_validation_ref = COALESCE(excluded.sandbox_validation_ref, factory_sandbox_integration_candidates.sandbox_validation_ref),
+        strict_validation_status = excluded.strict_validation_status,
+        rollback_requirements_ref = COALESCE(excluded.rollback_requirements_ref, factory_sandbox_integration_candidates.rollback_requirements_ref),
+        post_integration_validation_plan_ref = COALESCE(excluded.post_integration_validation_plan_ref, factory_sandbox_integration_candidates.post_integration_validation_plan_ref),
+        risk_level = excluded.risk_level,
+        approval_required = excluded.approval_required,
+        status = excluded.status,
+        blocker_count = excluded.blocker_count,
+        warning_count = excluded.warning_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_sandbox_integration_candidates.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_sandbox_integration_candidates.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_sandbox_integration_candidates.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      candidate.integration_candidate_id,
+      candidate.run_id,
+      candidate.proposal_id,
+      candidate.review_id,
+      candidate.validation_candidate_id,
+      candidate.sandbox_result_id,
+      candidate.sandbox_validation_id,
+      candidate.preparation_plan_id,
+      candidate.proposed_node_id,
+      candidate.patch_artifact_ref,
+      candidate.patch_summary,
+      JSON.stringify(candidate.changed_files),
+      JSON.stringify(candidate.required_file_locks),
+      JSON.stringify(candidate.required_module_locks),
+      JSON.stringify(candidate.required_semantic_locks),
+      candidate.review_ref,
+      candidate.sandbox_apply_ref,
+      candidate.sandbox_validation_ref,
+      candidate.strict_validation_status,
+      candidate.rollback_requirements_ref,
+      candidate.post_integration_validation_plan_ref,
+      candidate.risk_level,
+      candidate.approval_required ? 1 : 0,
+      candidate.status,
+      candidate.blockers.length,
+      candidate.warnings.length,
+      artifactRef,
+      candidate.summary_ref,
+      candidate.trace_event_id,
+      jsonMetadata(candidate.metadata_json),
+      candidate.created_at
+    );
+  }
+
+  recordSandboxIntegrationCandidateBlocker(input: FactorySandboxIntegrationCandidateBlockerRecordInput) {
+    const blocker = input.blocker;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_integration_candidate_blockers (
+        blocker_id, integration_candidate_id, run_id, blocker_type,
+        severity, reason, refs_json, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(blocker_id) DO UPDATE SET
+        blocker_type = excluded.blocker_type,
+        severity = excluded.severity,
+        reason = excluded.reason,
+        refs_json = excluded.refs_json,
+        metadata_json = excluded.metadata_json
+    `).run(
+      blocker.blocker_id,
+      blocker.integration_candidate_id,
+      blocker.run_id,
+      blocker.blocker_type,
+      blocker.severity,
+      blocker.reason,
+      JSON.stringify(blocker.refs),
+      jsonMetadata(blocker.metadata_json),
+      blocker.created_at
+    );
+  }
+
+  recordSandboxIntegrationCandidateBatch(input: FactorySandboxIntegrationCandidateBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_sandbox_integration_candidate_batches (
+        batch_id, run_id, sandbox_validation_ids_json, candidate_count,
+        candidate_created_count, blocked_count, rejected_count,
+        validation_failed_count, validation_blocked_count, artifact_ref,
+        summary_ref, trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        sandbox_validation_ids_json = excluded.sandbox_validation_ids_json,
+        candidate_count = excluded.candidate_count,
+        candidate_created_count = excluded.candidate_created_count,
+        blocked_count = excluded.blocked_count,
+        rejected_count = excluded.rejected_count,
+        validation_failed_count = excluded.validation_failed_count,
+        validation_blocked_count = excluded.validation_blocked_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_sandbox_integration_candidate_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_sandbox_integration_candidate_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_sandbox_integration_candidate_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.sandbox_validation_ids),
+      batch.summary.integration_candidate_count,
+      batch.summary.candidate_created_count,
+      batch.summary.blocked_count,
+      batch.summary.rejected_count,
+      batch.summary.validation_failed_count,
+      batch.summary.validation_blocked_count,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
   recordApprovalScopeConstraint(input: FactoryApprovalScopeConstraintRecordInput) {
     const constraint = input.constraint;
     this.database.prepare(`
@@ -4522,6 +4992,45 @@ export class FactoryMetadataAdapter {
 
   async recordValidationCandidateBatchSaved(batch: ValidationCandidateBatch) {
     await this.write((store) => store.recordValidationCandidateBatch({ batch }));
+  }
+
+  async recordPatchApplySandboxResultSaved(result: PatchApplySandboxResult) {
+    await this.write((store) => {
+      store.recordPatchApplySandboxResult({ result });
+      for (const conflict of result.conflicts) {
+        store.recordPatchApplyConflict({ result, conflict });
+      }
+    });
+  }
+
+  async recordPatchApplySandboxBatchSaved(batch: PatchSandboxBatch) {
+    await this.write((store) => store.recordPatchApplySandboxBatch({ batch }));
+  }
+
+  async recordSandboxValidationResultSaved(result: SandboxValidationResult) {
+    await this.write((store) => {
+      store.recordSandboxValidationResult({ result });
+      for (const commandResult of result.command_results) {
+        store.recordSandboxValidationCommand({ result, commandResult });
+      }
+    });
+  }
+
+  async recordSandboxValidationBatchSaved(batch: SandboxValidationBatch) {
+    await this.write((store) => store.recordSandboxValidationBatch({ batch }));
+  }
+
+  async recordSandboxIntegrationCandidateSaved(candidate: SandboxValidatedIntegrationCandidate) {
+    await this.write((store) => {
+      store.recordSandboxIntegrationCandidate({ candidate });
+      for (const blocker of candidate.blockers) {
+        store.recordSandboxIntegrationCandidateBlocker({ candidate, blocker });
+      }
+    });
+  }
+
+  async recordSandboxIntegrationCandidateBatchSaved(batch: IntegrationCandidateBatch) {
+    await this.write((store) => store.recordSandboxIntegrationCandidateBatch({ batch }));
   }
 
   async recordOutputSaved(runId: string, sourceId: string, kind: string, artifactRef: string, value?: unknown, taskId?: string) {
@@ -5653,6 +6162,194 @@ CREATE TABLE IF NOT EXISTS factory_validation_candidate_batches (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS factory_patch_apply_sandbox_results (
+  sandbox_result_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  patch_artifact_ref TEXT,
+  sandbox_mode TEXT NOT NULL,
+  sandbox_path_ref TEXT,
+  sandbox_artifact_ref TEXT,
+  base_revision_ref TEXT,
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  dry_apply_status TEXT NOT NULL,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  failed_hunk_count INTEGER NOT NULL DEFAULT 0,
+  unsafe_finding_count INTEGER NOT NULL DEFAULT 0,
+  main_repo_modified INTEGER NOT NULL DEFAULT 0,
+  validation_run INTEGER NOT NULL DEFAULT 0,
+  integration_created INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_patch_apply_conflicts (
+  conflict_id TEXT PRIMARY KEY,
+  sandbox_result_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  conflict_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  refs_json TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_patch_apply_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  validation_candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+  result_count INTEGER NOT NULL DEFAULT 0,
+  dry_apply_passed_count INTEGER NOT NULL DEFAULT 0,
+  dry_apply_failed_count INTEGER NOT NULL DEFAULT 0,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  failed_hunk_count INTEGER NOT NULL DEFAULT 0,
+  sandbox_unavailable_count INTEGER NOT NULL DEFAULT 0,
+  unsafe_patch_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  main_repo_integrity_ok INTEGER NOT NULL DEFAULT 1,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_validation_results (
+  sandbox_validation_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  sandbox_result_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  patch_artifact_ref TEXT,
+  sandbox_ref TEXT,
+  commands_json TEXT NOT NULL DEFAULT '[]',
+  strict_validation_status TEXT NOT NULL,
+  status TEXT NOT NULL,
+  required_command_count INTEGER NOT NULL DEFAULT 0,
+  optional_command_count INTEGER NOT NULL DEFAULT 0,
+  passed_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  skipped_count INTEGER NOT NULL DEFAULT 0,
+  timed_out_count INTEGER NOT NULL DEFAULT 0,
+  not_run_count INTEGER NOT NULL DEFAULT 0,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  logs_ref TEXT,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_validation_commands (
+  command_result_id TEXT PRIMARY KEY,
+  sandbox_validation_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  sandbox_result_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  command TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  required INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL,
+  exit_code INTEGER,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  log_ref TEXT,
+  summary TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_validation_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  sandbox_result_ids_json TEXT NOT NULL DEFAULT '[]',
+  result_count INTEGER NOT NULL DEFAULT 0,
+  passed_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  partial_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_integration_candidates (
+  integration_candidate_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  sandbox_result_id TEXT NOT NULL,
+  sandbox_validation_id TEXT NOT NULL,
+  preparation_plan_id TEXT,
+  proposed_node_id TEXT,
+  patch_artifact_ref TEXT,
+  patch_summary TEXT NOT NULL,
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  required_file_locks_json TEXT NOT NULL DEFAULT '[]',
+  required_module_locks_json TEXT NOT NULL DEFAULT '[]',
+  required_semantic_locks_json TEXT NOT NULL DEFAULT '[]',
+  review_ref TEXT,
+  sandbox_apply_ref TEXT,
+  sandbox_validation_ref TEXT,
+  strict_validation_status TEXT NOT NULL,
+  rollback_requirements_ref TEXT,
+  post_integration_validation_plan_ref TEXT,
+  risk_level TEXT NOT NULL,
+  approval_required INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL,
+  blocker_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_integration_candidate_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  sandbox_validation_ids_json TEXT NOT NULL DEFAULT '[]',
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  candidate_created_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  rejected_count INTEGER NOT NULL DEFAULT 0,
+  validation_failed_count INTEGER NOT NULL DEFAULT 0,
+  validation_blocked_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_sandbox_integration_candidate_blockers (
+  blocker_id TEXT PRIMARY KEY,
+  integration_candidate_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  blocker_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  refs_json TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS factory_approval_scope_constraints (
   constraint_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -6062,6 +6759,18 @@ CREATE INDEX IF NOT EXISTS idx_factory_validation_candidates_review ON factory_v
 CREATE INDEX IF NOT EXISTS idx_factory_validation_command_preflights_run ON factory_validation_command_preflights(run_id, safety_status);
 CREATE INDEX IF NOT EXISTS idx_factory_validation_environment_preflights_run ON factory_validation_environment_preflights(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_factory_validation_candidate_batches_run ON factory_validation_candidate_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_patch_apply_sandbox_results_run ON factory_patch_apply_sandbox_results(run_id, dry_apply_status);
+CREATE INDEX IF NOT EXISTS idx_factory_patch_apply_sandbox_results_candidate ON factory_patch_apply_sandbox_results(validation_candidate_id, dry_apply_status);
+CREATE INDEX IF NOT EXISTS idx_factory_patch_apply_conflicts_run ON factory_patch_apply_conflicts(run_id, conflict_type);
+CREATE INDEX IF NOT EXISTS idx_factory_patch_apply_batches_run ON factory_patch_apply_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_validation_results_run ON factory_sandbox_validation_results(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_validation_results_sandbox ON factory_sandbox_validation_results(sandbox_result_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_validation_commands_run ON factory_sandbox_validation_commands(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_validation_batches_run ON factory_sandbox_validation_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidates_run ON factory_sandbox_integration_candidates(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidates_validation ON factory_sandbox_integration_candidates(sandbox_validation_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidate_batches_run ON factory_sandbox_integration_candidate_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidate_blockers_run ON factory_sandbox_integration_candidate_blockers(run_id, blocker_type);
 CREATE INDEX IF NOT EXISTS idx_factory_approval_scope_constraints_run ON factory_approval_scope_constraints(run_id, source_type, status);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_candidates_run ON factory_integration_candidates(run_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_plans_run ON factory_integration_plans(run_id, created_at);
