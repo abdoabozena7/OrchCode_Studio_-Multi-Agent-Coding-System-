@@ -25,6 +25,9 @@ import { ValidationCandidateGate } from "./ValidationCandidateGate.js";
 import { PatchApplySandboxManager } from "./PatchApplySandboxManager.js";
 import { SandboxValidationRunner } from "./SandboxValidationRunner.js";
 import { SandboxIntegrationCandidateGate } from "./SandboxIntegrationCandidateGate.js";
+import { IntegrationApplyApprovalGate } from "./IntegrationApplyApprovalGate.js";
+import { ControlledIntegrationApplyManager } from "./ControlledIntegrationApplyManager.js";
+import { IntegrationFinalizationManager } from "./IntegrationFinalizationManager.js";
 import { assessApprovalGate } from "./ApprovalGates.js";
 import { ContextPackBuilder } from "./ContextPackBuilder.js";
 import { FactoryMetadataStore, resolveFactoryMetadataDatabasePath } from "./FactoryMetadataStore.js";
@@ -587,7 +590,13 @@ export class CoreOrchestrator {
         enable_sandbox_validation: this.config.enable_sandbox_validation,
         sandbox_validation_mode: this.config.sandbox_validation_mode,
         enable_sandbox_integration_candidates: this.config.enable_sandbox_integration_candidates,
-        sandbox_integration_candidate_mode: this.config.sandbox_integration_candidate_mode
+        sandbox_integration_candidate_mode: this.config.sandbox_integration_candidate_mode,
+        enable_integration_apply_approval_gate: this.config.enable_integration_apply_approval_gate,
+        integration_apply_approval_mode: this.config.integration_apply_approval_mode,
+        enable_controlled_integration_apply: this.config.enable_controlled_integration_apply,
+        controlled_apply_mode: this.config.controlled_apply_mode,
+        enable_integration_finalization: this.config.enable_integration_finalization,
+        integration_finalization_mode: this.config.integration_finalization_mode
       },
       artifacts_path: paths.runDir
     };
@@ -1555,6 +1564,87 @@ export class CoreOrchestrator {
       traceWriter: this.traceWriter
     });
     await gate.createCandidateBatch(runId);
+    await this.createIntegrationApplyApprovalsIfAllowed(runId, planOnly);
+  }
+
+  private async createIntegrationApplyApprovalsIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_integration_apply_approval_gate || this.config.integration_apply_approval_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "integration_apply_approval_batch_completed",
+        lifecycle_stage: "planning",
+        summary: "Integration apply approval gate skipped by configuration.",
+        reason: "integration_apply_approval_disabled",
+        metadata_json: { run_id: runId, mode: this.config.integration_apply_approval_mode, plan_only: planOnly, no_apply: true, no_validation_run: true, no_locks_acquired: true }
+      });
+      return;
+    }
+    const gate = new IntegrationApplyApprovalGate({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await gate.createApplyApprovalBatch(runId);
+    await this.applyControlledIntegrationIfAllowed(runId, planOnly);
+  }
+
+  private async applyControlledIntegrationIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_controlled_integration_apply || this.config.controlled_apply_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "controlled_apply_batch_completed",
+        lifecycle_stage: "integrating",
+        summary: "Controlled integration apply skipped by configuration.",
+        reason: "controlled_integration_apply_disabled",
+        metadata_json: { run_id: runId, mode: this.config.controlled_apply_mode, plan_only: planOnly, no_apply: true }
+      });
+      return;
+    }
+    if (this.config.controlled_apply_mode === "report_only") {
+      const manager = new ControlledIntegrationApplyManager({
+        workspacePath: this.workspacePath,
+        memoryDir: this.memoryDir,
+        config: this.config,
+        artifactStore: this.artifactStore,
+        traceWriter: this.traceWriter
+      });
+      await manager.applyApprovedIntegrationBatch(runId);
+      await this.finalizeIntegrationIfAllowed(runId, planOnly);
+      return;
+    }
+    const manager = new ControlledIntegrationApplyManager({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await manager.applyApprovedIntegrationBatch(runId);
+    await this.finalizeIntegrationIfAllowed(runId, planOnly);
+  }
+
+  private async finalizeIntegrationIfAllowed(runId: string, planOnly: boolean) {
+    if (!this.config.enable_integration_finalization || this.config.integration_finalization_mode === "off") {
+      await this.traceWriter.write({
+        run_id: runId,
+        event_type: "integration_finalization_batch_completed",
+        lifecycle_stage: "memory_update",
+        summary: "Integration finalization skipped by configuration.",
+        reason: "integration_finalization_disabled",
+        metadata_json: { run_id: runId, mode: this.config.integration_finalization_mode, plan_only: planOnly, no_apply: true, no_validation_run: true, no_locks_acquired: true }
+      });
+      return;
+    }
+    const manager = new IntegrationFinalizationManager({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      config: this.config,
+      artifactStore: this.artifactStore,
+      traceWriter: this.traceWriter
+    });
+    await manager.finalizeControlledApplyBatch(runId);
   }
 
   private async createFinalReport(
@@ -1790,6 +1880,37 @@ export class CoreOrchestrator {
     report.candidate_validation_failed_count = sandboxIntegrationCandidateSummary.validation_failed_count;
     report.candidate_validation_blocked_count = sandboxIntegrationCandidateSummary.validation_blocked_count;
     report.candidate_summary_ref = sandboxIntegrationCandidateSummary.candidate_summary_ref;
+    const applyApprovalSummary = await this.integrationApplyApprovalReportSummary(run.id);
+    report.integration_apply_approval_used = applyApprovalSummary.integration_apply_approval_used;
+    report.apply_approval_count = applyApprovalSummary.apply_approval_count;
+    report.approved_for_apply_candidate_count = applyApprovalSummary.approved_for_apply_candidate_count;
+    report.apply_approval_requires_human_approval_count = applyApprovalSummary.requires_human_approval_count;
+    report.apply_approval_blocked_count = applyApprovalSummary.blocked_count;
+    report.apply_approval_rejected_count = applyApprovalSummary.rejected_count;
+    report.dirty_worktree_blocked_count = applyApprovalSummary.dirty_worktree_blocked_count;
+    report.apply_mode_recommendation_count = applyApprovalSummary.apply_mode_recommendation_count;
+    report.apply_approval_summary_ref = applyApprovalSummary.apply_approval_summary_ref;
+    const controlledApplySummary = await this.controlledApplyReportSummary(run.id);
+    report.controlled_apply_used = controlledApplySummary.controlled_apply_used;
+    report.controlled_apply_count = controlledApplySummary.controlled_apply_count;
+    report.applied_count = controlledApplySummary.applied_count;
+    report.post_validation_passed_count = controlledApplySummary.post_validation_passed_count;
+    report.post_validation_failed_count = controlledApplySummary.post_validation_failed_count;
+    report.rolled_back_count = controlledApplySummary.rolled_back_count;
+    report.rollback_failed_count = controlledApplySummary.rollback_failed_count;
+    report.lock_failed_count = controlledApplySummary.lock_failed_count;
+    report.controlled_apply_blocked_count = controlledApplySummary.blocked_count;
+    report.controlled_apply_summary_ref = controlledApplySummary.controlled_apply_summary_ref;
+    const integrationFinalizationSummary = await this.integrationFinalizationReportSummary(run.id);
+    report.integration_finalization_used = integrationFinalizationSummary.integration_finalization_used;
+    report.integration_finalization_count = integrationFinalizationSummary.integration_finalization_count;
+    report.finalized_count = integrationFinalizationSummary.finalized_count;
+    report.finalization_validation_failed_count = integrationFinalizationSummary.validation_failed_count;
+    report.finalization_rollback_completed_count = integrationFinalizationSummary.rollback_completed_count;
+    report.finalization_rollback_failed_count = integrationFinalizationSummary.rollback_failed_count;
+    report.memory_entries_created_count = integrationFinalizationSummary.memory_entries_created_count;
+    report.lessons_created_count = integrationFinalizationSummary.lessons_created_count;
+    report.finalization_summary_ref = integrationFinalizationSummary.finalization_summary_ref;
     assertValid("FinalRunReport", report, validateFinalRunReport);
     const reportPath = await this.artifactStore.saveFinalReport(report);
     await this.artifactStore.appendEvent(this.event(run.id, "run.reported", `Final report written: ${reportPath}`, {
@@ -2415,6 +2536,147 @@ export class CoreOrchestrator {
           validation_failed_count: Number(batch.validation_failed_count),
           validation_blocked_count: Number(batch.validation_blocked_count),
           candidate_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async integrationApplyApprovalReportSummary(runId: string) {
+    const empty = {
+      integration_apply_approval_used: false,
+      apply_approval_count: 0,
+      approved_for_apply_candidate_count: 0,
+      requires_human_approval_count: 0,
+      blocked_count: 0,
+      rejected_count: 0,
+      dirty_worktree_blocked_count: 0,
+      apply_mode_recommendation_count: 0,
+      apply_approval_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          approval_count: number;
+          approved_for_apply_candidate_count: number;
+          requires_human_approval_count: number;
+          blocked_count: number;
+          rejected_count: number;
+          dirty_worktree_blocked_count: number;
+          apply_mode_recommendation_count: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_integration_apply_approval_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          integration_apply_approval_used: Number(batch.approval_count) > 0,
+          apply_approval_count: Number(batch.approval_count),
+          approved_for_apply_candidate_count: Number(batch.approved_for_apply_candidate_count),
+          requires_human_approval_count: Number(batch.requires_human_approval_count),
+          blocked_count: Number(batch.blocked_count),
+          rejected_count: Number(batch.rejected_count),
+          dirty_worktree_blocked_count: Number(batch.dirty_worktree_blocked_count),
+          apply_mode_recommendation_count: Number(batch.apply_mode_recommendation_count),
+          apply_approval_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async controlledApplyReportSummary(runId: string) {
+    const empty = {
+      controlled_apply_used: false,
+      controlled_apply_count: 0,
+      applied_count: 0,
+      post_validation_passed_count: 0,
+      post_validation_failed_count: 0,
+      rolled_back_count: 0,
+      rollback_failed_count: 0,
+      lock_failed_count: 0,
+      blocked_count: 0,
+      controlled_apply_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          controlled_apply_count: number;
+          applied_count: number;
+          post_validation_passed_count: number;
+          post_validation_failed_count: number;
+          rolled_back_count: number;
+          rollback_failed_count: number;
+          lock_failed_count: number;
+          blocked_count: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_controlled_apply_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          controlled_apply_used: Number(batch.controlled_apply_count) > 0,
+          controlled_apply_count: Number(batch.controlled_apply_count),
+          applied_count: Number(batch.applied_count),
+          post_validation_passed_count: Number(batch.post_validation_passed_count),
+          post_validation_failed_count: Number(batch.post_validation_failed_count),
+          rolled_back_count: Number(batch.rolled_back_count),
+          rollback_failed_count: Number(batch.rollback_failed_count),
+          lock_failed_count: Number(batch.lock_failed_count),
+          blocked_count: Number(batch.blocked_count),
+          controlled_apply_summary_ref: batch.summary_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
+  }
+
+  private async integrationFinalizationReportSummary(runId: string) {
+    const empty = {
+      integration_finalization_used: false,
+      integration_finalization_count: 0,
+      finalized_count: 0,
+      validation_failed_count: 0,
+      rollback_completed_count: 0,
+      rollback_failed_count: 0,
+      memory_entries_created_count: 0,
+      lessons_created_count: 0,
+      finalization_summary_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const batch = store.get<{
+          integration_finalization_count: number;
+          finalized_count: number;
+          validation_failed_count: number;
+          rollback_completed_count: number;
+          rollback_failed_count: number;
+          memory_entries_created_count: number;
+          lessons_created_count: number;
+          summary_ref?: string;
+        }>("SELECT * FROM factory_integration_finalization_batches WHERE run_id = ? ORDER BY created_at DESC LIMIT 1", runId);
+        if (!batch) return empty;
+        return {
+          integration_finalization_used: Number(batch.integration_finalization_count) > 0,
+          integration_finalization_count: Number(batch.integration_finalization_count),
+          finalized_count: Number(batch.finalized_count),
+          validation_failed_count: Number(batch.validation_failed_count),
+          rollback_completed_count: Number(batch.rollback_completed_count),
+          rollback_failed_count: Number(batch.rollback_failed_count),
+          memory_entries_created_count: Number(batch.memory_entries_created_count),
+          lessons_created_count: Number(batch.lessons_created_count),
+          finalization_summary_ref: batch.summary_ref
         };
       } finally {
         store.close();

@@ -140,6 +140,12 @@ export type Run = {
     sandbox_validation_mode?: "off" | "report_only" | "execute_safe_commands";
     enable_sandbox_integration_candidates?: boolean;
     sandbox_integration_candidate_mode?: "off" | "report_only" | "create_candidates";
+    enable_integration_apply_approval_gate?: boolean;
+    integration_apply_approval_mode?: "off" | "report_only" | "require_approval";
+    enable_controlled_integration_apply?: boolean;
+    controlled_apply_mode?: "off" | "report_only" | "apply_with_approval";
+    enable_integration_finalization?: boolean;
+    integration_finalization_mode?: "off" | "report_only" | "finalize_metadata";
   };
   summary?: string;
   artifacts_path: string;
@@ -532,6 +538,34 @@ export type FinalRunReport = {
   candidate_validation_failed_count?: number;
   candidate_validation_blocked_count?: number;
   candidate_summary_ref?: string;
+  integration_apply_approval_used?: boolean;
+  apply_approval_count?: number;
+  approved_for_apply_candidate_count?: number;
+  apply_approval_requires_human_approval_count?: number;
+  apply_approval_blocked_count?: number;
+  apply_approval_rejected_count?: number;
+  dirty_worktree_blocked_count?: number;
+  apply_mode_recommendation_count?: number;
+  apply_approval_summary_ref?: string;
+  controlled_apply_used?: boolean;
+  controlled_apply_count?: number;
+  applied_count?: number;
+  post_validation_passed_count?: number;
+  post_validation_failed_count?: number;
+  rolled_back_count?: number;
+  rollback_failed_count?: number;
+  lock_failed_count?: number;
+  controlled_apply_blocked_count?: number;
+  controlled_apply_summary_ref?: string;
+  integration_finalization_used?: boolean;
+  integration_finalization_count?: number;
+  finalized_count?: number;
+  finalization_validation_failed_count?: number;
+  finalization_rollback_completed_count?: number;
+  finalization_rollback_failed_count?: number;
+  memory_entries_created_count?: number;
+  lessons_created_count?: number;
+  finalization_summary_ref?: string;
 };
 
 export type OrchestratorEvent = {

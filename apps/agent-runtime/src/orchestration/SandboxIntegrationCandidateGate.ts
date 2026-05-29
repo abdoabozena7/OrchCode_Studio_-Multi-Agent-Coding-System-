@@ -152,7 +152,13 @@ export class SandboxIntegrationCandidateGate {
         no_apply: true,
         no_validation_run: true,
         no_locks_acquired: true,
-        integration_manager_required_for_apply: true
+        integration_manager_required_for_apply: true,
+        review_decision: loaded.review?.decision,
+        dry_apply_status: loaded.sandboxApply?.dry_apply_status,
+        main_repo_modified: loaded.sandboxApply?.main_repo_modified,
+        main_repo_integrity_ok: loaded.sandboxApply?.main_repo_modified === false,
+        scope_check_status: loaded.proposal?.scope_check_result?.status,
+        forbidden_files: loaded.proposal?.forbidden_files ?? []
       }
     });
     const persisted = await this.persistIntegrationCandidate(candidate, {

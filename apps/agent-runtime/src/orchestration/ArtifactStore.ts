@@ -109,6 +109,12 @@ import type {
   PostIntegrationValidationPlan,
   SandboxValidatedIntegrationCandidate
 } from "./SandboxIntegrationCandidateModels.js";
+import type {
+  IntegrationApplyApproval,
+  IntegrationApplyApprovalBatch,
+  IntegrationApplyApprovalSummary,
+  WorktreeSafetyCheck
+} from "./IntegrationApplyApprovalModels.js";
 import type { ValidationPlanDraft } from "./ValidationPreflightChecker.js";
 
 export type RunArtifactPaths = {
@@ -146,6 +152,9 @@ export type RunArtifactPaths = {
   patchApplySandboxDir: string;
   sandboxValidationDir: string;
   sandboxIntegrationCandidatesDir: string;
+  integrationApplyApprovalsDir: string;
+  controlledIntegrationApplyDir: string;
+  integrationFinalizationDir: string;
 };
 
 export class OrchestrationArtifactStore {
@@ -197,7 +206,10 @@ export class OrchestrationArtifactStore {
       validationCandidatesDir: path.join(runDir, "validation_candidates"),
       patchApplySandboxDir: path.join(runDir, "patch_apply_sandbox"),
       sandboxValidationDir: path.join(runDir, "sandbox_validation"),
-      sandboxIntegrationCandidatesDir: path.join(runDir, "integration_candidates")
+      sandboxIntegrationCandidatesDir: path.join(runDir, "integration_candidates"),
+      integrationApplyApprovalsDir: path.join(runDir, "integration_apply_approvals"),
+      controlledIntegrationApplyDir: path.join(runDir, "controlled_integration_apply"),
+      integrationFinalizationDir: path.join(runDir, "integration_finalization")
     };
   }
 
@@ -233,6 +245,9 @@ export class OrchestrationArtifactStore {
     await mkdir(paths.patchApplySandboxDir, { recursive: true });
     await mkdir(paths.sandboxValidationDir, { recursive: true });
     await mkdir(paths.sandboxIntegrationCandidatesDir, { recursive: true });
+    await mkdir(paths.integrationApplyApprovalsDir, { recursive: true });
+    await mkdir(paths.controlledIntegrationApplyDir, { recursive: true });
+    await mkdir(paths.integrationFinalizationDir, { recursive: true });
     return paths;
   }
 
@@ -2423,6 +2438,94 @@ export class OrchestrationArtifactStore {
     return { batchRef, summaryRef };
   }
 
+  async saveIntegrationApplyApproval(input: {
+    approval: IntegrationApplyApproval;
+    input?: unknown;
+    worktreeSafetyCheck: WorktreeSafetyCheck;
+    approvalScopeCheck: unknown;
+    applyModeRecommendation: unknown;
+  }) {
+    const paths = await this.ensureRunLayout(input.approval.run_id);
+    const id = sanitizeFilePart(input.approval.integration_apply_approval_id);
+    const approvalDir = path.join(paths.integrationApplyApprovalsDir, id);
+    await mkdir(approvalDir, { recursive: true });
+    const inputRef = path.join(approvalDir, "apply_approval_input.json");
+    const worktreeRef = path.join(approvalDir, "worktree_safety_check.json");
+    const scopeRef = path.join(approvalDir, "approval_scope_check.json");
+    const approvalRef = path.join(approvalDir, "apply_approval_result.json");
+    const modeRef = path.join(approvalDir, "apply_mode_recommendation.json");
+    const summaryRef = path.join(approvalDir, "apply_approval_summary.md");
+    const persisted: IntegrationApplyApproval = {
+      ...input.approval,
+      artifact_ref: approvalRef,
+      summary_ref: summaryRef
+    };
+    await writeJson(inputRef, sanitizeForArtifact(input.input ?? {
+      integration_candidate_id: input.approval.integration_candidate_id,
+      proposal_id: input.approval.proposal_id,
+      sandbox_validation_id: input.approval.sandbox_validation_id
+    }));
+    await writeJson(worktreeRef, sanitizeForArtifact(input.worktreeSafetyCheck));
+    await writeJson(scopeRef, sanitizeForArtifact(input.approvalScopeCheck));
+    await writeJson(modeRef, sanitizeForArtifact(input.applyModeRecommendation));
+    await writeJson(approvalRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, integrationApplyApprovalSummaryMarkdown(persisted), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: input.approval.run_id,
+      kind: "integration_apply_approval",
+      artifactRef: approvalRef,
+      status: input.approval.approval_status,
+      createdAt: input.approval.created_at,
+      updatedAt: input.approval.created_at,
+      metadata: {
+        integration_apply_approval_id: input.approval.integration_apply_approval_id,
+        integration_candidate_id: input.approval.integration_candidate_id,
+        approval_status: input.approval.approval_status,
+        apply_mode_recommendation: input.approval.apply_mode_recommendation,
+        no_apply: true,
+        no_validation_run: true,
+        no_locks_acquired: true
+      }
+    });
+    return { approvalDir, inputRef, worktreeRef, scopeRef, approvalRef, modeRef, summaryRef };
+  }
+
+  async saveIntegrationApplyApprovalBatch(batch: IntegrationApplyApprovalBatch) {
+    const paths = await this.ensureRunLayout(batch.run_id);
+    const id = sanitizeFilePart(batch.batch_id);
+    const batchRef = path.join(paths.integrationApplyApprovalsDir, `integration_apply_approval_batch_${id}.json`);
+    const summaryRef = path.join(paths.integrationApplyApprovalsDir, `integration_apply_approval_summary_${id}.md`);
+    const persisted: IntegrationApplyApprovalBatch = {
+      ...batch,
+      artifact_ref: batchRef,
+      summary_ref: summaryRef,
+      summary: {
+        ...batch.summary,
+        apply_approval_summary_ref: summaryRef
+      }
+    };
+    await writeJson(batchRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, integrationApplyApprovalBatchSummaryMarkdown(persisted.summary), "utf8");
+    await this.metadata.recordArtifactSaved({
+      runId: batch.run_id,
+      kind: "integration_apply_approval_batch",
+      artifactRef: batchRef,
+      status: "created",
+      createdAt: batch.created_at,
+      updatedAt: batch.created_at,
+      metadata: {
+        batch_id: batch.batch_id,
+        apply_approval_count: batch.summary.apply_approval_count,
+        approved_for_apply_candidate_count: batch.summary.approved_for_apply_candidate_count,
+        requires_human_approval_count: batch.summary.requires_human_approval_count,
+        no_apply: true,
+        no_validation_run: true,
+        no_locks_acquired: true
+      }
+    });
+    return { batchRef, summaryRef };
+  }
+
   async saveAgentTeamSummary(runId: string, id: string, value: string, metadata: Record<string, unknown> = {}) {
     const paths = await this.ensureRunLayout(runId);
     const filePath = path.join(paths.teamsDir, `team_summary_${id}.md`);
@@ -3051,6 +3154,55 @@ function sandboxIntegrationCandidateBatchSummaryMarkdown(summary: IntegrationCan
     `- candidate_summary_ref: ${summary.candidate_summary_ref ?? "n/a"}`,
     "",
     "Candidate creation records future IntegrationManager inputs only. No apply, validation command, lock acquisition, or integration occurred."
+  ].join("\n");
+}
+
+function integrationApplyApprovalSummaryMarkdown(approval: IntegrationApplyApproval) {
+  return [
+    `# Integration Apply Approval ${approval.integration_apply_approval_id}`,
+    "",
+    `- status: ${approval.approval_status}`,
+    `- integration_candidate_id: ${approval.integration_candidate_id}`,
+    `- proposal_id: ${approval.proposal_id}`,
+    `- review_id: ${approval.review_id}`,
+    `- validation_candidate_id: ${approval.validation_candidate_id}`,
+    `- sandbox_result_id: ${approval.sandbox_result_id}`,
+    `- sandbox_validation_id: ${approval.sandbox_validation_id}`,
+    `- approval_required: ${approval.approval_required}`,
+    `- approver_type: ${approval.approver_type}`,
+    `- worktree_safety_status: ${approval.worktree_safety_status}`,
+    `- apply_mode_recommendation: ${approval.apply_mode_recommendation}`,
+    `- risk_level: ${approval.risk_level}`,
+    `- changed_files: ${approval.changed_files.join(", ") || "none"}`,
+    `- required_file_locks: ${approval.required_file_locks.join(", ") || "none"}`,
+    `- required_module_locks: ${approval.required_module_locks.join(", ") || "none"}`,
+    `- required_semantic_locks: ${approval.required_semantic_locks.join(", ") || "none"}`,
+    `- rollback_requirements_ref: ${approval.rollback_requirements_ref ?? "n/a"}`,
+    `- post_integration_validation_plan_ref: ${approval.post_integration_validation_plan_ref ?? "n/a"}`,
+    `- blockers: ${approval.blockers.length}`,
+    `- warnings: ${approval.warnings.length}`,
+    "",
+    approval.approval_reason,
+    "",
+    "This is a final pre-apply approval gate record only. It does not apply patches to the main repository, acquire durable locks, run post-integration validation, mark integration passed, or mark the run succeeded."
+  ].join("\n");
+}
+
+function integrationApplyApprovalBatchSummaryMarkdown(summary: IntegrationApplyApprovalSummary) {
+  return [
+    `# Integration Apply Approval Summary ${summary.summary_id}`,
+    "",
+    `- integration_apply_approval_used: ${summary.integration_apply_approval_used}`,
+    `- apply_approval_count: ${summary.apply_approval_count}`,
+    `- approved_for_apply_candidate_count: ${summary.approved_for_apply_candidate_count}`,
+    `- requires_human_approval_count: ${summary.requires_human_approval_count}`,
+    `- blocked_count: ${summary.blocked_count}`,
+    `- rejected_count: ${summary.rejected_count}`,
+    `- dirty_worktree_blocked_count: ${summary.dirty_worktree_blocked_count}`,
+    `- apply_mode_recommendation_count: ${summary.apply_mode_recommendation_count}`,
+    `- apply_approval_summary_ref: ${summary.apply_approval_summary_ref ?? "n/a"}`,
+    "",
+    "Apply approvals are future-apply eligibility records only. No main-repository apply, lock acquisition, validation command, integration pass, or run success transition occurred."
   ].join("\n");
 }
 

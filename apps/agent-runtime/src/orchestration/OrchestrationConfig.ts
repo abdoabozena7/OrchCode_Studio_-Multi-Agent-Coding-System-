@@ -16,6 +16,9 @@ export type ValidationCandidateMode = "off" | "report_only" | "preflight";
 export type PatchApplySandboxMode = "off" | "simulate_only" | "temp_copy" | "git_worktree_if_available";
 export type SandboxValidationMode = "off" | "report_only" | "execute_safe_commands";
 export type SandboxIntegrationCandidateMode = "off" | "report_only" | "create_candidates";
+export type IntegrationApplyApprovalMode = "off" | "report_only" | "require_approval";
+export type ControlledIntegrationApplyMode = "off" | "report_only" | "apply_with_approval";
+export type IntegrationFinalizationMode = "off" | "report_only" | "finalize_metadata";
 
 export type OrchestrationSafetyConfig = {
   execution_mode: ExecutionMode;
@@ -126,6 +129,28 @@ export type OrchestrationSafetyConfig = {
   require_post_integration_validation_plan?: boolean;
   require_rollback_plan?: boolean;
   max_integration_candidates_per_run?: number;
+  enable_integration_apply_approval_gate?: boolean;
+  integration_apply_approval_mode?: IntegrationApplyApprovalMode;
+  require_clean_worktree_for_apply_approval?: boolean;
+  allow_unrelated_dirty_worktree?: boolean;
+  block_dirty_overlap?: boolean;
+  require_human_approval_for_main_repo_apply?: boolean;
+  apply_approval_default_ttl_hours?: number;
+  max_apply_approvals_per_run?: number;
+  enable_controlled_integration_apply?: boolean;
+  controlled_apply_mode?: ControlledIntegrationApplyMode;
+  require_human_approval_for_controlled_apply?: boolean;
+  require_automatic_rollback?: boolean;
+  require_clean_candidate_paths?: boolean;
+  max_controlled_applies_per_run?: number;
+  controlled_apply_validation_timeout_ms?: number;
+  enable_integration_finalization?: boolean;
+  integration_finalization_mode?: IntegrationFinalizationMode;
+  create_integration_memory_entries?: boolean;
+  create_integration_lessons?: boolean;
+  require_passed_post_apply_validation?: boolean;
+  allow_partial_finalization_for_rollback?: boolean;
+  max_finalizations_per_run?: number;
 };
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
@@ -236,7 +261,29 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   require_passed_sandbox_validation: true,
   require_post_integration_validation_plan: true,
   require_rollback_plan: true,
-  max_integration_candidates_per_run: 12
+  max_integration_candidates_per_run: 12,
+  enable_integration_apply_approval_gate: false,
+  integration_apply_approval_mode: "report_only",
+  require_clean_worktree_for_apply_approval: false,
+  allow_unrelated_dirty_worktree: true,
+  block_dirty_overlap: true,
+  require_human_approval_for_main_repo_apply: true,
+  apply_approval_default_ttl_hours: 168,
+  max_apply_approvals_per_run: 12,
+  enable_controlled_integration_apply: false,
+  controlled_apply_mode: "off",
+  require_human_approval_for_controlled_apply: true,
+  require_automatic_rollback: true,
+  require_clean_candidate_paths: true,
+  max_controlled_applies_per_run: 4,
+  controlled_apply_validation_timeout_ms: 30_000,
+  enable_integration_finalization: true,
+  integration_finalization_mode: "finalize_metadata",
+  create_integration_memory_entries: true,
+  create_integration_lessons: true,
+  require_passed_post_apply_validation: true,
+  allow_partial_finalization_for_rollback: true,
+  max_finalizations_per_run: 4
 };
 
 export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<OrchestrationSafetyConfig>> = {
@@ -261,6 +308,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_patch_apply_sandbox: false,
     enable_sandbox_validation: false,
     enable_sandbox_integration_candidates: false,
+    enable_integration_apply_approval_gate: false,
+    enable_controlled_integration_apply: false,
+    enable_integration_finalization: true,
     validation_level: "basic",
     require_human_approval_for_risky_files: true
   },
@@ -285,6 +335,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_patch_apply_sandbox: false,
     enable_sandbox_validation: false,
     enable_sandbox_integration_candidates: false,
+    enable_integration_apply_approval_gate: false,
+    enable_controlled_integration_apply: false,
+    enable_integration_finalization: true,
     validation_level: "standard",
     require_human_approval_for_risky_files: true
   },
@@ -309,6 +362,9 @@ export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<Orchestration
     enable_patch_apply_sandbox: false,
     enable_sandbox_validation: false,
     enable_sandbox_integration_candidates: false,
+    enable_integration_apply_approval_gate: false,
+    enable_controlled_integration_apply: false,
+    enable_integration_finalization: true,
     max_team_sub_plans_per_run: 24,
     max_team_sub_plan_tasks: 8,
     max_team_sub_plan_depth: 3,
@@ -437,7 +493,29 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     require_passed_sandbox_validation: envBool("HIVO_REQUIRE_PASSED_SANDBOX_VALIDATION", input.require_passed_sandbox_validation, DEFAULT_ORCHESTRATION_CONFIG.require_passed_sandbox_validation ?? true),
     require_post_integration_validation_plan: envBool("HIVO_REQUIRE_POST_INTEGRATION_VALIDATION_PLAN", input.require_post_integration_validation_plan, DEFAULT_ORCHESTRATION_CONFIG.require_post_integration_validation_plan ?? true),
     require_rollback_plan: envBool("HIVO_REQUIRE_ROLLBACK_PLAN", input.require_rollback_plan, DEFAULT_ORCHESTRATION_CONFIG.require_rollback_plan ?? true),
-    max_integration_candidates_per_run: envNumber("HIVO_MAX_INTEGRATION_CANDIDATES_PER_RUN", input.max_integration_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_integration_candidates_per_run ?? 12)
+    max_integration_candidates_per_run: envNumber("HIVO_MAX_INTEGRATION_CANDIDATES_PER_RUN", input.max_integration_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_integration_candidates_per_run ?? 12),
+    enable_integration_apply_approval_gate: envBool("HIVO_ENABLE_INTEGRATION_APPLY_APPROVAL_GATE", input.enable_integration_apply_approval_gate, DEFAULT_ORCHESTRATION_CONFIG.enable_integration_apply_approval_gate ?? false),
+    integration_apply_approval_mode: envIntegrationApplyApprovalMode("HIVO_INTEGRATION_APPLY_APPROVAL_MODE", input.integration_apply_approval_mode ?? DEFAULT_ORCHESTRATION_CONFIG.integration_apply_approval_mode ?? "report_only"),
+    require_clean_worktree_for_apply_approval: envBool("HIVO_REQUIRE_CLEAN_WORKTREE_FOR_APPLY_APPROVAL", input.require_clean_worktree_for_apply_approval, DEFAULT_ORCHESTRATION_CONFIG.require_clean_worktree_for_apply_approval ?? false),
+    allow_unrelated_dirty_worktree: envBool("HIVO_ALLOW_UNRELATED_DIRTY_WORKTREE", input.allow_unrelated_dirty_worktree, DEFAULT_ORCHESTRATION_CONFIG.allow_unrelated_dirty_worktree ?? true),
+    block_dirty_overlap: envBool("HIVO_BLOCK_DIRTY_OVERLAP", input.block_dirty_overlap, DEFAULT_ORCHESTRATION_CONFIG.block_dirty_overlap ?? true),
+    require_human_approval_for_main_repo_apply: envBool("HIVO_REQUIRE_HUMAN_APPROVAL_FOR_MAIN_REPO_APPLY", input.require_human_approval_for_main_repo_apply, DEFAULT_ORCHESTRATION_CONFIG.require_human_approval_for_main_repo_apply ?? true),
+    apply_approval_default_ttl_hours: envNumber("HIVO_APPLY_APPROVAL_DEFAULT_TTL_HOURS", input.apply_approval_default_ttl_hours, DEFAULT_ORCHESTRATION_CONFIG.apply_approval_default_ttl_hours ?? 168),
+    max_apply_approvals_per_run: envNumber("HIVO_MAX_APPLY_APPROVALS_PER_RUN", input.max_apply_approvals_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_apply_approvals_per_run ?? 12),
+    enable_controlled_integration_apply: envBool("HIVO_ENABLE_CONTROLLED_INTEGRATION_APPLY", input.enable_controlled_integration_apply, DEFAULT_ORCHESTRATION_CONFIG.enable_controlled_integration_apply ?? false),
+    controlled_apply_mode: envControlledIntegrationApplyMode("HIVO_CONTROLLED_APPLY_MODE", input.controlled_apply_mode ?? DEFAULT_ORCHESTRATION_CONFIG.controlled_apply_mode ?? "off"),
+    require_human_approval_for_controlled_apply: envBool("HIVO_REQUIRE_HUMAN_APPROVAL_FOR_CONTROLLED_APPLY", input.require_human_approval_for_controlled_apply, DEFAULT_ORCHESTRATION_CONFIG.require_human_approval_for_controlled_apply ?? true),
+    require_automatic_rollback: envBool("HIVO_REQUIRE_AUTOMATIC_ROLLBACK", input.require_automatic_rollback, DEFAULT_ORCHESTRATION_CONFIG.require_automatic_rollback ?? true),
+    require_clean_candidate_paths: envBool("HIVO_REQUIRE_CLEAN_CANDIDATE_PATHS", input.require_clean_candidate_paths, DEFAULT_ORCHESTRATION_CONFIG.require_clean_candidate_paths ?? true),
+    max_controlled_applies_per_run: envNumber("HIVO_MAX_CONTROLLED_APPLIES_PER_RUN", input.max_controlled_applies_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_controlled_applies_per_run ?? 4),
+    controlled_apply_validation_timeout_ms: envNumber("HIVO_CONTROLLED_APPLY_VALIDATION_TIMEOUT_MS", input.controlled_apply_validation_timeout_ms, DEFAULT_ORCHESTRATION_CONFIG.controlled_apply_validation_timeout_ms ?? 30_000),
+    enable_integration_finalization: envBool("HIVO_ENABLE_INTEGRATION_FINALIZATION", input.enable_integration_finalization, DEFAULT_ORCHESTRATION_CONFIG.enable_integration_finalization ?? true),
+    integration_finalization_mode: envIntegrationFinalizationMode("HIVO_INTEGRATION_FINALIZATION_MODE", input.integration_finalization_mode ?? DEFAULT_ORCHESTRATION_CONFIG.integration_finalization_mode ?? "finalize_metadata"),
+    create_integration_memory_entries: envBool("HIVO_CREATE_INTEGRATION_MEMORY_ENTRIES", input.create_integration_memory_entries, DEFAULT_ORCHESTRATION_CONFIG.create_integration_memory_entries ?? true),
+    create_integration_lessons: envBool("HIVO_CREATE_INTEGRATION_LESSONS", input.create_integration_lessons, DEFAULT_ORCHESTRATION_CONFIG.create_integration_lessons ?? true),
+    require_passed_post_apply_validation: envBool("HIVO_REQUIRE_PASSED_POST_APPLY_VALIDATION", input.require_passed_post_apply_validation, DEFAULT_ORCHESTRATION_CONFIG.require_passed_post_apply_validation ?? true),
+    allow_partial_finalization_for_rollback: envBool("HIVO_ALLOW_PARTIAL_FINALIZATION_FOR_ROLLBACK", input.allow_partial_finalization_for_rollback, DEFAULT_ORCHESTRATION_CONFIG.allow_partial_finalization_for_rollback ?? true),
+    max_finalizations_per_run: envNumber("HIVO_MAX_FINALIZATIONS_PER_RUN", input.max_finalizations_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_finalizations_per_run ?? 4)
   };
   validateOrchestrationConfig(config);
   return config;
@@ -478,6 +556,11 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     | "max_sandbox_validation_per_run"
     | "sandbox_validation_command_timeout_ms"
     | "max_integration_candidates_per_run"
+    | "apply_approval_default_ttl_hours"
+    | "max_apply_approvals_per_run"
+    | "max_controlled_applies_per_run"
+    | "controlled_apply_validation_timeout_ms"
+    | "max_finalizations_per_run"
   >> = [
     "max_tasks_per_run",
     "max_supported_logical_agents",
@@ -510,7 +593,12 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     "max_sandbox_apply_per_run",
     "max_sandbox_validation_per_run",
     "sandbox_validation_command_timeout_ms",
-    "max_integration_candidates_per_run"
+    "max_integration_candidates_per_run",
+    "apply_approval_default_ttl_hours",
+    "max_apply_approvals_per_run",
+    "max_controlled_applies_per_run",
+    "controlled_apply_validation_timeout_ms",
+    "max_finalizations_per_run"
   ];
   for (const key of numericKeys) {
     const minValue = key === "max_repair_rounds" ? 0 : 1;
@@ -538,6 +626,9 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   if (!["off", "simulate_only", "temp_copy", "git_worktree_if_available"].includes(config.patch_apply_sandbox_mode ?? "off")) throw new Error("Invalid orchestration config patch_apply_sandbox_mode");
   if (!["off", "report_only", "execute_safe_commands"].includes(config.sandbox_validation_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_validation_mode");
   if (!["off", "report_only", "create_candidates"].includes(config.sandbox_integration_candidate_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_integration_candidate_mode");
+  if (!["off", "report_only", "require_approval"].includes(config.integration_apply_approval_mode ?? "off")) throw new Error("Invalid orchestration config integration_apply_approval_mode");
+  if (!["off", "report_only", "apply_with_approval"].includes(config.controlled_apply_mode ?? "off")) throw new Error("Invalid orchestration config controlled_apply_mode");
+  if (!["off", "report_only", "finalize_metadata"].includes(config.integration_finalization_mode ?? "off")) throw new Error("Invalid orchestration config integration_finalization_mode");
   if (!Number.isFinite(config.min_evidence_confidence) || config.min_evidence_confidence < 0 || config.min_evidence_confidence > 1) {
     throw new Error("Invalid orchestration config min_evidence_confidence");
   }
@@ -671,6 +762,24 @@ function envSandboxValidationMode(name: string, fallback: SandboxValidationMode)
 function envSandboxIntegrationCandidateMode(name: string, fallback: SandboxIntegrationCandidateMode): SandboxIntegrationCandidateMode {
   const raw = envRaw(name);
   if (raw === "off" || raw === "report_only" || raw === "create_candidates") return raw;
+  return fallback;
+}
+
+function envIntegrationApplyApprovalMode(name: string, fallback: IntegrationApplyApprovalMode): IntegrationApplyApprovalMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "report_only" || raw === "require_approval") return raw;
+  return fallback;
+}
+
+function envControlledIntegrationApplyMode(name: string, fallback: ControlledIntegrationApplyMode): ControlledIntegrationApplyMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "report_only" || raw === "apply_with_approval") return raw;
+  return fallback;
+}
+
+function envIntegrationFinalizationMode(name: string, fallback: IntegrationFinalizationMode): IntegrationFinalizationMode {
+  const raw = envRaw(name);
+  if (raw === "off" || raw === "report_only" || raw === "finalize_metadata") return raw;
   return fallback;
 }
 

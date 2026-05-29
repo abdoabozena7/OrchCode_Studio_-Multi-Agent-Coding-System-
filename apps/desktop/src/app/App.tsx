@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowUp,
   Bot,
   ChevronDown,
@@ -15,8 +16,10 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   PanelLeft,
+  Pin,
   Play,
   RefreshCw,
+  RotateCcw,
   Settings,
   ShieldCheck,
   TerminalSquare,
@@ -165,6 +168,8 @@ const RTL_TEXT_MODE_KEY = "hivo.rtlTextMode";
 const SIDEBAR_WIDTH_KEY = "hivo.sidebarWidth";
 const SESSION_TOKENS_KEY = "hivo.sessionTokens";
 const COLLAPSED_PROJECTS_KEY = "hivo.collapsedProjects";
+const ARCHIVED_SESSIONS_KEY = "hivo.archivedSessions";
+const PINNED_SESSIONS_KEY = "hivo.pinnedSessions";
 const SESSION_TITLE_MIGRATION_KEY = "hivo.sessionTitleMigration.v1";
 const PET_VISIBLE_KEY = "hivo.petVisible";
 const MIGRATED_STORAGE_KEYS = [
@@ -178,12 +183,15 @@ const MIGRATED_STORAGE_KEYS = [
   SIDEBAR_WIDTH_KEY,
   SESSION_TOKENS_KEY,
   COLLAPSED_PROJECTS_KEY,
+  ARCHIVED_SESSIONS_KEY,
+  PINNED_SESSIONS_KEY,
   SESSION_TITLE_MIGRATION_KEY
 ];
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_RECENT_SESSIONS = 12;
 const MAX_PROMPT_HISTORY = 50;
 const MAX_SESSION_TITLE_WORDS = 4;
+const MAX_VISIBLE_PROJECT_SESSIONS = 5;
 const DEFAULT_COMPOSER_SCALE = 0.78;
 const MIN_COMPOSER_SCALE = 0.55;
 const MAX_COMPOSER_SCALE = 1.35;
@@ -298,6 +306,10 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [sessionTokens, setSessionTokens] = useState<Record<string, StoredSessionToken>>({});
   const [collapsedProjectPaths, setCollapsedProjectPaths] = useState<string[]>([]);
+  const [archivedSessionIds, setArchivedSessionIds] = useState<string[]>([]);
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>([]);
+  const [expandedSessionProjectPaths, setExpandedSessionProjectPaths] = useState<string[]>([]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
   const [activeRuntimeCommand, setActiveRuntimeCommand] = useState<ActiveRuntimeCommand | null>(null);
   const [showFullAccessBanner, setShowFullAccessBanner] = useState(false);
@@ -329,6 +341,8 @@ export function App() {
       const storedSidebarWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
       const storedSessionTokens = pruneExpiredSessionTokens(readStoredJson<Record<string, StoredSessionToken>>(SESSION_TOKENS_KEY, {}));
       const storedCollapsedProjects = readStoredJson<string[]>(COLLAPSED_PROJECTS_KEY, []);
+      const storedArchivedSessions = readStoredJson<string[]>(ARCHIVED_SESSIONS_KEY, []);
+      const storedPinnedSessions = readStoredJson<string[]>(PINNED_SESSIONS_KEY, []);
       const storedRtlTextMode = localStorage.getItem(RTL_TEXT_MODE_KEY) === "true";
       const storedPetVisible = localStorage.getItem(PET_VISIBLE_KEY);
       setRecentWorkspaces(storedWorkspaces.map((entry) => ({ ...entry, path: normalizeWorkspacePath(entry.path) })));
@@ -336,6 +350,8 @@ export function App() {
       setPromptHistory(storedPromptHistory);
       setSessionTokens(storedSessionTokens);
       setCollapsedProjectPaths(storedCollapsedProjects.map(normalizeWorkspacePath));
+      setArchivedSessionIds([...new Set(storedArchivedSessions.filter(Boolean))]);
+      setPinnedSessionIds([...new Set(storedPinnedSessions.filter(Boolean))]);
       setRtlTextMode(storedRtlTextMode);
       setHivoPetVisible(storedPetVisible !== "false");
       if (Number.isFinite(storedComposerScale)) {
@@ -404,6 +420,14 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify(collapsedProjectPaths));
   }, [collapsedProjectPaths]);
+
+  useEffect(() => {
+    localStorage.setItem(ARCHIVED_SESSIONS_KEY, JSON.stringify(archivedSessionIds));
+  }, [archivedSessionIds]);
+
+  useEffect(() => {
+    localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(pinnedSessionIds));
+  }, [pinnedSessionIds]);
 
   useEffect(() => {
     if (!recentSessions.length) return;
@@ -640,11 +664,22 @@ export function App() {
   const shellLayoutStyle: CSSProperties = {
     gridTemplateColumns: `${effectiveSidebarWidth}px ${sidebarCollapsed ? "0px" : "10px"} minmax(0, 1fr) ${showRightPanel ? "minmax(0, 390px)" : "0px"}`
   };
+  const archivedSessionIdSet = new Set(archivedSessionIds);
+  const pinnedSessionIdSet = new Set(pinnedSessionIds);
+  const visibleRecentSessions = recentSessions.filter((entry) => !archivedSessionIdSet.has(entry.id));
+  const archivedSessions = recentSessions
+    .filter((entry) => archivedSessionIdSet.has(entry.id))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const visibleRuntimeSession =
+    runtimeSession && !archivedSessionIdSet.has(runtimeSession.id)
+      ? runtimeSession
+      : null;
   const sidebarProjects = buildSidebarProjects({
     workspace,
-    runtimeSession,
+    runtimeSession: visibleRuntimeSession,
     recentWorkspaces,
-    recentSessions,
+    recentSessions: visibleRecentSessions,
+    pinnedSessionIds,
     agentBusy,
     runtimeConnectionState
   });
@@ -843,6 +878,42 @@ export function App() {
     } catch (error) {
       setMessage(String(error));
     }
+  }
+
+  function handleArchiveSession(entry: RecentSessionEntry) {
+    setArchivedSessionIds((current) => current.includes(entry.id) ? current : [entry.id, ...current]);
+    if (runtimeSession?.id === entry.id) {
+      runtimeEventUnsubscribeRef.current?.();
+      runtimeEventUnsubscribeRef.current = null;
+      setRuntimeSession(null);
+      setRuntimeSessionToken("");
+      setRuntimeConnectionState("connected");
+    }
+    setActivityOpen(false);
+    setMessage(`Archived chat: ${entry.title}`);
+  }
+
+  function handleTogglePinnedSession(entry: RecentSessionEntry) {
+    setPinnedSessionIds((current) =>
+      current.includes(entry.id)
+        ? current.filter((id) => id !== entry.id)
+        : [entry.id, ...current]
+    );
+  }
+
+  function handleToggleProjectSessionsExpanded(projectPath: string) {
+    const normalizedPath = normalizeWorkspacePath(projectPath);
+    setExpandedSessionProjectPaths((current) =>
+      current.includes(normalizedPath)
+        ? current.filter((entry) => entry !== normalizedPath)
+        : [...current, normalizedPath]
+    );
+  }
+
+  async function handleRestoreArchivedSession(entry: RecentSessionEntry) {
+    setArchivedSessionIds((current) => current.filter((id) => id !== entry.id));
+    setArchiveOpen(false);
+    await handleRestoreRecentSession(entry);
   }
 
   async function restoreRecentSessionById(sessionId: string, workspacePathForSession: string) {
@@ -1477,7 +1548,13 @@ export function App() {
             {sidebarProjects.length ? (
               <div className="project-groups">
                 {sidebarProjects.map((project) => {
-                  const isCollapsed = collapsedProjectPaths.includes(normalizeWorkspacePath(project.path));
+                  const normalizedProjectPath = normalizeWorkspacePath(project.path);
+                  const isCollapsed = collapsedProjectPaths.includes(normalizedProjectPath);
+                  const sessionsExpanded = expandedSessionProjectPaths.includes(normalizedProjectPath);
+                  const hiddenSessionCount = Math.max(0, project.sessions.length - MAX_VISIBLE_PROJECT_SESSIONS);
+                  const displayedSessions = sessionsExpanded
+                    ? project.sessions
+                    : project.sessions.slice(0, MAX_VISIBLE_PROJECT_SESSIONS);
                   return (
                     <section
                       key={project.path}
@@ -1518,30 +1595,66 @@ export function App() {
 
                       {!isCollapsed && project.sessions.length ? (
                         <div className="project-session-list">
-                          {project.sessions.slice(0, project.isActive ? 8 : 5).map((entry) => {
+                          {displayedSessions.map((entry) => {
                             const isActiveSession = entry.id === runtimeSession?.id;
+                            const isPinnedSession = pinnedSessionIdSet.has(entry.id);
                             return (
-                              <button
+                              <div
                                 key={entry.id}
-                                className={`project-session-item ${isActiveSession ? "active-session-item" : ""}`}
-                                onClick={() =>
-                                  isActiveSession
-                                    ? setActivityOpen(true)
-                                    : void handleRestoreRecentSession(entry)
-                                }
-                                title={
-                                  isActiveSession
-                                    ? "Open current session"
-                                    : getPersistedSessionToken(sessionTokens, entry.id)
-                                      ? "Reopen chat"
-                                      : "Open saved chat history"
-                                }
+                                className={[
+                                  "project-session-item",
+                                  isActiveSession ? "active-session-item" : "",
+                                  isPinnedSession ? "pinned-session-item" : ""
+                                ].filter(Boolean).join(" ")}
                               >
-                                <span className="project-session-title">{entry.title}</span>
-                                <small>{formatRelativeDate(entry.updatedAt)}</small>
-                              </button>
+                                <button
+                                  className="project-session-main"
+                                  onClick={() =>
+                                    isActiveSession
+                                      ? setActivityOpen(true)
+                                      : void handleRestoreRecentSession(entry)
+                                  }
+                                  title={
+                                    isActiveSession
+                                      ? "Open current session"
+                                      : getPersistedSessionToken(sessionTokens, entry.id)
+                                        ? "Reopen chat"
+                                        : "Open saved chat history"
+                                  }
+                                  type="button"
+                                >
+                                  <span className="project-session-title">{entry.title}</span>
+                                </button>
+                                <button
+                                  className="project-session-pin"
+                                  onClick={() => handleTogglePinnedSession(entry)}
+                                  title={isPinnedSession ? "Unpin chat" : "Pin chat"}
+                                  type="button"
+                                  aria-pressed={isPinnedSession}
+                                >
+                                  <Pin size={13} />
+                                </button>
+                                <button
+                                  className="project-session-archive"
+                                  onClick={() => handleArchiveSession(entry)}
+                                  title="Archive chat"
+                                  type="button"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                                <small className="project-session-age">{formatRelativeDate(entry.updatedAt)}</small>
+                              </div>
                             );
                           })}
+                          {hiddenSessionCount ? (
+                            <button
+                              className="project-session-show-more"
+                              onClick={() => handleToggleProjectSessionsExpanded(project.path)}
+                              type="button"
+                            >
+                              {sessionsExpanded ? "Show less" : "Show more"}
+                            </button>
+                          ) : null}
                         </div>
                       ) : !isCollapsed ? (
                         <div className="sidebar-empty">No chats yet for this project.</div>
@@ -1555,10 +1668,46 @@ export function App() {
             )}
           </section>
 
-          <button className="sidebar-settings" onClick={() => setSettingsOpen(true)} title="Settings" type="button">
-            <Settings size={16} />
-            <span>Settings</span>
-          </button>
+          <div className="sidebar-bottom">
+            <button className="sidebar-settings" onClick={() => setArchiveOpen((current) => !current)} title="Archived chats" type="button">
+              <Archive size={16} />
+              <span>Archive</span>
+              {archivedSessions.length ? <small>{archivedSessions.length}</small> : null}
+            </button>
+            {archiveOpen ? (
+              <div className="archive-panel">
+                {archivedSessions.length ? (
+                  archivedSessions.map((entry) => (
+                    <div className="archive-session-row" key={entry.id}>
+                      <button
+                        className="archive-session-main"
+                        onClick={() => void handleRestoreArchivedSession(entry)}
+                        title="Restore and open archived chat"
+                        type="button"
+                      >
+                        <span>{entry.title}</span>
+                        <small>{entry.workspaceName} · {formatRelativeDate(entry.updatedAt)}</small>
+                      </button>
+                      <button
+                        className="frame-icon-button archive-restore-button"
+                        onClick={() => void handleRestoreArchivedSession(entry)}
+                        title="Restore chat"
+                        type="button"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="sidebar-empty archive-empty">No archived chats.</div>
+                )}
+              </div>
+            ) : null}
+            <button className="sidebar-settings" onClick={() => setSettingsOpen(true)} title="Settings" type="button">
+              <Settings size={16} />
+              <span>Settings</span>
+            </button>
+          </div>
         </aside>
 
         <button
@@ -1634,7 +1783,7 @@ export function App() {
               {!runtimeSession ? (
                 <>
                   <img className="hero-brand-mark" src="/hivo-icon.png" alt="" aria-hidden="true" />
-                  <h1>Hivo</h1>
+                  <h1>Hivo Studio</h1>
                   <p className="hero-slogan">stop paying, stop thinking, stop prompting</p>
                 </>
               ) : null}
@@ -1676,7 +1825,11 @@ export function App() {
                 <div className="composer-input-actions">
                   <div className="composer-input-left">
                     <div className="access-menu-shell">
-                      <button className="composer-chip access-chip" onClick={() => setAccessMenuOpen((current) => !current)} type="button">
+                      <button
+                        className={`composer-chip access-chip ${accessProfile === "full_access" ? "danger-access-chip" : ""}`}
+                        onClick={() => setAccessMenuOpen((current) => !current)}
+                        type="button"
+                      >
                         <ShieldCheck size={14} />
                         <span>{accessProfileLabel(accessProfile)}</span>
                         <ChevronDown size={14} />
@@ -5042,9 +5195,11 @@ function buildSidebarProjects(input: {
   runtimeSession: AgentRuntimeSession | null;
   recentWorkspaces: RecentWorkspaceEntry[];
   recentSessions: RecentSessionEntry[];
+  pinnedSessionIds: string[];
   agentBusy: boolean;
   runtimeConnectionState: "connected" | "disconnected";
 }) {
+  const pinnedSessionIdSet = new Set(input.pinnedSessionIds);
   const grouped = new Map<string, {
     path: string;
     name: string;
@@ -5117,7 +5272,13 @@ function buildSidebarProjects(input: {
       ...project,
       sessions: project.sessions
         .filter((entry, index, array) => array.findIndex((candidate) => candidate.id === entry.id) === index)
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .sort((left, right) => {
+          const leftPinned = pinnedSessionIdSet.has(left.id);
+          const rightPinned = pinnedSessionIdSet.has(right.id);
+          if (leftPinned && !rightPinned) return -1;
+          if (!leftPinned && rightPinned) return 1;
+          return right.updatedAt.localeCompare(left.updatedAt);
+        })
     }))
     .sort((left, right) => {
       if (left.isActive && !right.isActive) return -1;

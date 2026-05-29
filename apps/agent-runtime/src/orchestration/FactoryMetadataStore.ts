@@ -115,8 +115,27 @@ import type {
   IntegrationCandidateBlocker,
   SandboxValidatedIntegrationCandidate
 } from "./SandboxIntegrationCandidateModels.js";
+import type {
+  IntegrationApplyApproval,
+  IntegrationApplyApprovalBatch,
+  IntegrationApplyApprovalBlocker,
+  WorktreeSafetyCheck
+} from "./IntegrationApplyApprovalModels.js";
+import type {
+  ControlledApplyBatch,
+  ControlledIntegrationApplyResult,
+  PreApplySnapshot,
+  RollbackResult
+} from "./ControlledIntegrationApplyModels.js";
+import type {
+  IntegrationFinalizationBatch,
+  IntegrationFinalizationResult,
+  IntegrationLesson,
+  IntegrationMemoryEntry,
+  TaskStatusUpdateRef
+} from "./IntegrationFinalizationModels.js";
 
-export const FACTORY_METADATA_SCHEMA_VERSION = 23;
+export const FACTORY_METADATA_SCHEMA_VERSION = 26;
 export const FACTORY_METADATA_DATABASE_FILENAME = "factory_metadata.sqlite";
 
 type SqliteStatement = {
@@ -447,6 +466,78 @@ export type FactorySandboxIntegrationCandidateBlockerRecordInput = {
 
 export type FactorySandboxIntegrationCandidateBatchRecordInput = {
   batch: IntegrationCandidateBatch;
+  artifactRef?: string;
+};
+
+export type FactoryIntegrationApplyApprovalRecordInput = {
+  approval: IntegrationApplyApproval;
+  artifactRef?: string;
+};
+
+export type FactoryIntegrationApplyApprovalBlockerRecordInput = {
+  approval: IntegrationApplyApproval;
+  blocker: IntegrationApplyApprovalBlocker;
+};
+
+export type FactoryIntegrationApplyWorktreeCheckRecordInput = {
+  approval: IntegrationApplyApproval;
+  check: WorktreeSafetyCheck;
+};
+
+export type FactoryIntegrationApplyApprovalBatchRecordInput = {
+  batch: IntegrationApplyApprovalBatch;
+  artifactRef?: string;
+};
+
+export type FactoryControlledIntegrationApplyRecordInput = {
+  result: ControlledIntegrationApplyResult;
+  artifactRef?: string;
+};
+
+export type FactoryControlledApplyFileRecordInput = {
+  result: ControlledIntegrationApplyResult;
+  filePath: string;
+  fileStatus: string;
+  artifactRef?: string;
+};
+
+export type FactoryPreApplySnapshotRecordInput = {
+  snapshot: PreApplySnapshot;
+  artifactRef?: string;
+};
+
+export type FactoryControlledRollbackResultRecordInput = {
+  rollback: RollbackResult;
+  artifactRef?: string;
+};
+
+export type FactoryControlledApplyBatchRecordInput = {
+  batch: ControlledApplyBatch;
+  artifactRef?: string;
+};
+
+export type FactoryIntegrationFinalizationRecordInput = {
+  result: IntegrationFinalizationResult;
+  artifactRef?: string;
+};
+
+export type FactoryIntegrationMemoryUpdateRecordInput = {
+  result: IntegrationFinalizationResult;
+  entry: IntegrationMemoryEntry;
+};
+
+export type FactoryIntegrationLessonRecordInput = {
+  result: IntegrationFinalizationResult;
+  lesson: IntegrationLesson;
+};
+
+export type FactoryIntegrationTaskStatusUpdateRecordInput = {
+  result: IntegrationFinalizationResult;
+  update: TaskStatusUpdateRef;
+};
+
+export type FactoryIntegrationFinalizationBatchRecordInput = {
+  batch: IntegrationFinalizationBatch;
   artifactRef?: string;
 };
 
@@ -4182,6 +4273,596 @@ export class FactoryMetadataStore {
     );
   }
 
+  recordIntegrationApplyApproval(input: FactoryIntegrationApplyApprovalRecordInput) {
+    const approval = input.approval;
+    const artifactRef = input.artifactRef ?? approval.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_integration_apply_approvals (
+        integration_apply_approval_id, run_id, integration_candidate_id,
+        proposal_id, review_id, validation_candidate_id, sandbox_result_id,
+        sandbox_validation_id, preparation_plan_id, proposed_node_id,
+        approval_required, approval_status, approver_type, approver_id,
+        approval_reason, approved_scope_json, allowed_files_json,
+        forbidden_files_json, changed_files_json, required_file_locks_json,
+        required_module_locks_json, required_semantic_locks_json,
+        rollback_requirements_ref, post_integration_validation_plan_ref,
+        worktree_safety_status, dirty_worktree_findings_json,
+        apply_mode_recommendation, risk_level, blocker_count,
+        warning_count, expires_at, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(integration_apply_approval_id) DO UPDATE SET
+        approval_required = excluded.approval_required,
+        approval_status = excluded.approval_status,
+        approver_type = excluded.approver_type,
+        approver_id = COALESCE(excluded.approver_id, factory_integration_apply_approvals.approver_id),
+        approval_reason = excluded.approval_reason,
+        approved_scope_json = excluded.approved_scope_json,
+        allowed_files_json = excluded.allowed_files_json,
+        forbidden_files_json = excluded.forbidden_files_json,
+        changed_files_json = excluded.changed_files_json,
+        required_file_locks_json = excluded.required_file_locks_json,
+        required_module_locks_json = excluded.required_module_locks_json,
+        required_semantic_locks_json = excluded.required_semantic_locks_json,
+        rollback_requirements_ref = COALESCE(excluded.rollback_requirements_ref, factory_integration_apply_approvals.rollback_requirements_ref),
+        post_integration_validation_plan_ref = COALESCE(excluded.post_integration_validation_plan_ref, factory_integration_apply_approvals.post_integration_validation_plan_ref),
+        worktree_safety_status = excluded.worktree_safety_status,
+        dirty_worktree_findings_json = excluded.dirty_worktree_findings_json,
+        apply_mode_recommendation = excluded.apply_mode_recommendation,
+        risk_level = excluded.risk_level,
+        blocker_count = excluded.blocker_count,
+        warning_count = excluded.warning_count,
+        expires_at = COALESCE(excluded.expires_at, factory_integration_apply_approvals.expires_at),
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_apply_approvals.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_integration_apply_approvals.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_integration_apply_approvals.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      approval.integration_apply_approval_id,
+      approval.run_id,
+      approval.integration_candidate_id,
+      approval.proposal_id,
+      approval.review_id,
+      approval.validation_candidate_id,
+      approval.sandbox_result_id,
+      approval.sandbox_validation_id,
+      approval.preparation_plan_id,
+      approval.proposed_node_id,
+      approval.approval_required ? 1 : 0,
+      approval.approval_status,
+      approval.approver_type,
+      approval.approver_id,
+      approval.approval_reason,
+      JSON.stringify(approval.approved_scope),
+      JSON.stringify(approval.allowed_files),
+      JSON.stringify(approval.forbidden_files),
+      JSON.stringify(approval.changed_files),
+      JSON.stringify(approval.required_file_locks),
+      JSON.stringify(approval.required_module_locks),
+      JSON.stringify(approval.required_semantic_locks),
+      approval.rollback_requirements_ref,
+      approval.post_integration_validation_plan_ref,
+      approval.worktree_safety_status,
+      JSON.stringify(approval.dirty_worktree_findings),
+      approval.apply_mode_recommendation,
+      approval.risk_level,
+      approval.blockers.length,
+      approval.warnings.length,
+      approval.expires_at,
+      artifactRef,
+      approval.summary_ref,
+      approval.trace_event_id,
+      jsonMetadata(approval.metadata_json),
+      approval.created_at
+    );
+  }
+
+  recordIntegrationApplyApprovalBlocker(input: FactoryIntegrationApplyApprovalBlockerRecordInput) {
+    const blocker = input.blocker;
+    this.database.prepare(`
+      INSERT INTO factory_integration_apply_approval_blockers (
+        blocker_id, integration_apply_approval_id, run_id,
+        integration_candidate_id, blocker_type, severity, reason,
+        refs_json, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(blocker_id) DO UPDATE SET
+        blocker_type = excluded.blocker_type,
+        severity = excluded.severity,
+        reason = excluded.reason,
+        refs_json = excluded.refs_json,
+        metadata_json = excluded.metadata_json
+    `).run(
+      blocker.blocker_id,
+      blocker.integration_apply_approval_id,
+      blocker.run_id,
+      blocker.integration_candidate_id,
+      blocker.blocker_type,
+      blocker.severity,
+      blocker.reason,
+      JSON.stringify(blocker.refs),
+      jsonMetadata(blocker.metadata_json),
+      blocker.created_at
+    );
+  }
+
+  recordIntegrationApplyWorktreeCheck(input: FactoryIntegrationApplyWorktreeCheckRecordInput) {
+    const check = input.check;
+    this.database.prepare(`
+      INSERT INTO factory_integration_apply_worktree_checks (
+        worktree_check_id, integration_apply_approval_id, run_id,
+        integration_candidate_id, status, dirty_files_json,
+        findings_json, command, command_exit_code, command_error,
+        metadata_json, checked_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(worktree_check_id) DO UPDATE SET
+        status = excluded.status,
+        dirty_files_json = excluded.dirty_files_json,
+        findings_json = excluded.findings_json,
+        command_exit_code = excluded.command_exit_code,
+        command_error = excluded.command_error,
+        metadata_json = excluded.metadata_json
+    `).run(
+      check.worktree_check_id,
+      input.approval.integration_apply_approval_id,
+      check.run_id,
+      check.integration_candidate_id,
+      check.status,
+      JSON.stringify(check.dirty_files),
+      JSON.stringify(check.findings),
+      check.command,
+      check.command_exit_code,
+      check.command_error,
+      jsonMetadata(check.metadata_json),
+      check.checked_at
+    );
+  }
+
+  recordIntegrationApplyApprovalBatch(input: FactoryIntegrationApplyApprovalBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_integration_apply_approval_batches (
+        batch_id, run_id, integration_candidate_ids_json, approval_count,
+        approved_for_apply_candidate_count, requires_human_approval_count,
+        blocked_count, rejected_count, dirty_worktree_blocked_count,
+        apply_mode_recommendation_count, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        integration_candidate_ids_json = excluded.integration_candidate_ids_json,
+        approval_count = excluded.approval_count,
+        approved_for_apply_candidate_count = excluded.approved_for_apply_candidate_count,
+        requires_human_approval_count = excluded.requires_human_approval_count,
+        blocked_count = excluded.blocked_count,
+        rejected_count = excluded.rejected_count,
+        dirty_worktree_blocked_count = excluded.dirty_worktree_blocked_count,
+        apply_mode_recommendation_count = excluded.apply_mode_recommendation_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_apply_approval_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_integration_apply_approval_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_integration_apply_approval_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.integration_candidate_ids),
+      batch.summary.apply_approval_count,
+      batch.summary.approved_for_apply_candidate_count,
+      batch.summary.requires_human_approval_count,
+      batch.summary.blocked_count,
+      batch.summary.rejected_count,
+      batch.summary.dirty_worktree_blocked_count,
+      batch.summary.apply_mode_recommendation_count,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
+  recordControlledIntegrationApply(input: FactoryControlledIntegrationApplyRecordInput) {
+    const result = input.result;
+    const artifactRef = input.artifactRef ?? result.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_controlled_integration_applies (
+        controlled_apply_id, run_id, integration_candidate_id,
+        integration_apply_approval_id, proposal_id, patch_artifact_ref,
+        approval_ref, changed_files_json, acquired_lock_refs_json,
+        pre_apply_snapshot_ref, apply_adapter, apply_status,
+        applied_files_json, failed_files_json, post_validation_result_ref,
+        strict_validation_status, rollback_plan_ref, rollback_result_ref,
+        worktree_safety_ref, status, blocker_count, warning_count,
+        artifact_ref, trace_event_id, metadata_json, created_at, completed_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(controlled_apply_id) DO UPDATE SET
+        apply_status = excluded.apply_status,
+        applied_files_json = excluded.applied_files_json,
+        failed_files_json = excluded.failed_files_json,
+        post_validation_result_ref = COALESCE(excluded.post_validation_result_ref, factory_controlled_integration_applies.post_validation_result_ref),
+        strict_validation_status = excluded.strict_validation_status,
+        rollback_result_ref = COALESCE(excluded.rollback_result_ref, factory_controlled_integration_applies.rollback_result_ref),
+        status = excluded.status,
+        blocker_count = excluded.blocker_count,
+        warning_count = excluded.warning_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_controlled_integration_applies.artifact_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_controlled_integration_applies.trace_event_id),
+        metadata_json = excluded.metadata_json,
+        completed_at = COALESCE(excluded.completed_at, factory_controlled_integration_applies.completed_at)
+    `).run(
+      result.controlled_apply_id,
+      result.run_id,
+      result.integration_candidate_id,
+      result.integration_apply_approval_id,
+      result.proposal_id,
+      result.patch_artifact_ref,
+      result.approval_ref,
+      JSON.stringify(result.changed_files),
+      JSON.stringify(result.acquired_lock_refs),
+      result.pre_apply_snapshot_ref,
+      result.apply_adapter,
+      result.apply_status,
+      JSON.stringify(result.applied_files),
+      JSON.stringify(result.failed_files),
+      result.post_validation_result_ref,
+      result.strict_validation_status,
+      result.rollback_plan_ref,
+      result.rollback_result_ref,
+      result.worktree_safety_ref,
+      result.status,
+      result.blockers.length,
+      result.warnings.length,
+      artifactRef,
+      result.trace_event_id,
+      jsonMetadata(result.metadata_json),
+      result.created_at,
+      result.completed_at
+    );
+  }
+
+  recordControlledApplyFile(input: FactoryControlledApplyFileRecordInput) {
+    this.database.prepare(`
+      INSERT INTO factory_controlled_apply_files (
+        id, controlled_apply_id, run_id, integration_candidate_id,
+        path, file_status, artifact_ref, created_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        file_status = excluded.file_status,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_controlled_apply_files.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      `${input.result.controlled_apply_id}:${input.filePath}:${input.fileStatus}`,
+      input.result.controlled_apply_id,
+      input.result.run_id,
+      input.result.integration_candidate_id,
+      input.filePath,
+      input.fileStatus,
+      input.artifactRef,
+      input.result.completed_at ?? input.result.created_at,
+      jsonMetadata({})
+    );
+  }
+
+  recordPreApplySnapshot(input: FactoryPreApplySnapshotRecordInput) {
+    const snapshot = input.snapshot;
+    this.database.prepare(`
+      INSERT INTO factory_pre_apply_snapshots (
+        snapshot_id, controlled_apply_id, run_id, integration_candidate_id,
+        changed_files_json, file_count, artifact_ref, content_dir_ref,
+        metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(snapshot_id) DO UPDATE SET
+        changed_files_json = excluded.changed_files_json,
+        file_count = excluded.file_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_pre_apply_snapshots.artifact_ref),
+        content_dir_ref = COALESCE(excluded.content_dir_ref, factory_pre_apply_snapshots.content_dir_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      snapshot.snapshot_id,
+      snapshot.controlled_apply_id,
+      snapshot.run_id,
+      snapshot.integration_candidate_id,
+      JSON.stringify(snapshot.changed_files),
+      snapshot.files.length,
+      input.artifactRef ?? snapshot.artifact_ref,
+      snapshot.content_dir_ref,
+      jsonMetadata(snapshot.metadata_json),
+      snapshot.created_at
+    );
+  }
+
+  recordControlledRollbackResult(input: FactoryControlledRollbackResultRecordInput) {
+    const rollback = input.rollback;
+    this.database.prepare(`
+      INSERT INTO factory_controlled_rollback_results (
+        rollback_result_id, controlled_apply_id, run_id, integration_candidate_id,
+        status, restored_files_json, failed_files_json, artifact_ref,
+        metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(rollback_result_id) DO UPDATE SET
+        status = excluded.status,
+        restored_files_json = excluded.restored_files_json,
+        failed_files_json = excluded.failed_files_json,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_controlled_rollback_results.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      rollback.rollback_result_id,
+      rollback.controlled_apply_id,
+      rollback.run_id,
+      rollback.integration_candidate_id,
+      rollback.status,
+      JSON.stringify(rollback.restored_files),
+      JSON.stringify(rollback.failed_files),
+      input.artifactRef ?? rollback.artifact_ref,
+      jsonMetadata(rollback.metadata_json),
+      rollback.created_at
+    );
+  }
+
+  recordControlledApplyBatch(input: FactoryControlledApplyBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_controlled_apply_batches (
+        batch_id, run_id, integration_candidate_ids_json,
+        controlled_apply_count, applied_count, post_validation_passed_count,
+        post_validation_failed_count, rolled_back_count, rollback_failed_count,
+        lock_failed_count, blocked_count, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        integration_candidate_ids_json = excluded.integration_candidate_ids_json,
+        controlled_apply_count = excluded.controlled_apply_count,
+        applied_count = excluded.applied_count,
+        post_validation_passed_count = excluded.post_validation_passed_count,
+        post_validation_failed_count = excluded.post_validation_failed_count,
+        rolled_back_count = excluded.rolled_back_count,
+        rollback_failed_count = excluded.rollback_failed_count,
+        lock_failed_count = excluded.lock_failed_count,
+        blocked_count = excluded.blocked_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_controlled_apply_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_controlled_apply_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_controlled_apply_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.integration_candidate_ids),
+      batch.summary.controlled_apply_count,
+      batch.summary.applied_count,
+      batch.summary.post_validation_passed_count,
+      batch.summary.post_validation_failed_count,
+      batch.summary.rolled_back_count,
+      batch.summary.rollback_failed_count,
+      batch.summary.lock_failed_count,
+      batch.summary.blocked_count,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
+  recordIntegrationFinalization(input: FactoryIntegrationFinalizationRecordInput) {
+    const result = input.result;
+    const artifactRef = input.artifactRef ?? result.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_integration_finalizations (
+        integration_finalization_id, run_id, controlled_apply_id,
+        integration_candidate_id, proposal_id, proposed_node_id, task_id,
+        team_id, controlled_apply_status, strict_validation_status,
+        rollback_status, finalized_files_json, rejected_files_json,
+        validation_refs_json, apply_refs_json, rollback_refs_json,
+        memory_entries_created_count, lessons_created_count,
+        task_status_update_count, report_summary_ref, status, blocker_count,
+        warning_count, artifact_ref, trace_event_id, metadata_json,
+        created_at, completed_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(integration_finalization_id) DO UPDATE SET
+        controlled_apply_status = excluded.controlled_apply_status,
+        strict_validation_status = excluded.strict_validation_status,
+        rollback_status = COALESCE(excluded.rollback_status, factory_integration_finalizations.rollback_status),
+        finalized_files_json = excluded.finalized_files_json,
+        rejected_files_json = excluded.rejected_files_json,
+        validation_refs_json = excluded.validation_refs_json,
+        apply_refs_json = excluded.apply_refs_json,
+        rollback_refs_json = excluded.rollback_refs_json,
+        memory_entries_created_count = excluded.memory_entries_created_count,
+        lessons_created_count = excluded.lessons_created_count,
+        task_status_update_count = excluded.task_status_update_count,
+        report_summary_ref = COALESCE(excluded.report_summary_ref, factory_integration_finalizations.report_summary_ref),
+        status = excluded.status,
+        blocker_count = excluded.blocker_count,
+        warning_count = excluded.warning_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_finalizations.artifact_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_integration_finalizations.trace_event_id),
+        metadata_json = excluded.metadata_json,
+        completed_at = COALESCE(excluded.completed_at, factory_integration_finalizations.completed_at)
+    `).run(
+      result.integration_finalization_id,
+      result.run_id,
+      result.controlled_apply_id,
+      result.integration_candidate_id,
+      result.proposal_id,
+      result.proposed_node_id,
+      result.task_id,
+      result.team_id,
+      result.controlled_apply_status,
+      result.strict_validation_status,
+      result.rollback_status,
+      JSON.stringify(result.finalized_files),
+      JSON.stringify(result.rejected_files),
+      JSON.stringify(result.validation_refs),
+      JSON.stringify(result.apply_refs),
+      JSON.stringify(result.rollback_refs),
+      result.memory_entries_created.length,
+      result.lessons_created.length,
+      result.task_status_updates.length,
+      result.report_summary_ref,
+      result.status,
+      result.blockers.length,
+      result.warnings.length,
+      artifactRef,
+      result.trace_event_id,
+      jsonMetadata(result.metadata_json),
+      result.created_at,
+      result.completed_at
+    );
+  }
+
+  recordIntegrationMemoryUpdate(input: FactoryIntegrationMemoryUpdateRecordInput) {
+    const entry = input.entry;
+    this.database.prepare(`
+      INSERT INTO factory_integration_memory_updates (
+        memory_entry_id, integration_finalization_id, run_id, controlled_apply_id,
+        integration_candidate_id, scope, entry_type, summary, source_refs_json,
+        confidence, freshness, tags_json, artifact_ref, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(memory_entry_id) DO UPDATE SET
+        summary = excluded.summary,
+        source_refs_json = excluded.source_refs_json,
+        confidence = excluded.confidence,
+        freshness = excluded.freshness,
+        tags_json = excluded.tags_json,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_memory_updates.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      entry.memory_entry_id,
+      entry.integration_finalization_id,
+      entry.run_id,
+      entry.controlled_apply_id,
+      entry.integration_candidate_id,
+      entry.scope,
+      entry.entry_type,
+      entry.summary,
+      JSON.stringify(entry.source_refs),
+      entry.confidence,
+      entry.freshness,
+      JSON.stringify(entry.tags),
+      entry.artifact_ref,
+      jsonMetadata(entry.metadata_json),
+      entry.created_at
+    );
+  }
+
+  recordIntegrationLesson(input: FactoryIntegrationLessonRecordInput) {
+    const lesson = input.lesson;
+    this.database.prepare(`
+      INSERT INTO factory_integration_lessons (
+        lesson_id, integration_finalization_id, run_id, controlled_apply_id,
+        integration_candidate_id, lesson_type, summary, evidence_refs_json,
+        tags_json, artifact_ref, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(lesson_id) DO UPDATE SET
+        summary = excluded.summary,
+        evidence_refs_json = excluded.evidence_refs_json,
+        tags_json = excluded.tags_json,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_lessons.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      lesson.lesson_id,
+      lesson.integration_finalization_id,
+      lesson.run_id,
+      lesson.controlled_apply_id,
+      lesson.integration_candidate_id,
+      lesson.lesson_type,
+      lesson.summary,
+      JSON.stringify(lesson.evidence_refs),
+      JSON.stringify(lesson.tags),
+      lesson.artifact_ref,
+      jsonMetadata(lesson.metadata_json),
+      lesson.created_at
+    );
+  }
+
+  recordIntegrationTaskStatusUpdate(input: FactoryIntegrationTaskStatusUpdateRecordInput) {
+    const update = input.update;
+    this.database.prepare(`
+      INSERT INTO factory_integration_task_status_updates (
+        task_status_update_id, integration_finalization_id, run_id,
+        controlled_apply_id, integration_candidate_id, target_type,
+        target_id, previous_status, next_status, artifact_ref,
+        metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_status_update_id) DO UPDATE SET
+        previous_status = COALESCE(excluded.previous_status, factory_integration_task_status_updates.previous_status),
+        next_status = excluded.next_status,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_task_status_updates.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      update.task_status_update_id,
+      update.integration_finalization_id,
+      update.run_id,
+      update.controlled_apply_id,
+      update.integration_candidate_id,
+      update.target_type,
+      update.target_id,
+      update.previous_status,
+      update.next_status,
+      update.artifact_ref,
+      jsonMetadata(update.metadata_json),
+      update.created_at
+    );
+  }
+
+  recordIntegrationFinalizationBatch(input: FactoryIntegrationFinalizationBatchRecordInput) {
+    const batch = input.batch;
+    const artifactRef = input.artifactRef ?? batch.artifact_ref;
+    this.database.prepare(`
+      INSERT INTO factory_integration_finalization_batches (
+        batch_id, run_id, controlled_apply_ids_json,
+        integration_finalization_count, finalized_count,
+        validation_failed_count, rollback_completed_count,
+        rollback_failed_count, memory_entries_created_count,
+        lessons_created_count, artifact_ref, summary_ref,
+        trace_event_id, metadata_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        controlled_apply_ids_json = excluded.controlled_apply_ids_json,
+        integration_finalization_count = excluded.integration_finalization_count,
+        finalized_count = excluded.finalized_count,
+        validation_failed_count = excluded.validation_failed_count,
+        rollback_completed_count = excluded.rollback_completed_count,
+        rollback_failed_count = excluded.rollback_failed_count,
+        memory_entries_created_count = excluded.memory_entries_created_count,
+        lessons_created_count = excluded.lessons_created_count,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_integration_finalization_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_integration_finalization_batches.summary_ref),
+        trace_event_id = COALESCE(excluded.trace_event_id, factory_integration_finalization_batches.trace_event_id),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      JSON.stringify(batch.controlled_apply_ids),
+      batch.summary.integration_finalization_count,
+      batch.summary.finalized_count,
+      batch.summary.validation_failed_count,
+      batch.summary.rollback_completed_count,
+      batch.summary.rollback_failed_count,
+      batch.summary.memory_entries_created_count,
+      batch.summary.lessons_created_count,
+      artifactRef,
+      batch.summary_ref,
+      batch.trace_event_id,
+      jsonMetadata(batch.metadata_json),
+      batch.created_at
+    );
+  }
+
   recordApprovalScopeConstraint(input: FactoryApprovalScopeConstraintRecordInput) {
     const constraint = input.constraint;
     this.database.prepare(`
@@ -5031,6 +5712,63 @@ export class FactoryMetadataAdapter {
 
   async recordSandboxIntegrationCandidateBatchSaved(batch: IntegrationCandidateBatch) {
     await this.write((store) => store.recordSandboxIntegrationCandidateBatch({ batch }));
+  }
+
+  async recordIntegrationApplyApprovalSaved(approval: IntegrationApplyApproval, worktreeCheck: WorktreeSafetyCheck) {
+    await this.write((store) => {
+      store.recordIntegrationApplyApproval({ approval });
+      store.recordIntegrationApplyWorktreeCheck({ approval, check: worktreeCheck });
+      for (const blocker of approval.blockers) {
+        store.recordIntegrationApplyApprovalBlocker({ approval, blocker });
+      }
+    });
+  }
+
+  async recordIntegrationApplyApprovalBatchSaved(batch: IntegrationApplyApprovalBatch) {
+    await this.write((store) => store.recordIntegrationApplyApprovalBatch({ batch }));
+  }
+
+  async recordControlledApplyResultSaved(result: ControlledIntegrationApplyResult) {
+    await this.write((store) => {
+      store.recordControlledIntegrationApply({ result });
+      for (const file of result.applied_files) {
+        store.recordControlledApplyFile({ result, filePath: file, fileStatus: "applied" });
+      }
+      for (const file of result.failed_files) {
+        store.recordControlledApplyFile({ result, filePath: file, fileStatus: "failed" });
+      }
+    });
+  }
+
+  async recordPreApplySnapshotSaved(snapshot: PreApplySnapshot) {
+    await this.write((store) => store.recordPreApplySnapshot({ snapshot }));
+  }
+
+  async recordControlledRollbackResultSaved(rollback: RollbackResult) {
+    await this.write((store) => store.recordControlledRollbackResult({ rollback }));
+  }
+
+  async recordControlledApplyBatchSaved(batch: ControlledApplyBatch) {
+    await this.write((store) => store.recordControlledApplyBatch({ batch }));
+  }
+
+  async recordIntegrationFinalizationResultSaved(result: IntegrationFinalizationResult) {
+    await this.write((store) => {
+      store.recordIntegrationFinalization({ result });
+      for (const entry of result.memory_entries_created) {
+        store.recordIntegrationMemoryUpdate({ result, entry });
+      }
+      for (const lesson of result.lessons_created) {
+        store.recordIntegrationLesson({ result, lesson });
+      }
+      for (const update of result.task_status_updates) {
+        store.recordIntegrationTaskStatusUpdate({ result, update });
+      }
+    });
+  }
+
+  async recordIntegrationFinalizationBatchSaved(batch: IntegrationFinalizationBatch) {
+    await this.write((store) => store.recordIntegrationFinalizationBatch({ batch }));
   }
 
   async recordOutputSaved(runId: string, sourceId: string, kind: string, artifactRef: string, value?: unknown, taskId?: string) {
@@ -6350,6 +7088,275 @@ CREATE TABLE IF NOT EXISTS factory_sandbox_integration_candidate_blockers (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS factory_integration_apply_approvals (
+  integration_apply_approval_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  validation_candidate_id TEXT NOT NULL,
+  sandbox_result_id TEXT NOT NULL,
+  sandbox_validation_id TEXT NOT NULL,
+  preparation_plan_id TEXT,
+  proposed_node_id TEXT,
+  approval_required INTEGER NOT NULL DEFAULT 1,
+  approval_status TEXT NOT NULL,
+  approver_type TEXT NOT NULL,
+  approver_id TEXT,
+  approval_reason TEXT NOT NULL,
+  approved_scope_json TEXT NOT NULL DEFAULT '{}',
+  allowed_files_json TEXT NOT NULL DEFAULT '[]',
+  forbidden_files_json TEXT NOT NULL DEFAULT '[]',
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  required_file_locks_json TEXT NOT NULL DEFAULT '[]',
+  required_module_locks_json TEXT NOT NULL DEFAULT '[]',
+  required_semantic_locks_json TEXT NOT NULL DEFAULT '[]',
+  rollback_requirements_ref TEXT,
+  post_integration_validation_plan_ref TEXT,
+  worktree_safety_status TEXT NOT NULL,
+  dirty_worktree_findings_json TEXT NOT NULL DEFAULT '[]',
+  apply_mode_recommendation TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  blocker_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_apply_approval_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  integration_candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+  approval_count INTEGER NOT NULL DEFAULT 0,
+  approved_for_apply_candidate_count INTEGER NOT NULL DEFAULT 0,
+  requires_human_approval_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  rejected_count INTEGER NOT NULL DEFAULT 0,
+  dirty_worktree_blocked_count INTEGER NOT NULL DEFAULT 0,
+  apply_mode_recommendation_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_apply_approval_blockers (
+  blocker_id TEXT PRIMARY KEY,
+  integration_apply_approval_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  blocker_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  refs_json TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_apply_worktree_checks (
+  worktree_check_id TEXT PRIMARY KEY,
+  integration_apply_approval_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dirty_files_json TEXT NOT NULL DEFAULT '[]',
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  command TEXT NOT NULL,
+  command_exit_code INTEGER,
+  command_error TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_controlled_integration_applies (
+  controlled_apply_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  integration_apply_approval_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  patch_artifact_ref TEXT,
+  approval_ref TEXT,
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  acquired_lock_refs_json TEXT NOT NULL DEFAULT '[]',
+  pre_apply_snapshot_ref TEXT,
+  apply_adapter TEXT NOT NULL,
+  apply_status TEXT NOT NULL,
+  applied_files_json TEXT NOT NULL DEFAULT '[]',
+  failed_files_json TEXT NOT NULL DEFAULT '[]',
+  post_validation_result_ref TEXT,
+  strict_validation_status TEXT NOT NULL,
+  rollback_plan_ref TEXT,
+  rollback_result_ref TEXT,
+  worktree_safety_ref TEXT,
+  status TEXT NOT NULL,
+  blocker_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS factory_controlled_apply_files (
+  id TEXT PRIMARY KEY,
+  controlled_apply_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  file_status TEXT NOT NULL,
+  artifact_ref TEXT,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_pre_apply_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  controlled_apply_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  file_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  content_dir_ref TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_controlled_rollback_results (
+  rollback_result_id TEXT PRIMARY KEY,
+  controlled_apply_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  restored_files_json TEXT NOT NULL DEFAULT '[]',
+  failed_files_json TEXT NOT NULL DEFAULT '[]',
+  artifact_ref TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_controlled_apply_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  integration_candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+  controlled_apply_count INTEGER NOT NULL DEFAULT 0,
+  applied_count INTEGER NOT NULL DEFAULT 0,
+  post_validation_passed_count INTEGER NOT NULL DEFAULT 0,
+  post_validation_failed_count INTEGER NOT NULL DEFAULT 0,
+  rolled_back_count INTEGER NOT NULL DEFAULT 0,
+  rollback_failed_count INTEGER NOT NULL DEFAULT 0,
+  lock_failed_count INTEGER NOT NULL DEFAULT 0,
+  blocked_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_finalizations (
+  integration_finalization_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  controlled_apply_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL,
+  proposed_node_id TEXT,
+  task_id TEXT,
+  team_id TEXT,
+  controlled_apply_status TEXT NOT NULL,
+  strict_validation_status TEXT NOT NULL,
+  rollback_status TEXT,
+  finalized_files_json TEXT NOT NULL DEFAULT '[]',
+  rejected_files_json TEXT NOT NULL DEFAULT '[]',
+  validation_refs_json TEXT NOT NULL DEFAULT '[]',
+  apply_refs_json TEXT NOT NULL DEFAULT '[]',
+  rollback_refs_json TEXT NOT NULL DEFAULT '[]',
+  memory_entries_created_count INTEGER NOT NULL DEFAULT 0,
+  lessons_created_count INTEGER NOT NULL DEFAULT 0,
+  task_status_update_count INTEGER NOT NULL DEFAULT 0,
+  report_summary_ref TEXT,
+  status TEXT NOT NULL,
+  blocker_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_memory_updates (
+  memory_entry_id TEXT PRIMARY KEY,
+  integration_finalization_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  controlled_apply_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  entry_type TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL NOT NULL,
+  freshness TEXT NOT NULL,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  artifact_ref TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_lessons (
+  lesson_id TEXT PRIMARY KEY,
+  integration_finalization_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  controlled_apply_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  lesson_type TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  artifact_ref TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_task_status_updates (
+  task_status_update_id TEXT PRIMARY KEY,
+  integration_finalization_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  controlled_apply_id TEXT NOT NULL,
+  integration_candidate_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  previous_status TEXT,
+  next_status TEXT NOT NULL,
+  artifact_ref TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_integration_finalization_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  controlled_apply_ids_json TEXT NOT NULL DEFAULT '[]',
+  integration_finalization_count INTEGER NOT NULL DEFAULT 0,
+  finalized_count INTEGER NOT NULL DEFAULT 0,
+  validation_failed_count INTEGER NOT NULL DEFAULT 0,
+  rollback_completed_count INTEGER NOT NULL DEFAULT 0,
+  rollback_failed_count INTEGER NOT NULL DEFAULT 0,
+  memory_entries_created_count INTEGER NOT NULL DEFAULT 0,
+  lessons_created_count INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  trace_event_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS factory_approval_scope_constraints (
   constraint_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -6771,6 +7778,23 @@ CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidates_run ON fac
 CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidates_validation ON factory_sandbox_integration_candidates(sandbox_validation_id, status);
 CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidate_batches_run ON factory_sandbox_integration_candidate_batches(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_factory_sandbox_integration_candidate_blockers_run ON factory_sandbox_integration_candidate_blockers(run_id, blocker_type);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_apply_approvals_run ON factory_integration_apply_approvals(run_id, approval_status);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_apply_approvals_candidate ON factory_integration_apply_approvals(integration_candidate_id, approval_status);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_apply_approval_batches_run ON factory_integration_apply_approval_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_apply_approval_blockers_run ON factory_integration_apply_approval_blockers(run_id, blocker_type);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_apply_worktree_checks_run ON factory_integration_apply_worktree_checks(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_controlled_integration_applies_run ON factory_controlled_integration_applies(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_controlled_integration_applies_candidate ON factory_controlled_integration_applies(integration_candidate_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_controlled_apply_files_run ON factory_controlled_apply_files(run_id, path);
+CREATE INDEX IF NOT EXISTS idx_factory_pre_apply_snapshots_run ON factory_pre_apply_snapshots(run_id, integration_candidate_id);
+CREATE INDEX IF NOT EXISTS idx_factory_controlled_rollback_results_run ON factory_controlled_rollback_results(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_controlled_apply_batches_run ON factory_controlled_apply_batches(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_finalizations_run ON factory_integration_finalizations(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_finalizations_apply ON factory_integration_finalizations(controlled_apply_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_memory_updates_run ON factory_integration_memory_updates(run_id, entry_type);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_lessons_run ON factory_integration_lessons(run_id, lesson_type);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_task_status_updates_run ON factory_integration_task_status_updates(run_id, target_type);
+CREATE INDEX IF NOT EXISTS idx_factory_integration_finalization_batches_run ON factory_integration_finalization_batches(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_factory_approval_scope_constraints_run ON factory_approval_scope_constraints(run_id, source_type, status);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_candidates_run ON factory_integration_candidates(run_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_plans_run ON factory_integration_plans(run_id, created_at);

@@ -32,6 +32,7 @@ import {
   type IntegrationRollbackPlan,
   type IntegrationStatus
 } from "./IntegrationModels.js";
+import type { ControlledIntegrationApplyResult } from "./ControlledIntegrationApplyModels.js";
 
 export type IntegrationApplyAdapterResult = {
   status: "applied" | "failed" | "blocked";
@@ -299,6 +300,23 @@ export class IntegrationManager {
         task_id: input.taskId,
         apply_mode: this.applyMode,
         preview_only: true
+      }
+    });
+  }
+
+  async consumeControlledIntegrationApplyResult(result: ControlledIntegrationApplyResult): Promise<void> {
+    await this.metadata.recordControlledApplyResultSaved(result);
+    await this.traceWriter.write({
+      run_id: result.run_id,
+      event_type: "integration_controlled_apply_result_referenced",
+      lifecycle_stage: "integrating",
+      severity: result.status === "post_validation_passed" ? "info" : "warning",
+      summary: `Integration manager referenced controlled apply result ${result.status}.`,
+      artifact_refs: [result.artifact_ref].filter((ref): ref is string => Boolean(ref)),
+      metadata_json: {
+        controlled_apply_id: result.controlled_apply_id,
+        integration_candidate_id: result.integration_candidate_id,
+        status: result.status
       }
     });
   }
