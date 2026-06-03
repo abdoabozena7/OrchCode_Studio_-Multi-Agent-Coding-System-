@@ -127,13 +127,14 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
   feedback: ["feedback", "customer feedback", "customer_feedback", "submitfeedback", "awaiting_feedback", "positive", "negative", "neutral", "outcome"],
   outerloop: ["outerloop", "outer loop", "outer_loop", "orchestrator", "actionexecutor", "action executor", "feedback loop", "decision loop", "human review", "retention offer"],
   inner_loop: ["inner loop", "inner_loop", "innerloop", "model pipeline", "prediction", "decision"],
-  inner_outer_loop: ["inner loop", "outer loop", "feedback loop", "decision loop", "action executor"]
+  inner_outer_loop: ["inner loop", "outer loop", "feedback loop", "decision loop", "action executor"],
+  multi_agent_system: ["multi agent", "multi-agent", "multi agentic", "multi-agentic", "multiagent", "agentic system", "specialist agents", "build_default_agents", "reactorchestrator", "agent_recommendations", "agent_consensus", "weighted_votes"]
 };
 
 const STYLE_TERMS = new Set([
   "answer", "applied", "apply", "code", "current", "detail", "details", "detailed",
-  "explain", "flow", "full", "here", "how", "implementation", "implemented", "inside",
-  "project", "snippet", "snippets", "step", "steps", "usage", "walkthrough", "work",
+  "chain", "explain", "flow", "full", "here", "how", "implementation", "implemented", "inside",
+  "path", "project", "snippet", "snippets", "stage", "stages", "step", "steps", "usage", "walkthrough", "work",
   "works", "ازاي", "إزاي", "كيف", "اشرح", "بالتفصيل", "هنا", "المشروع", "بيطبق", "بيتطبق"
 ]);
 
@@ -144,7 +145,13 @@ export function inferTargetConcept(input: {
   entities: string[];
 }) {
   const investigationConcept = resolveInvestigationConcept(input.question);
-  if (investigationConcept.isTargeted && investigationConcept.targetConcept !== "general") return investigationConcept.targetConcept;
+  if (
+    investigationConcept.isTargeted
+    && investigationConcept.targetConcept !== "general"
+    && !(STYLE_TERMS.has(normalizeConceptTerm(investigationConcept.targetConcept)) && looksLikeRelationshipExploration(input.question))
+  ) {
+    return investigationConcept.targetConcept;
+  }
   const fullQuestionConcept = canonicalConcept(input.question);
   if (fullQuestionConcept) return fullQuestionConcept;
   const candidates = [
@@ -157,7 +164,14 @@ export function inferTargetConcept(input: {
     const canonical = canonicalConcept(candidate);
     if (canonical) return canonical;
   }
+  if (looksLikeRelationshipExploration(input.question)) return "general";
   return candidates.find((candidate) => !STYLE_TERMS.has(candidate) && candidate.length > 2) ?? normalizeConceptTerm(input.topicPhrase);
+}
+
+function looksLikeRelationshipExploration(question: string) {
+  const normalized = normalizeConceptTerm(question);
+  return /\b(chain|flow|path|pipeline|stage|stages|step|steps|from|into|through|between|connect|link|follow|trace|relationship|handoff)\b/i.test(normalized)
+    || /\bwhat does each stage prove\b/i.test(question);
 }
 
 export function inferRequestedFacets(question: string, understanding: Pick<ProjectQuestionUnderstanding, "expectedAnswerShape" | "detailLevel" | "wantsCodeExamples">): RequestedQuestionFacet[] {

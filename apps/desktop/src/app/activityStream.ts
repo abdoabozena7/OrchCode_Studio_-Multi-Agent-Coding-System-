@@ -1,4 +1,10 @@
-import type { AgentRuntimeSession, RuntimeTaskTransition } from "@hivo/protocol";
+import type {
+  AgentRuntimeSession,
+  RuntimeProgressEvent,
+  RuntimeProgressStage,
+  RuntimeProgressStatus,
+  RuntimeTaskTransition
+} from "@hivo/protocol";
 
 export type ActivityStreamStatus = "running" | "completed" | "blocked" | "failed";
 
@@ -8,6 +14,12 @@ export type ActivityStreamItem = {
   summary: string;
   status: ActivityStreamStatus;
   createdAt?: string;
+  stage?: RuntimeProgressStage;
+  targetFiles?: string[];
+  agentName?: string;
+  rationaleLabel?: string;
+  nextLabel?: string;
+  nextStepTitle?: string;
 };
 
 export type ActiveRuntimeCommand = {
@@ -19,15 +31,17 @@ export type ActiveRuntimeCommand = {
 };
 
 export function buildPrimaryActivityItems(session: AgentRuntimeSession, activeCommand?: ActiveRuntimeCommand | null): ActivityStreamItem[] {
-  const items: ActivityStreamItem[] = session.taskState.transitions
-    .slice(-8)
-    .map((transition) => ({
-      id: transition.id,
-      title: humanizeTransition(transition),
-      summary: transition.detail,
-      status: mapTransitionStatus(transition),
-      createdAt: transition.createdAt
-    }));
+  const progressItems = annotateProgressItems(session.progressEvents.map(mapProgressEventToActivityItem), session);
+  const items: ActivityStreamItem[] = progressItems.length
+    ? progressItems
+    : session.taskState.transitions
+      .map((transition) => ({
+        id: transition.id,
+        title: humanizeTransition(transition),
+        summary: transition.detail,
+        status: mapTransitionStatus(transition),
+        createdAt: transition.createdAt
+      }));
 
   if (activeCommand && activeCommand.sessionId === session.id) {
     items.push({
@@ -51,12 +65,12 @@ export function buildPrimaryActivityItems(session: AgentRuntimeSession, activeCo
   }
 
   const implementationFallbackNote = session.reasoningSummaries.find((entry) =>
-    /Provider patch output was invalid; using deterministic implementation fallback\./i.test(entry)
+    /Provider patch output was invalid; (?:no deterministic implementation was invented|using only the explicit file path and content from the user request)\./i.test(entry)
   );
   if (implementationFallbackNote) {
     items.push({
       id: "implementation-fallback",
-      title: "Implementation fallback",
+      title: "Patch generation fallback",
       summary: implementationFallbackNote,
       status: "completed"
     });
@@ -70,21 +84,28 @@ export function describeCurrentStep(
   connectionState: "connected" | "disconnected",
   activeCommand?: ActiveRuntimeCommand | null
 ): ActivityStreamItem {
-  if (activeCommand && activeCommand.sessionId === session.id) {
-    return {
-      id: `current-running-${activeCommand.requestId}`,
-      title: `Running command: ${activeCommand.command}`,
-      summary: `${activeCommand.autoRun ? "Policy-classified auto-run" : "Approved run"} in ${activeCommand.cwd}`,
-      status: "running"
-    };
-  }
-
   if (connectionState === "disconnected" && session.status === "running") {
     return {
       id: "current-disconnected",
       title: "Live updates disconnected",
       summary: "The run may still be active, but the live event stream is disconnected.",
       status: "blocked"
+    };
+  }
+
+  if (!["completed", "blocked", "failed"].includes(session.status)) {
+    const currentProgress = selectCurrentProgressEvent(session.progressEvents);
+    if (currentProgress) {
+      return annotateCurrentItem(mapProgressEventToActivityItem(currentProgress), session, session.progressEvents);
+    }
+  }
+
+  if (activeCommand && activeCommand.sessionId === session.id) {
+    return {
+      id: `current-running-${activeCommand.requestId}`,
+      title: `Running command: ${activeCommand.command}`,
+      summary: `${activeCommand.autoRun ? "Policy-classified auto-run" : "Approved run"} in ${activeCommand.cwd}`,
+      status: "running"
     };
   }
 
@@ -144,7 +165,7 @@ export function describeCurrentStep(
 
   if (session.status === "failed") {
     const implementationFallbackNote = session.reasoningSummaries.find((entry) =>
-      /Provider patch output was invalid; using deterministic implementation fallback\./i.test(entry)
+      /Provider patch output was invalid; (?:no deterministic implementation was invented|using only the explicit file path and content from the user request)\./i.test(entry)
     );
     if (implementationFallbackNote) {
       return {
@@ -165,10 +186,83 @@ export function describeCurrentStep(
   const latest = buildPrimaryActivityItems(session, activeCommand).at(-1);
   return {
     id: "current-working",
-    title: latest?.title ?? "Working",
-    summary: latest?.summary ?? "Preparing the project flow.",
+    title: latest?.title ?? "Starting local run",
+    summary: latest?.summary ?? "Starting local run...",
     status: latest?.status ?? "running"
   };
+}
+
+export function describeNextProgressStep(session: AgentRuntimeSession, item: ActivityStreamItem): string | undefined {
+  return item.nextStepTitle ?? nextKnownStepTitle(session, item.title);
+}
+
+function mapProgressEventToActivityItem(event: RuntimeProgressEvent): ActivityStreamItem {
+  return {
+    id: event.id,
+    title: event.taskTitle ?? humanizeProgressStage(event.stage),
+    summary: event.summary,
+    status: mapProgressStatus(event.status),
+    createdAt: event.createdAt,
+    stage: event.stage,
+    targetFiles: event.targetFiles,
+    agentName: event.agentName
+  };
+}
+
+function annotateProgressItems(items: ActivityStreamItem[], session: AgentRuntimeSession) {
+  return items.map((item) => ({
+    ...item,
+    rationaleLabel: reasonLabelForSession(session),
+    nextLabel: nextLabelForSession(session),
+    nextStepTitle: nextKnownStepTitle(session, item.title)
+  }));
+}
+
+function annotateCurrentItem(item: ActivityStreamItem, session: AgentRuntimeSession, events: RuntimeProgressEvent[]) {
+  const nextEvent = events.find((event) => event.createdAt > (item.createdAt ?? "") && event.status !== "completed");
+  return {
+    ...item,
+    rationaleLabel: reasonLabelForSession(session),
+    nextLabel: nextLabelForSession(session),
+    nextStepTitle: nextEvent?.taskTitle ?? nextKnownStepTitle(session, item.title)
+  };
+}
+
+function selectCurrentProgressEvent(events: RuntimeProgressEvent[]) {
+  return events.at(-1);
+}
+
+function nextKnownStepTitle(session: AgentRuntimeSession, title: string) {
+  const steps = isArabicSession(session)
+    ? ["فهم الطلب", "قراءة المشروع", "تحديد نوع السؤال", "تقرير الأدلة", "فتح الملفات", "مراجعة الأدلة", "تجهيز الرد", "حفظ النتيجة"]
+    : ["Intake", "Workspace snapshot", "Question mode", "Evidence report", "Workspace reading", "Evidence validation", "Answer drafting", "Final report"];
+  const index = steps.indexOf(title);
+  return index >= 0 ? steps[index + 1] : undefined;
+}
+
+function reasonLabelForSession(session: AgentRuntimeSession) {
+  return isArabicSession(session) ? "ليه الخطوة دي" : "Why this step";
+}
+
+function nextLabelForSession(session: AgentRuntimeSession) {
+  return isArabicSession(session) ? "التالي" : "Next";
+}
+
+function isArabicSession(session: AgentRuntimeSession) {
+  return /[\u0600-\u06ff]/.test(session.userPrompt);
+}
+
+function humanizeProgressStage(stage: RuntimeProgressStage) {
+  return stage
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function mapProgressStatus(status: RuntimeProgressStatus): ActivityStreamStatus {
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "completed") return "completed";
+  return "running";
 }
 
 function humanizeTransition(transition: RuntimeTaskTransition) {

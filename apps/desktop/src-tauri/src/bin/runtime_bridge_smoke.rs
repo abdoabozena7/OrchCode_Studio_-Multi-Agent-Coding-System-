@@ -1,17 +1,23 @@
 #[path = "../models/mod.rs"]
 mod models;
 
+#[path = "../security/mod.rs"]
+mod security;
+
 mod services {
     #[path = "../../services/command_policy.rs"]
     pub mod command_policy;
     #[path = "../../services/terminal.rs"]
     pub mod terminal;
+    #[path = "../../services/workspace.rs"]
+    pub mod workspace;
 }
 
 use chrono::Utc;
 use models::{CommandResult, SafetySettingsInput};
 use serde_json::json;
 use services::terminal::TerminalService;
+use services::workspace::WorkspaceService;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -29,6 +35,30 @@ async fn run() -> Result<(), String> {
         args.get("--workspace")
             .ok_or_else(|| "Missing --workspace".to_string())?,
     );
+    if args
+        .get("--open-workspace")
+        .map(|value| value == "true")
+        .unwrap_or(false)
+    {
+        let mut workspace_service = WorkspaceService::new();
+        let canonical = workspace_service.open_workspace(
+            &workspace.to_string_lossy(),
+            "desktop-smoke-real-workspace".to_string(),
+        )?;
+        let files = workspace_service.list_files(None, true)?;
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "workspaceOpened": true,
+                "authority": "rust_workspace_service",
+                "canonicalWorkspace": canonical.to_string_lossy(),
+                "fileCount": files.len(),
+                "sampleFiles": files.iter().take(20).collect::<Vec<_>>()
+            }))
+            .map_err(|err| err.to_string())?
+        );
+        return Ok(());
+    }
     let cwd = PathBuf::from(args.get("--cwd").ok_or_else(|| "Missing --cwd".to_string())?);
     let command = args
         .get("--command")

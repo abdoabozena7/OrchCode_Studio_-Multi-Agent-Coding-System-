@@ -52,6 +52,7 @@ const IGNORED_DIRECTORIES = new Set([
   ".nox",
   ".nuxt",
   ".hivo-agent-runtime",
+  ".orchcode-agent-runtime",
   ".playwright-cli",
   ".playwright-mcp",
   ".pytest_cache",

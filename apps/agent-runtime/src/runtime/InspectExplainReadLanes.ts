@@ -174,6 +174,7 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
   ],
   inner_loop: ["inner loop", "inner_loop", "innerloop", "model pipeline", "prediction", "decision", "svm", "dbscan"],
   inner_outer_loop: ["inner loop", "outer loop", "feedback loop", "decision loop", "action executor", "retraining"],
+  multi_agent_system: ["multi agent", "multi-agent", "multi agentic", "multi-agentic", "multiagent", "agentic system", "agents", "specialist agents", "build_default_agents", "ReActOrchestrator", "orchestrator", "agent_recommendations", "agent_consensus", "weighted_votes", "choose_route"],
   dbscan: ["dbscan", "density-based", "density based", "fit_dbscan", "fit_predict"],
   fcm: ["fcm", "cmeans", "fuzzy c", "fuzzy c-means", "skfuzzy"],
   svm: ["svm", "svc", "support vector", "linearsvc", "predict_proba"],
@@ -191,7 +192,7 @@ export function runInspectExplainReadLanes(input: InspectExplainReadLaneInput): 
     targetTerms,
     filePaths,
     maxFilesPerLane: input.maxFilesPerLane ?? 220,
-    maxReadChars: input.maxReadChars ?? 50_000
+    maxReadChars: input.maxReadChars ?? 300_000
   };
 
   const artifacts = LANE_ORDER.map((lane) => runLane(lane, context));
@@ -425,7 +426,7 @@ function classifyLaneRole(
   }
   if (lane === "frontend") {
     if (/\.(css|scss)$/i.test(filePath) && /\b(page|screen|view|section|route|tab)\b/i.test(haystack)) return "unrelated_name_match";
-    if (isClientSourceFile(filePath) && /\b(fetch|axios|XMLHttpRequest|apiClient|client\.)\b/i.test(haystack) && extractEndpoint(haystack)) return "api_client_call";
+    if (isClientSourceFile(filePath) && /\b(fetch|axios|XMLHttpRequest|apiClient|client\.|apiGet|apiPost|request|postJson|getJson)\b/i.test(haystack) && isConcreteEndpoint(extractEndpoint(line) ?? extractEndpoint(snippet))) return "api_client_call";
     if (isClientSourceFile(filePath) && targetSeen && /\b(onSubmit|onClick|onChange|handle[A-Z][A-Za-z0-9_]*|submit[A-Z][A-Za-z0-9_]*|button|form|textarea|input|select)\b/i.test(haystack)) return "ui_event_handler";
     if (isClientSourceFile(filePath) && targetSeen && /\b(useState|state|set[A-Z][A-Za-z0-9_]*|submitting|message|label)\b/i.test(haystack)) return "ui_state";
     if (isClientSourceFile(filePath) && /\b(BrowserRouter|createBrowserRouter|Routes|Route|router|href=|data-view|data-page|CHAPTERS|PAGES|ROUTES|VIEWS|TABS)\b|<\s*(nav|section|aside|main|a|button)\b/i.test(haystack)) return "page_structure";
@@ -438,6 +439,7 @@ function classifyLaneRole(
   }
   if (lane === "storage") {
     if (storageNames.some((name) => line.includes(name)) && /\b[A-Z0-9_]*(?:LOG|CSV|FILE|PATH)[A-Z0-9_]*\b/.test(line)) return "storage_target";
+    if (targetSeen && /(?:^|[^A-Za-z0-9_])_?(?:append|record|write|save|persist|log)_[A-Za-z0-9_]*(?:feedback|outcome|retrain|log)|(?:^|[^A-Za-z0-9_])_?[A-Za-z0-9_]*(?:feedback|outcome|retrain|log)[A-Za-z0-9_]*(?:append|record|write|save|persist|log)\b/i.test(line)) return "log_append";
     if (isStorageWrite(line) && storageNames.some((name) => haystack.includes(name))) return isLogLike(haystack) ? "log_append" : "storage_write";
     if (isStorageRead(line) && storageNames.some((name) => haystack.includes(name))) return "storage_read";
     if (targetSeen && /\b(retrain|retraining|scheduler|job|queue|candidate)\b/i.test(haystack)) return "training_or_retraining";
@@ -456,7 +458,7 @@ function classifyLaneRole(
     if (isAlgorithmImplementation(haystack, context.targetConcept)) return "algorithm_implementation";
     if (targetSeen && TEST_PATH_RE.test(filePath)) return "test_endpoint_expectation";
     if (targetSeen && DOC_PATH_RE.test(filePath)) return "documentation_context";
-    if (targetSeen && /\b(fetch|axios|XMLHttpRequest)\b/i.test(haystack) && extractEndpoint(haystack)) return "api_client_call";
+    if (targetSeen && /\b(fetch|axios|XMLHttpRequest|apiGet|apiPost|apiClient|client\.|request|postJson|getJson)\b/i.test(haystack) && isConcreteEndpoint(extractEndpoint(line) ?? extractEndpoint(snippet))) return "api_client_call";
     if (targetSeen && extractEndpoint(haystack) && API_PATH_RE.test(filePath)) return "backend_route";
     if (targetSeen && /\b(def|function|class|return|execute|selected_action|decision|feedback|outcome|retrain)\b/i.test(haystack)) return "service_logic";
     if (targetSeen) return "wrapper_or_context";
@@ -481,16 +483,20 @@ function synthesizeFeedbackGraph(targetConcept: string, artifacts: InspectExplai
   const ui = findings.filter((item) => item.role === "ui_event_handler" || item.role === "ui_state");
   const apiCalls = findings.filter((item) => item.role === "api_client_call" && item.endpoint);
   const routes = findings.filter((item) => item.role === "backend_route" && item.endpoint);
-  const routeEndpoints = new Set(routes.map((item) => item.endpoint).filter(Boolean));
-  const matchedApi = apiCalls.filter((item) => item.endpoint && routeEndpoints.has(item.endpoint));
-  const storage = findings.filter((item) => (item.role === "storage_write" || item.role === "log_append" || item.role === "storage_read") && item.targetScoped !== false);
-  const storageTargets = findings.filter((item) => item.role === "storage_target" && item.targetScoped !== false);
+  const routeEndpointKeys = new Set(routes.map((item) => endpointMatchKey(item.endpoint)).filter(Boolean));
+  const matchedApi = apiCalls.filter((item) => item.endpoint && routeEndpointKeys.has(endpointMatchKey(item.endpoint)));
+  const storage = findings
+    .filter((item) => (item.role === "storage_write" || item.role === "log_append" || item.role === "storage_read") && item.targetScoped !== false)
+    .sort((left, right) => feedbackStorageFindingScore(right) - feedbackStorageFindingScore(left) || left.path.localeCompare(right.path) || left.line - right.line);
+  const storageTargets = findings
+    .filter((item) => item.role === "storage_target" && item.targetScoped !== false)
+    .sort((left, right) => feedbackStorageFindingScore(right) - feedbackStorageFindingScore(left) || left.path.localeCompare(right.path) || left.line - right.line);
   const downstream = findings.filter((item) => item.role === "training_or_retraining" || item.role === "job_or_scheduler");
   const tests = findings.filter((item) => item.role === "test_endpoint_expectation");
 
   push("frontend_surface", ui.some((item) => item.role === "ui_event_handler") ? "proven" : "partial", ui, "Frontend lane found a feedback surface or submit handler.", ui[0]?.ownerSymbol, ui[0]?.endpoint);
   push("frontend_to_api", apiCalls.length ? "proven" : "partial", apiCalls.length ? apiCalls : tests, apiCalls.length ? "Frontend lane found a production client/API call." : "Tests mention an endpoint, but no production client call was found.", apiCalls[0]?.ownerSymbol ?? "client", apiCalls[0]?.endpoint ?? tests[0]?.endpoint);
-  push("api_to_backend", matchedApi.length ? "proven" : routes.length && apiCalls.length ? "partial" : routes.length ? "partial" : "unproven", matchedApi.length ? [...matchedApi, ...routes.filter((route) => route.endpoint === matchedApi[0]?.endpoint)] : routes, matchedApi.length ? "Client endpoint matches a backend route." : "Backend route evidence exists without a matched production client call.", matchedApi[0]?.endpoint ?? routes[0]?.endpoint, routes[0]?.ownerSymbol);
+  push("api_to_backend", matchedApi.length ? "proven" : routes.length && apiCalls.length ? "partial" : routes.length ? "partial" : "unproven", matchedApi.length ? [...matchedApi, ...routes.filter((route) => endpointMatchKey(route.endpoint) === endpointMatchKey(matchedApi[0]?.endpoint))] : routes, matchedApi.length ? "Client endpoint matches a backend route." : "Backend route evidence exists without a matched production client call.", matchedApi[0]?.endpoint ?? routes[0]?.endpoint, routes[0]?.ownerSymbol);
   push("backend_to_storage", storage.length ? "proven" : storageTargets.length ? "partial" : "unproven", storage.length ? storage : storageTargets, storage.length ? "Target-scoped feedback storage/log read or write exists." : "Feedback storage target is declared, but no read/write was proven.", storage[0]?.ownerSymbol, storage[0]?.storageTarget ?? storageTargets[0]?.storageTarget);
   push("downstream_feedback_consumer", downstream.length ? "proven" : "unproven", downstream, "Feedback has a downstream consumer such as retraining or a scheduled job.", downstream[0]?.ownerSymbol, downstream[0]?.storageTarget);
 
@@ -850,11 +856,30 @@ function extractEndpoint(text: string) {
     ?? text.match(/["'](\/[A-Za-z0-9_./:-]+)["']/)?.[1];
 }
 
+function endpointMatchKey(endpoint?: string) {
+  if (!endpoint) return "";
+  return endpoint.replace(/\/+$/g, "").replace(/^\/api(?=\/)/i, "") || "/";
+}
+
+function isConcreteEndpoint(endpoint?: string) {
+  const key = endpointMatchKey(endpoint);
+  return key !== "" && key !== "/" && key.startsWith("/") && !key.includes("${");
+}
+
+function feedbackStorageFindingScore(item: InspectExplainReadLaneFinding) {
+  const text = `${item.storageTarget ?? ""}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`;
+  let score = item.role === "log_append" || item.role === "storage_write" ? 30 : 0;
+  if (/\bcustomer_feedback|customer-feedback|customer feedback|feedback_log|feedback[-_]?log\b/i.test(text)) score += 100;
+  else if (/\bfeedback\b/i.test(text)) score += 50;
+  if (/\bretrain|retraining\b/i.test(text) && !/\bcustomer_feedback|customer-feedback|feedback_log\b/i.test(text)) score -= 25;
+  return score;
+}
+
 function extractStorageTarget(text: string, storageNames: string[]) {
   for (const name of storageNames) {
     if (text.includes(name)) return name;
   }
-  return text.match(/["']([^"']*(?:feedback|outcome|retrain|log|csv|state)[^"']*)["']/i)?.[1];
+  return text.match(/["']([^"'\r\n]*(?:feedback|outcome|retrain|log|csv|state)[^"'\r\n]*)["']/i)?.[1];
 }
 
 function isStorageWrite(line: string) {

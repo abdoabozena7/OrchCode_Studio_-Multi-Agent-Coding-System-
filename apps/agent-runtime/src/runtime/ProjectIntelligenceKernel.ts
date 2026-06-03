@@ -275,6 +275,29 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
     "dbscan",
     "retraining"
   ],
+  multi_agent_system: [
+    "multi agent",
+    "multi-agent",
+    "multi agentic",
+    "multi-agentic",
+    "multiagent",
+    "agentic system",
+    "agent system",
+    "agents",
+    "specialist agents",
+    "build_default_agents",
+    "BaseAgent",
+    "ReliabilityAgent",
+    "ForecastAgent",
+    "ClusterHealthAgent",
+    "ReActOrchestrator",
+    "orchestrator",
+    "agent_recommendations",
+    "agent_consensus",
+    "weighted_votes",
+    "choose_route",
+    "ActionExecutor"
+  ],
   dbscan: ["dbscan", "DBSCAN", "fit_dbscan"],
   fcm: ["fcm", "FCM", "cmeans", "fuzzy c"],
   svm: ["svm", "SVM", "SVC", "support vector"],
@@ -324,10 +347,14 @@ const QUESTION_MODIFIER_TERMS = [
 export function resolveInvestigationConcept(question: string): InvestigationConceptResolution {
   const normalized = normalizeInvestigationText(question);
   const asciiTokens = extractAsciiTokens(question).map(normalizeConcept).filter(Boolean);
+  const hasFeedbackSignal = /\b(?:feedback|customer feedback|customer_feedback|submitfeedback|awaiting_feedback|outcome|positive|negative|neutral)\b/i.test(normalized)
+    || /(?:\u0641\u064a\u062f\u0628\u0627\u0643|\u0627\u0644\u0641\u064a\u062f\u0628\u0627\u0643|\u0633\u0644\u0628\u064a|\u0633\u0644\u0628\u0649|\u0627\u064a\u062c\u0627\u0628\u064a|\u0625\u064a\u062c\u0627\u0628\u064a)/.test(question);
+  const hasRetrainingSignal = /\b(?:retraining loop|retrain|retraining)\b/i.test(normalized)
+    || /(?:\u0627\u0639\u0627\u062f\u0629\s+\u062a\u062f\u0631\u064a\u0628|\u0625\u0639\u0627\u062f\u0629\s+\u062a\u062f\u0631\u064a\u0628|\u062a\u062f\u0631\u064a\u0628|retraining)/i.test(question);
   const labelsOrModifiers = uniqueStrings([
     ...QUESTION_MODIFIER_TERMS.filter((term) => normalized.includes(term)),
     ...(/\bpositive\b/i.test(question) ? ["positive"] : []),
-    ...(/\bnegative\b/i.test(question) ? ["negative"] : []),
+    ...(/\bnegative\b/i.test(question) || /(?:\u0633\u0644\u0628\u064a|\u0633\u0644\u0628\u0649)/.test(question) ? ["negative"] : []),
     ...(/\bneutral\b/i.test(question) ? ["neutral"] : [])
   ]);
   const notes: string[] = [];
@@ -357,6 +384,11 @@ export function resolveInvestigationConcept(question: string): InvestigationConc
     targetConcept = "sarima";
     requestedConceptText = "SARIMA";
     resolvedName = "SARIMA";
+  } else if (/\b(?:multi\s+agent(?:ic)?|multi-agent(?:ic)?|multiagent|agentic\s+system|agent\s+system|specialist\s+agents)\b/i.test(normalized)) {
+    targetConcept = "multi_agent_system";
+    requestedConceptText = "multi agentic system";
+    resolvedName = "multi-agentic system";
+    inferredPatternName = "specialist agents plus central orchestrator";
   } else if (/\binner\s+loop\b|\binner_loop\b|\binnerloop\b/i.test(normalized) && /\bouter\s+loop\b|\bouter_loop\b|\bouterloop\b/i.test(normalized)) {
     targetConcept = "inner_outer_loop";
     requestedConceptText = "inner loop / outer loop";
@@ -371,6 +403,13 @@ export function resolveInvestigationConcept(question: string): InvestigationConc
     targetConcept = "inner_loop";
     requestedConceptText = "inner loop";
     inferredPatternName = "model/prediction decision loop";
+  } else if (hasFeedbackSignal && hasRetrainingSignal) {
+    targetConcept = "feedback";
+    requestedConceptText = "feedback";
+    resolvedName = "feedback";
+    secondaryConcepts = ["retraining_loop"];
+    notes.push("Mixed feedback/retraining question kept centered on feedback impact.");
+    if (labelsOrModifiers.length) notes.push(`Feedback labels/modifiers detected: ${labelsOrModifiers.join(", ")}.`);
   } else if (/\b(?:retraining loop|retrain|retraining)\b/i.test(normalized)) {
     targetConcept = "retraining_loop";
     requestedConceptText = "retraining loop";
@@ -448,7 +487,7 @@ export function buildProjectIntelligenceGraph(input: ProjectIntelligenceBuildInp
   for (const filePath of files) {
     let text = "";
     try {
-      text = input.readFile(filePath).slice(0, input.maxReadChars ?? 50_000);
+      text = input.readFile(filePath).slice(0, input.maxReadChars ?? 300_000);
     } catch {
       continue;
     }
@@ -467,7 +506,12 @@ export function buildProjectIntelligenceGraph(input: ProjectIntelligenceBuildInp
 
   addGraphExpansionTrace(evidence, expansionTrace);
   const graphEvidence = [...evidence.values()]
-    .sort((left, right) => roleRank(left.role) - roleRank(right.role) || left.path.localeCompare(right.path) || left.line - right.line)
+    .sort((left, right) =>
+      mechanismEvidencePriority(right, targetConcept) - mechanismEvidencePriority(left, targetConcept)
+      || roleRank(left.role) - roleRank(right.role)
+      || left.path.localeCompare(right.path)
+      || left.line - right.line
+    )
     .slice(0, 160);
   const graphNodes = [...nodes.values()].slice(0, 240);
   const graphEdges = [...edges.values()].slice(0, 240);
@@ -651,13 +695,20 @@ function classifyMechanismRole(
     return extractEndpoint(haystack) ? "test_endpoint_expectation" : "test";
   }
   if (DOC_RE.test(filePath) && targetSeen) return "documentation";
-  if (isClientSourceFile(filePath) && /\b(fetch|axios\.(?:get|post|put|patch|delete)|request\(|client\.(?:get|post|put|patch|delete))\b/.test(haystack) && (targetSeen || endpointMatchesTarget(haystack, targetTerms))) return "api_client_call";
+  if (isClientSourceFile(filePath)
+    && /\b(fetch|axios\.(?:get|post|put|patch|delete)|request\(|client\.(?:get|post|put|patch|delete)|apiGet|apiPost|postJson|getJson)\b/.test(haystack)
+    && isConcreteEndpoint(extractEndpoint(line) ?? extractEndpoint(snippet))
+    && (targetSeen || endpointMatchesTarget(haystack, targetTerms))) return "api_client_call";
   if (isRouteLine(line)) return endpointMatchesTarget(line, targetTerms) ? "backend_route" : undefined;
   if (/\b(CUSTOMER_[A-Z0-9_]*LOG_PATH|[A-Z0-9_]*(?:LOG|CSV|FILE|PATH)[A-Z0-9_]*)\b/.test(line) && storageNames.some((name) => line.includes(name))) {
     return isTargetScopedStorage(haystack, targetConcept, targetTerms, extractStorageTarget(line, storageNames) ?? extractStorageTarget(snippet, storageNames)) ? "storage_target" : "general_storage";
   }
   if (isStorageWrite(line) && storageNames.some((name) => haystack.includes(name))) return isTargetScopedStorage(haystack, targetConcept, targetTerms, extractStorageTarget(line, storageNames) ?? extractStorageTarget(snippet, storageNames)) ? isLogLike(haystack) ? "log_append" : "storage_write" : "general_storage";
+  if (targetSeen && /(?:^|[^A-Za-z0-9_])_?(?:append|record|write|save|persist|log)_[A-Za-z0-9_]*(?:feedback|outcome|retrain|log)|(?:^|[^A-Za-z0-9_])_?[A-Za-z0-9_]*(?:feedback|outcome|retrain|log)[A-Za-z0-9_]*(?:append|record|write|save|persist|log)\b/i.test(line)) return "log_append";
   if (isStorageRead(line) && storageNames.some((name) => haystack.includes(name))) return isTargetScopedStorage(haystack, targetConcept, targetTerms, extractStorageTarget(line, storageNames) ?? extractStorageTarget(snippet, storageNames)) ? "storage_read" : "general_storage";
+  if (normalizeConcept(targetConcept) === "feedback" && SOURCE_RE.test(filePath) && /\b(should_trigger_outer_loop|retrain_with_rollback|interpret_customer_feedback|submit_customer_feedback)\b/i.test(haystack)) {
+    return /\b(retrain_with_rollback|retraining_event)\b/i.test(haystack) ? "training_or_retraining" : "lifecycle_status";
+  }
   if (FRONTEND_RE.test(filePath) && targetSeen && /\b(onSubmit|onClick|handle[A-Z][A-Za-z0-9_]*|submit[A-Z][A-Za-z0-9_]*|addEventListener)\b/.test(haystack)) return "ui_event_handler";
   if (FRONTEND_RE.test(filePath) && targetSeen && /\b(useState|state|set[A-Z][A-Za-z0-9_]*|feedback\s*:|submitting\s*:)\b/.test(haystack)) return "ui_state";
   if (targetSeen && /\b(retrain|training|train_|fit\(|scheduler|cron|job|queue|interval)\b/i.test(haystack)) return /\b(scheduler|cron|job|queue|interval)\b/i.test(haystack) ? "job_or_scheduler" : "training_or_retraining";
@@ -762,7 +813,7 @@ function missingMechanismLinks(targetConcept: string, evidence: MechanismEvidenc
   }
   if (targetConcept !== "feedback") return [];
   const missing: string[] = [];
-  if (!hasAnyRole(evidence, ["ui_state", "ui_event_handler"])) missing.push("frontend_feedback_surface");
+  if (!hasAnyRole(evidence, ["ui_state", "ui_event_handler", "api_client_call"])) missing.push("frontend_feedback_surface");
   if (!hasAnyRole(evidence, ["api_client_call"])) missing.push("frontend_to_backend_request");
   const endpoints = targetEndpointSet(evidence);
   if (!hasMatchingEndpoint(evidence, "backend_route", endpoints) && !hasAnyRole(evidence, ["service_logic"])) missing.push("backend_feedback_handler");
@@ -797,7 +848,7 @@ function buildFeedbackMechanismSteps(evidence: MechanismEvidence[]) {
   const apiCalls = evidence.filter((item) => item.role === "api_client_call" && item.endpoint);
   const tests = evidence.filter((item) => item.role === "test_endpoint_expectation" && item.endpoint);
   const endpoints = targetEndpointSet(evidence);
-  const backendRoutes = evidence.filter((item) => item.role === "backend_route" && (!endpoints.size || endpoints.has(item.endpoint ?? "")));
+  const backendRoutes = evidence.filter((item) => item.role === "backend_route" && (!endpoints.size || endpoints.has(endpointMatchKey(item.endpoint))));
   const services = evidence.filter((item) => item.role === "service_logic");
   const storage = targetScopedStorageWrites(evidence);
   const storageTargets = evidence.filter((item) => item.role === "storage_target" && item.targetScoped !== false);
@@ -814,7 +865,7 @@ function buildFeedbackMechanismSteps(evidence: MechanismEvidence[]) {
 
   if (apiCalls.length) {
     for (const endpoint of uniqueStrings(apiCalls.map((item) => item.endpoint ?? "")).slice(0, 4)) {
-      const items = apiCalls.filter((item) => item.endpoint === endpoint);
+      const items = apiCalls.filter((item) => endpointMatchKey(item.endpoint) === endpointMatchKey(endpoint));
       pushMechanismStep(steps, {
         role: "api_client_call",
         relation: "frontend_to_api",
@@ -840,8 +891,12 @@ function buildFeedbackMechanismSteps(evidence: MechanismEvidence[]) {
     }
   }
 
+  const seenBackendEndpointKeys = new Set<string>();
   for (const endpoint of uniqueStrings([...apiCalls, ...tests, ...backendRoutes].map((item) => item.endpoint ?? "")).slice(0, 4)) {
-    const routeItems = backendRoutes.filter((item) => item.endpoint === endpoint);
+    const endpointKey = endpointMatchKey(endpoint);
+    if (seenBackendEndpointKeys.has(endpointKey)) continue;
+    seenBackendEndpointKeys.add(endpointKey);
+    const routeItems = backendRoutes.filter((item) => endpointMatchKey(item.endpoint) === endpointMatchKey(endpoint));
     if (!routeItems.length) continue;
     pushMechanismStep(steps, {
       role: "backend_route",
@@ -1034,15 +1089,25 @@ function extractStorageTarget(text: string, storageNames: string[]) {
   }
   const constant = text.match(/\b([A-Z][A-Z0-9_]*(?:LOG|CSV|FILE|PATH)[A-Z0-9_]*)\b/);
   if (constant?.[1]) return constant[1];
-  const pathLike = text.match(/["']([^"']*(?:feedback|log|csv)[^"']*)["']/i);
+  const pathLike = text.match(/["']([^"'\r\n]*(?:feedback|log|csv)[^"'\r\n]*)["']/i);
   return pathLike?.[1];
 }
 
 function extractEndpoint(text: string) {
-  const route = text.match(/(?:@\w+\.(?:get|post|put|patch|delete)|router\.(?:get|post|put|patch|delete)|app\.(?:get|post|put|patch|delete)|fetch|axios\.(?:get|post|put|patch|delete)|client\.(?:get|post|put|patch|delete)|self\.client\.(?:get|post|put|patch|delete))\s*\(?\s*["'`]([^"'`]+)["'`]/i);
+  const route = text.match(/(?:@\w+\.(?:get|post|put|patch|delete)|router\.(?:get|post|put|patch|delete)|app\.(?:get|post|put|patch|delete)|fetch|apiGet|apiPost|postJson|getJson|axios\.(?:get|post|put|patch|delete)|client\.(?:get|post|put|patch|delete)|self\.client\.(?:get|post|put|patch|delete))\s*\(?\s*["'`]([^"'`]+)["'`]/i);
   if (route?.[1]) return route[1];
   const methodObject = text.match(/\burl\s*:\s*["'`]([^"'`]+)["'`]/i);
   return methodObject?.[1];
+}
+
+function endpointMatchKey(endpoint?: string) {
+  if (!endpoint) return "";
+  return endpoint.replace(/\/+$/g, "").replace(/^\/api(?=\/)/i, "") || "/";
+}
+
+function isConcreteEndpoint(endpoint?: string) {
+  const key = endpointMatchKey(endpoint);
+  return key !== "" && key !== "/" && key.startsWith("/") && !key.includes("${");
 }
 
 function isRouteLine(line: string) {
@@ -1306,6 +1371,29 @@ function roleRank(role: MechanismEvidenceRole) {
   return index === -1 ? ROLE_ORDER.length : index;
 }
 
+function mechanismEvidencePriority(item: MechanismEvidence, targetConcept: string) {
+  const target = normalizeConcept(targetConcept);
+  const text = `${item.endpoint ?? ""}\n${item.storageTarget ?? ""}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`;
+  let score = 0;
+  if (target === "feedback") {
+    if (/submit_customer_feedback|interpret_customer_feedback/i.test(text)) score += 120;
+    if (/should_trigger_outer_loop|retrain_with_rollback|response_label.*negative|negative.*response_label/i.test(text)) score += 110;
+    if (/\bcustomer_feedback|customer-feedback|customer feedback|feedback_log|CUSTOMER_FEEDBACK_LOG_PATH\b/i.test(text)) score += 90;
+    else if (/\bfeedback\b/i.test(text)) score += 50;
+    if (/\/customer-feedback/i.test(text)) score += 80;
+    if (/\bretrain|retraining\b/i.test(text) && !/should_trigger_outer_loop|retrain_with_rollback|customer_feedback|feedback/i.test(text)) score -= 20;
+  }
+  if (target === "multi_agent_system") {
+    if (/services\/agents\.py|class\s+(?:BaseAgent|ReliabilityAgent|ForecastAgent|ClusterHealthAgent)|build_default_agents/i.test(`${item.path}\n${text}`)) score += 120;
+    if (/services\/orchestrator\.py|class\s+ReActOrchestrator|choose_route|weighted_votes|weighted_winner/i.test(`${item.path}\n${text}`)) score += 110;
+    if (/routes?\.py/i.test(item.path) && /\bagents\s*=\s*build_default_agents\(|\borchestrator\s*=\s*ReActOrchestrator\(|\baction_executor\s*=\s*ActionExecutor\(/i.test(text)) score += 160;
+    if (/routes?\.py/i.test(item.path) && /agent_recommendations\s*=.*agent\.recommend|orchestrator\.choose_route|execute_action/i.test(text)) score += 155;
+    if (/routes?\.py/i.test(item.path) && /agent_consensus|agent_recommendations|orchestrator_snapshot/i.test(text)) score += 130;
+    if (/\btrend_multiplier\b/i.test(text) && !/ForecastAgent|agent_recommendations|orchestrator/i.test(text)) score -= 70;
+  }
+  return score;
+}
+
 function hasAnyRole(evidence: MechanismEvidence[], roles: MechanismEvidenceRole[]) {
   return evidence.some((item) => roles.includes(item.role));
 }
@@ -1325,12 +1413,12 @@ function targetEndpointSet(evidence: MechanismEvidence[]) {
   return new Set(
     evidence
       .filter((item) => item.endpoint && endpointLooksTargetScoped(item.endpoint, item.relatedNames))
-      .map((item) => item.endpoint ?? "")
+      .map((item) => endpointMatchKey(item.endpoint))
   );
 }
 
 function hasMatchingEndpoint(evidence: MechanismEvidence[], role: MechanismEvidenceRole, endpoints: Set<string>) {
-  return evidence.some((item) => item.role === role && item.endpoint && (!endpoints.size || endpoints.has(item.endpoint)));
+  return evidence.some((item) => item.role === role && item.endpoint && (!endpoints.size || endpoints.has(endpointMatchKey(item.endpoint))));
 }
 
 function hasTargetScopedStorageWrite(evidence: MechanismEvidence[]) {
@@ -1341,7 +1429,16 @@ function targetScopedStorageWrites(evidence: MechanismEvidence[]) {
   return evidence.filter((item) =>
     (item.role === "storage_write" || item.role === "log_append" || item.role === "storage_read")
     && item.targetScoped !== false
-  );
+  ).sort((left, right) => feedbackStorageScore(right) - feedbackStorageScore(left) || left.path.localeCompare(right.path) || left.line - right.line);
+}
+
+function feedbackStorageScore(item: MechanismEvidence) {
+  const text = `${item.storageTarget ?? ""}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`;
+  let score = item.role === "log_append" || item.role === "storage_write" ? 30 : 0;
+  if (/\bcustomer_feedback|customer-feedback|customer feedback|feedback_log|feedback[-_]?log\b/i.test(text)) score += 100;
+  else if (/\bfeedback\b/i.test(text)) score += 50;
+  if (/\bretrain|retraining\b/i.test(text) && !/\bcustomer_feedback|customer-feedback|feedback_log\b/i.test(text)) score -= 25;
+  return score;
 }
 
 function endpointLooksTargetScoped(endpoint: string, relatedNames: string[]) {
@@ -1354,6 +1451,7 @@ function isArchitectureLevelConcept(targetConcept: string) {
     "outerloop",
     "inner_loop",
     "inner_outer_loop",
+    "multi_agent_system",
     "retraining_loop",
     "human_review_loop",
     "action_loop"

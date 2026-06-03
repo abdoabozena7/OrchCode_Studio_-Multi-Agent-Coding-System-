@@ -39,3 +39,7 @@ export const runVerificationSchema = {
 export const projectExplainSchema = {
   name: "project-explain"
 } as const;
+
+export const conversationIntentDecisionSchema = {
+  name: "conversation-intent-decision"
+} as const;

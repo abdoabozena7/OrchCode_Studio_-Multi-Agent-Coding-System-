@@ -57,6 +57,13 @@ import {
 } from "./LargeProjectContextBuilder.js";
 import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 import { answerUniversalProjectQuestion } from "./UniversalProjectQuestionEngine.js";
+import {
+  createDirectConversationReply,
+  directConversationProgressSummary,
+  directConversationProgressTitle,
+  type IntentDecision
+} from "./IntentDecisionEngine.js";
+import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
 
 type RunPlanTask = {
   id?: string;
@@ -84,6 +91,56 @@ type RunVerificationModel = {
   checks: Array<{ name: string; status: "passed" | "failed" | "pending"; detail: string }>;
 };
 
+function addWorkspaceIdentityBanner(answerMarkdown: string, workspacePath: string, fallbackUsed?: boolean, fallbackReason?: string): string {
+  const trimmedAnswer = answerMarkdown.trim();
+  const normalizedWorkspace = workspacePath.replaceAll("\\", "/").replace(/\/$/, "");
+  const normalizedAnswer = trimmedAnswer.replaceAll("\\", "/");
+  const lines: string[] = [];
+  if (!normalizedWorkspace || !normalizedAnswer.includes(normalizedWorkspace)) {
+    lines.push(`> Workspace used for this answer: \`${workspacePath}\``);
+  }
+  if (fallbackUsed) {
+    const reason = fallbackReason ? ` Reason: ${fallbackReason.slice(0, 220)}` : "";
+    const noticeOnly = /^provider_(?:failed|validation)_notice\b/i.test(fallbackReason ?? "");
+    lines.push(noticeOnly
+      ? `> Answer source: provider output was unavailable or failed validation; local synthesis was not used.${reason}`
+      : `> Answer source: local evidence graph synthesis after provider output was unavailable or failed validation.${reason}`);
+  }
+  return lines.length ? [...lines, "", trimmedAnswer].join("\n") : trimmedAnswer;
+}
+
+function createLocalRunProgressCopy(message: string) {
+  const arabic = /[\u0600-\u06ff]/.test(message);
+  return {
+    arabic,
+    intake: arabic
+      ? { title: "فهم الطلب", summary: "بفهم المطلوب وبجهز تشغيل محلي آمن من غير ما أعدل ملفات." }
+      : { title: "Intake", summary: "Clarifying the request and preparing a local run." },
+    workspaceSnapshot: arabic
+      ? { title: "قراءة المشروع", summary: "بقرأ شكل المشروع والملفات المهمة عشان أبني الصورة من الواقع." }
+      : { title: "Workspace snapshot", summary: "Inspecting workspace structure and important files." },
+    questionMode: arabic
+      ? { title: "تحديد نوع السؤال", summary: "ليه الخطوة دي: لازم أعرف هل المطلوب شرح، تدفق، معماريات، أو سؤال عن ميزة قبل ما أقرأ الأدلة." }
+      : { title: "Question mode", summary: "Why this step: classify whether this is explain, flow, architecture, or feature understanding before reading evidence." },
+    evidenceReportStart: arabic
+      ? { title: "تقرير الأدلة", summary: "ليه الخطوة دي: ببني تقرير أولي من خريطة المشروع والملفات المهمة بدل رد ثابت." }
+      : { title: "Evidence report", summary: "Why this step: build an initial evidence report from the project map and important files instead of using a canned answer." },
+    workspaceReadingStart: arabic
+      ? { title: "فتح الملفات", summary: "ليه الخطوة دي: بفتح الملفات المرشحة وبجمع إشارات من الكود الحالي قبل صياغة الرد." }
+      : { title: "Workspace reading", summary: "Why this step: open candidate files and collect current-code signals before drafting the answer." },
+    evidenceValidation: arabic
+      ? { title: "مراجعة الأدلة", summary: "ليه الخطوة دي: براجع الاستشهادات وبستبعد الأدلة الضعيفة أو اللي مش من كود production." }
+      : { title: "Evidence validation", summary: "Why this step: check citations and reject weak, generated, or non-production evidence before trusting claims." },
+    answerDraft: arabic
+      ? { title: "تجهيز الرد", summary: "ليه الخطوة دي: بصيغ إجابة مفهومة من الأدلة المقبولة، مش من كلام عام." }
+      : { title: "Answer drafting", summary: "Why this step: draft a readable answer from accepted evidence, not generic bullets." },
+    finalReport: arabic
+      ? { title: "حفظ النتيجة", summary: "ليه الخطوة دي: بحفظ التقرير والرد النهائي عشان تقدر تراجع اللي حصل بعد التشغيل." }
+      : { title: "Final report", summary: "Why this step: store the evidence report and final answer so the run stays auditable." }
+  };
+}
+
+
 export class RunEngine {
   constructor(
     private readonly provider: LlmProvider,
@@ -98,17 +155,26 @@ export class RunEngine {
       resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">;
       projectMap: ProjectMap;
       thinkFirst?: boolean;
+      conversationUnderstanding?: ConversationUnderstanding;
     }
   ): Promise<AgentRuntimeSession> {
     const session = this.requireSession(sessionId);
-    const requestedRunIntent = classifyRunIntent(message);
-    const runMode = inferLocalRunMode(message, options.resolvedMode, requestedRunIntent);
     const lastMessage = session.messages.at(-1);
     if (lastMessage?.role !== "user" || lastMessage.content !== message) {
       await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
     }
+    const conversationUnderstanding = options.conversationUnderstanding ?? createConversationUnderstanding(message);
+    const intentDecision = conversationUnderstanding.intentDecision;
+    if (intentDecision.kind === "direct_conversation") {
+      return this.completeDirectConversationTurn(sessionId, options.resolvedMode, intentDecision);
+    }
+    const executionMessage = conversationUnderstanding.workspaceMessage || message;
 
-    await this.updateStage(sessionId, "INTAKE", "planning", "running", "Intake", "Clarifying the request and preparing a local run.");
+    const requestedRunIntent = classifyRunIntent(message, conversationUnderstanding);
+    const runMode = inferLocalRunMode(executionMessage, options.resolvedMode, requestedRunIntent);
+
+    const progressCopy = createLocalRunProgressCopy(message);
+    await this.updateStage(sessionId, "INTAKE", "planning", "running", progressCopy.intake.title, progressCopy.intake.summary);
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "running";
       draft.resolvedExecutionMode = options.resolvedMode;
@@ -125,7 +191,7 @@ export class RunEngine {
         role: "Senior Coding Agent",
         roleTitle: "Coordinator",
         lifecycleStage: "INTAKE",
-        objective: message,
+        objective: executionMessage,
         ownedPaths: ["workspace://current"],
         forbiddenPaths: ["tauri://rust-authority", "workspace://outside-current"],
         allowedActions: ["inspect_workspace", "prepare_plan", "propose_patch", "request_commands", "record_decisions"],
@@ -166,12 +232,13 @@ export class RunEngine {
     }, "executed");
     const intake = buildProjectIntake({
       workspacePath: session.workspacePath,
-      message,
+      message: executionMessage,
       projectMap: options.projectMap,
-      tools
+      tools,
+      conversationUnderstanding
     });
     const enrichedProjectMap = createProjectMapFromIntake(options.projectMap, intake);
-    const snapshot = createSnapshot(tools, enrichedProjectMap, message, intake);
+    const snapshot = createSnapshot(tools, enrichedProjectMap, executionMessage, intake, conversationUnderstanding);
     await this.addIntent(sessionId, "project.intake.requested", "Project intake", "Detect project continuation signals before planning edits.", {
       workspacePath: session.workspacePath,
       projectKind: intake.projectKind,
@@ -218,7 +285,15 @@ export class RunEngine {
       createdByAgentId: "agent_local_codex",
       linkedAgentIds: ["agent_local_codex"]
     });
-    await this.updateStage(sessionId, "CONTEXT_GATHER", "inspecting", "completed", "Workspace snapshot", snapshot.summary);
+    await this.updateStage(
+      sessionId,
+      "CONTEXT_GATHER",
+      "inspecting",
+      "completed",
+      progressCopy.workspaceSnapshot.title,
+      progressCopy.arabic ? `${progressCopy.workspaceSnapshot.summary} لقيت ${snapshot.importantFiles.length} ملف مهم.` : snapshot.summary,
+      snapshot.importantFiles.slice(0, 6)
+    );
     await this.updateRunPhase(sessionId, "inspect_workspace", "completed", snapshot.summary, snapshot.fileSamples.length);
     await this.updateRunPhase(
       sessionId,
@@ -229,21 +304,21 @@ export class RunEngine {
     );
 
     await this.addIntent(sessionId, "workspace.search.requested", "Search request", "Identify likely files and project entry points.", {
-      query: inferSearchQuery(message),
+      query: inferSearchQuery(executionMessage, conversationUnderstanding),
       importantFiles: snapshot.importantFiles
     }, "executed");
 
     if (isReadOnlyAnswerRequest(snapshot)) {
-      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake);
+      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake, conversationUnderstanding);
     }
 
     if (snapshot.runIntent === "run_to_green") {
-      const runToGreenPlan = createDeterministicFallbackPlan(message, snapshot, "run_to_green");
+      const runToGreenPlan = createDeterministicFallbackPlan(executionMessage, snapshot, "run_to_green");
       const modulePlan = shouldTreatProjectAsExisting(intake.projectKind)
         ? buildModuleExecutionPlan({
             sessionId,
             workspaceRoot: session.workspacePath,
-            objective: message,
+            objective: executionMessage,
             createdAt: new Date().toISOString(),
             intake,
             contextPack: intake.contextPack,
@@ -283,7 +358,7 @@ export class RunEngine {
       const runToGreen = initializeRunToGreenState({
         sessionId,
         workspacePath: session.workspacePath,
-        message,
+        message: executionMessage,
         modulePlan,
         intake,
         contextPack: intake.contextPack,
@@ -420,9 +495,7 @@ export class RunEngine {
         role: "assistant",
         content: commandRequests.length
           ? `I selected a run-to-green command and prepared it for approval.\n\nCommand: \`${commandRequests[0]?.command}\`\n\nReasoning summary: ${runToGreen.selectedCommands[0]?.reason ?? "Selected from grounded workspace signals."}`
-          : recommendation?.preview
-            ? `I inspected the workspace, but I could not infer a grounded run command.\n\nPreview is available at ${recommendation.preview.target}.`
-            : `I inspected the workspace, but I could not infer a grounded run command.\n\n${runToGreen.blockerReason ?? "No grounded command was available."}`
+          : createNoGroundedRunCommandMessage(message, recommendation?.preview?.target, runToGreen.blockerReason)
       });
       await this.updateStage(
         sessionId,
@@ -437,13 +510,16 @@ export class RunEngine {
       return this.requireSession(sessionId);
     }
 
-    const plan = await this.createPlan(session, message, snapshot, options.resolvedMode);
+    const plan = await this.createPlan(session, executionMessage, snapshot, options.resolvedMode);
+    if (shouldRejectPlannerFallback(session, requestedRunIntent, plan)) {
+      return this.failProviderPlanningFallback(sessionId, plan);
+    }
     const modulePlan =
       shouldTreatProjectAsExisting(intake.projectKind)
         ? buildModuleExecutionPlan({
             sessionId,
             workspaceRoot: session.workspacePath,
-            objective: message,
+            objective: executionMessage,
             createdAt: new Date().toISOString(),
             intake,
             contextPack: intake.contextPack,
@@ -548,8 +624,8 @@ export class RunEngine {
     await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", plan.reasoningSummary || plan.summary);
     await this.updateRunPhase(sessionId, "split_agents", "completed", `Prepared ${plan.tasks.length} work item(s) for the local run.`, plan.tasks.length);
 
-    const singleFilePygameRequest = isSingleFilePythonPygameRequest(message, snapshot);
-    const explicitAgentCount = inferExplicitAgentCount(message);
+    const singleFilePygameRequest = isSingleFilePythonPygameRequest(executionMessage, snapshot);
+    const explicitAgentCount = inferExplicitAgentCount(executionMessage);
     if (singleFilePygameRequest && explicitAgentCount !== null && explicitAgentCount >= 3) {
       const confirmMessage =
         "This request targets a single Python file, but you explicitly asked for 3 agents. Running multiple agents against one file can create conflicting edits. Continue with 3 agents and merge into one file, or switch to a simpler workflow first.";
@@ -615,14 +691,14 @@ export class RunEngine {
       });
       await this.sessionManager.addMessage(sessionId, {
         role: "assistant",
-        content: formatPlanModeMessage(plan, message)
+          content: formatPlanModeMessage(plan, executionMessage)
       });
       await this.updateRunPhase(sessionId, "review_final_diff", "active", "Plan is waiting for operator confirmation before implementation.");
       return this.requireSession(sessionId);
     }
 
     if (plan.mode === "inspect_only") {
-      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake);
+      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake, conversationUnderstanding);
     }
 
     await this.updateStage(sessionId, "EXECUTION_DRAFT", "working", "running", "Draft changes", "Preparing reviewable patch and command intents.");
@@ -633,7 +709,7 @@ export class RunEngine {
         draft.moduleExecutionPlan.updatedAt = new Date().toISOString();
       }
     });
-    const patchIntentModel = await this.createPatchIntent(session, message, snapshot, plan);
+    const patchIntentModel = await this.createPatchIntent(session, executionMessage, snapshot, plan);
     if (!patchIntentModel.intents.length) {
       const summary = patchIntentModel.summary || "I could not generate a safe file change from the provider output.";
       await this.sessionManager.updateSession(sessionId, (draft) => {
@@ -677,14 +753,17 @@ export class RunEngine {
           createdAt: new Date().toISOString()
         });
       });
-      await this.addArtifact(sessionId, "summary", "Implementation fallback", patchIntentModel.fallbackWarning, {
+      const isExplicitFileWriteFallback = patchIntentModel.fallbackKind === "simple_file_request";
+      await this.addArtifact(sessionId, "summary", isExplicitFileWriteFallback ? "Explicit file write fallback" : "Patch generation fallback", patchIntentModel.fallbackWarning, {
         fallbackKind: patchIntentModel.fallbackKind ?? "generic",
         targetFiles: patchIntentModel.intents.map((intent) => intent.path)
       });
       await this.addDecisionRecord(sessionId, {
         category: "risk",
         finding: "Provider patch output was invalid for the requested implementation.",
-        decision: "Use a deterministic implementation fallback instead of failing the run.",
+        decision: isExplicitFileWriteFallback
+          ? "Use only the exact file path and content provided by the user."
+          : "Do not invent an implementation when patch generation is unavailable.",
         rationaleSummary: patchIntentModel.fallbackWarning,
         evidenceRefs: [],
         linkedFiles: patchIntentModel.intents.map((intent) => intent.path).slice(0, 4),
@@ -888,30 +967,60 @@ export class RunEngine {
     sessionId: string,
     message: string,
     projectMap: ProjectMap,
-    intake: ReturnType<typeof buildProjectIntake>
+    intake: ReturnType<typeof buildProjectIntake>,
+    conversationUnderstanding?: ConversationUnderstanding
   ): Promise<AgentRuntimeSession> {
     const session = this.requireSession(sessionId);
     const tools = new ToolRegistry(session.workspacePath);
     const enrichedProjectMap = createProjectMapFromIntake(projectMap, intake);
-    const intent = inferWorkspaceIntent(message);
-    
-    await this.updateStage(sessionId, "PLAN", "planning", "completed", "Plan", "Planning complete for inspect-only task.");
+    const understanding = conversationUnderstanding ?? createConversationUnderstanding(message);
+    const intent = understanding.workspaceIntent ?? inferWorkspaceIntent(message);
+    const progressCopy = createLocalRunProgressCopy(message);
+
+    await this.updateStage(sessionId, "PLAN", "planning", "running", progressCopy.questionMode.title, progressCopy.questionMode.summary);
+    await this.updateStage(sessionId, "CONTEXT_GATHER", "inspecting", "running", progressCopy.evidenceReportStart.title, progressCopy.evidenceReportStart.summary, enrichedProjectMap.importantFiles.slice(0, 6));
 
     const explainReport = buildLargeProjectExplainReport({
       workspacePath: session.workspacePath,
       message,
       projectMap: enrichedProjectMap,
-      intake
+      intake,
+      conversationUnderstanding: understanding
     });
+    await this.updateStage(
+      sessionId,
+      "CONTEXT_GATHER",
+      "inspecting",
+      "completed",
+      progressCopy.evidenceReportStart.title,
+      progressCopy.arabic
+        ? `ليه الخطوة دي: بنيت تقرير أدلة من ${explainReport.contextPack.inventory.scannedFiles} ملف ممسوح و${explainReport.moduleMap.length} موديول.`
+        : `Why this step: built an evidence report from ${explainReport.contextPack.inventory.scannedFiles} scanned files and ${explainReport.moduleMap.length} module(s).`,
+      explainReport.entryPoints.slice(0, 6)
+    );
+
+    await this.updateStage(sessionId, "CONTEXT_GATHER", "inspecting", "running", progressCopy.workspaceReadingStart.title, progressCopy.workspaceReadingStart.summary, explainReport.evidence.slice(0, 6).map((item) => item.path));
 
     const questionResult = await answerUniversalProjectQuestion({
       provider: this.provider,
       userPrompt: message,
       tools,
       explainReport,
-      intent
+      intent,
+      providerFailureSynthesis: session.mode === "real_provider" ? "notice_only" : "allow_local_synthesis"
     });
-    const answerMarkdown = questionResult.answerMarkdown;
+    await this.updateStage(
+      sessionId,
+      "CONTEXT_GATHER",
+      "inspecting",
+      "completed",
+      progressCopy.workspaceReadingStart.title,
+      progressCopy.arabic
+        ? `ليه الخطوة دي: فتحت ${questionResult.openedFiles.length} ملف وراجعت ${questionResult.candidateFiles.length} مرشح متعلق بالسؤال.`
+        : `Why this step: opened ${questionResult.openedFiles.length} file(s) and checked ${questionResult.candidateFiles.length} candidate(s) related to the question.`,
+      questionResult.openedFiles.slice(0, 8)
+    );
+    const answerMarkdown = addWorkspaceIdentityBanner(questionResult.answerMarkdown, session.workspacePath, questionResult.fallbackUsed, questionResult.fallbackReason);
     const validationErrors = questionResult.validationErrors;
     const evidenceRefs = questionResult.evidenceRefs;
     const fallbackUsed = questionResult.fallbackUsed;
@@ -921,6 +1030,7 @@ export class RunEngine {
     const providerTelemetry = this.options.providerTelemetry?.snapshot();
     const evidenceReport = questionResult.evidenceReport;
     const answerContract = {
+      answerStrategy: questionResult.answerStrategy,
       realProviderAnswered: Boolean(providerTelemetry?.realProviderUsed && providerTelemetry.providerResponseCount > 0 && !providerTelemetry.fallbackUsed),
       deterministicFallbackAnswered: Boolean(providerTelemetry?.deterministicOnly || providerTelemetry?.fallbackUsed || fallbackUsed),
       providerTimeoutInvolved: Boolean(providerTelemetry?.providerTimeoutCount),
@@ -931,6 +1041,29 @@ export class RunEngine {
       finalEvidenceFilesActuallyUsed: evidenceReport.finalEvidenceFilesActuallyUsed,
       generatedArtifactsExcluded: evidenceReport.generatedEvidenceExcludedCount > 0
     };
+    await this.updateStage(
+      sessionId,
+      "SELF_REVIEW",
+      "reviewing",
+      "completed",
+      progressCopy.evidenceValidation.title,
+      progressCopy.arabic
+        ? `ليه الخطوة دي: قبلت ${evidenceReport.finalEvidenceFilesActuallyUsed.length} ملف دليل واستبعدت ${evidenceReport.generatedEvidenceExcludedCount} مرشح generated/runtime.`
+        : `Why this step: accepted ${evidenceReport.finalEvidenceFilesActuallyUsed.length} evidence file(s) and excluded ${evidenceReport.generatedEvidenceExcludedCount} generated/runtime candidate(s).`,
+      evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8)
+    );
+    await this.updateStage(
+      sessionId,
+      "EXECUTION_DRAFT",
+      "working",
+      "completed",
+      progressCopy.answerDraft.title,
+      progressCopy.arabic
+        ? (fallbackUsed ? "ليه الخطوة دي: جهزت رد مبني على الأدلة بعد ما خرج المزود أو التحقق عن المسار الآمن." : "ليه الخطوة دي: جهزت رد مفهوم بعد ما عدى تحقق الأدلة.")
+        : (fallbackUsed ? "Why this step: drafted an evidence-grounded answer after provider output needed fallback or validation repair." : "Why this step: drafted the answer after it passed evidence validation."),
+      evidenceRefs.slice(0, 8).map((ref) => ref.replace(/:\d+$/, ""))
+    );
+    await this.updateStage(sessionId, "DONE", "completed", "running", progressCopy.finalReport.title, progressCopy.finalReport.summary, evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8));
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.explainReport = questionResult.augmentedReport;
@@ -998,6 +1131,7 @@ export class RunEngine {
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
       fallbackUsed,
+      answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       concept_resolution: questionResult.conceptResolution,
       investigation_graph: questionResult.projectIntelligenceGraph,
@@ -1114,6 +1248,7 @@ export class RunEngine {
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
       fallbackUsed,
+      answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       usedEvidenceRefs: evidenceRefs,
       unsupportedOrUnclearParts: validationErrors,
@@ -1132,6 +1267,18 @@ export class RunEngine {
       evidenceReport,
       answerContract
     });
+
+    await this.updateStage(
+      sessionId,
+      "DONE",
+      "completed",
+      "completed",
+      progressCopy.finalReport.title,
+      progressCopy.arabic
+        ? "ليه الخطوة دي: حفظت تقرير الأدلة والرد النهائي في جلسة التشغيل."
+        : "Why this step: saved the evidence report and final answer in the run session.",
+      evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8)
+    );
 
     await this.finish(sessionId, "completed", "DONE", {
       status: "completed",
@@ -1177,6 +1324,99 @@ export class RunEngine {
     await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
     
     await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answerMarkdown });
+    return this.requireSession(sessionId);
+  }
+
+  private async completeDirectConversationTurn(
+    sessionId: string,
+    resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">,
+    decision: IntentDecision
+  ) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "running";
+      draft.lifecycleStage = "INTAKE";
+      draft.resolvedExecutionMode = resolvedMode;
+      draft.agentName = "Local Run";
+      draft.runPhases = [];
+      draft.nextAction = undefined;
+      draft.orchestration ??= createEmptyOrchestration(draft);
+    });
+    await this.updateStage(
+      sessionId,
+      "DONE",
+      "completed",
+      "completed",
+      directConversationProgressTitle(decision.language),
+      directConversationProgressSummary(decision)
+    );
+    const answer = createDirectConversationReply(decision);
+    await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answer });
+    await this.finish(sessionId, "completed", "DONE", {
+      status: "completed",
+      summary: answer,
+      filesChanged: [],
+      appliedPatchIds: [],
+      proposedPatchIds: [],
+      commandResults: [],
+      gates: [
+        {
+          name: "Intent gate",
+          status: "passed",
+          notes: [decision.rationale]
+        }
+      ],
+      nextAction: "Send a concrete project question or coding task when ready.",
+      createdAt: new Date().toISOString()
+    });
+    return this.requireSession(sessionId);
+  }
+
+  private async failProviderPlanningFallback(sessionId: string, plan: RunPlanModel) {
+    const summary = "The provider did not return a valid implementation plan, so no deterministic implementation plan was invented.";
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.reasoningSummaries.push(plan.fallbackWarning ?? summary);
+    });
+    await this.addArtifact(sessionId, "summary", "Planning fallback stopped", summary, {
+      fallbackWarning: plan.fallbackWarning,
+      planMode: plan.mode
+    });
+    await this.addDecisionRecord(sessionId, {
+      category: "risk",
+      finding: "Provider planning output was invalid for an implementation request.",
+      decision: "Stop before implementation instead of using a deterministic fallback plan.",
+      rationaleSummary: plan.fallbackWarning ?? summary,
+      evidenceRefs: [],
+      linkedFiles: [],
+      uncertainty: "A deterministic implementation plan would make the run look more confident than the provider evidence allows.",
+      createdByAgent: "Local Run",
+      createdByAgentId: "agent_local_codex",
+      linkedAgentIds: ["agent_local_codex"]
+    });
+    await this.sessionManager.addMessage(sessionId, {
+      role: "assistant",
+      content: [
+        "I could not produce a safe implementation plan for that request.",
+        "",
+        summary,
+        "",
+        "The provider planner failed or returned malformed structured output. I stopped here instead of creating a canned plan."
+      ].join("\n")
+    });
+    const verification = await this.createVerification(sessionId, summary, [
+      { name: "Implementation plan", status: "failed", detail: plan.fallbackWarning ?? summary }
+    ]);
+    await this.updateStage(sessionId, "PLAN", "planning", "failed", "Implementation plan", summary);
+    await this.finish(sessionId, "failed", "FAILED", {
+      status: "failed",
+      summary,
+      filesChanged: [],
+      appliedPatchIds: [],
+      proposedPatchIds: [],
+      commandResults: [],
+      gates: verification.checks.map((check) => ({ name: check.name, status: "failed", notes: [check.detail] })),
+      nextAction: "Retry with a working provider or ask an inspect-only question.",
+      createdAt: new Date().toISOString()
+    });
     return this.requireSession(sessionId);
   }
 
@@ -1265,11 +1505,11 @@ export class RunEngine {
       );
       const validation = validateStructuredOutput(generated, runPatchIntentSchema);
       if (!validation.valid) {
-        return createPatchIntentFallback(message, snapshot, plan);
+        return createPatchIntentFallback(message, plan);
       }
-      return normalizePatchIntent(generated, message, snapshot, plan);
+      return normalizePatchIntent(generated, message);
     } catch {
-      return createPatchIntentFallback(message, snapshot, plan);
+      return createPatchIntentFallback(message, plan);
     }
   }
 
@@ -1420,7 +1660,8 @@ export class RunEngine {
     progressStage: RuntimeProgressStage,
     status: "queued" | "running" | "completed" | "blocked" | "failed",
     taskTitle: string,
-    summary: string
+    summary: string,
+    targetFiles: string[] = []
   ) {
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.lifecycleStage = lifecycleStage;
@@ -1435,7 +1676,7 @@ export class RunEngine {
       role: "Local Run",
       taskTitle,
       summary,
-      targetFiles: [],
+      targetFiles,
       createdAt: new Date().toISOString()
     });
   }
@@ -1494,16 +1735,17 @@ function createSnapshot(
   tools: ToolRegistry,
   projectMap: ProjectMap,
   message: string,
-  intake?: AgentRuntimeSession["projectIntake"]
+  intake?: AgentRuntimeSession["projectIntake"],
+  conversationUnderstanding?: ConversationUnderstanding
 ): RepoSnapshot {
-  const intentUnderstanding = inferWorkspaceIntent(message);
+  const intentUnderstanding = conversationUnderstanding?.workspaceIntent ?? inferWorkspaceIntent(message);
   const files = tools.workspace.listFiles(260);
   const candidateFiles = files
     .filter((file) => !file.isDir && !file.isSecretCandidate)
     .map((file) => file.path)
     .filter((file) => /\.(ts|tsx|js|jsx|rs|py|css|html|md|json|toml)$/i.test(file))
     .slice(0, 60);
-  const searchResults = tools.workspace.searchCode(inferSearchQuery(message), 12);
+  const searchResults = tools.workspace.searchCode(inferSearchQuery(message, conversationUnderstanding), 12);
   const normalizedMessage = message.toLowerCase();
   const matchedFiles = candidateFiles.filter((file) => normalizedMessage.includes(file.toLowerCase()) || normalizedMessage.includes(file.split("/").pop()?.toLowerCase() ?? ""));
   const samplePaths = [
@@ -1598,11 +1840,20 @@ function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: 
 function shouldForceInferredInspectOnly(message: string, snapshot: RepoSnapshot) {
   return (
     inferRunMode(message, snapshot) === "inspect_only" &&
-    (snapshot.intentUnderstanding?.actionMode === "answer_only" || inferWorkspaceIntent(message).actionMode === "answer_only")
+    snapshot.intentUnderstanding?.actionMode === "answer_only"
   );
 }
 
-function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
+function shouldRejectPlannerFallback(
+  session: AgentRuntimeSession,
+  requestedRunIntent: ReturnType<typeof classifyRunIntent>,
+  plan: RunPlanModel
+) {
+  if (session.mode === "demo_mock" || !plan.fallbackWarning) return false;
+  return requestedRunIntent !== "run_to_green";
+}
+
+function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: string): RunPatchIntentModel {
   if (input.intents?.length) {
     return {
       title: input.title || "Ollama patch intent proposal",
@@ -1613,49 +1864,52 @@ function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: stri
       fallbackKind: input.fallbackKind
     };
   }
-  return createDemoPatchIntent(message, snapshot, plan);
-}
-
-function createPatchIntentFallback(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
-  const fallbackWarning = "Provider patch output was invalid; using deterministic implementation fallback.";
-  if (isSingleFilePythonPygameRequest(message, snapshot)) {
-    return {
-      ...createSingleFilePygameFallbackIntent(message, snapshot, plan),
-      fallbackWarning,
-      fallbackKind: "single_file_pygame"
-    };
-  }
   const simpleFile = inferSimpleFileWriteRequest(message);
   if (simpleFile) {
-    return {
-      title: `Create ${simpleFile.path}`,
-      summary: `Writes the requested content to ${simpleFile.path}.`,
-      intents: [
-        {
-          path: simpleFile.path,
-          operation: "overwrite_file",
-          replacementText: simpleFile.content,
-          reason: "User asked for a concrete file and content.",
-          risk: "low"
-        }
-      ],
-      fallbackWarning,
-      fallbackKind: "simple_file_request"
-    };
+    return createExplicitFileWritePatchIntent(simpleFile);
   }
-  if (plan.mode !== "create_project") {
-    return {
-      title: "Provider patch generation failed",
-      summary: "The provider did not return a valid patch intent, and the request was too broad for a deterministic file-write fallback.",
-      intents: [],
-      suggestedCommands: [],
-      fallbackWarning,
-      fallbackKind: "generic"
-    };
+  return createPatchIntentUnavailable(
+    "The provider returned a valid patch intent envelope, but it did not contain any file edits."
+  );
+}
+
+function createPatchIntentFallback(message: string, plan: RunPlanModel): RunPatchIntentModel {
+  const simpleFile = inferSimpleFileWriteRequest(message);
+  if (simpleFile) {
+    return createExplicitFileWritePatchIntent(simpleFile);
   }
+  return createPatchIntentUnavailable(
+    plan.mode === "create_project"
+      ? "The provider did not return a valid patch intent for the new project, so no starter scaffold was invented."
+      : "The provider did not return a valid patch intent, and the request was too broad for an exact user-provided file write."
+  );
+}
+
+function createExplicitFileWritePatchIntent(simpleFile: { path: string; content: string }): RunPatchIntentModel {
   return {
-    ...createDemoPatchIntent(message, snapshot, plan),
-    fallbackWarning,
+    title: `Create ${simpleFile.path}`,
+    summary: `Writes the exact requested content to ${simpleFile.path}.`,
+    intents: [
+      {
+        path: simpleFile.path,
+        operation: "overwrite_file",
+        replacementText: simpleFile.content,
+        reason: "User provided a concrete file path and exact content.",
+        risk: "low"
+      }
+    ],
+    fallbackWarning: "Provider patch output was invalid; using only the explicit file path and content from the user request.",
+    fallbackKind: "simple_file_request"
+  };
+}
+
+function createPatchIntentUnavailable(summary: string): RunPatchIntentModel {
+  return {
+    title: "Provider patch generation failed",
+    summary,
+    intents: [],
+    suggestedCommands: [],
+    fallbackWarning: "Provider patch output was invalid; no deterministic implementation was invented.",
     fallbackKind: "generic"
   };
 }
@@ -1690,185 +1944,6 @@ function createDemoPatchIntent(message: string, snapshot: RepoSnapshot, plan: Ru
     ],
     suggestedCommands: [{ command: snapshot.testCommands[0] ?? "git diff --check", reason: "Validate the approved patch." }]
   };
-}
-
-function createSingleFilePygameFallbackIntent(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
-  const target = chooseSingleFilePythonTarget(snapshot, plan);
-  const command = `python ${target}`;
-  return {
-    title: "Create single-file Pygame snake prototype",
-    summary: "Build a runnable one-file Pygame snake prototype from a deterministic fallback.",
-    intents: [
-      {
-        path: target,
-        operation: "create_file",
-        replacementText: createSingleFilePygameBootstrap(message),
-        reason: "Create a grounded one-file Python fallback when structured patch generation fails.",
-        risk: "medium"
-      }
-    ],
-    suggestedCommands: [
-      {
-        command,
-        reason: "Launch the generated single-file Pygame prototype after approval."
-      }
-    ]
-  };
-}
-
-function createSingleFilePygameBootstrap(message: string) {
-  const title = escapePythonString(message);
-  return [
-    "import random",
-    "import pygame",
-    "",
-    "CELL_SIZE = 24",
-    "GRID_WIDTH = 22",
-    "GRID_HEIGHT = 18",
-    "HUD_HEIGHT = 72",
-    "WINDOW_WIDTH = GRID_WIDTH * CELL_SIZE",
-    "WINDOW_HEIGHT = GRID_HEIGHT * CELL_SIZE + HUD_HEIGHT",
-    "FPS = 10",
-    "",
-    'BACKGROUND = (12, 15, 22)',
-    'GRID_LINE = (28, 34, 48)',
-    'SNAKE_HEAD = (94, 233, 124)',
-    'SNAKE_BODY = (45, 161, 74)',
-    'FOOD_COLOR = (255, 92, 92)',
-    'TEXT_COLOR = (235, 238, 245)',
-    "",
-    "",
-    "def random_food(snake):",
-    "    while True:",
-    "        position = (random.randrange(GRID_WIDTH), random.randrange(GRID_HEIGHT))",
-    "        if position not in snake:",
-    "            return position",
-    "",
-    "",
-    "def reset_game():",
-    "    snake = [(GRID_WIDTH // 2, GRID_HEIGHT // 2), (GRID_WIDTH // 2 - 1, GRID_HEIGHT // 2)]",
-    '    direction = (1, 0)',
-    "    food = random_food(snake)",
-    "    score = 0",
-    "    game_over = False",
-    "    return snake, direction, food, score, game_over",
-    "",
-    "",
-    "def draw_grid(surface):",
-    "    for x in range(GRID_WIDTH + 1):",
-    "        pygame.draw.line(surface, GRID_LINE, (x * CELL_SIZE, HUD_HEIGHT), (x * CELL_SIZE, WINDOW_HEIGHT))",
-    "    for y in range(GRID_HEIGHT + 1):",
-    "        pygame.draw.line(surface, GRID_LINE, (0, HUD_HEIGHT + y * CELL_SIZE), (WINDOW_WIDTH, HUD_HEIGHT + y * CELL_SIZE))",
-    "",
-    "",
-    "def draw_snake(surface, snake):",
-    "    for index, segment in enumerate(snake):",
-    "        color = SNAKE_HEAD if index == 0 else SNAKE_BODY",
-    "        rect = pygame.Rect(segment[0] * CELL_SIZE + 2, HUD_HEIGHT + segment[1] * CELL_SIZE + 2, CELL_SIZE - 4, CELL_SIZE - 4)",
-    "        pygame.draw.rect(surface, color, rect, border_radius=8)",
-    "",
-    "",
-    "def draw_food(surface, food):",
-    "    rect = pygame.Rect(food[0] * CELL_SIZE + 4, HUD_HEIGHT + food[1] * CELL_SIZE + 4, CELL_SIZE - 8, CELL_SIZE - 8)",
-    "    pygame.draw.rect(surface, FOOD_COLOR, rect, border_radius=8)",
-    "",
-    "",
-    "def step_snake(snake, direction, food):",
-    "    head_x, head_y = snake[0]",
-    "    next_head = (head_x + direction[0], head_y + direction[1])",
-    "    hit_wall = not (0 <= next_head[0] < GRID_WIDTH and 0 <= next_head[1] < GRID_HEIGHT)",
-    "    hit_self = next_head in snake",
-    "    if hit_wall or hit_self:",
-    "        return snake, food, False, True",
-    "    snake = [next_head, *snake]",
-    "    ate_food = next_head == food",
-    "    if not ate_food:",
-    "        snake.pop()",
-    "    else:",
-    "        food = random_food(snake)",
-    "    return snake, food, ate_food, False",
-    "",
-    "",
-    "def main():",
-    "    pygame.init()",
-    '    pygame.display.set_caption("Single-File 3D-ish Snake")',
-    "    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))",
-    "    clock = pygame.time.Clock()",
-    "    font = pygame.font.SysFont('consolas', 22)",
-    "    hint_font = pygame.font.SysFont('consolas', 16)",
-    "",
-    "    snake, direction, food, score, game_over = reset_game()",
-    "    running = True",
-    "",
-    "    while running:",
-    "        clock.tick(FPS)",
-    "        for event in pygame.event.get():",
-    "            if event.type == pygame.QUIT:",
-    "                running = False",
-    "            elif event.type == pygame.KEYDOWN:",
-    "                if event.key in (pygame.K_ESCAPE, pygame.K_q):",
-    "                    running = False",
-    "                elif event.key == pygame.K_r and game_over:",
-    "                    snake, direction, food, score, game_over = reset_game()",
-    "                elif event.key in (pygame.K_UP, pygame.K_w) and direction != (0, 1):",
-    "                    direction = (0, -1)",
-    "                elif event.key in (pygame.K_DOWN, pygame.K_s) and direction != (0, -1):",
-    "                    direction = (0, 1)",
-    "                elif event.key in (pygame.K_LEFT, pygame.K_a) and direction != (1, 0):",
-    "                    direction = (-1, 0)",
-    "                elif event.key in (pygame.K_RIGHT, pygame.K_d) and direction != (-1, 0):",
-    "                    direction = (1, 0)",
-    "",
-    "        if not game_over:",
-    "            snake, food, ate_food, game_over = step_snake(snake, direction, food)",
-    "            if ate_food:",
-    "                score += 1",
-    "",
-    "        screen.fill(BACKGROUND)",
-    "        draw_grid(screen)",
-    "        draw_food(screen, food)",
-    "        draw_snake(screen, snake)",
-    "",
-    `        title_surface = font.render(${JSON.stringify(title)}, True, TEXT_COLOR)`,
-    "        score_surface = hint_font.render(f'Score: {score}', True, TEXT_COLOR)",
-    "        hint_text = 'Press R to restart after a collision.' if game_over else 'Arrows/WASD to move. Esc to quit.'",
-    "        hint_surface = hint_font.render(hint_text, True, TEXT_COLOR)",
-    "        screen.blit(title_surface, (16, 14))",
-    "        screen.blit(score_surface, (16, 42))",
-    "        screen.blit(hint_surface, (170, 42))",
-    "",
-    "        if game_over:",
-    "            overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)",
-    "            overlay.fill((5, 8, 12, 170))",
-    "            screen.blit(overlay, (0, 0))",
-    "            game_over_surface = font.render('Game over', True, (255, 210, 120))",
-    "            restart_surface = hint_font.render('Press R to play again.', True, TEXT_COLOR)",
-    "            screen.blit(game_over_surface, (WINDOW_WIDTH // 2 - game_over_surface.get_width() // 2, WINDOW_HEIGHT // 2 - 24))",
-    "            screen.blit(restart_surface, (WINDOW_WIDTH // 2 - restart_surface.get_width() // 2, WINDOW_HEIGHT // 2 + 12))",
-    "",
-    "        pygame.display.flip()",
-    "",
-    "    pygame.quit()",
-    "",
-    "",
-    "if __name__ == '__main__':",
-    "    main()",
-    ""
-  ].join("\n");
-}
-
-function escapePythonString(value: string) {
-  return value.replaceAll("\\", "\\\\").replaceAll("\"", '\\"');
-}
-
-function chooseSingleFilePythonTarget(snapshot: RepoSnapshot, plan: RunPlanModel) {
-  const plannedPython = plan.tasks
-    .flatMap((task) => task.targetFiles ?? [])
-    .find((file) => /\.py$/i.test(file));
-  if (plannedPython) return plannedPython;
-  if (!snapshot.candidateFiles.includes("main.py")) return "main.py";
-  if (!snapshot.candidateFiles.includes("snake_game.py")) return "snake_game.py";
-  return "snake_game_fallback.py";
 }
 
 function inferExplicitAgentCount(message: string): number | null {
@@ -2285,6 +2360,20 @@ function inferLocalRunMode(
   if (/\b(audit|deep|inspect thoroughly|thorough|analyze deeply)\b/.test(normalized)) return "deep_audit";
   if (resolvedMode === "simple_mode" && /\b(tiny|small|quick|minor)\b/.test(normalized)) return "quick_fix";
   return "normal_run";
+}
+
+function createNoGroundedRunCommandMessage(message: string, previewTarget?: string, blockerReason?: string) {
+  if (/[\u0600-\u06ff]/.test(message)) {
+    const localizedReason = blockerReason && !/[A-Za-z]/.test(blockerReason)
+      ? blockerReason
+      : "مفيش أمر تشغيل أو build أو test متثبت من ملفات المشروع.";
+    return previewTarget
+      ? `راجعت المشروع، لكن مقدرتش أثبت أمر تشغيل آمن من الملفات.\n\nالمعاينة متاحة هنا: ${previewTarget}.`
+      : `راجعت المشروع، لكن مقدرتش أثبت أمر تشغيل آمن من الملفات.\n\n${localizedReason}`;
+  }
+  return previewTarget
+    ? `I inspected the workspace, but I could not infer a grounded run command.\n\nPreview is available at ${previewTarget}.`
+    : `I inspected the workspace, but I could not infer a grounded run command.\n\n${blockerReason ?? "No grounded command was available."}`;
 }
 
 function inferFallbackPlanKind(snapshot: RepoSnapshot) {
@@ -2749,8 +2838,8 @@ function inferTargetFiles(message: string, snapshot: RepoSnapshot, mode: RunPlan
   return (matches.length ? matches : curated.length ? curated : snapshot.candidateFiles.slice(0, 3)).slice(0, 6);
 }
 
-function inferSearchQuery(message: string) {
-  const intent = inferWorkspaceIntent(message);
+function inferSearchQuery(message: string, conversationUnderstanding?: ConversationUnderstanding) {
+  const intent = conversationUnderstanding?.workspaceIntent ?? inferWorkspaceIntent(message);
   if (intent.topicTerms.length) {
     return intent.topicTerms.slice(0, 5).join(" ");
   }

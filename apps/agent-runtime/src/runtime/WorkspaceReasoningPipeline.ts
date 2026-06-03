@@ -1,4 +1,5 @@
 import type { ProjectExplainReport } from "@hivo/protocol";
+import { prepareWorkspacePromptForUnderstanding } from "./IntentDecisionEngine.js";
 
 export type WorkspaceActionMode = "answer_only" | "edit" | "run" | "debug";
 export type WorkspaceAnswerGoal = "explain" | "count" | "list" | "compare" | "trace_flow" | "locate" | "summarize";
@@ -66,9 +67,9 @@ const ALL_FACETS: WorkspaceEvidenceFacet[] = [
 const ENGLISH_STOP_WORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "can", "code", "codebase", "current",
   "do", "does", "each", "every", "explain", "for", "from", "give", "have", "here",
-  "how", "i", "in", "inside", "is", "it", "me", "many", "much", "of", "one", "please",
+  "hi", "hello", "hey", "yo", "how", "i", "in", "inside", "is", "it", "me", "many", "much", "of", "one", "please",
   "project", "selected", "show", "system", "tell", "that", "the", "this", "to", "what",
-  "which", "with", "work", "works", "workspace", "you"
+  "which", "with", "work", "works", "workspace", "you", "thanks", "thank"
 ]);
 
 const ARABIC_STOP_WORDS = new Set([
@@ -99,7 +100,19 @@ const ARABIC_STOP_WORDS = new Set([
   "\u0647\u0627\u062a\u0644\u064a",
   "\u0642\u0648\u0644\u064a",
   "\u0627\u0632\u0627\u064a",
-  "\u0625\u0632\u0627\u064a"
+  "\u0625\u0632\u0627\u064a",
+  "\u0628\u064a\u062a\u0637\u0628\u0642",
+  "\u0628\u062a\u062a\u0637\u0628\u0642",
+  "\u0645\u062a\u0637\u0628\u0642",
+  "\u0628\u064a\u0634\u062a\u063a\u0644",
+  "\u0628\u062a\u0634\u062a\u063a\u0644",
+  "\u0647\u0627\u064a",
+  "\u0647\u0627\u0649",
+  "\u0647\u0644\u0627",
+  "\u0627\u0647\u0644\u0627",
+  "\u0623\u0647\u0644\u0627",
+  "\u0633\u0644\u0627\u0645",
+  "\u0634\u0643\u0631\u0627"
 ]);
 
 const STYLE_WORDS = new Set([
@@ -137,9 +150,11 @@ const FACET_TOPIC_TERMS: Record<WorkspaceEvidenceFacet, string[]> = {
 const EXPLICIT_ALGORITHM_TOPIC_RE = /\b(svm|svc|support vector|dbscan|fcm|cmeans|c-means|fuzzy c|shap|sarima|arima|kmeans|k-means|random\s*forest|randomforest|logistic\s*regression|isolation\s*forest)\b/i;
 
 export function inferWorkspaceIntent(userPrompt: string): WorkspaceIntentUnderstanding {
+  const prepared = prepareWorkspacePromptForUnderstanding(userPrompt);
+  const workspacePrompt = prepared.workspaceMessage || userPrompt;
   const language = /[\u0600-\u06ff]/.test(userPrompt) ? "arabic" : "english";
-  const normalized = normalizeForIntent(userPrompt);
-  const raw = userPrompt.toLowerCase();
+  const normalized = normalizeForIntent(workspacePrompt);
+  const raw = workspacePrompt.toLowerCase();
   const style = detectStyle(raw, normalized);
   const actionMode = detectActionMode(raw, normalized);
   const answerGoal = detectAnswerGoal(raw, normalized);
@@ -152,7 +167,7 @@ export function inferWorkspaceIntent(userPrompt: string): WorkspaceIntentUnderst
     actionMode === "edit" ? "tests_docs" : undefined
   ].filter(Boolean) as WorkspaceEvidenceFacet[]);
   const outputShape = detectOutputShape(raw, normalized, answerGoal, requiredFacets);
-  const topicTerms = extractTopicTerms(userPrompt, requiredFacets);
+  const topicTerms = extractTopicTerms(workspacePrompt, requiredFacets);
   const topicPhrase = topicTerms.length
     ? topicTerms.slice(0, 4).join(" ")
     : requiredFacets[0]
@@ -369,6 +384,7 @@ function extractTopicTerms(userPrompt: string, facets: WorkspaceEvidenceFacet[])
   const tokens = normalized
     .split(/\s+/)
     .map((token) => token.trim())
+    .map(normalizeTopicToken)
     .filter(Boolean)
     .filter((token) => token.length > 1)
     .filter((token) => !ENGLISH_STOP_WORDS.has(token))
@@ -377,6 +393,10 @@ function extractTopicTerms(userPrompt: string, facets: WorkspaceEvidenceFacet[])
   const facetTerms = facets.flatMap((facet) => FACET_TOPIC_TERMS[facet].map(normalizeForIntent));
   const preferred = tokens.filter((token) => facetTerms.some((term) => term.includes(token) || token.includes(term)));
   return uniqueStrings(preferred.length ? preferred : tokens).slice(0, 8);
+}
+
+function normalizeTopicToken(token: string) {
+  return token.replace(/^\u0627\u0644(?=[a-z0-9_])/i, "");
 }
 
 function scoreEvidenceForIntent(item: WorkspaceEvidenceLike, facets: WorkspaceEvidenceFacet[], intent: WorkspaceIntentUnderstanding) {

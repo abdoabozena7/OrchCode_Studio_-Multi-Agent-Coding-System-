@@ -51,6 +51,8 @@ export type ActiveProviderSource =
   | "desktop_saved_provider"
   | "session_override"
   | "explicit_cli"
+  | "env_ollama"
+  | "env_openai_compatible"
   | "unknown";
 
 export type ProviderPromptLatency = {
@@ -78,6 +80,7 @@ export type ProviderTruthTelemetry = {
   perPromptProviderLatencyMs: ProviderPromptLatency[];
   fallbackUsed: boolean;
   fallbackReason?: string;
+  lastError?: string;
   deterministicOnly: boolean;
   mockProviderUsed: boolean;
   realProviderUsed: boolean;
@@ -93,12 +96,74 @@ export type EvidenceFileTier =
   | "runtime_state"
   | "config";
 
+export type EvidenceSourceType =
+  | "production_source"
+  | "test_source"
+  | "fixture_generated_path"
+  | "tmp_artifact"
+  | "memory_artifact"
+  | "documentation"
+  | "generated_report"
+  | "runtime_state"
+  | "config"
+  | "unknown";
+
+export type EvidencePathVerification = {
+  sourceFile: string;
+  citedPath: string;
+  existsOnDisk: boolean;
+  safePath: boolean;
+  pathTraversalRejected: boolean;
+  mentionedOnly: boolean;
+};
+
+export type EvidenceConfidence = "high" | "medium" | "low";
+
+export type EvidenceDirectness =
+  | "direct_implementation"
+  | "indirect_test_or_fixture"
+  | "documentation_only"
+  | "generated_artifact"
+  | "unknown";
+
+export type EvidenceProvenance = {
+  sourceFile: string;
+  citedPath: string;
+  mentionedPaths: string[];
+  sourceType: EvidenceSourceType;
+  pathVerification: EvidencePathVerification;
+  directness: EvidenceDirectness;
+  confidence: EvidenceConfidence;
+  reason: string;
+};
+
+export type GroundedEvidenceItem = {
+  ref: string;
+  sourceFile: string;
+  citedPath: string;
+  sourceType: EvidenceSourceType;
+  existsOnDisk: boolean;
+  directness: EvidenceDirectness;
+  confidence: EvidenceConfidence;
+  reason: string;
+};
+
+export type RejectedEvidenceItem = {
+  ref: string;
+  sourceFile: string;
+  citedPath: string;
+  sourceType: EvidenceSourceType;
+  reason: string;
+};
+
 export type EvidenceTruthReport = {
   topEvidenceFiles: string[];
   evidenceFilesByTier: Record<EvidenceFileTier, string[]>;
   excludedEvidenceCandidates: string[];
   exclusionReasons: Record<string, string>;
   finalEvidenceFilesActuallyUsed: string[];
+  groundedEvidence?: GroundedEvidenceItem[];
+  rejectedEvidence?: RejectedEvidenceItem[];
   generatedEvidenceExcludedCount: number;
   generatedEvidenceIncludedCount: number;
   generatedEvidenceIncluded: boolean;
@@ -129,6 +194,7 @@ export type RuntimeSessionStatus =
   | "completed"
   | "needs_approval"
   | "blocked"
+  | "failed_provider"
   | "failed"
   | "expired";
 
@@ -217,6 +283,7 @@ export type AgentRuntimeSession = {
   id: string;
   workspacePath: string;
   mode: AgentRuntimeMode;
+  requireRealProvider?: boolean;
   trustProfile: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
   activeProviderSource?: ActiveProviderSource;
@@ -276,6 +343,7 @@ export type RunSession = AgentRuntimeSession;
 export type CreateRuntimeSessionRequest = {
   workspacePath: string;
   mode: AgentRuntimeMode;
+  requireRealProvider?: boolean;
   trustProfile?: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
   activeProviderSource?: ActiveProviderSource;
@@ -329,4 +397,7 @@ export type ReportCommandResultRequest = {
 export type SanitizedProviderConfig = Pick<
   ModelProviderConfig,
   "providerType" | "providerName" | "baseUrl" | "selectedModel" | "isValid"
->;
+> & {
+  apiKeyEnv?: string;
+  apiKeyConfigured?: boolean;
+};

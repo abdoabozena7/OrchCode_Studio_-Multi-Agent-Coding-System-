@@ -49,7 +49,7 @@ test("existing-file edits use patch intents and generate focused reviewable diff
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "update App.tsx color");
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "هاي update App.tsx color");
   const proposal = session.patchProposals[0];
 
   assert.ok(proposal);
@@ -60,6 +60,38 @@ test("existing-file edits use patch intents and generate focused reviewable diff
   assert.match(proposal?.unifiedDiff ?? "", /\+  const color = "blue";/);
   assert.doesNotMatch(proposal?.unifiedDiff ?? "", /console\.log\("tail line"\);/);
   assert.equal(provider.prompts.some((prompt) => prompt.includes("do not return full file contents")), true);
+  assert.equal(provider.prompts.every((prompt) => !prompt.includes("هاي")), true);
+  assert.equal(provider.prompts.some((prompt) => prompt.includes("update App.tsx color")), true);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("direct social turns bypass workspace intake and provider even when files match", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-direct-intent-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-direct-intent-storage-${Date.now()}`);
+  await mkdir(path.join(workspace, "src"), { recursive: true });
+  await writeFile(path.join(workspace, "src", "hay.ts"), "export const value = 'هاي';\n", "utf8");
+
+  const provider = new PatchIntentProvider({
+    targetFiles: ["src/hay.ts"],
+    patchOutput: {
+      title: "Should not run",
+      summary: "Direct conversation should bypass provider.",
+      intents: []
+    }
+  });
+
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "هاي", ["src/hay.ts"]);
+  const answer = session.messages.at(-1)?.content ?? "";
+
+  assert.equal(session.status, "completed");
+  assert.equal(provider.prompts.length, 0);
+  assert.equal(session.artifacts.some((artifact) => artifact.type === "project_intake"), false);
+  assert.equal(session.artifacts.some((artifact) => artifact.type === "project_explain_report"), false);
+  assert.equal(session.progressEvents.some((event) => /قراءة المشروع|Workspace snapshot/.test(event.taskTitle ?? "")), false);
+  assert.doesNotMatch(answer, /Workspace used for this answer|لقيت|src\/hay\.ts/i);
+  assert.match(answer, /أهل|موجود/);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -87,11 +119,12 @@ test("malformed broad patch intents fail with a chat explanation instead of crea
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "break the patch intent");
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "break the patch intent in src/App.tsx");
   assert.equal(session.status, "failed");
-  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; using deterministic implementation fallback."));
+  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
   assert.equal(session.patchProposals.length, 0);
   assert.match(session.messages.at(-1)?.content ?? "", /could not produce a file change/i);
+  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /AGENT_PROPOSAL/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -121,7 +154,7 @@ test("malformed simple file requests fall back to the requested file instead of 
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("single-file pygame requests use deterministic implementation fallback", async () => {
+test("single-file pygame provider failures do not invent deterministic implementations", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-pygame-fallback-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-pygame-fallback-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
@@ -148,12 +181,42 @@ test("single-file pygame requests use deterministic implementation fallback", as
     }
   );
 
-  assert.equal(session.status, "needs_approval");
-  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; using deterministic implementation fallback."));
-  assert.equal(session.patchProposals[0]?.filesChanged[0]?.path, "main.py");
-  assert.match(session.patchProposals[0]?.unifiedDiff ?? "", /import pygame/);
-  assert.match(session.patchProposals[0]?.unifiedDiff ?? "", /def main\(\):/);
-  assert.equal(session.commandRequests[0]?.command, "python main.py");
+  assert.equal(session.status, "failed");
+  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
+  assert.equal(session.patchProposals.length, 0);
+  assert.equal(session.commandRequests.length, 0);
+  assert.match(session.messages.at(-1)?.content ?? "", /could not produce a file change/i);
+  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /pygame|snake|import pygame/i);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("empty provider patch envelopes fail instead of creating demo scaffold", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-empty-patch-envelope-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-empty-patch-envelope-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const provider = new PatchIntentProvider({
+    targetFiles: ["demo/src/main.js"],
+    patchOutput: {
+      title: "Empty patch",
+      summary: "No edits were returned.",
+      intents: []
+    }
+  });
+
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "create a tiny vite demo project", {
+    stack: [],
+    packageManagers: [],
+    testCommands: [],
+    importantFiles: []
+  });
+
+  assert.equal(session.status, "failed");
+  assert.equal(session.patchProposals.length, 0);
+  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
+  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /starter project|scaffold|vite/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -184,7 +247,7 @@ test("missing anchors are rejected", async () => {
   });
 
   await assert.rejects(
-    () => runTurnWithProvider(workspace, storageDir, provider, "replace a missing anchor"),
+    () => runTurnWithProvider(workspace, storageDir, provider, "replace a missing anchor in src/App.tsx"),
     /anchor was not found/
   );
 
@@ -221,7 +284,7 @@ test("ambiguous anchors are rejected", async () => {
   });
 
   await assert.rejects(
-    () => runTurnWithProvider(workspace, storageDir, provider, "replace an ambiguous anchor"),
+    () => runTurnWithProvider(workspace, storageDir, provider, "replace an ambiguous anchor in src/App.tsx"),
     /anchor is ambiguous/
   );
 
@@ -351,7 +414,7 @@ test("insert and delete patch intents generate focused diffs", async () => {
         }]
       }
     }),
-    "insert after one"
+    "insert after one in list.txt"
   );
   assert.match(insertAfter.patchProposals[0]?.unifiedDiff ?? "", /\+after-one/);
 
@@ -373,7 +436,7 @@ test("insert and delete patch intents generate focused diffs", async () => {
         }]
       }
     }),
-    "insert before two"
+    "insert before two in list.txt"
   );
   assert.match(insertBefore.patchProposals[0]?.unifiedDiff ?? "", /\+before-two/);
 
@@ -395,7 +458,7 @@ test("insert and delete patch intents generate focused diffs", async () => {
         }]
       }
     }),
-    "delete remove line"
+    "delete remove line in list.txt"
   );
   assert.match(deleteRange.patchProposals[0]?.unifiedDiff ?? "", /-remove/);
 

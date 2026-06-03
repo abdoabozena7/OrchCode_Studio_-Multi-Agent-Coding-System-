@@ -1,0 +1,99 @@
+import {
+  decideIntentBeforeRetrieval,
+  normalizeProviderIntentDecision,
+  prepareWorkspacePromptForUnderstanding,
+  type IntentDecision,
+  type ProviderIntentDecisionModel,
+  type WorkspacePromptPreparation
+} from "./IntentDecisionEngine.js";
+import { routeConversation, type ConversationRouteDecision } from "./ConversationRouter.js";
+import type { LlmProvider } from "../llm/LlmProvider.js";
+import { conversationIntentDecisionSchema } from "../schemas/sessionSchemas.js";
+import { validateStructuredOutput } from "../schemas/validators.js";
+import { inferWorkspaceIntent, type WorkspaceActionMode, type WorkspaceIntentUnderstanding } from "./WorkspaceReasoningPipeline.js";
+
+export type ConversationUnderstanding = {
+  originalMessage: string;
+  preparedPrompt: WorkspacePromptPreparation;
+  workspaceMessage: string;
+  intentDecision: IntentDecision;
+  routeDecision: ConversationRouteDecision;
+  workspaceIntent?: WorkspaceIntentUnderstanding;
+};
+
+export function createConversationUnderstanding(message: string): ConversationUnderstanding {
+  const routeDecision = routeConversation(message);
+  const preparedPrompt = prepareWorkspacePromptForUnderstanding(message);
+  const workspaceMessage = preparedPrompt.workspaceMessage || message;
+  const intentDecision = decideIntentBeforeRetrieval(message);
+  return {
+    originalMessage: message,
+    preparedPrompt,
+    workspaceMessage,
+    intentDecision,
+    routeDecision,
+    workspaceIntent: intentDecision.kind === "direct_conversation"
+      ? undefined
+      : alignWorkspaceIntentWithDecision(inferWorkspaceIntent(workspaceMessage), intentDecision)
+  };
+}
+
+export async function createProviderConversationUnderstanding(provider: LlmProvider, message: string): Promise<ConversationUnderstanding> {
+  const generated = await provider.generateStructured<ProviderIntentDecisionModel>({
+    systemPrompt: [
+      "You are the first intent gate for a local coding assistant.",
+      "Classify the user's message before any workspace files are read.",
+      "Return strict JSON only.",
+      "Do not use hidden chain-of-thought. The rationale must be one short user-visible reason.",
+      "Choose kind:",
+      "- direct_conversation: social talk, thanks, acknowledgement, or a message that does not ask for code, files, project explanation, or running.",
+      "- workspace_question: asks to explain, inspect, compare, trace, or judge project/code behavior.",
+      "- workspace_action: asks to change, create, fix, implement, edit, or refactor project/code.",
+      "- run_request: asks to run, start, launch, open, preview, test, or build the project.",
+      "Set needsWorkspace false only for direct_conversation; otherwise true.",
+      "Set workspaceMessage to the cleaned actionable request. Remove greetings and social preambles, but keep real task words.",
+      "For direct_conversation, workspaceMessage should be an empty string."
+    ].join("\n"),
+    userPrompt: [
+      "Classify this single user message before retrieval:",
+      message,
+      "",
+      "Return JSON with exactly:",
+      "{",
+      "  \"kind\": \"direct_conversation|workspace_question|workspace_action|run_request\",",
+      "  \"language\": \"arabic|english\",",
+      "  \"needsWorkspace\": boolean,",
+      "  \"confidence\": \"high|medium|low\",",
+      "  \"rationale\": \"short visible reason\",",
+      "  \"workspaceMessage\": \"cleaned actionable request or empty string\"",
+      "}"
+    ].join("\n")
+  }, conversationIntentDecisionSchema);
+  const validation = validateStructuredOutput(generated, conversationIntentDecisionSchema);
+  if (!validation.valid) {
+    throw new Error(`provider_intent_decision_invalid: ${validation.errors.join("; ")}`);
+  }
+  const normalized = normalizeProviderIntentDecision(generated, message);
+  return {
+    originalMessage: message,
+    preparedPrompt: normalized.preparedPrompt,
+    workspaceMessage: normalized.workspaceMessage,
+    intentDecision: normalized.decision,
+    routeDecision: routeConversation(normalized.workspaceMessage || message),
+    workspaceIntent: normalized.decision.kind === "direct_conversation"
+      ? undefined
+      : alignWorkspaceIntentWithDecision(inferWorkspaceIntent(normalized.workspaceMessage), normalized.decision)
+  };
+}
+
+function alignWorkspaceIntentWithDecision(intent: WorkspaceIntentUnderstanding, decision: IntentDecision): WorkspaceIntentUnderstanding {
+  const actionMode = actionModeForDecision(decision);
+  return actionMode ? { ...intent, actionMode } : intent;
+}
+
+function actionModeForDecision(decision: IntentDecision): WorkspaceActionMode | undefined {
+  if (decision.kind === "workspace_question") return "answer_only";
+  if (decision.kind === "workspace_action") return "edit";
+  if (decision.kind === "run_request") return "run";
+  return undefined;
+}

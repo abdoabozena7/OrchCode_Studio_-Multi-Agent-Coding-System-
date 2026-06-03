@@ -84,6 +84,95 @@ test("run this project prefers package manager dev scripts in package.json works
   delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
 });
 
+test("simple greeting short-circuits before workspace inspection or file search", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-greeting-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-greeting-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  for (let index = 0; index < 9; index += 1) {
+    await writeFile(path.join(workspace, `file-${index}.md`), "هاي should not be searched here\n", "utf8");
+  }
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: "هاي"
+  });
+  await runtime.runTurn(created.sessionId, "هاي");
+  const session = runtime.getSession(created.sessionId);
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+  assert.equal(session?.status, "completed");
+  assert.equal(session?.lifecycleStage, "DONE");
+  assert.equal(session?.projectIntake, undefined);
+  assert.equal(session?.contextPack, undefined);
+  assert.equal(session?.explainReport, undefined);
+  assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake" || artifact.type === "project_explain_answer"), false);
+  assert.equal(session?.progressEvents.length, 1);
+  assert.equal(session?.progressEvents[0]?.taskTitle, "رد مباشر");
+  assert.equal(session?.progressEvents[0]?.targetFiles.length, 0);
+  assert.doesNotMatch(session?.progressEvents.map((event) => `${event.taskTitle}\n${event.summary}`).join("\n") ?? "", /قراءة المشروع|Workspace snapshot|لقيت 9|9 file/i);
+  assert.match(assistantMessage, /أهلًا|موجود/);
+  assert.equal(session?.commandRequests.length, 0);
+  assert.equal(session?.patchProposals.length, 0);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("direct conversation does not require an existing workspace", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-missing-greeting-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-missing-greeting-storage-${Date.now()}`);
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: "hi"
+  });
+  await runtime.runTurn(created.sessionId, "hi");
+  const session = runtime.getSession(created.sessionId);
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+  assert.equal(session?.status, "completed");
+  assert.equal(session?.projectIntake, undefined);
+  assert.equal(session?.explainReport, undefined);
+  assert.equal(session?.progressEvents[0]?.taskTitle, "Direct reply");
+  assert.doesNotMatch(assistantMessage, /Workspace used for this answer|Answer source/i);
+
+  await app.close();
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("arabic run request keeps no-command response in arabic", async () => {
+  process.env.HIVO_DISABLE_BACKGROUND_COMMANDS = "1";
+  const workspace = path.join(os.tmpdir(), `hivo-arabic-run-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-arabic-run-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "static fixture without runnable scripts\n", "utf8");
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: "شغل المشروع"
+  });
+  await runtime.runTurn(created.sessionId, "شغل المشروع");
+  const session = runtime.getSession(created.sessionId);
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+  assert.equal(session?.runMode, "run_to_green");
+  assert.match(assistantMessage, /راجعت المشروع|أمر تشغيل/);
+  assert.doesNotMatch(assistantMessage, /I inspected the workspace/i);
+  assert.doesNotMatch(assistantMessage, /No safe run|grounded command|detected scripts/i);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+  delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
+});
+
 test("explain this project stays in simple mode and emits ordered progress without patch proposals", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-explain-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-explain-storage-${Date.now()}`);
@@ -99,20 +188,84 @@ test("explain this project stays in simple mode and emits ordered progress witho
   });
   await runtime.runTurn(created.sessionId, "explain this project");
   const session = runtime.getSession(created.sessionId);
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+  const answerArtifact = session?.artifacts.find((artifact) => artifact.type === "project_explain_answer");
 
   assert.equal(session?.resolvedExecutionMode, "simple_mode");
   assert.equal(session?.patchProposals.length, 0);
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Intake"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Workspace snapshot"));
-  assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Plan"));
+  assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
+    "Intake",
+    "Workspace snapshot",
+    "Question mode",
+    "Evidence report",
+    "Workspace reading",
+    "Evidence validation",
+    "Answer drafting",
+    "Final report"
+  ]);
+  assert.equal(session?.progressEvents.some((event) => /Planning complete for inspect-only task/i.test(event.summary)), false);
+  assert.ok(session?.progressEvents.some((event) => /Why this step/i.test(event.summary)));
   assert.ok(session?.verificationResult);
   assert.ok(session?.explainReport);
   assert.equal(session?.commandRequests.length, 0);
+  assert.match(assistantMessage, /Workspace used for this answer:/);
+  assert.match(assistantMessage, escapeRegExpForAssert(workspace));
+  assert.match(String(answerArtifact?.payload.answerMarkdown ?? ""), escapeRegExpForAssert(workspace));
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
+
+test("arabic inspect-only progress uses actual Arabic step labels without mojibake", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-arabic-progress-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-arabic-progress-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
+  await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const prompt = "اشرح المشروع ببساطة";
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    userPrompt: prompt
+  });
+  await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+  const progressText = session?.progressEvents.map((event) => `${event.taskTitle ?? ""} ${event.summary}`).join("\n") ?? "";
+
+  assert.equal(session?.runMode, "inspect_only");
+  assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
+    "فهم الطلب",
+    "قراءة المشروع",
+    "تحديد نوع السؤال",
+    "تقرير الأدلة",
+    "فتح الملفات",
+    "مراجعة الأدلة",
+    "تجهيز الرد",
+    "حفظ النتيجة"
+  ]);
+  assert.match(progressText, /ليه الخطوة دي/);
+  assert.doesNotMatch(progressText, /\uFFFD|ط§|ظ„|ظ…|أ¯|أ™|ï؟½/);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+function escapeRegExpForAssert(value: string): RegExp {
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+}
+
+function assertOrderedTitles(actual: string[], expected: string[]) {
+  let cursor = 0;
+  for (const title of actual) {
+    if (title === expected[cursor]) cursor += 1;
+    if (cursor === expected.length) return;
+  }
+  assert.fail(`Expected ordered progress titles ${expected.join(" -> ")} inside ${actual.join(" -> ")}`);
+}
 
 test("arabic explain requests stay inspect-only and answer in chat", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-arabic-explain-${Date.now()}`);
@@ -250,6 +403,7 @@ test("Arabic inspect regression prompts answer from evidence without patch propo
     assert.ok(answerArtifact?.payload && "laneSynthesizedGraph" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "evidenceReview" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "fallbackUsed" in answerArtifact.payload);
+    assert.ok(answerArtifact?.payload && "answerStrategy" in answerArtifact.payload);
     assert.ok(answerArtifact?.payload && "confidence" in answerArtifact.payload);
     assert.ok(artifactTypes.has("concept_resolution"));
     assert.ok(artifactTypes.has("investigation_graph"));

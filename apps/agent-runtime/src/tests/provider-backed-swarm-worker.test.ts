@@ -110,7 +110,7 @@ test("provider-backed worker blocks executor repair and write-requesting work it
   }
 });
 
-test("provider-backed worker falls back to mock in auto mode and remains mock by default", async () => {
+test("provider-backed worker falls back to mock in auto mode but uses explicit provider factory by default", async () => {
   const workspace = await fixtureWorkspace("provider-worker-fallback");
   try {
     const auto = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "auto" });
@@ -123,10 +123,16 @@ test("provider-backed worker falls back to mock in auto mode and remains mock by
     assert.ok(trace.events.some((event) => event.event_type === "provider_worker_fallback_to_mock"));
 
     const provider = new FakeProvider();
-    const defaultMock = new ProviderBackedSwarmWorker({ workspacePath: workspace, providerFactory: () => provider });
-    const mockResult = await defaultMock.run(workerInput(workspace, { role: "PlannerAgent", type: "plan" }));
+    const defaultProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace, providerFactory: () => provider });
+    const providerResult = await defaultProvider.run(workerInput(workspace, { role: "PlannerAgent", type: "plan", runId: "swarm_provider_default" }));
+    assert.equal(providerResult.status, "succeeded");
+    assert.equal(provider.calls.length, 1);
+    assert.doesNotMatch(providerResult.summary, /completed plan work/);
+
+    const explicitMock = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "mock", providerFactory: () => provider });
+    const mockResult = await explicitMock.run(workerInput(workspace, { role: "PlannerAgent", type: "plan", runId: "swarm_explicit_mock" }));
     assert.match(mockResult.summary, /completed plan work/);
-    assert.equal(provider.calls.length, 0);
+    assert.equal(provider.calls.length, 1);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

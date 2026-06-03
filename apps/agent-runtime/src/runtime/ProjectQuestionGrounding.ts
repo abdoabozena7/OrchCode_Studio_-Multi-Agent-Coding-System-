@@ -14,6 +14,7 @@ export type ProjectQuestionKind =
   | "forecasting_scope"
   | "dataset_realtime"
   | "page_inventory"
+  | "decision_policy"
   | "general_project";
 
 export type RequestedConcept = {
@@ -100,6 +101,7 @@ const QUESTION_STOP_WORDS = new Set([
   "how", "i", "in", "is", "it", "me", "of", "please", "project", "selected",
   "show", "system", "tell", "that", "the", "this", "to", "walk", "what", "where",
   "why", "with", "work", "works", "workspace", "you",
+  "chain", "flow", "path", "stage", "stages", "step", "steps",
   "اشرح", "اشرحلي", "شرح", "المشروع", "مشروع", "ده", "دا", "دي", "ازاي", "إزاي", "كيف", "ايه",
   "إيه", "من", "في", "هنا", "على", "هو", "هي", "بيقدر", "يقدر", "يجيب", "كأنها", "كانها", "prompt",
   "اشرح", "شرح", "المشروع", "مشروع", "ده", "دا", "دي", "ازاي", "كيف", "ايه",
@@ -119,8 +121,8 @@ const STYLE_STOP_WORDS = new Set([
 ]);
 
 const GENERIC_CONCEPT_WORDS = new Set([
-  "analysis", "architecture", "feature", "flow", "module", "overview", "pipeline",
-  "process", "system"
+  "analysis", "architecture", "chain", "feature", "flow", "module", "overview", "path", "pipeline",
+  "process", "stage", "stages", "step", "steps", "system"
 ]);
 
 const EXTRA_ARABIC_QUESTION_STOP_WORDS = new Set([
@@ -230,6 +232,23 @@ const FORECASTING_FACT_GROUP: RequestedConceptEvidenceGroup = {
   label: "forecasting type/scope evidence",
   aliases: FORECASTING_ALIASES,
   coreTerms: ["forecast", "forecasting", "arima", "sarima", "trend", "customer", "cluster", "\u0639\u0645\u064a\u0644"]
+};
+
+const DECISION_POLICY_ALIASES = [
+  "decision", "decide", "decides", "route", "rules", "rule", "policy", "orchestrator",
+  "choose_route", "selected_action_name", "recommended_action_name", "agent_recommendations",
+  "agent_consensus", "weighted_votes", "weighted_winner", "dispatch", "review", "offer",
+  "strong offer", "retention offer", "re-cluster", "recluster", "re cluster", "cluster drift",
+  "drift detection", "drift_detected", "membership", "membership_strength", "fcm membership",
+  "\u064a\u0642\u0631\u0631", "\u064a\u0628\u0639\u062a", "\u0642\u0648\u0627\u0639\u062f", "\u0642\u0631\u0627\u0631",
+  "\u0628\u062f\u0644", "\u0634\u0631\u0648\u0637", "\u0627\u0644\u0642\u0631\u0627\u0631"
+];
+
+const DECISION_POLICY_GROUP: RequestedConceptEvidenceGroup = {
+  id: "decision_policy",
+  label: "decision policy/routing evidence",
+  aliases: DECISION_POLICY_ALIASES,
+  coreTerms: ["decision", "orchestrator", "rule", "offer", "re-cluster", "drift", "membership", "\u064a\u0642\u0631\u0631"]
 };
 
 const PAGE_STRUCTURE_ALIASES = [
@@ -455,6 +474,8 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   const styleStripped = stripStylePhrases(userPrompt);
   const pageInventory = detectPageInventoryConcept(styleStripped) ?? detectPageInventoryConcept(userPrompt);
   if (pageInventory) return pageInventory;
+  const decisionPolicy = detectDecisionPolicyConcept(styleStripped) ?? detectDecisionPolicyConcept(userPrompt);
+  if (decisionPolicy) return decisionPolicy;
   const numericOrForecasting =
     detectThresholdInventoryConcept(styleStripped)
     ?? detectThresholdInventoryConcept(userPrompt)
@@ -467,6 +488,9 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   if (known) return known;
   const investigationConcept = conceptFromInvestigationResolution(styleStripped) ?? conceptFromInvestigationResolution(userPrompt);
   if (investigationConcept) return investigationConcept;
+  if (looksLikeRelationshipExplorationQuestion(styleStripped)) {
+    return { specific: false, label: "this project", terms: [], coreTerms: [], aliases: [], confidence: "unknown" };
+  }
   const normalized = normalizeForGroundingSearch(styleStripped);
   const focused = selectConceptPhrase(normalized);
   const terms = meaningfulConceptTerms(focused);
@@ -489,6 +513,8 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
 function conceptFromInvestigationResolution(userPrompt: string): RequestedConcept | undefined {
   const resolved = resolveInvestigationConcept(userPrompt);
   if (!resolved.isTargeted || resolved.targetConcept === "general") return undefined;
+  const normalizedTarget = normalizeForGroundingSearch(resolved.targetConcept);
+  if (isQuestionStopWord(normalizedTarget) || GENERIC_CONCEPT_WORDS.has(normalizedTarget)) return undefined;
   return {
     specific: true,
     label: resolved.targetConcept,
@@ -521,9 +547,16 @@ function conceptFromInvestigationResolution(userPrompt: string): RequestedConcep
   };
 }
 
+function looksLikeRelationshipExplorationQuestion(userPrompt: string) {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  return /\b(chain|flow|path|pipeline|stage|stages|step|steps|from|into|through|between|connect|link|follow|trace|relationship|handoff)\b/i.test(normalized)
+    || /\bwhat does each stage prove\b/i.test(userPrompt);
+}
+
 export function detectProjectQuestionKind(userPrompt: string): ProjectQuestionKind {
   const concept = extractRequestedConcept(userPrompt);
   if (isPageInventoryConcept(concept)) return "page_inventory";
+  if (isDecisionPolicyConcept(concept)) return "decision_policy";
   if (isThresholdInventoryConcept(concept)) return "threshold_inventory";
   if (isForecastingScopeConcept(concept)) return "forecasting_scope";
   if (concept.label === DATASET_REALTIME_CONCEPT_LABEL
@@ -968,6 +1001,27 @@ function detectCompoundDatasetRealtimeConcept(userPrompt: string): RequestedConc
   };
 }
 
+function detectDecisionPolicyConcept(userPrompt: string): RequestedConcept | undefined {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  const asksDecision =
+    /\b(when|why|how|decide|decides|decision|rule|rules|policy|route|orchestrator|choose|instead|versus|vs)\b/.test(normalized)
+    || /(?:\u0627\u0645\u062a\u0649|\u064a\u0642\u0631\u0631|\u0644\u064a\u0647|\u0627\u0632\u0627\u064a|\u0642\u0648\u0627\u0639\u062f|\u0628\u062f\u0644|\u064a\u0628\u0639\u062a)/.test(normalized);
+  const hasActionChoice = /\b(re\s*cluster|recluster|offer|strong offer|human review|no action|dispatch|selected action|recommended action)\b/.test(normalized);
+  const hasRoutingTerms = /\b(orchestrator|choose_route|route_result|routing|weighted votes|weighted winner|agent consensus|agent recommendations|selected action|recommended action|dispatch)\b/.test(normalized);
+  const hasDecisionEvidenceTerms = /\b(drift|drift detected|membership|membership strength|fcm|orchestrator|agent recommendations|weighted votes|agent consensus)\b/.test(normalized);
+  if (!asksDecision || !(hasActionChoice || (hasRoutingTerms && hasDecisionEvidenceTerms))) return undefined;
+  return {
+    specific: true,
+    label: "decision policy",
+    displayLabel: "decision policy: re-cluster vs offer",
+    terms: uniqueStrings(["decision policy", "re-cluster", "offer", "drift", "membership", "fcm", "orchestrator"]),
+    coreTerms: DECISION_POLICY_GROUP.coreTerms,
+    aliases: DECISION_POLICY_ALIASES,
+    evidenceGroups: [DECISION_POLICY_GROUP],
+    confidence: "high"
+  };
+}
+
 function detectPageInventoryConcept(userPrompt: string): RequestedConcept | undefined {
   const normalized = normalizeForGroundingSearch(userPrompt);
   const rawPrompt = userPrompt.toLowerCase();
@@ -1048,7 +1102,7 @@ function detectForecastingScopeConcept(userPrompt: string): RequestedConcept | u
   const hasForecastIntent = forecastTopicAliases.some((alias) => textContainsConceptTerm(normalized, alias));
   const hasTypeOrScopeIntent = /\b(type|kind|scope|customer|per customer|global|aggregate|one customer|single customer)\b/.test(normalized)
     || /(?:\u0646\u0648\u0639|\u0639\u0645\u064a\u0644|\u0648\u0627\u062d\u062f|\u064a\u062a\u0637\u0628\u0642|\u064a\u062a\u0637\u0628\u0642\s+\u0639\u0644\u0649)/.test(userPrompt);
-  if (!hasForecastIntent) return undefined;
+  if (!hasForecastIntent || !hasPrimaryForecastIntent(normalized)) return undefined;
   return {
     specific: true,
     label: FORECASTING_SCOPE_CONCEPT_LABEL,
@@ -1089,6 +1143,7 @@ function detectKnownConcept(userPrompt: string): RequestedConcept | undefined {
     });
   const best = matches[0];
   if (!best) return undefined;
+  if (best.concept.key === "forecasting" && !hasPrimaryForecastIntent(normalized)) return undefined;
   return {
     specific: true,
     label: best.concept.label,
@@ -1149,6 +1204,11 @@ function expandConceptAliases(terms: string[], label: string) {
 
 function isQuestionStopWord(term: string) {
   return QUESTION_STOP_WORDS.has(term) || EXTRA_ARABIC_QUESTION_STOP_WORDS.has(term) || REAL_ARABIC_QUESTION_STOP_WORDS.has(term);
+}
+
+function hasPrimaryForecastIntent(normalizedPrompt: string) {
+  return /\b(forecast|forecasts|forecasting|arima|sarima|sarimax|timeseries|time series|trend|trend_multiplier)\b/i.test(normalizedPrompt)
+    || /(?:\u062a\u0648\u0642\u0639|\u062a\u0648\u0642\u0639\u0627\u062a|\u0627\u0644\u0641\u0648\u0631\u0643\u0627\u0633\u062a\u064a\u0646\u062c)/u.test(normalizedPrompt);
 }
 
 function isStyleStopWord(term: string) {
@@ -1438,6 +1498,13 @@ export function isForecastingScopeConcept(grounding: ProjectQuestionGrounding | 
   const concept = "concept" in grounding ? grounding.concept : grounding;
   return concept.label === FORECASTING_SCOPE_CONCEPT_LABEL
     || concept.evidenceGroups?.some((group) => group.id === "forecasting_fact") === true;
+}
+
+export function isDecisionPolicyConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
+  if ("questionKind" in grounding && grounding.questionKind === "decision_policy") return true;
+  const concept = "concept" in grounding ? grounding.concept : grounding;
+  return concept.label === "decision policy"
+    || concept.evidenceGroups?.some((group) => group.id === "decision_policy") === true;
 }
 
 export function isPageInventoryConcept(grounding: ProjectQuestionGrounding | RequestedConcept) {
@@ -1947,25 +2014,55 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
     ...scopeEvidence,
     ...forecastEvidence
   ]).slice(0, 5);
+  const scoreEvidence = items
+    .filter((item) => /\b(normalized_trend|trend_multiplier|intelligent_score|calculate_intelligent_score|_compute_intelligent_score|\/\s*1\.25)\b/i.test(evidenceItemContentText(item)))
+    .slice(0, 5);
+  const runtimeEvidence = items
+    .filter((item) => /\b(get_cluster_state|predicted_cluster|forecast_state)\b/i.test(evidenceItemContentText(item)))
+    .slice(0, 5);
+  const dataValidityEvidence = items
+    .filter((item) => /\b(behavior_period|stable_period|drift_period|period_date|month|synthetic|random|data_generator|churn_label)\b/i.test(evidenceItemContentText(item)))
+    .slice(0, 5);
+  const hasTrendNormalizationIssue = /\bnormalized_trend\b[\s\S]{0,160}\/\s*1\.25|\/\s*1\.25[\s\S]{0,160}\bnormalized_trend\b/i.test(items.map(evidenceItemContentText).join("\n"));
+  const hasSyntheticTimeSignals = dataValidityEvidence.length > 0;
+  const scoreLinks = formatNonShallowForecastLinks(scoreEvidence);
+  const runtimeLinks = formatNonShallowForecastLinks(runtimeEvidence);
+  const dataLinks = formatNonShallowForecastLinks(dataValidityEvidence);
+  const mainLinks = formatNonShallowForecastLinks(mainEvidence);
 
   if (arabic) {
     const lines = [
-      "### \u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0645\u062e\u062a\u0635\u0631\u0629",
-      `\u0627\u0644\u0640 forecasting \u0647\u0646\u0627 \u0646\u0648\u0639\u0647 \`${type}\`.`,
+      "## \u0627\u0644\u062e\u0644\u0627\u0635\u0629",
+      `\u0627\u0644\u0640 forecasting \u0647\u0646\u0627 \u0646\u0648\u0639\u0647 \`${type}\`\u060c \u0648\u0623\u0642\u0631\u0628 \u0648\u0635\u0641 \u0644\u0647 \u0625\u0646\u0647 \u0060cluster-level / per-cluster churn trend signal\u0060 \u0645\u0634 forecast \u0645\u0633\u062a\u0642\u0644 \u0644\u0643\u0644 customer.`,
+      "\u0627\u0644\u062d\u0643\u0645: \u0645\u0642\u0628\u0648\u0644 \u0643\u0640 demo/academic signal \u0644\u0648 \u0627\u0644\u0647\u062f\u0641 \u0645\u062a\u0627\u0628\u0639\u0629 trend \u0639\u0644\u0649 \u0645\u0633\u062a\u0648\u0649 cluster\u060c \u0644\u0643\u0646\u0647 \u0636\u0639\u064a\u0641 \u0643\u0640 production customer-level forecasting \u0644\u0648 \u0645\u0641\u064a\u0634 time-series \u062d\u0642\u064a\u0642\u064a \u0644\u0643\u0644 customer.",
       "",
-      "### \u0628\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u0649 \u0645\u064a\u0646\u061f",
+      "## \u0628\u064a\u062a\u0637\u0628\u0642 \u0639\u0644\u0649 \u0645\u064a\u0646\u061f",
       scope.arabicExplanation,
       "",
-      "### \u0628\u064a\u062a\u062c\u062f\u062f \u0625\u0645\u062a\u0649\u061f",
+      "## \u0628\u064a\u062a\u062c\u062f\u062f \u0625\u0645\u062a\u0649\u061f",
       cadence?.sentence ?? "\u0645\u0627\u0644\u0642\u064a\u062a\u0634 \u062f\u0644\u064a\u0644 \u0648\u0627\u0636\u062d \u064a\u0642\u0648\u0644 \u0625\u0645\u062a\u0649 \u0627\u0644\u0640 forecast \u0628\u064a\u062a\u062d\u0633\u0628 \u0623\u0648 \u0628\u064a\u062a\u062c\u062f\u062f.",
       ""
     ];
+    lines.push("## \u0645\u0633\u0627\u0631 \u0627\u0644\u062a\u0634\u063a\u064a\u0644");
+    lines.push(`- \u0627\u0644\u0640 training/state \u0628\u0627\u064a\u0646 \u062d\u0648\u0644 \u0060fit_cluster_models\u0060 \u0648\u0060save_state\u0060${mainLinks ? `: ${mainLinks}.` : "."}`);
+    lines.push(`- \u0648\u0642\u062a runtime \u0627\u0644\u0646\u0638\u0627\u0645 \u0628\u064a\u0631\u0628\u0637 \u0627\u0644\u0640 customer \u0628\u0640 \u0060predicted_cluster\u0060 \u0648\u064a\u0633\u062a\u0631\u062c\u0639 \u0060get_cluster_state\u0060${runtimeLinks ? `: ${runtimeLinks}.` : "."}`);
+    lines.push(`- \u0627\u0644\u0623\u062b\u0631 \u0639\u0644\u0649 \u0627\u0644\u0642\u0631\u0627\u0631 \u062c\u0627\u064a \u0645\u0646 \u0060trend_multiplier\u0060 \u062f\u0627\u062e\u0644 score/intelligent score${scoreLinks ? `: ${scoreLinks}.` : "."}`);
+    lines.push("");
+    lines.push("## \u0647\u0644 \u062f\u0647 \u0645\u0646\u0637\u0642\u064a\u061f");
+    lines.push("- \u0627\u0644\u0645\u0646\u0637\u0642\u064a: \u064a\u0646\u0641\u0639 \u0643\u0625\u0634\u0627\u0631\u0629 trend \u0645\u0633\u0627\u0639\u062f\u0629 \u0644\u0644\u0640 agent \u0639\u0644\u0649 \u0645\u0633\u062a\u0648\u0649 cluster.");
+    lines.push(hasSyntheticTimeSignals
+      ? `- \u0627\u0644\u0645\u062d\u062f\u0648\u062f/\u0627\u0644\u063a\u0644\u0637 \u0644\u0648 \u0627\u062a\u0639\u0627\u0645\u0644 \u0643\u0640 production: \u0641\u064a\u0647 \u0625\u0634\u0627\u0631\u0627\u062a \u0644\u0640 \u0060behavior_period\u0060/\u0060month\u0060/\u0060churn_label\u0060 \u0623\u0648 data synthetic\u060c \u0641\u062f\u0647 \u0645\u0634 history \u0632\u0645\u0646\u064a \u0642\u0648\u064a \u0644\u0643\u0644 customer${dataLinks ? `: ${dataLinks}.` : "."}`
+      : "- \u062c\u0648\u062f\u0629 \u0627\u0644\u062f\u0627\u062a\u0627 \u0645\u0634 \u0645\u062b\u0628\u062a\u0629 \u0643\u0641\u0627\u064a\u0629\u060c \u0641\u0645\u0634 \u0647\u0623\u0639\u0627\u0645\u0644\u0647 \u0643\u0640 production-grade forecast \u0628\u062b\u0642\u0629.");
+    lines.push(hasTrendNormalizationIssue
+      ? "- \u062e\u0644\u0644 \u0627\u0644\u0640 score \u0627\u0644\u0648\u0627\u0636\u062d: \u0060normalized_trend = ... / 1.25\u0060 \u0645\u0639\u0646\u0627\u0647 \u0625\u0646 \u0060trend_multiplier\u0060 \u0645\u0634 multiplier \u062d\u0642\u064a\u0642\u064a. \u00601.15\u0060 \u062a\u062a\u062d\u0648\u0644 \u0644\u062d\u0648\u0627\u0644\u064a \u00600.92\u0060\u060c \u0641\u0632\u064a\u0627\u062f\u0629 \u0627\u0644\u062e\u0637\u0631 \u0645\u0634 \u0628\u062a\u0632\u0648\u062f \u0627\u0644\u0633\u0643\u0648\u0631 \u0641\u0639\u0644\u064a\u064b\u0627\u061b \u0628\u0633 \u0628\u062a\u0642\u0644\u0644 \u0627\u0644\u0639\u0642\u0648\u0628\u0629."
+      : "- \u0645\u0634 \u0647\u0623\u062f\u0639\u064a \u0645\u0634\u0643\u0644\u0629 \u0060/ 1.25\u0060 \u0644\u0648 \u0627\u0644\u0633\u0637\u0631 \u062f\u0647 \u0645\u0634 \u0645\u0648\u062c\u0648\u062f \u0641\u064a \u0627\u0644\u0623\u062f\u0644\u0629.");
+    lines.push("");
     if (scope.kind === "unknown") {
       lines.push("\u0645\u0634 \u0647\u0623\u0643\u062f \u0625\u0646\u0647 \u0644\u0640 customer \u0648\u0627\u062d\u062f \u063a\u064a\u0631 \u0644\u0648 \u0627\u0644\u0643\u0648\u062f \u0642\u0627\u064a\u0644 \u0643\u062f\u0647 \u0628\u0648\u0636\u0648\u062d.", "");
     }
     if (mainEvidence.length) {
-      lines.push("### \u0627\u0644\u0623\u062f\u0644\u0629");
-      lines.push(...mainEvidence.map((item) => `- ${item.markdownLink}`));
+      lines.push("## \u0627\u0644\u0623\u062f\u0644\u0629");
+      lines.push(...uniqueEvidenceItems([...mainEvidence, ...runtimeEvidence, ...scoreEvidence, ...dataValidityEvidence]).slice(0, 8).map((item) => `- ${forecastEvidenceLinkOrPath(item)}`));
       lines.push("");
     } else {
       lines.push("\u0645\u0641\u064a\u0634 \u0645\u0644\u0641 \u0648\u0627\u0636\u062d \u0643\u0641\u0627\u064a\u0629 \u064a\u062b\u0628\u062a \u0627\u0644\u0646\u0648\u0639.", "");
@@ -1984,7 +2081,7 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
 
   const lines = [
     "### Short Answer",
-    `The forecasting type here is \`${type}\`.`,
+    `The forecasting type here is \`${type}\`, and the strongest scope is a cluster-level / per-cluster churn trend signal rather than a customer-level forecast.`,
     "",
     "### Scope",
     scope.englishExplanation,
@@ -1995,9 +2092,18 @@ function createForecastingScopeFallback(grounding: ProjectQuestionGrounding, val
   ];
   if (mainEvidence.length) {
     lines.push("### Evidence");
-    lines.push(...mainEvidence.map((item) => `- ${item.markdownLink}`));
+    lines.push(...uniqueEvidenceItems([...mainEvidence, ...runtimeEvidence, ...scoreEvidence, ...dataValidityEvidence]).slice(0, 8).map((item) => `- ${forecastEvidenceLinkOrPath(item)}`));
   } else {
     lines.push("I did not find enough evidence to name the exact forecasting type.");
+  }
+  lines.push("");
+  lines.push("### Logic Assessment");
+  lines.push("This is reasonable as a demo/academic cluster trend signal, but weak as production customer-level forecasting without real per-customer time-series history.");
+  if (hasTrendNormalizationIssue) {
+    lines.push("The score logic also has a likely issue: `normalized_trend = ... / 1.25` means `trend_multiplier` is not used as a true multiplier; an increasing-risk `1.15` becomes about `0.92`.");
+  }
+  if (hasSyntheticTimeSignals) {
+    lines.push("The evidence includes derived/synthetic time signals such as `behavior_period`, `month`, `period_date`, or `churn_label`, so data validity is limited.");
   }
   if (shouldUseTable && facts.length) {
     lines.push("Forecasting Facts");
@@ -2160,7 +2266,13 @@ function collectGroundingEvidenceForSynthesis(grounding: ProjectQuestionGroundin
     ...grounding.projectDomain.evidence,
     ...grounding.understanding.sourceEvidence,
     ...grounding.understanding.dataFlowEvidence,
-    ...grounding.understanding.validationEvidence
+    ...grounding.understanding.validationEvidence,
+    ...grounding.workspaceReasoning.evidencePack.items,
+    ...grounding.workspaceReasoning.evidencePack.topicItems,
+    ...grounding.workspaceReasoning.evidencePack.byFacet.algorithms_models,
+    ...grounding.workspaceReasoning.evidencePack.byFacet.code_symbols,
+    ...grounding.workspaceReasoning.evidencePack.byFacet.data_flow,
+    ...grounding.workspaceReasoning.evidencePack.byFacet.numeric_logic
   ]).slice(0, limit);
 }
 
@@ -2300,6 +2412,20 @@ function realtimeModeSentence(items: GroundingEvidenceItem[]) {
 
 function formatEvidenceLinks(items: GroundingEvidenceItem[]) {
   return uniqueEvidenceItems(items).map((item) => item.markdownLink).join(", ");
+}
+
+function formatNonShallowForecastLinks(items: GroundingEvidenceItem[]) {
+  return uniqueEvidenceItems(items)
+    .map(forecastEvidenceLinkOrPath)
+    .filter(Boolean)
+    .join(", ");
+}
+
+function forecastEvidenceLinkOrPath(item: GroundingEvidenceItem) {
+  if (item.line <= 1 && /\bbackend\/(?:routes|services\/arima_model)\.py$/i.test(item.path.replaceAll("\\", "/"))) {
+    return `\`${item.path}\``;
+  }
+  return item.markdownLink;
 }
 
 function isSourceEvidencePath(filePath: string) {

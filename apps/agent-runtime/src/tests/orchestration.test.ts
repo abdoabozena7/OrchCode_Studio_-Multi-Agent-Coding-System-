@@ -4,7 +4,9 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
+import type { LlmRequest } from "../llm/LlmProvider.js";
 import { ensureMemoryLayout, writeJson } from "../memory/ProjectMemory.js";
 import type { CommandInventory, FileSummaryRecord, RepoIndex } from "../memory/types.js";
 import { SeniorCodingAgent } from "../agents/SeniorCodingAgent.js";
@@ -22,6 +24,14 @@ import {
   type Run,
   type Task
 } from "../orchestration/index.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("Phase 2 Run and Task model validation fails loudly for invalid data", () => {
   const runValidation = validateRun({
@@ -166,6 +176,27 @@ test("orchestrator creates a run, tasks, artifacts, executor invocation, and fin
   }
 });
 
+test("provider-backed orchestrator executor is not reported as demo mock", async () => {
+  const workspace = await createFixtureWorkspace("hivo-orchestrator-provider-executor");
+  const provider = new CountingMockProvider();
+  try {
+    const result = await new CoreOrchestrator({
+      workspacePath: workspace,
+      maxContextFiles: 3,
+      maxContextChars: 2500,
+      providerFactory: () => provider
+    }).runAgenticTask("Explain src/index.ts and do not change files.");
+
+    assert.equal(result.run.status, "succeeded");
+    assert.equal(provider.structuredCalls > 0, true);
+    assert.ok(result.report.limitations.some((entry) => /provider-backed SeniorCodingAgent planner/i.test(entry)));
+    assert.equal(result.report.limitations.some((entry) => /ExecutorAgent uses mock provider mode unless/i.test(entry)), false);
+    assert.ok((result.report.unresolved_risks ?? []).some((entry) => /provider-backed planner/i.test(entry)));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("old simple SeniorCodingAgent path still works alongside Phase 2", async () => {
   const workspace = await createFixtureWorkspace("hivo-simple-agent");
   try {
@@ -187,6 +218,86 @@ test("old simple SeniorCodingAgent path still works alongside Phase 2", async ()
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("provider-backed SeniorCodingAgent inspect uses provider final answer instead of local summary", async () => {
+  const workspace = await createFixtureWorkspace("hivo-provider-final-inspect");
+  try {
+    const sessionManager = new SessionManager(path.join(workspace, ".runtime-test"), new EventBus(), {
+      runtimeEventLoader: async () => []
+    });
+    await sessionManager.load();
+    const session = await sessionManager.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      activeProviderSource: "session_override",
+      executionMode: "simple_mode",
+      userPrompt: "Explain this project."
+    });
+    const provider = new FinalInspectProvider();
+    const completed = await new SeniorCodingAgent(provider, sessionManager)
+      .runTurn(session.id, "Explain this project.");
+    const assistantMessage = completed.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+    assert.equal(completed.status, "completed");
+    assert.equal(provider.textCalls, 1);
+    assert.match(assistantMessage, /PROVIDER_FINAL_INSPECT/);
+    assert.doesNotMatch(assistantMessage, /I inspected the workspace to explain it|Detected stack:/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("provider-backed SeniorCodingAgent inspect stops instead of returning local summary when final provider answer fails", async () => {
+  const workspace = await createFixtureWorkspace("hivo-provider-final-inspect-fails");
+  try {
+    const sessionManager = new SessionManager(path.join(workspace, ".runtime-test"), new EventBus(), {
+      runtimeEventLoader: async () => []
+    });
+    await sessionManager.load();
+    const session = await sessionManager.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      activeProviderSource: "session_override",
+      executionMode: "simple_mode",
+      userPrompt: "Explain this project."
+    });
+    const completed = await new SeniorCodingAgent(new FinalInspectProvider("fail"), sessionManager)
+      .runTurn(session.id, "Explain this project.");
+    const assistantMessage = completed.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+    assert.equal(completed.status, "failed");
+    assert.match(assistantMessage, /stopped before returning a local inspect summary/i);
+    assert.match(assistantMessage, /provider final inspect failure/i);
+    assert.doesNotMatch(assistantMessage, /Detected stack:/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+class CountingMockProvider extends MockLlmProvider {
+  structuredCalls = 0;
+
+  override async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    this.structuredCalls += 1;
+    return super.generateStructured<T>(input, schema);
+  }
+}
+
+class FinalInspectProvider extends MockLlmProvider {
+  textCalls = 0;
+
+  constructor(private readonly behavior: "ok" | "fail" = "ok") {
+    super();
+  }
+
+  override async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    if (this.behavior === "fail") throw new Error("provider final inspect failure");
+    return `PROVIDER_FINAL_INSPECT: ${input.userPrompt}`;
+  }
+}
 
 async function createFixtureWorkspace(prefix: string) {
   const workspace = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`);

@@ -12,6 +12,7 @@
     "typecheck": "npm run build -w @hivo/protocol && npm run typecheck -w @hivo/protocol && npm run typecheck -w @hivo/agent-runtime && npm run typecheck -w @hivo/desktop",
     "test": "npm run test -w @hivo/agent-runtime",
     "smoke:desktop-run-project": "npm run smoke:run-project -w @hivo/desktop",
+    "smoke:real-workspace": "npm run smoke:real-workspace -w @hivo/desktop --",
     "smoke:terminal-authority": "npm run smoke:run-project -w @hivo/desktop",
     "smoke:run-to-green": "npm run smoke:run-to-green -w @hivo/agent-runtime",
     "smoke:inspect-provider-truth": "npm run smoke:inspect-provider-truth -w @hivo/agent-runtime",

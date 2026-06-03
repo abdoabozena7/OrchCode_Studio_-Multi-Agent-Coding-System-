@@ -7,7 +7,7 @@ import type {
   RuntimeTurnRequest
 } from "@hivo/protocol";
 import { loadConfig, type RuntimeConfig } from "./config.js";
-import { AgentRuntime } from "./runtime/AgentRuntime.js";
+import { AgentRuntime, ProviderConfigurationError } from "./runtime/AgentRuntime.js";
 import { EventBus } from "./runtime/EventBus.js";
 import { SessionManager } from "./runtime/SessionManager.js";
 
@@ -39,7 +39,14 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
     if (!body?.workspacePath || !body.userPrompt) {
       return reply.status(400).send({ error: "workspacePath and userPrompt are required" });
     }
-    return runtime.createSession(body);
+    try {
+      return await runtime.createSession(body);
+    } catch (error) {
+      if (error instanceof ProviderConfigurationError) {
+        return reply.status(400).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
   });
 
   app.post("/sessions/:id/turn", async (request, reply) => {

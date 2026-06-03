@@ -24,6 +24,7 @@ export class ProviderTelemetryRecorder {
   private perPromptProviderLatencyMs: ProviderPromptLatency[] = [];
   private fallbackUsed = false;
   private fallbackReason: string | undefined;
+  private lastError: string | undefined;
 
   constructor(private readonly input: ProviderTelemetryInput) {}
 
@@ -42,6 +43,7 @@ export class ProviderTelemetryRecorder {
       this.providerResponseCount += 1;
       return result;
     } catch (error) {
+      this.markProviderError(error);
       const timeout = isProviderTimeout(error);
       this.recordLatency({
         requestId,
@@ -59,6 +61,10 @@ export class ProviderTelemetryRecorder {
   markFallback(reason: string) {
     this.fallbackUsed = true;
     this.fallbackReason = this.fallbackReason ? `${this.fallbackReason}; ${reason}` : reason;
+  }
+
+  markProviderError(error: unknown) {
+    this.lastError = summarizeProviderError(error);
   }
 
   snapshot(): ProviderTruthTelemetry {
@@ -79,6 +85,7 @@ export class ProviderTelemetryRecorder {
       perPromptProviderLatencyMs: this.perPromptProviderLatencyMs,
       fallbackUsed: this.fallbackUsed,
       fallbackReason: this.fallbackReason,
+      lastError: this.lastError,
       deterministicOnly: this.providerRequestCount === 0,
       mockProviderUsed: this.input.mode === "demo_mock" && this.providerRequestCount > 0,
       realProviderUsed: this.input.mode === "real_provider" && this.providerRequestCount > 0,

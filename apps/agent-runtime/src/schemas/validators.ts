@@ -70,6 +70,8 @@ export function validateStructuredOutput(value: unknown, schema: unknown): Valid
       return validateRunVerificationShape(value);
     case "project-explain":
       return validateProjectExplainShape(value);
+    case "conversation-intent-decision":
+      return validateConversationIntentDecisionShape(value);
     case "worker-output":
       return validateWorkerOutput(value as WorkerOutput);
     case "review":
@@ -226,6 +228,40 @@ function validateProjectExplainShape(value: unknown): ValidationResult {
         errors.push(`unsupportedOrUnclearParts[${index}] must be a string`);
       }
     });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateConversationIntentDecisionShape(value: unknown): ValidationResult {
+  const errors: string[] = [];
+  if (!isRecord(value)) return { valid: false, errors: ["conversation-intent-decision must be an object"] };
+  errors.push(...requiredStrings(value, ["kind", "language", "rationale"]));
+  if (typeof value.workspaceMessage !== "string") {
+    errors.push("workspaceMessage is required");
+  }
+  if (typeof value.kind === "string" && !["direct_conversation", "workspace_question", "workspace_action", "run_request"].includes(value.kind)) {
+    errors.push("kind is invalid");
+  }
+  if (typeof value.language === "string" && !["arabic", "english"].includes(value.language)) {
+    errors.push("language is invalid");
+  }
+  if (typeof value.needsWorkspace !== "boolean") {
+    errors.push("needsWorkspace must be boolean");
+  }
+  if (typeof value.confidence === "string" && !["high", "medium", "low"].includes(value.confidence)) {
+    errors.push("confidence is invalid");
+  }
+  if (typeof value.confidence !== "string") {
+    errors.push("confidence is required");
+  }
+  if (value.kind === "direct_conversation" && value.needsWorkspace !== false) {
+    errors.push("direct_conversation must set needsWorkspace false");
+  }
+  if (value.kind !== "direct_conversation" && value.needsWorkspace !== true) {
+    errors.push("workspace intents must set needsWorkspace true");
+  }
+  if (value.kind !== "direct_conversation" && typeof value.workspaceMessage === "string" && !value.workspaceMessage.trim()) {
+    errors.push("workspaceMessage must not be empty for workspace intents");
   }
   return { valid: errors.length === 0, errors };
 }

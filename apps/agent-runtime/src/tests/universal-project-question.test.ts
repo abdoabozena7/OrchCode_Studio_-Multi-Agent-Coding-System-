@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import type { ProjectMap } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { classifyEvidenceSource } from "../runtime/EvidenceHygiene.js";
 import { buildLargeProjectExplainReport } from "../runtime/LargeProjectContextBuilder.js";
-import { answerUniversalProjectQuestion } from "../runtime/UniversalProjectQuestionEngine.js";
+import { answerUniversalProjectQuestion as answerUniversalProjectQuestionRaw } from "../runtime/UniversalProjectQuestionEngine.js";
 import { inferWorkspaceIntent } from "../runtime/WorkspaceReasoningPipeline.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
@@ -16,7 +17,7 @@ class ThrowingProvider implements LlmProvider {
   }
 
   async generateText(): Promise<string> {
-    throw new Error("not used");
+    throw new Error("provider unavailable");
   }
 }
 
@@ -33,6 +34,22 @@ class NotFoundProvider implements LlmProvider {
 
   async generateText(): Promise<string> {
     throw new Error("not used");
+  }
+}
+
+class GroundedProvider implements LlmProvider {
+  constructor(private readonly answerMarkdown: string, private readonly refs: string[]) {}
+
+  async generateStructured<T>(_input: LlmRequest, _schema: unknown): Promise<T> {
+    return {
+      answerMarkdown: this.answerMarkdown,
+      usedEvidenceRefs: this.refs,
+      unsupportedOrUnclearParts: []
+    } as T;
+  }
+
+  async generateText(): Promise<string> {
+    return this.answerMarkdown;
   }
 }
 
@@ -67,6 +84,130 @@ class GenericPipelineProvider implements LlmProvider {
   }
 }
 
+class UngroundedProvider implements LlmProvider {
+  callCount = 0;
+
+  async generateStructured<T>(_input: LlmRequest, _schema: unknown): Promise<T> {
+    this.callCount += 1;
+    return {
+      answerMarkdown: "This is a natural provider answer, but it does not cite the workspace evidence or prove the requested mechanism.",
+      usedEvidenceRefs: [],
+      unsupportedOrUnclearParts: []
+    } as T;
+  }
+
+  async generateText(): Promise<string> {
+    throw new Error("not used");
+  }
+}
+
+class NaturalUniversalProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("natural universal provider should not use structured project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    const link = input.userPrompt.match(/\[[^\]]+\]\(hivo-file:[^)]+\)/)?.[0];
+    if (!link) throw new Error("natural universal prompt did not include hivo-file evidence links");
+    return [
+      "The requested behavior is explained from the current project evidence, not from a canned local synthesis.",
+      "",
+      `The key code evidence is ${link}.`,
+      "",
+      "That cited evidence is enough for this concise project answer."
+    ].join("\n");
+  }
+}
+
+class NaturalDecisionPolicyProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("decision policy provider should use natural text project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    const links = Array.from(input.userPrompt.matchAll(/\[[^\]]+\]\(hivo-file:[^)]+\)/g)).map((match) => match[0]);
+    const agents = links.find((link) => link.includes("backend/services/agents.py")) ?? links[0];
+    const orchestrator = links.find((link) => link.includes("backend/services/orchestrator.py")) ?? links[1] ?? agents;
+    const routes = links.find((link) => link.includes("backend/routes.py")) ?? links[2] ?? agents;
+    if (!agents || !orchestrator || !routes) {
+      throw new Error("decision policy prompt did not include the expected evidence links");
+    }
+    return [
+      "## \u062a\u0633\u0644\u0633\u0644 \u0627\u0644\u0642\u0631\u0627\u0631",
+      "",
+      `\u0627\u0644\u0646\u0638\u0627\u0645 \u0645\u0634 \u0628\u064a\u062e\u062a\u0627\u0631 \`Re-cluster\` \u0645\u0646 FCM \u0644\u0648\u062d\u062f\u0647. \u0627\u0644\u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0641\u064a \`ClusterHealthAgent.recommend\`: \u064a\u0648\u0635\u064a \u0628\u0640 \`Re-cluster\` \u0641\u0642\u0637 \u0644\u0648 \`drift_detected\` \u0635\u062d \u0648 \`membership_strength < 0.50\`\u061b \u0648\u063a\u064a\u0631 \u0643\u062f\u0647 \u0627\u0644\u0640 agent \u064a\u0648\u0635\u064a \u0628\u0640 \`Offer\`. ${agents}`,
+      "",
+      `\u0628\u0639\u062f \u0643\u062f\u0647 \`process_customer\` \u0628\u062a\u062c\u0645\u0639 \`agent_recommendations\` \u0645\u0646 \u0643\u0644 \u0627\u0644\u0640 agents \u0648\u062a\u0628\u0639\u062a\u0647\u0627 \u0644\u0640 \`orchestrator.choose_route\`\u060c \u0641\u0635\u0648\u062a cluster-health \u0645\u0634 \u0647\u0648 \u0627\u0644\u0642\u0631\u0627\u0631 \u0627\u0644\u0646\u0647\u0627\u0626\u064a \u0644\u0648\u062d\u062f\u0647. ${routes}`,
+      "",
+      `\u0627\u0644\u0640 orchestrator \u0628\u064a\u0628\u0646\u064a \`weighted_votes\`\u060c \u064a\u062e\u062a\u0627\u0631 \`weighted_winner\`\u060c \u0648\u064a\u062d\u0633\u0628 \`agent_consensus\`. \u0648\u0645\u0645\u0643\u0646 \u0644\u0633\u0647 \u064a\u0631\u062c\u0639 \`No Action\` \u0623\u0648 \`Human Review\` \u0642\u0628\u0644 \u0645\u0627 \u064a\u0639\u0645\u0644 dispatch \u0644\u0644\u0623\u0643\u0634\u0646 \u0627\u0644\u0643\u0633\u0628\u0627\u0646. ${orchestrator}`,
+      "",
+      "\u0628\u0627\u0644\u062a\u0627\u0644\u064a: \u0627\u0644\u0646\u0638\u0627\u0645 \u064a\u0642\u0631\u0631 \`Re-cluster\` \u0644\u0648 \u0642\u0627\u0639\u062f\u0629 \u0635\u062d\u0629 \u0627\u0644\u0643\u0644\u0633\u062a\u0631 \u0635\u0648\u062a\u062a \u0644\u0647 \u0648\u0627\u0644\u0640 weighted routing \u0633\u0645\u062d \u0644\u0644\u0635\u0648\u062a \u062f\u0647 \u064a\u0643\u0633\u0628 \u0628\u0640 score/consensus \u0643\u0627\u0641\u064a. \u063a\u064a\u0631 \u0643\u062f\u0647 \u0645\u0645\u0643\u0646 \u064a\u0637\u0644\u0639 \`Offer\` \u0623\u0648 \`Strong Offer\` \u0623\u0648 \`Human Review\` \u0623\u0648 \`No Action\`."
+    ].join("\n");
+  }
+}
+
+class CapturingDeepQuestionProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+  requests: LlmRequest[] = [];
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("deep project question provider should use natural text project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    this.requests.push(input);
+    const links = Array.from(input.userPrompt.matchAll(/\[[^\]]+\]\(hivo-file:[^)]+\)/g)).map((match) => match[0]);
+    const clustering = links.find((link) => link.includes("backend/services/clustering.py")) ?? links[0];
+    const svm = links.find((link) => link.includes("backend/services/svm_model.py")) ?? clustering;
+    const routes = links.find((link) => link.includes("backend/routes.py")) ?? clustering;
+    if (!clustering) throw new Error("deep question prompt did not include clustering evidence");
+    return [
+      "DBSCAN is used first to separate obvious noise/outliers from the feature matrix: the code creates `dbscan_labels`, builds `noise_mask`, and passes only the cleaned `feature_frame` into the next clustering stage. " + clustering,
+      "",
+      "Fuzzy C-Means then runs `cmeans` on that cleaned frame and produces `memberships` plus `fcm_labels`; that is a membership-certainty signal, not the same thing as DBSCAN's outlier/noise decision. " + clustering,
+      "",
+      "The downstream decision path uses those labels for training and prediction: `train_svm_state_detector` trains from `fcm_labels`, and the route wires `build_customer_segments` into training, so the DBSCAN stage shapes what FCM and later SVM see. " + svm + " " + routes
+    ].join("\n");
+  }
+}
+
+class StaleOuterloopProvider implements LlmProvider {
+  async generateStructured<T>(_input: LlmRequest, _schema: unknown): Promise<T> {
+    return {
+      answerMarkdown: [
+        "## الخلاصة",
+        "لقيت `outerloop` كدليل مباشر، وبنيت الشرح على الروابط المثبتة في الكود، مش على mentions عامة.",
+        "",
+        "## الفلو المثبت",
+        "- جزئي: فيه مرحلة model/decision/action داخل النظام. [backend/services/action_executor.py:38](hivo-file:backend%2Fservices%2Faction_executor.py:38)",
+        "- جزئي: فيه feedback/outcome stage تربط القرار بنتيجة لاحقة. [backend/routes.py:19](hivo-file:backend%2Froutes.py:19)",
+        "",
+        "## النواتج أو الحالات المثبتة",
+        "- `ACTION_LOG_PATH`, `status`, `observed_outcome`."
+      ].join("\n"),
+      usedEvidenceRefs: ["backend/services/action_executor.py:38", "backend/routes.py:19"],
+      unsupportedOrUnclearParts: []
+    } as T;
+  }
+
+  async generateText(): Promise<string> {
+    throw new Error("not used");
+  }
+}
+
 const projectMap: ProjectMap = {
   stack: ["TypeScript"],
   packageManagers: ["npm"],
@@ -74,6 +215,119 @@ const projectMap: ProjectMap = {
   entryPoints: ["src/index.ts"],
   importantFiles: ["package.json", "src/index.ts"]
 };
+
+const answerUniversalProjectQuestion = (
+  input: Parameters<typeof answerUniversalProjectQuestionRaw>[0]
+) => answerUniversalProjectQuestionRaw({
+  providerFailureSynthesis: "allow_local_synthesis",
+  ...input
+});
+
+test("UniversalProjectQuestionEngine defaults to notice-only after provider failure", async () => {
+  const workspace = await createWorkspace("universal-default-provider-notice");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "payment.ts"), "export const rarePaymentGatewayAdapter = true;\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Where is rarePaymentGatewayAdapter?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: { ...projectMap, importantFiles: ["src/payment.ts"], entryPoints: ["src/payment.ts"] }
+    });
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.answerStrategy.strategy, "provider_failed_notice");
+    assert.equal(result.answerStrategy.finalAnswerSource, "local_notice");
+    assert.doesNotMatch(result.answerMarkdown, /hivo-file:src%2Fpayment\.ts|rarePaymentGatewayAdapter.*defined/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine notice-only accepts natural provider Markdown with citations", async () => {
+  const workspace = await createWorkspace("universal-natural-provider-markdown");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "index.ts"), "export function startApp() { return 'ready'; }\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "explain this project";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: { ...projectMap, importantFiles: ["src/index.ts"], entryPoints: ["src/index.ts"] }
+    });
+    const provider = new NaturalUniversalProvider();
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.fallbackUsed, false);
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.match(result.answerMarkdown, /key code evidence|hivo-file/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine cleans social preambles before evidence search", async () => {
+  const workspace = await createWorkspace("universal-clean-social-preamble");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    for (let index = 0; index < 9; index += 1) {
+      await writeFile(path.join(workspace, "src", `chat-${index}.md`), "هاي فقط في ملف دردشة ولا علاقة له بالميزة.\n", "utf8");
+    }
+    await writeFile(
+      path.join(workspace, "src", "feedback.ts"),
+      [
+        "export function submitFeedback(label: string) {",
+        "  return fetch('/api/customer-feedback', { method: 'POST', body: JSON.stringify({ label }) });",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "هاي ازاي الfeedback بيتطبق؟";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        importantFiles: ["src/feedback.ts"],
+        entryPoints: ["src/feedback.ts"]
+      }
+    });
+
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.intent.topicPhrase, "feedback");
+    assert.equal(result.questionUnderstanding.targetConcept, "feedback");
+    assert.equal(result.queryPlan.some((query) => query.query === "هاي"), false);
+    assert.equal(result.positiveEvidence.some((item) => item.query === "هاي" || item.path.includes("chat-")), false);
+    assert.ok(result.queryPlan.some((query) => /feedback/i.test(query.query)));
+    assert.ok(result.positiveEvidence.some((item) => item.path === "src/feedback.ts"));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
 
 async function createWorkspace(prefix: string) {
   const workspace = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -292,6 +546,129 @@ async function createInvestigationWorkspace() {
   return workspace;
 }
 
+async function createMultiAgentDecisionWorkspace() {
+  const workspace = await createWorkspace("universal-multi-agent-decision");
+  await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
+  await writeFile(
+    path.join(workspace, "backend", "services", "agents.py"),
+    [
+      "class BaseAgent:",
+      "    agent_name = 'base'",
+      "    vote_weight = 1.0",
+      "",
+      "    def _response(self, action_name, reasoning):",
+      "        return {",
+      "            'agent_name': self.agent_name,",
+      "            'recommended_action_name': action_name,",
+      "            'reasoning': reasoning,",
+      "            'vote_weight': self.vote_weight,",
+      "        }",
+      "",
+      "class ReliabilityAgent(BaseAgent):",
+      "    agent_name = 'reliability'",
+      "    vote_weight = 1.4",
+      "",
+      "    def recommend(self, context):",
+      "        if context.get('shap_cosine', 1.0) < 0.60 or context.get('probability_gap', 1.0) < 0.18:",
+      "            return self._response('Human Review', 'low confidence or weak SHAP agreement')",
+      "        return self._response('Offer', 'reliable enough to automate')",
+      "",
+      "class ForecastAgent(BaseAgent):",
+      "    agent_name = 'forecast'",
+      "    vote_weight = 1.1",
+      "",
+      "    def recommend(self, context):",
+      "        if context.get('trend_multiplier', 1.0) < 1.0:",
+      "            return self._response('Human Review', 'forecast trend is cooling down')",
+      "        if context.get('severity', 0.0) >= 0.75:",
+      "            return self._response('Strong Offer', 'high severity with rising trend')",
+      "        return self._response('Offer', 'normal churn-risk trend')",
+      "",
+      "class ClusterHealthAgent(BaseAgent):",
+      "    agent_name = 'cluster_health'",
+      "    vote_weight = 1.0",
+      "",
+      "    def recommend(self, context):",
+      "        if context.get('drift_detected') and context.get('membership_strength', 1.0) < 0.50:",
+      "            return self._response('Re-cluster', 'cluster drift with weak membership')",
+      "        return self._response('Offer', 'cluster looks stable')",
+      "",
+      "def build_default_agents():",
+      "    return [ReliabilityAgent(), ForecastAgent(), ClusterHealthAgent()]"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "orchestrator.py"),
+    [
+      "from collections import defaultdict",
+      "",
+      "class ReActOrchestrator:",
+      "    def __init__(self):",
+      "        self.minimum_score = 0.32",
+      "        self.borderline_low = 0.55",
+      "        self.direct_dispatch_score = 0.82",
+      "",
+      "    def choose_route(self, context, retrieval_summary, agent_recommendations):",
+      "        weighted_votes = defaultdict(float)",
+      "        for recommendation in agent_recommendations:",
+      "            weighted_votes[recommendation['recommended_action_name']] += recommendation.get('vote_weight', 1.0)",
+      "        weighted_winner = max(weighted_votes, key=weighted_votes.get)",
+      "        agent_consensus = weighted_votes[weighted_winner] / max(sum(weighted_votes.values()), 1.0)",
+      "        if context.get('score', 0.0) < self.minimum_score:",
+      "            return {'route_name': 'reject', 'selected_action_name': 'No Action', 'agent_consensus': agent_consensus}",
+      "        if agent_consensus < 0.60 or context.get('score', 0.0) < self.borderline_low:",
+      "            return {'route_name': 'review', 'selected_action_name': 'Human Review', 'agent_consensus': agent_consensus}",
+      "        return {'route_name': 'dispatch', 'selected_action_name': weighted_winner, 'agent_consensus': agent_consensus}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "services", "action_executor.py"),
+    [
+      "class ActionExecutor:",
+      "    def execute(self, selected_action_name, context):",
+      "        return {'status': 'executed', 'selected_action_name': selected_action_name, 'customer_id': context.get('customer_id')}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    path.join(workspace, "backend", "routes.py"),
+    [
+      "from backend.services.action_executor import ActionExecutor",
+      "from backend.services.agents import build_default_agents",
+      "from backend.services.orchestrator import ReActOrchestrator",
+      "",
+      "SYSTEM_STATE = {}",
+      "",
+      "def startup():",
+      "    action_executor = ActionExecutor()",
+      "    agents = build_default_agents()",
+      "    orchestrator = ReActOrchestrator()",
+      "    SYSTEM_STATE['action_executor'] = action_executor",
+      "    SYSTEM_STATE['agents'] = agents",
+      "    SYSTEM_STATE['orchestrator'] = orchestrator",
+      "",
+      "def process_customer(model_context, retrieval_summary):",
+      "    action_executor = SYSTEM_STATE['action_executor']",
+      "    agents = SYSTEM_STATE['agents']",
+      "    orchestrator = SYSTEM_STATE['orchestrator']",
+      "    agent_recommendations = [agent.recommend(model_context) for agent in agents]",
+      "    route_result = orchestrator.choose_route(model_context, retrieval_summary, agent_recommendations)",
+      "    execution = action_executor.execute(route_result['selected_action_name'], model_context)",
+      "    return {",
+      "        'route_name': route_result['route_name'],",
+      "        'agent_consensus': route_result['agent_consensus'],",
+      "        'agent_recommendations': agent_recommendations,",
+      "        'orchestrator_snapshot': route_result,",
+      "        'execution': execution,",
+      "    }"
+    ].join("\n"),
+    "utf8"
+  );
+  return workspace;
+}
+
 test("UniversalProjectQuestionEngine finds evidence beyond the old searchCode file cap", async () => {
   const workspace = await createWorkspace("universal-search-cap");
   try {
@@ -330,6 +707,285 @@ test("UniversalProjectQuestionEngine finds evidence beyond the old searchCode fi
     assert.ok(result.positiveEvidence.some((item) => item.path === "zzz/deep/payment.ts"));
     assert.ok(result.openedFiles.includes("zzz/deep/payment.ts"));
     assert.equal(result.fallbackUsed, true);
+    assert.equal(result.answerStrategy.strategy, "local_synthesis_after_provider_failure");
+    assert.equal(result.answerStrategy.finalAnswerSource, "local_evidence_synthesis");
+    assert.equal(result.answerStrategy.providerDraftStatus, "failed");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine treats provider text as draft, not final authority", async () => {
+  const workspace = await createWorkspace("universal-provider-draft-not-authority");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "src", "feedback.ts"),
+      [
+        "export function submitFeedback(label: 'positive' | 'negative' | 'neutral') {",
+        "  return fetch('/api/customer-feedback', { method: 'POST', body: JSON.stringify({ label }) });",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How is feedback applied here?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        entryPoints: ["src/feedback.ts"],
+        importantFiles: ["src/feedback.ts"]
+      }
+    });
+    const provider = new UngroundedProvider();
+    const result = await answerUniversalProjectQuestion({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.ok(provider.callCount >= 1);
+    assert.equal(result.fallbackUsed, true);
+    assert.equal(result.answerStrategy.strategy, "local_synthesis_after_provider_validation_failure");
+    assert.equal(result.answerStrategy.finalAnswerSource, "local_evidence_synthesis");
+    assert.equal(result.answerStrategy.providerDraftStatus, "failed_local_validation");
+    assert.match(result.fallbackReason ?? "", /local_validation_failed|provider_answer_failed_local_validation/i);
+    assert.doesNotMatch(result.answerMarkdown, /natural provider answer/i);
+    assert.match(result.answerMarkdown, /feedback|customer-feedback|src\/feedback\.ts/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine marks accepted provider answers as provider_final", async () => {
+  const workspace = await createWorkspace("universal-provider-final-strategy");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "src", "payment.ts"),
+      [
+        "export function rarePaymentGatewayAdapter(payload: unknown) {",
+        "  return { provider: 'stripe', payload };",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Where is rarePaymentGatewayAdapter?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        entryPoints: ["src/payment.ts"],
+        importantFiles: ["src/payment.ts"]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new GroundedProvider(
+        "`rarePaymentGatewayAdapter` is defined in `src/payment.ts`; it returns a Stripe-tagged payload wrapper. [src/payment.ts:1](hivo-file:src%2Fpayment.ts:1)",
+        ["src/payment.ts:1"]
+      ),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.fallbackUsed, false);
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.equal(result.answerStrategy.providerDraftStatus, "accepted_first");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine notice-only mode does not let forced agentic kernel replace provider final", async () => {
+  const workspace = await createWorkspace("universal-provider-final-no-agentic-replace");
+  const previousMode = process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+  const previousUse = process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+  process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = "force";
+  process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = "1";
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "src", "payment.ts"),
+      [
+        "export function rarePaymentGatewayAdapter(payload: unknown) {",
+        "  return { provider: 'stripe', payload };",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Where is rarePaymentGatewayAdapter?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        entryPoints: ["src/payment.ts"],
+        importantFiles: ["src/payment.ts"]
+      }
+    });
+    const result = await answerUniversalProjectQuestionRaw({
+      provider: new GroundedProvider(
+        "`rarePaymentGatewayAdapter` is defined in `src/payment.ts`; it returns a Stripe-tagged payload wrapper. [src/payment.ts:1](hivo-file:src%2Fpayment.ts:1)",
+        ["src/payment.ts:1"]
+      ),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.notEqual(result.answerStrategy.strategy, "agentic_kernel_after_provider_fallback");
+  } finally {
+    if (previousMode === undefined) delete process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+    else process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = previousMode;
+    if (previousUse === undefined) delete process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+    else process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = previousUse;
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine stops weak local synthesis instead of inventing a confident fallback", async () => {
+  const workspace = await createWorkspace("universal-weak-evidence-notice");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "index.ts"), "export const appName = 'ordinary-app';\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How is neuralRewardEngine applied here?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        entryPoints: ["src/index.ts"],
+        importantFiles: ["src/index.ts"]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.fallbackUsed, true);
+    assert.equal(result.answerStrategy.strategy, "insufficient_evidence_notice");
+    assert.equal(result.answerStrategy.finalAnswerSource, "local_notice");
+    assert.match(result.answerMarkdown, /will not synthesize|weak evidence/i);
+    assert.doesNotMatch(result.answerMarkdown, /strongest local evidence|I searched for `neuralRewardEngine`/i);
+    assert.equal(result.evidenceRefs.length, 0);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine refuses judgment questions from documentation-only name matches", async () => {
+  const workspace = await createWorkspace("universal-judgment-weak-evidence");
+  try {
+    await mkdir(path.join(workspace, "docs"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "docs", "notes.md"),
+      [
+        "# Reward Notes",
+        "",
+        "The reward logic is planned for a future experiment.",
+        "A future reward score may compare suggested actions.",
+        "No implementation is included here."
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Is the reward logic correct or wrong?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Markdown"],
+        entryPoints: ["docs/notes.md"],
+        importantFiles: ["docs/notes.md"]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.questionUnderstanding.wantsJudgment, true);
+    assert.equal(result.fallbackUsed, true);
+    assert.equal(result.answerStrategy.strategy, "insufficient_evidence_notice");
+    assert.equal(result.answerStrategy.finalAnswerSource, "local_notice");
+    assert.match(result.answerMarkdown, /will not synthesize|weak evidence|not enough/i);
+    assert.doesNotMatch(result.answerMarkdown, /strongest local evidence|wrong because|the logic is correct|the logic is wrong/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine labels fixture-generated paths and does not cite them as production evidence", async () => {
+  const workspace = await createWorkspace("universal-provenance-fixture-paths");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "src", "orchestrator.ts"),
+      [
+        "export function runOuterLoop(decision: string, feedback: string) {",
+        "  const action = decision === 'review' ? 'human_review' : 'apply_patch';",
+        "  return { action, feedback, nextDecision: feedback ? 'retry' : 'done' };",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    await mkdir(path.join(workspace, "tests"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "tests", "universal-project-question.test.ts"),
+      [
+        "import { writeFile } from 'node:fs/promises';",
+        "import path from 'node:path';",
+        "test('fixture mock outerloop', async () => {",
+        "  await writeFile(path.join(workspace, 'backend', 'services', 'action_executor.py'), 'outerloop mock');",
+        "});"
+      ].join("\n"),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How is outerloop implemented here? Explain in detail.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["TypeScript"],
+        entryPoints: ["src/orchestrator.ts"],
+        importantFiles: ["src/orchestrator.ts"]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.conceptResolution.resolutionStatus, "direct_found");
+    assert.ok(result.positiveEvidence.some((item) => item.path === "src/orchestrator.ts" && item.provenance?.sourceType === "production_source"));
+    assert.ok(result.evidenceReport.rejectedEvidence?.some((item) => item.sourceFile === "tests/universal-project-question.test.ts" && item.sourceType === "fixture_generated_path"));
+    assert.doesNotMatch(result.answerMarkdown, /backend\/services\/action_executor\.py/);
+    assert.equal(result.evidenceReport.finalEvidenceFilesActuallyUsed.includes("backend/services/action_executor.py"), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -391,6 +1047,20 @@ test("Project Investigation Kernel v1 resolves DBSCAN, feedback, outerloop, and 
     assert.ok(outerloop.mechanismChain.steps.some((step) => step.relation === "feedback_or_outcome_stage"));
     assert.doesNotMatch(outerloop.answerMarkdown, /upstream-clustering\s*->\s*training\s*->\s*prediction/i);
     assert.doesNotMatch(outerloop.answerMarkdown, /No local matches for query/i);
+    assert.doesNotMatch(outerloop.answerMarkdown, /لقيت `outerloop` كدليل مباشر/);
+    assert.match(outerloop.answerMarkdown, /مسار الحلقة من الأدلة/);
+    assert.match(outerloop.answerMarkdown, /حدود الثقة/);
+
+    const stalePrompt = "\u0627\u0632\u0627\u064a \u0627\u0644outerloop \u0628\u064a\u062a\u0637\u0628\u0642 \u0647\u0646\u0627 \u061f \u0627\u0634\u0631\u062d \u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644";
+    const staleProviderOuterloop = await answerUniversalProjectQuestion({
+      provider: new StaleOuterloopProvider(),
+      tools,
+      userPrompt: stalePrompt,
+      explainReport: reportFor(stalePrompt)
+    });
+    assert.equal(staleProviderOuterloop.fallbackUsed, true);
+    assert.doesNotMatch(staleProviderOuterloop.answerMarkdown, /model\/decision\/action/);
+    assert.match(staleProviderOuterloop.answerMarkdown, /model\/score\/context|source=`production_source`/);
 
     const innerOuter = await ask("هل فيه inner loop و outer loop هنا؟ الفرق بينهم ايه؟");
     assert.equal(innerOuter.questionUnderstanding.targetConcept, "inner_outer_loop");
@@ -409,6 +1079,101 @@ test("Project Investigation Kernel v1 resolves DBSCAN, feedback, outerloop, and 
     assert.ok(feedbackChanges.conceptResolution.labelsOrModifiers.includes("neutral"));
     assert.ok(feedbackChanges.mechanismChain.steps.some((step) => step.relation === "backend_to_storage"));
     assert.doesNotMatch(feedbackChanges.answerMarkdown, /No local matches for query|positive` كدليل مستقل|target concept.*positive/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine explains Arabic multi-agent architecture from actual agents and orchestrator wiring", async () => {
+  const workspace = await createMultiAgentDecisionWorkspace();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "ازاي الmulti agentic system هنا بيتطبق وهل دا المنطقي ولا هو متطبق ب شكل غلط ؟";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: [
+          "backend/routes.py",
+          "backend/services/agents.py",
+          "backend/services/orchestrator.py",
+          "backend/services/action_executor.py"
+        ]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.intent.actionMode, "answer_only");
+    assert.equal(result.questionUnderstanding.targetConcept, "multi_agent_system");
+    assert.equal(result.answerShapeValidation.valid, true);
+    assert.match(result.answerMarkdown, /build_default_agents|ReActOrchestrator|orchestrator\.choose_route|agent_recommendations|agent_consensus|ActionExecutor/);
+    assert.match(result.answerMarkdown, /multi-agentic|orchestrator|agents/);
+    assert.match(result.answerMarkdown, /منطقي|مقبول|استشار|خفيف/);
+    assert.doesNotMatch(result.answerMarkdown, /multi implementation|The implementation applies multi|The implementation applies multi_agent_system/i);
+    assert.doesNotMatch(result.answerMarkdown, /backend\/routes\.py:1\b/);
+    assert.doesNotMatch(result.answerMarkdown, /ط§|ظ„|ظ…/);
+    assert.ok(result.positiveEvidence.some((item) => item.path === "backend/services/agents.py" && /build_default_agents|ReliabilityAgent|ForecastAgent|ClusterHealthAgent/.test(item.snippet ?? "")));
+    assert.ok(result.positiveEvidence.some((item) => item.path === "backend/services/orchestrator.py" && /choose_route|weighted_votes/.test(item.snippet ?? "")));
+    assert.ok(result.positiveEvidence.some((item) => item.path === "backend/routes.py" && /agent_recommendations|orchestrator\.choose_route/.test(item.snippet ?? "")));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine accepts provider decision-policy answers without forecasting validation", async () => {
+  const workspace = await createMultiAgentDecisionWorkspace();
+  const provider = new NaturalDecisionPolicyProvider();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "\u0627\u0645\u062a\u0649 \u0627\u0644\u0646\u0638\u0627\u0645 \u064a\u0642\u0631\u0631 Re-cluster \u0628\u062f\u0644 \u0645\u0627 \u064a\u0628\u0639\u062a offer\u061f \u0627\u0631\u0628\u0637 \u0625\u062c\u0627\u0628\u062a\u0643 \u0628\u064a\u0646 drift detection \u0648 FCM membership \u0648 orchestrator rules.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: [
+          "backend/routes.py",
+          "backend/services/agents.py",
+          "backend/services/orchestrator.py",
+          "backend/services/action_executor.py"
+        ]
+      }
+    });
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report,
+      providerFailureSynthesis: "notice_only"
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.grounding.questionKind, "decision_policy");
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      unsupportedOrUnclearParts: result.unsupportedOrUnclearParts,
+      answerShapeValidation: result.answerShapeValidation,
+      targetConcept: result.questionUnderstanding.targetConcept,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.equal(result.answerShapeValidation.valid, true);
+    assert.doesNotMatch(result.fallbackReason ?? "", /Forecasting answer|Downstream stage/i);
+    assert.match(result.answerMarkdown, /drift_detected|membership_strength|ClusterHealthAgent|Re-cluster|Offer|agent_recommendations|weighted_votes|agent_consensus|choose_route/);
+    assert.match(result.answerMarkdown, /backend\/services\/agents\.py|backend\/services\/orchestrator\.py|backend\/routes\.py/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -661,6 +1426,107 @@ test("UniversalProjectQuestionEngine narrates confirmed feedback frontend API ba
   }
 });
 
+test("UniversalProjectQuestionEngine follows apiPost feedback helper and backend log helper flow", async () => {
+  const workspace = await createWorkspace("universal-feedback-apipost-helper-flow");
+  try {
+    await mkdir(path.join(workspace, "frontend"), { recursive: true });
+    await mkdir(path.join(workspace, "backend"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "frontend", "app.js"),
+      [
+        "const stateStore = { apiBase: '/api', feedback: { submitting: false, latest: null } };",
+        "",
+        "async function apiPost(path, payload = {}) {",
+        "  return fetch(`${stateStore.apiBase}${path}`, {",
+        "    method: 'POST',",
+        "    headers: { 'Content-Type': 'application/json' },",
+        "    body: JSON.stringify(payload),",
+        "  });",
+        "}",
+        "",
+        ...Array.from({ length: 2200 }, (_, index) => `const fillerLine${index} = 'large frontend file padding ${index}';`),
+        "",
+        "async function submitCustomerFeedback(responseLabel) {",
+        "  stateStore.feedback.submitting = true;",
+        "  return apiPost('/customer-feedback', { customer_id: 100001, response_label: responseLabel });",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace, "backend", "main.py"),
+      [
+        "from fastapi import FastAPI",
+        "from backend.routes import router",
+        "app = FastAPI()",
+        "app.include_router(router, prefix='/api')"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace, "backend", "routes.py"),
+      [
+        "from fastapi import APIRouter",
+        "router = APIRouter()",
+        "CUSTOMER_FEEDBACK_LOG_PATH = 'data/customer_feedback_log.csv'",
+        "",
+        "def _append_customer_feedback_log(payload):",
+        "    payload.to_csv(CUSTOMER_FEEDBACK_LOG_PATH, mode='a')",
+        "",
+        "def submit_customer_feedback(payload):",
+        "    feedback_event = {'response_label': payload.response_label, 'should_trigger_outer_loop': False}",
+        "    _append_customer_feedback_log(feedback_event)",
+        "    if payload.response_label == 'negative':",
+        "        feedback_event['should_trigger_outer_loop'] = True",
+        "        retrain_with_rollback('customer feedback negative')",
+        "    return {'status': 'recorded', 'feedback': feedback_event}",
+        "",
+        "@router.post('/customer-feedback')",
+        "def customer_feedback_endpoint(payload):",
+        "    return submit_customer_feedback(payload)"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How is feedback applied here, and is it logical or wired incorrectly?";
+    const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: prompt, projectMap });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.questionUnderstanding.targetConcept, "feedback");
+    assert.equal(result.mechanismChain.status, "confirmed");
+    assert.ok(result.mechanismChain.steps.some((step) => step.relation === "frontend_to_api" && step.status === "proven"));
+    assert.ok(result.mechanismChain.steps.some((step) => step.relation === "api_to_backend" && step.status === "proven"));
+    assert.ok(result.mechanismChain.steps.some((step) => step.relation === "backend_to_storage" && step.status === "proven"));
+    assert.equal(result.missingMechanismLinks.includes("frontend_to_backend_request"), false);
+    assert.equal(result.missingMechanismLinks.includes("backend_feedback_handler"), false);
+    assert.equal(result.missingMechanismLinks.includes("feedback_storage_or_log_usage"), false);
+    assert.match(result.answerMarkdown, /\/customer-feedback|customer_feedback_log|CUSTOMER_FEEDBACK_LOG_PATH/);
+    assert.doesNotMatch(result.answerMarkdown, /frontend_to_backend_request|backend_feedback_handler|feedback_storage_or_log_usage|not proven.*backend|no matching route/i);
+
+    const negativePrompt = "If feedback is negative, is it only logged or does it actually trigger retraining?";
+    const negativeReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: negativePrompt, projectMap });
+    const negativeResult = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: negativePrompt,
+      explainReport: negativeReport
+    });
+    assert.equal(negativeResult.questionUnderstanding.targetConcept, "feedback");
+    assert.equal(negativeResult.conceptResolution.labelsOrModifiers.includes("negative"), true);
+    assert.equal(negativeResult.conceptResolution.secondaryConcepts.includes("retraining_loop"), true);
+    assert.match(negativeResult.answerMarkdown, /negative|سلبي|should_trigger_outer_loop|retrain_with_rollback|retraining/i);
+    assert.doesNotMatch(negativeResult.answerMarkdown, /`retraining_loop` here appears|الـ `retraining_loop` هنا/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("UniversalProjectQuestionEngine keeps detailed DBSCAN answers centered on DBSCAN implementation", async () => {
   const workspace = await createSvmWorkspace();
   try {
@@ -715,6 +1581,109 @@ test("UniversalProjectQuestionEngine keeps detailed DBSCAN answers centered on D
     assert.doesNotMatch(result.answerMarkdown, /upstream-clustering\s*->\s*training\s*->\s*prediction\s*->\s*explainability\s*->\s*usage/i);
     assert.doesNotMatch(result.answerMarkdown, /No local matches for query/i);
   } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine feeds agentic relationship-model evidence to provider for deep project questions", async () => {
+  const workspace = await createSvmWorkspace();
+  const previousMode = process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+  const previousUse = process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+  process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = "force";
+  process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = "1";
+  const provider = new CapturingDeepQuestionProvider();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Why does the project use DBSCAN followed by Fuzzy C-Means? Compare noise/outliers with membership certainty in the final decision.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: ["backend/routes.py", "backend/services/clustering.py", "backend/services/svm_model.py"]
+      }
+    });
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report,
+      providerFailureSynthesis: "notice_only"
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.notEqual(result.grounding.questionKind, "decision_policy");
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.ok(result.augmentedReport.evidence.some((item) => /Agentic relationship-model evidence/.test(item.reason)));
+    assert.ok(result.augmentedReport.risksAndUnknowns.some((item) => /Agentic mental model confidence/.test(item)));
+    const providerPrompt = provider.requests.map((request) => request.userPrompt).join("\n\n--- revision ---\n\n");
+    assert.match(providerPrompt, /Agentic relationship-model evidence/);
+    assert.match(providerPrompt, /Relationships followed|Data\/control flow|Agentic mental model confidence/);
+    assert.match(result.answerMarkdown, /DBSCAN|noise_mask|Fuzzy C-Means|memberships|fcm_labels|train_svm_state_detector/);
+  } finally {
+    if (previousMode === undefined) delete process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+    else process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = previousMode;
+    if (previousUse === undefined) delete process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+    else process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = previousUse;
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine treats paraphrased cross-file model questions as relationship-model work", async () => {
+  const workspace = await createSvmWorkspace();
+  const previousMode = process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+  const previousUse = process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+  process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = "force";
+  process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = "1";
+  const provider = new CapturingDeepQuestionProvider();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "Explain the chain from density filtering into soft cluster confidence and then into the trained state model. What does each stage prove?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: ["backend/routes.py", "backend/services/clustering.py", "backend/services/svm_model.py"]
+      }
+    });
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report,
+      providerFailureSynthesis: "notice_only"
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.ok(result.augmentedReport.evidence.some((item) => /Agentic relationship-model evidence/.test(item.reason)));
+    const providerPrompt = provider.requests.map((request) => request.userPrompt).join("\n\n--- revision ---\n\n");
+    assert.match(providerPrompt, /Agentic relationship-model evidence/);
+    assert.match(providerPrompt, /backend\/services\/clustering\.py|backend\/services\/svm_model\.py|backend\/routes\.py/);
+    assert.match(result.answerMarkdown, /DBSCAN|noise_mask|Fuzzy C-Means|memberships|fcm_labels|train_svm_state_detector/);
+  } finally {
+    if (previousMode === undefined) delete process.env.HIVO_AGENTIC_TASK_KERNEL_MODE;
+    else process.env.HIVO_AGENTIC_TASK_KERNEL_MODE = previousMode;
+    if (previousUse === undefined) delete process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL;
+    else process.env.HIVO_PROJECT_EXPLAIN_USE_AGENTIC_KERNEL = previousUse;
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -808,6 +1777,59 @@ test("UniversalProjectQuestionEngine keeps unknown target concepts separate from
     assert.match(result.answerMarkdown, /could not prove|not prove|No direct, alias, behavioral, or architectural-pattern evidence/i);
     assert.doesNotMatch(result.answerMarkdown, /upstream-clustering\s*->\s*training\s*->\s*prediction\s*->\s*explainability\s*->\s*usage/i);
     assert.doesNotMatch(result.answerMarkdown, /No local matches for query "(interface|def|export|import|function|class|type)"/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine excludes persisted runtime sessions from project explain evidence", async () => {
+  const workspace = await createWorkspace("universal-runtime-state-contamination");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "index.ts"), "export const appName = 'real-app';\n", "utf8");
+    await mkdir(path.join(workspace, ".orchcode-agent-runtime"), { recursive: true });
+    await writeFile(
+      path.join(workspace, ".orchcode-agent-runtime", "sessions.json"),
+      JSON.stringify({
+        sessions: [{
+          messages: [{
+            role: "assistant",
+            content: [
+              "## Summary",
+              "I found direct outerloop evidence.",
+              "backend/services/action_executor.py:38",
+              "backend/routes.py:19",
+              "frontend/index.html:72",
+              "ACTION_LOG_PATH, FORECAST_STATE_PATH, STREAMING_LOG_PATH, FAISS_INDEX_PATH"
+            ].join("\n")
+          }]
+        }]
+      }),
+      "utf8"
+    );
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How is outerloop implemented here? Explain in detail.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        importantFiles: ["src/index.ts"],
+        entryPoints: ["src/index.ts"]
+      }
+    });
+    const result = await answerUniversalProjectQuestion({
+      provider: new ThrowingProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(classifyEvidenceSource(".orchcode-agent-runtime/sessions.json"), "runtime_state");
+    assert.ok(result.candidateFiles.every((file) => !file.includes(".orchcode-agent-runtime")));
+    assert.ok(result.openedFiles.every((file) => !file.includes(".orchcode-agent-runtime")));
+    assert.doesNotMatch(result.answerMarkdown, /backend\/services\/action_executor\.py|backend\/routes\.py|frontend\/index\.html/);
+    assert.doesNotMatch(result.answerMarkdown, /ACTION_LOG_PATH|FORECAST_STATE_PATH|STREAMING_LOG_PATH|FAISS_INDEX_PATH/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

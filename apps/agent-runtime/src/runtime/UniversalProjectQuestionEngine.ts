@@ -1,7 +1,10 @@
-import type { EvidenceTruthReport, ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection } from "@hivo/protocol";
+import type { EvidenceProvenance, EvidenceTruthReport, GroundedEvidenceItem, ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection, RejectedEvidenceItem } from "@hivo/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { analyzeAlgorithmInventory } from "./AlgorithmInventoryAnalyzer.js";
+import { classifyAgenticTaskIntent } from "./AgenticIntentClassifier.js";
+import { envAgenticTaskConfig, runAgenticTaskKernel, shouldUseAgenticKernelForProjectExplain } from "./AgenticTaskKernel.js";
+import { mergeAgenticTaskKernelConfig, type AgenticTaskIntent, type AgenticTaskKernelConfig, type AgenticTaskResult } from "./AgenticTaskModels.js";
 import { analyzeCodeFlow } from "./CodeFlowAnalyzer.js";
 import { analyzeFrontendStructure } from "./FrontendStructureAnalyzer.js";
 import { composeAnswer } from "./InspectExplainComposer.js";
@@ -19,10 +22,15 @@ import {
 import { explainProjectWithLlm } from "./LlmProjectExplainer.js";
 import {
   buildEvidenceTruthReport,
-  filterProjectEvidencePaths
+  canProveImplementation,
+  createEvidenceProvenance,
+  evidenceItemForReport,
+  filterProjectEvidencePaths,
+  isProductionEvidence
 } from "./EvidenceHygiene.js";
 import { analyzeTrainingInference } from "./TrainingInferenceAnalyzer.js";
 import { analyzeUIControls } from "./UIControlAnalyzer.js";
+import { prepareWorkspacePromptForUnderstanding } from "./IntentDecisionEngine.js";
 import {
   extractImplementationEvidence,
   cleanedOutputsFromFlow,
@@ -92,6 +100,7 @@ export type ProjectQuestionUnderstanding = {
   detailLevel: "brief" | "normal" | "detailed" | "deep";
   wantsCodeExamples: boolean;
   wantsComparisons: boolean;
+  wantsJudgment: boolean;
 };
 
 export type ProjectQuestionSearchQuery = {
@@ -112,6 +121,7 @@ export type ProjectQuestionEvidence = WorkspaceEvidenceLike & {
   querySource: ProjectQuestionSearchQuery["source"] | "structured";
   confidence: "high" | "medium" | "low";
   sourceRole: SourceRole;
+  provenance?: EvidenceProvenance;
 };
 
 export type ConceptResolutionStatus =
@@ -229,6 +239,23 @@ export type ProjectQuestionEvidencePack = {
   readLaneArtifacts: InspectExplainReadLaneArtifact[];
   laneSynthesizedGraph: InspectExplainLaneSynthesizedGraph;
   evidenceReview: InspectExplainEvidenceReview;
+  agenticTask?: AgenticProjectExplainDebug;
+};
+
+export type AgenticProjectExplainDebug = {
+  enabled: boolean;
+  usedForFinalAnswer: boolean;
+  mode: AgenticTaskResult["intent"]["mode"];
+  intent: AgenticTaskResult["intent"];
+  readPlan: AgenticTaskResult["readPlan"];
+  openedFiles: string[];
+  relationshipsFollowed: AgenticTaskResult["evidenceGraph"]["relationships"];
+  evidenceAccepted: string[];
+  evidenceDowngraded: string[];
+  evidenceRejected: string[];
+  fallbackReason: AgenticTaskResult["trace"]["fallbackReason"];
+  claimValidationSummary: AgenticTaskResult["trace"]["claimValidationSummary"];
+  finalOutputValidationStatus: AgenticTaskResult["finalOutput"]["validationStatus"];
 };
 
 export type AnswerShapeValidation = {
@@ -253,6 +280,27 @@ export type UniversalProjectQuestionResult = ProjectQuestionEvidencePack & {
   validationWarnings: string[];
   grounding: Awaited<ReturnType<typeof explainProjectWithLlm>>["grounding"];
   augmentedReport: ProjectExplainReport;
+  answerStrategy: ProjectAnswerStrategy;
+};
+
+export type ProjectAnswerStrategyName =
+  | "provider_final"
+  | "provider_revision_final"
+  | "agentic_kernel_after_provider_fallback"
+  | "provider_failed_notice"
+  | "provider_validation_notice"
+  | "insufficient_evidence_notice"
+  | "local_synthesis_concept_not_found"
+  | "local_synthesis_after_provider_failure"
+  | "local_synthesis_after_provider_validation_failure"
+  | "local_synthesis_after_local_validation_failure";
+
+export type ProjectAnswerStrategy = {
+  strategy: ProjectAnswerStrategyName;
+  finalAnswerSource: "provider" | "agentic_kernel" | "local_evidence_synthesis" | "local_notice";
+  providerDraftStatus: "accepted_first" | "accepted_revision" | "not_called" | "failed" | "failed_local_validation" | "replaced_by_local_validation";
+  fallbackUsed: boolean;
+  reason?: string;
 };
 
 const SEARCH_LIMITS = {
@@ -260,13 +308,13 @@ const SEARCH_LIMITS = {
   maxCandidateFiles: 80,
   maxOpenedFiles: 24,
   maxSnippetsPerFile: 8,
-  maxReadChars: 20_000,
+  maxReadChars: 300_000,
   maxEvidenceItems: 120
 };
 
 const TEXT_FILE_RE = /\.(c|cc|conf|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|md|mjs|py|rs|scss|sh|sql|swift|toml|ts|tsx|txt|yaml|yml)$/i;
 const SOURCE_FILE_RE = /\.(c|cc|cpp|cs|go|h|hpp|java|js|jsx|kt|mjs|py|rs|ts|tsx)$/i;
-const IGNORED_PATH_RE = /(^|\/)(\.cache|\.git|\.next|\.nuxt|\.pytest_cache|\.ruff_cache|\.svelte-kit|\.turbo|\.venv|\.vite|__pycache__|build|coverage|dist|env|node_modules|out|output|outputs|playwright-report|site-packages|target|test-results|venv)(\/|$)/i;
+const IGNORED_PATH_RE = /(^|\/)(\.agent_memory|\.cache|\.git|\.hivo-agent-runtime|\.next|\.nuxt|\.orchcode-agent-runtime|\.pytest_cache|\.ruff_cache|\.svelte-kit|\.tmp-run|\.turbo|\.venv|\.vite|__pycache__|build|coverage|dist|env|node_modules|out|output|outputs|playwright-report|site-packages|target|test-results|venv)(\/|$)/i;
 
 const COMMON_STOP_WORDS = new Set([
   "about", "after", "all", "and", "answer", "are", "code", "current", "does", "each",
@@ -330,23 +378,50 @@ export async function answerUniversalProjectQuestion(input: {
   userPrompt: string;
   explainReport: ProjectExplainReport;
   intent?: WorkspaceIntentUnderstanding;
+  providerFailureSynthesis?: "allow_local_synthesis" | "notice_only";
 }): Promise<UniversalProjectQuestionResult> {
+  const providerFailureSynthesis = input.providerFailureSynthesis ?? "notice_only";
+  const preparedPrompt = prepareWorkspacePromptForUnderstanding(input.userPrompt);
+  const understandingPrompt = preparedPrompt.workspaceMessage || input.userPrompt;
   const intent = input.intent ?? inferWorkspaceIntent(input.userPrompt);
-  const topic = inferUniversalInspectTopic(input.userPrompt, intent);
+  const topic = inferUniversalInspectTopic(understandingPrompt, intent);
+  const agenticConfig = mergeAgenticTaskKernelConfig({
+    ...envAgenticTaskConfig(),
+    agenticTaskAllowNaturalDraft: false
+  });
+  const agenticIntent = classifyAgenticTaskIntent(understandingPrompt);
+  const agenticKernelEnabledForQuestion = shouldUseAgenticKernelForProjectExplain({
+    mode: agenticConfig.agenticTaskKernelMode,
+    projectExplainUseAgenticKernel: agenticConfig.projectExplainUseAgenticKernel,
+    prompt: understandingPrompt,
+    taskMode: agenticIntent.mode,
+    complexity: agenticIntent.complexity
+  });
+  const agenticKernelResult = agenticKernelEnabledForQuestion
+    ? await runAgenticTaskKernel({
+      adapterId: "project_explain",
+      prompt: understandingPrompt,
+      workspacePath: input.tools.getWorkspacePath(),
+      modeHint: agenticIntent.mode,
+      provider: input.provider,
+      tools: input.tools,
+      config: agenticConfig
+    })
+    : undefined;
   const allFiles = input.tools.workspace
     .listFiles(10_000)
     .filter((file) => !file.isDir && !file.isSecretCandidate)
     .map((file) => file.path)
     .filter(isSearchablePath);
-  const evidenceScope = filterProjectEvidencePaths(allFiles, input.userPrompt);
+  const evidenceScope = filterProjectEvidencePaths(allFiles, understandingPrompt);
   const projectSourceFiles = evidenceScope.included;
-  const investigationConceptResolution = resolveInvestigationConcept(input.userPrompt);
+  const investigationConceptResolution = resolveInvestigationConcept(understandingPrompt);
   const questionUnderstanding = applyInvestigationConceptResolution(
-    createQuestionUnderstanding(input.userPrompt, intent, topic),
+    createQuestionUnderstanding(understandingPrompt, intent, topic),
     investigationConceptResolution
   );
   const readLaneRun = runInspectExplainReadLanes({
-    userPrompt: input.userPrompt,
+    userPrompt: understandingPrompt,
     targetConcept: questionUnderstanding.targetConcept,
     topic,
     intent,
@@ -357,20 +432,21 @@ export async function answerUniversalProjectQuestion(input: {
   const structuredFacts = collectStructuredFacts(input.tools, laneScopedFiles, topic, questionUnderstanding.targetConcept);
   const queryPlan = createSearchPlan(questionUnderstanding, topic);
   const search = collectLocalEvidence(input.tools, projectSourceFiles, queryPlan, intent);
-  const structuredEvidence = structuredFactsToEvidence(structuredFacts);
-  const readLaneEvidence = readLaneFindingsToEvidence(readLaneRun.artifacts);
-  const projectIntelligenceGraph = buildProjectIntelligenceGraph({
+  const structuredEvidence = proveEvidenceItems(structuredFactsToEvidence(structuredFacts), understandingPrompt, input.tools.workspace.fileExists.bind(input.tools.workspace));
+  const readLaneEvidence = proveEvidenceItems(readLaneFindingsToEvidence(readLaneRun.artifacts), understandingPrompt, input.tools.workspace.fileExists.bind(input.tools.workspace));
+  const searchEvidence = proveEvidenceItems(search.positiveEvidence, understandingPrompt, input.tools.workspace.fileExists.bind(input.tools.workspace));
+  const projectIntelligenceGraph = filterSelfReferentialProjectIntelligenceGraph(buildProjectIntelligenceGraph({
     targetConcept: questionUnderstanding.targetConcept,
     filePaths: laneScopedFiles,
     readFile: (relativePath) => input.tools.workspace.readWholeFile(relativePath)
-  });
+  }), questionUnderstanding);
   const mechanismChain = mergeReadLaneGraphIntoMechanismChain(
     resolveMechanismChain(projectIntelligenceGraph, questionUnderstanding.targetConcept),
     readLaneRun
   );
   const mechanismEvidence = bucketMechanismEvidence(projectIntelligenceGraph.evidence);
   const allCollectedEvidence = uniqueEvidence([
-    ...search.positiveEvidence,
+    ...searchEvidence,
     ...structuredEvidence,
     ...readLaneEvidence
   ]).slice(0, SEARCH_LIMITS.maxEvidenceItems);
@@ -390,13 +466,15 @@ export async function answerUniversalProjectQuestion(input: {
     questionUnderstanding,
     topic,
     queryPlan,
-    localEvidence: uniqueEvidence([...search.positiveEvidence, ...readLaneEvidence]),
-    structuredEvidence,
+    localEvidence: allCollectedEvidence,
+    structuredEvidence: [],
     mechanismEvidence: projectIntelligenceGraph.evidence,
     investigationConceptResolution,
     implementationEvidence,
     conceptFlow,
-    negativeEvidence: search.negativeEvidence
+    negativeEvidence: search.negativeEvidence,
+    prompt: understandingPrompt,
+    fileExists: input.tools.workspace.fileExists.bind(input.tools.workspace)
   });
   const evidenceBuckets: ConceptEvidenceBuckets = {
     directTargetEvidence: conceptResolution.directTargetEvidence,
@@ -417,22 +495,35 @@ export async function answerUniversalProjectQuestion(input: {
   const suppressedEvidence = suppressedEvidenceFromRoles(implementationEvidence);
   const artifactPreparationEvidence = implementationEvidence.filter((item) => item.semanticRole === "artifact_preparation");
   const canonicalActions = uniqueStrings(implementationEvidence.map((item) => item.canonicalAction));
-  const roleClassificationValidation = validateRoleClassification({
-    conceptFlow,
-    implementationEvidence,
-    targetConcept: questionUnderstanding.targetConcept
-  });
+  const roleClassificationValidation = isDecisionPolicyQuestion(understandingPrompt, questionUnderstanding)
+    ? {
+        valid: true,
+        errors: [],
+        implementationRefs: implementationEvidence.filter((item) => item.semanticRole === "implementation").map((item) => item.ref),
+        suppressedRefs: suppressedEvidenceFromRoles(implementationEvidence).map((item) => item.ref)
+      }
+    : validateRoleClassification({
+        conceptFlow,
+        implementationEvidence,
+        targetConcept: questionUnderstanding.targetConcept
+      });
   const cleanedOutputs = cleanedOutputsFromFlow(conceptFlow);
   const confidence = positiveEvidence.length >= 3 || structuredFactsHaveEvidence(topic, structuredFacts)
     ? "high"
     : positiveEvidence.length
       ? "medium"
       : "low";
-  const augmentedReport = augmentExplainReport(input.explainReport, positiveEvidence, questionUnderstanding);
+  const augmentedReport = augmentReportWithAgenticUnderstanding(
+    augmentExplainReport(input.explainReport, positiveEvidence, questionUnderstanding),
+    agenticKernelResult
+  );
   const explainResult = await explainProjectWithLlm({
     provider: input.provider,
-    userPrompt: input.userPrompt,
-    report: augmentedReport
+    userPrompt: understandingPrompt,
+    report: augmentedReport,
+    requireProviderForConceptNotFound: providerFailureSynthesis === "notice_only",
+    providerFailureBehavior: providerFailureSynthesis === "notice_only" ? "notice_only" : "deterministic_synthesis",
+    providerAnswerMode: providerFailureSynthesis === "notice_only" ? "natural_text" : "structured_json"
   });
 
   let answerMarkdown = explainResult.answerMarkdown;
@@ -445,7 +536,48 @@ export async function answerUniversalProjectQuestion(input: {
   ];
   let fallbackUsed = explainResult.fallbackUsed || explainResult.unsupportedOrUnclearParts.length > 0;
   let fallbackReason = explainResult.fallbackReason;
+  let agenticUsedForFinalAnswer = false;
+  const localSynthesisStoppedForProviderIssue =
+    providerFailureSynthesis === "notice_only" &&
+    explainResult.fallbackUsed &&
+    (/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") || explainResult.fallbackReason === "provider_answer_failed_local_validation");
+  const allowLocalFinalAnswer = providerFailureSynthesis === "allow_local_synthesis";
+  if (localSynthesisStoppedForProviderIssue) {
+    answerMarkdown = createProviderNoSynthesisNotice({
+      questionUnderstanding,
+      intent,
+      providerReason: explainResult.fallbackReason,
+      negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
+      kind: /provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") ? "failed" : "rejected"
+    });
+    evidenceRefs = [];
+    fallbackUsed = true;
+    fallbackReason = `${/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") ? "provider_failed_notice" : "provider_validation_notice"}: ${explainResult.fallbackReason}`;
+    agenticUsedForFinalAnswer = false;
+  }
+  if (
+    agenticKernelResult
+    && !localSynthesisStoppedForProviderIssue
+    && allowLocalFinalAnswer
+    && agenticConfig.projectExplainUseAgenticKernel
+    && agenticKernelResult.finalOutput.validationStatus !== "blocked"
+    && agenticKernelResult.evidenceGraph.accepted.length > 0
+    && !questionUnderstanding.wantsCodeExamples
+    && questionUnderstanding.detailLevel !== "detailed"
+    && questionUnderstanding.detailLevel !== "deep"
+    && (agenticConfig.agenticTaskKernelMode === "force" || explainResult.fallbackUsed)
+  ) {
+    answerMarkdown = agenticKernelResult.finalOutput.markdown;
+    evidenceRefs = uniqueStrings([
+      ...agenticKernelResult.finalOutput.citations,
+      ...agenticKernelResult.evidenceGraph.accepted.slice(0, 20).map((item) => `${item.path}:${item.lineStart ?? 1}`)
+    ]);
+    fallbackUsed = explainResult.fallbackUsed;
+    fallbackReason = explainResult.fallbackReason ?? agenticKernelResult.draft.fallbackReason;
+    agenticUsedForFinalAnswer = true;
+  }
   let answerShapeValidation = validateAnswer({
+    question: understandingPrompt,
     answerMarkdown,
     intent,
     questionUnderstanding,
@@ -487,28 +619,59 @@ export async function answerUniversalProjectQuestion(input: {
   validationErrors.push(...coverageValidation.errors);
   validationErrors.push(...roleClassificationValidation.errors, ...languageValidation.errors, ...dedupeValidation.errors, ...outputCleanupValidation.errors);
   validationErrors.push(...answerShapeValidation.errors, ...targetEvidenceValidation.errors, ...mechanismCoverageValidation.errors, ...readLaneAnswerValidation.errors);
+  validationErrors.push(...detectStaleCannedOuterloopAnswer(answerMarkdown, questionUnderstanding));
 
-  if (validationErrors.length) {
+  if (validationErrors.length && !localSynthesisStoppedForProviderIssue) {
     const initialValidationErrors = [...validationErrors];
-    answerMarkdown = createEvidenceFallbackAnswer({
-      question: input.userPrompt,
+    const stopLocalSynthesisAfterValidation = providerFailureSynthesis === "notice_only";
+    const insufficientEvidence = !stopLocalSynthesisAfterValidation && shouldUseInsufficientEvidenceNotice({
       questionUnderstanding,
       topic,
-      structuredFacts,
       positiveEvidence,
-      implementationEvidence,
-      conceptFlow,
+      structuredFacts,
       conceptResolution,
-      mechanismChain,
-      mechanismEvidence,
-      negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
-      intent
+      mechanismChain
     });
-    evidenceRefs = positiveEvidence.slice(0, 20).map((item) => item.ref);
+    answerMarkdown = stopLocalSynthesisAfterValidation
+      ? createProviderNoSynthesisNotice({
+        questionUnderstanding,
+        intent,
+        providerReason: explainResult.fallbackReason ?? initialValidationErrors.find((error) => /provider|validation|citation|evidence/i.test(error)),
+        negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
+        kind: "rejected"
+      })
+      : insufficientEvidence
+      ? createInsufficientEvidenceNotice({
+        questionUnderstanding,
+        topic,
+        intent,
+        providerReason: explainResult.fallbackReason,
+        validationErrors: initialValidationErrors,
+        negativeEvidence: conceptResolution.userVisibleNegativeEvidence
+      })
+      : createEvidenceFallbackAnswer({
+        question: understandingPrompt,
+        questionUnderstanding,
+        topic,
+        structuredFacts,
+        positiveEvidence,
+        implementationEvidence,
+        conceptFlow,
+        conceptResolution,
+        mechanismChain,
+        mechanismEvidence,
+        negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
+        intent,
+        projectSourceFiles,
+        readFile: (relativePath) => input.tools.workspace.readWholeFile(relativePath)
+      });
+    evidenceRefs = stopLocalSynthesisAfterValidation ? [] : positiveEvidence.slice(0, 20).map((item) => item.ref);
     fallbackUsed = true;
-    fallbackReason = `local_validation_failed: ${initialValidationErrors.slice(0, 3).join("; ")}`;
+    fallbackReason = `${stopLocalSynthesisAfterValidation ? "provider_validation_notice" : insufficientEvidence ? "local_validation_failed_insufficient_evidence" : "local_validation_failed"}: ${initialValidationErrors.slice(0, 3).join("; ")}`;
+    agenticUsedForFinalAnswer = false;
     answerShapeValidation = {
       ...validateAnswer({
+        question: understandingPrompt,
         answerMarkdown,
         intent,
         questionUnderstanding,
@@ -551,6 +714,16 @@ export async function answerUniversalProjectQuestion(input: {
     });
   }
 
+  const finalCitationGuard = guardFinalAnswerCitations({
+    answerMarkdown,
+    evidenceRefs,
+    prompt: understandingPrompt,
+    language: intent.language,
+    fileExists: input.tools.workspace.fileExists.bind(input.tools.workspace)
+  });
+  answerMarkdown = finalCitationGuard.answerMarkdown;
+  evidenceRefs = finalCitationGuard.evidenceRefs;
+
   const openedFiles = uniqueStrings([
     ...positiveEvidence.map((item) => item.path),
     ...search.openedFiles,
@@ -562,12 +735,18 @@ export async function answerUniversalProjectQuestion(input: {
     ...positiveEvidence.map((item) => item.path),
     ...laneScopedFiles
   ]).slice(0, SEARCH_LIMITS.maxCandidateFiles);
+  const provenanceReport = evidenceProvenanceReport(uniqueEvidence([
+    ...allCollectedEvidence,
+    ...positiveEvidence
+  ]));
   const evidenceReport = buildEvidenceTruthReport({
-    prompt: input.userPrompt,
+    prompt: understandingPrompt,
     excluded: evidenceScope.excluded,
     candidateFiles,
     openedFiles,
-    finalEvidenceRefs: evidenceRefs
+    finalEvidenceRefs: evidenceRefs,
+    groundedEvidence: provenanceReport.groundedEvidence,
+    rejectedEvidence: provenanceReport.rejectedEvidence
   });
 
   return {
@@ -636,14 +815,289 @@ export async function answerUniversalProjectQuestion(input: {
     readLaneArtifacts: readLaneRun.artifacts,
     laneSynthesizedGraph: readLaneRun.synthesizedGraph,
     evidenceReview: readLaneRun.evidenceReview,
+    agenticTask: agenticKernelResult
+      ? createAgenticDebug(agenticKernelResult, agenticUsedForFinalAnswer)
+      : createDisabledAgenticDebug(agenticIntent, agenticConfig),
     answerMarkdown,
     evidenceRefs,
     usedEvidenceRefs: evidenceRefs,
     unsupportedOrUnclearParts: uniqueStrings(validationErrors),
     revisionCount: explainResult.revisionCount,
-    validationWarnings: uniqueStrings([...explainResult.validationWarnings, ...conceptResolution.userVisibleNegativeEvidence]),
+    validationWarnings: uniqueStrings([...explainResult.validationWarnings, ...conceptResolution.userVisibleNegativeEvidence, ...finalCitationGuard.warnings]),
     grounding: explainResult.grounding,
-    augmentedReport
+    augmentedReport,
+    answerStrategy: createProjectAnswerStrategy({
+      explainResult,
+      fallbackUsed,
+      fallbackReason,
+      agenticUsedForFinalAnswer
+    })
+  };
+}
+
+function createProjectAnswerStrategy(input: {
+  explainResult: Awaited<ReturnType<typeof explainProjectWithLlm>>;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+  agenticUsedForFinalAnswer: boolean;
+}): ProjectAnswerStrategy {
+  if (input.agenticUsedForFinalAnswer) {
+    return {
+      strategy: "agentic_kernel_after_provider_fallback",
+      finalAnswerSource: "agentic_kernel",
+      providerDraftStatus: input.explainResult.fallbackUsed ? providerFallbackStatus(input.explainResult.fallbackReason) : "accepted_first",
+      fallbackUsed: input.fallbackUsed,
+      reason: input.fallbackReason
+    };
+  }
+  if (!input.fallbackUsed) {
+    return {
+      strategy: input.explainResult.revisionCount > 0 ? "provider_revision_final" : "provider_final",
+      finalAnswerSource: "provider",
+      providerDraftStatus: input.explainResult.revisionCount > 0 ? "accepted_revision" : "accepted_first",
+      fallbackUsed: false
+    };
+  }
+  const reason = input.fallbackReason ?? input.explainResult.fallbackReason;
+  if (/^local_validation_failed_insufficient_evidence\b/i.test(reason ?? "")) {
+    return {
+      strategy: "insufficient_evidence_notice",
+      finalAnswerSource: "local_notice",
+      providerDraftStatus: input.explainResult.fallbackUsed ? providerFallbackStatus(input.explainResult.fallbackReason) : "replaced_by_local_validation",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  if (/^provider_failed_notice\b/i.test(reason ?? "")) {
+    return {
+      strategy: "provider_failed_notice",
+      finalAnswerSource: "local_notice",
+      providerDraftStatus: "failed",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  if (/^provider_validation_notice\b/i.test(reason ?? "")) {
+    return {
+      strategy: "provider_validation_notice",
+      finalAnswerSource: "local_notice",
+      providerDraftStatus: input.explainResult.fallbackReason === "provider_answer_failed_local_validation" ? "failed_local_validation" : "replaced_by_local_validation",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  if (input.explainResult.fallbackReason === "concept_not_found_without_provider_answer") {
+    return {
+      strategy: "local_synthesis_concept_not_found",
+      finalAnswerSource: "local_evidence_synthesis",
+      providerDraftStatus: "not_called",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  if (/provider failed during project explanation/i.test(reason ?? "")) {
+    return {
+      strategy: "local_synthesis_after_provider_failure",
+      finalAnswerSource: "local_evidence_synthesis",
+      providerDraftStatus: "failed",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  if (input.explainResult.fallbackReason === "provider_answer_failed_local_validation") {
+    return {
+      strategy: "local_synthesis_after_provider_validation_failure",
+      finalAnswerSource: "local_evidence_synthesis",
+      providerDraftStatus: "failed_local_validation",
+      fallbackUsed: true,
+      reason
+    };
+  }
+  return {
+    strategy: "local_synthesis_after_local_validation_failure",
+    finalAnswerSource: "local_evidence_synthesis",
+    providerDraftStatus: "replaced_by_local_validation",
+    fallbackUsed: true,
+    reason
+  };
+}
+
+function providerFallbackStatus(reason: string | undefined): ProjectAnswerStrategy["providerDraftStatus"] {
+  if (reason === "concept_not_found_without_provider_answer") return "not_called";
+  if (reason === "provider_answer_failed_local_validation") return "failed_local_validation";
+  if (/provider failed during project explanation/i.test(reason ?? "")) return "failed";
+  return "replaced_by_local_validation";
+}
+
+function shouldUseInsufficientEvidenceNotice(input: {
+  questionUnderstanding: ProjectQuestionUnderstanding;
+  topic: UniversalInspectTopic;
+  positiveEvidence: ProjectQuestionEvidence[];
+  structuredFacts: InspectExplainFacts;
+  conceptResolution: ConceptResolution;
+  mechanismChain: MechanismChain;
+}) {
+  const asksForJudgment = input.questionUnderstanding.wantsJudgment
+    || input.questionUnderstanding.expectedAnswerShape === "compare"
+    || input.questionUnderstanding.answerGoal === "yes_no";
+  if (!isTargetedConceptQuestion(input.questionUnderstanding, input.topic)) {
+    if (asksForJudgment) {
+      const hasImplementationEvidence = input.positiveEvidence.some((item) =>
+        item.sourceRole === "implementation" || item.sourceRole === "orchestration" || item.sourceRole === "downstream_stage"
+      );
+      return !structuredFactsHaveEvidence(input.topic, input.structuredFacts) && (!hasImplementationEvidence || input.positiveEvidence.length < 3);
+    }
+    return !structuredFactsHaveEvidence(input.topic, input.structuredFacts) && input.positiveEvidence.length < 2;
+  }
+  if (asksForJudgment && !hasEvidenceEnoughForJudgment(input.conceptResolution, input.mechanismChain, input.positiveEvidence)) {
+    return true;
+  }
+  if (input.conceptResolution.resolutionStatus === "direct_found" || input.conceptResolution.resolutionStatus === "alias_found") {
+    return false;
+  }
+  if (input.conceptResolution.resolutionStatus === "behavioral_found" && input.positiveEvidence.length >= 2) {
+    return false;
+  }
+  if (input.mechanismChain.status === "confirmed" && input.positiveEvidence.length >= 2) {
+    return false;
+  }
+  return !conceptHasTargetEvidence(input.conceptResolution) || input.positiveEvidence.length === 0;
+}
+
+function hasEvidenceEnoughForJudgment(
+  conceptResolution: ConceptResolution,
+  mechanismChain: MechanismChain,
+  positiveEvidence: ProjectQuestionEvidence[]
+) {
+  const hasImplementationEvidence = positiveEvidence.some((item) =>
+    item.sourceRole === "implementation" || item.sourceRole === "orchestration" || item.sourceRole === "downstream_stage"
+  );
+  if ((conceptResolution.resolutionStatus === "direct_found" || conceptResolution.resolutionStatus === "alias_found") && hasImplementationEvidence && positiveEvidence.length >= 2) return true;
+  if (conceptResolution.resolutionStatus === "behavioral_found" && hasImplementationEvidence && positiveEvidence.length >= 2) return true;
+  if (mechanismChain.status === "confirmed" && positiveEvidence.length >= 2) return true;
+  if (conceptResolution.resolutionStatus === "architectural_pattern_found" && positiveEvidence.length >= 3 && mechanismChain.status !== "not_found") return true;
+  return false;
+}
+
+function createInsufficientEvidenceNotice(input: {
+  questionUnderstanding: ProjectQuestionUnderstanding;
+  topic: UniversalInspectTopic;
+  intent: WorkspaceIntentUnderstanding;
+  providerReason?: string;
+  validationErrors: string[];
+  negativeEvidence: string[];
+}) {
+  const target = input.questionUnderstanding.topicPhrase || input.questionUnderstanding.targetConcept || String(input.topic);
+  const providerLine = input.providerReason
+    ? input.providerReason
+    : input.validationErrors.find((error) => /provider|validation|citation|evidence/i.test(error));
+  const searched = input.negativeEvidence.slice(0, 4).join("; ");
+  if (input.intent.language === "arabic") {
+    return [
+      `مش هصنّع إجابة عن \`${target}\` من أدلة ضعيفة.`,
+      "",
+      providerLine ? `حالة المزود/التحقق: ${providerLine}.` : "رد المزود لم يمر كإجابة موثوقة بالأدلة الحالية.",
+      searched ? `اللي اتراجع ولم يثبت المطلوب: ${searched}.` : "الأدلة المحلية الحالية لا تكفي لإثبات المطلوب من المشروع.",
+      "",
+      "الخطوة الصح هنا: حدّد الملف أو الموديول المقصود، أو شغّل مزود أقوى/أطول وقتًا، بدل ما أطلع رد يبدو واثق وهو مبني على إشارات غير كافية."
+    ].join("\n");
+  }
+  return [
+    `I will not synthesize an answer about \`${target}\` from weak evidence.`,
+    "",
+    providerLine ? `Provider/validation state: ${providerLine}.` : "The provider answer did not pass as a trustworthy evidence-backed answer.",
+    searched ? `Checked but did not prove the target: ${searched}.` : "The current local evidence is not enough to prove the requested behavior from the project.",
+    "",
+    "The correct next step is to point me to the intended file/module or use a stronger/longer-running provider, instead of returning a confident-looking local template."
+  ].join("\n");
+}
+
+function createProviderNoSynthesisNotice(input: {
+  questionUnderstanding: ProjectQuestionUnderstanding;
+  intent: WorkspaceIntentUnderstanding;
+  providerReason?: string;
+  negativeEvidence: string[];
+  kind: "failed" | "rejected";
+}) {
+  const target = input.questionUnderstanding.topicPhrase || input.questionUnderstanding.targetConcept || "the project question";
+  const searched = input.negativeEvidence.slice(0, 4).join("; ");
+  const state = input.kind === "failed" ? "failed" : "did not pass validation";
+  if (input.intent.language === "arabic") {
+    return [
+      input.kind === "failed"
+        ? `مش هصنّع إجابة محلية عن \`${target}\` بعد فشل المزود.`
+        : `مش هصنّع إجابة محلية عن \`${target}\` بعد ما رد المزود فشل في التحقق.`,
+      "",
+      input.providerReason ? `حالة المزود: ${input.providerReason}.` : "المزود لم يرجع إجابة موثوقة.",
+      searched ? `إشارات اتراجعت محليًا لكنها ليست بديلًا عن إجابة المزود: ${searched}.` : "الأدلة المحلية ممكن تساعد في التحقق، لكنها مش هتتحول هنا لإجابة بديلة بعد فشل المزود.",
+      "",
+      "السبب: الجلسة تعمل في real-provider mode، ولو رديت من local synthesis بعد فشل المزود أو فشل التحقق يبقى ده نفس سلوك الردود المحفوظة اللي يخلي النظام يبان فاهم وهو فعليًا لا يملك إجابة مزود موثوقة."
+    ].join("\n");
+  }
+  return [
+    input.kind === "failed"
+      ? `I will not synthesize a local answer about \`${target}\` after the provider failed.`
+      : `I will not synthesize a local answer about \`${target}\` after the provider answer failed validation.`,
+    "",
+    input.providerReason ? `Provider state: ${input.providerReason}.` : `The provider ${state}.`,
+    searched ? `Local signals checked, but not used as a replacement answer: ${searched}.` : "Local evidence can help validate a provider answer, but it is not being promoted into a replacement answer here.",
+    "",
+    "Reason: this session is in real-provider mode. Returning local synthesis after a timeout, provider failure, or validation failure would make deterministic fallback look like provider-backed understanding."
+  ].join("\n");
+}
+
+function createAgenticDebug(result: AgenticTaskResult, usedForFinalAnswer: boolean): AgenticProjectExplainDebug {
+  return {
+    enabled: true,
+    usedForFinalAnswer,
+    mode: result.intent.mode,
+    intent: result.intent,
+    readPlan: result.readPlan,
+    openedFiles: result.openedFiles.map((file) => file.path),
+    relationshipsFollowed: result.evidenceGraph.relationships,
+    evidenceAccepted: result.evidenceGraph.accepted.map((item) => item.id),
+    evidenceDowngraded: result.evidenceGraph.downgraded.map((item) => item.id),
+    evidenceRejected: result.evidenceGraph.rejected.map((item) => item.id),
+    fallbackReason: result.trace.fallbackReason,
+    claimValidationSummary: result.trace.claimValidationSummary,
+    finalOutputValidationStatus: result.finalOutput.validationStatus
+  };
+}
+
+function createDisabledAgenticDebug(intent: AgenticTaskIntent, config: AgenticTaskKernelConfig): AgenticProjectExplainDebug {
+  return {
+    enabled: false,
+    usedForFinalAnswer: false,
+    mode: intent.mode,
+    intent,
+    readPlan: {
+      mode: intent.mode,
+      strategy: "kernel_not_selected",
+      budget: {
+        maxOpenedFiles: config.agenticTaskMaxOpenedFiles,
+        maxRelationshipDepth: config.agenticTaskMaxRelationshipDepth,
+        maxCharsPerFile: config.agenticTaskMaxFileChars,
+        maxTotalChars: config.agenticTaskMaxTotalReadChars,
+        maxEvidenceItems: config.agenticTaskMaxEvidenceItems,
+        timeoutMs: config.agenticTaskProviderTimeoutMs
+      },
+      steps: []
+    },
+    openedFiles: [],
+    relationshipsFollowed: [],
+    evidenceAccepted: [],
+    evidenceDowngraded: [],
+    evidenceRejected: [],
+    fallbackReason: "none",
+    claimValidationSummary: {
+      supported: 0,
+      partially_supported: 0,
+      unsupported: 0,
+      contradicted: 0,
+      opinion: 0,
+      unknown: 0
+    },
+    finalOutputValidationStatus: "valid"
   };
 }
 
@@ -713,7 +1167,8 @@ function createQuestionUnderstanding(
     expectedAnswerShape: expectedShape,
     detailLevel,
     wantsCodeExamples: wantsCode,
-    wantsComparisons: wantsComparisons(question)
+    wantsComparisons: wantsComparisons(question),
+    wantsJudgment: wantsLogicJudgment(question)
   };
 }
 
@@ -722,6 +1177,7 @@ function applyInvestigationConceptResolution(
   resolution: InvestigationConceptResolution
 ): ProjectQuestionUnderstanding {
   if (!resolution.isTargeted || !resolution.targetConcept || resolution.targetConcept === "general") return understanding;
+  if (resolution.resolutionStatus === "not_found" && isStructuralResolutionTarget(resolution.targetConcept)) return understanding;
   return {
     ...understanding,
     targetConcept: resolution.targetConcept,
@@ -753,6 +1209,12 @@ function applyInvestigationConceptResolution(
       ...(resolution.targetConcept === "feedback" || resolution.targetConcept.includes("loop") ? ["downstream_usage", "output", "uncertainty"] as RequestedQuestionFacet[] : [])
     ]) as RequestedQuestionFacet[]
   };
+}
+
+function isStructuralResolutionTarget(targetConcept: string) {
+  const normalized = normalizeTerm(targetConcept);
+  return COMMON_STOP_WORDS.has(normalized)
+    || /^(chain|flow|path|pipeline|stage|stages|step|steps|relationship|handoff)$/i.test(normalized);
 }
 
 function createSearchPlan(
@@ -901,6 +1363,8 @@ function resolveConceptEvidence(input: {
   implementationEvidence: ImplementationEvidence[];
   conceptFlow: ConceptFlow;
   negativeEvidence: string[];
+  prompt: string;
+  fileExists: (relativePath: string) => boolean;
 }): ConceptResolution {
   const literalTerms = uniqueStrings([
     ...literalConceptTerms(input.questionUnderstanding.targetConcept),
@@ -921,9 +1385,17 @@ function resolveConceptEvidence(input: {
     ...(shouldSearchArchitecturePatterns(input.questionUnderstanding) ? ARCHITECTURAL_PATTERN_TERMS : []),
     ...input.investigationConceptResolution.architecturalTerms
   ]);
-  const implementationEvidenceItems = input.implementationEvidence.map(implementationToQuestionEvidence);
-  const mechanismEvidenceItems = input.mechanismEvidence.map((item) =>
-    mechanismToQuestionEvidence(item, input.questionUnderstanding.targetConcept, input.investigationConceptResolution)
+  const implementationEvidenceItems = proveEvidenceItems(
+    input.implementationEvidence.map(implementationToQuestionEvidence),
+    input.prompt,
+    input.fileExists
+  );
+  const mechanismEvidenceItems = proveEvidenceItems(
+    input.mechanismEvidence.map((item) =>
+      mechanismToQuestionEvidence(item, input.questionUnderstanding.targetConcept, input.investigationConceptResolution)
+    ),
+    input.prompt,
+    input.fileExists
   );
   const allEvidence = uniqueEvidence([
     ...input.localEvidence,
@@ -940,17 +1412,22 @@ function resolveConceptEvidence(input: {
   for (const item of allEvidence) {
     const text = evidenceText(item);
     const mechanismItem = mechanismEvidenceItems.find((mechanism) => mechanism.ref === item.ref);
+    const selfReferentialExplainEvidence = isSelfReferentialExplainEvidence(item, input.questionUnderstanding);
+    const canProveDirect = canProveImplementation(item.provenance) && !selfReferentialExplainEvidence;
+    const canSupportTarget = isProductionEvidence(item.provenance) && !selfReferentialExplainEvidence;
     if (
-      termsMatch(text, literalTerms)
-      || implementationEvidenceItems.some((impl) => impl.ref === item.ref && impl.sourceRole === "implementation")
-      || (mechanismItem && isDirectMechanismEvidence(mechanismItem, input.questionUnderstanding.targetConcept))
+      canProveDirect && (
+        termsMatch(text, literalTerms)
+        || implementationEvidenceItems.some((impl) => impl.ref === item.ref && impl.sourceRole === "implementation")
+        || (mechanismItem && isDirectMechanismEvidence(mechanismItem, input.questionUnderstanding.targetConcept))
+      )
     ) {
       directTargetEvidence.push(item);
-    } else if (termsMatch(text, aliasTerms)) {
+    } else if (canSupportTarget && termsMatch(text, aliasTerms)) {
       aliasTargetEvidence.push(item);
-    } else if (termsMatch(text, behavioralTerms) || (mechanismItem && isBehavioralMechanismEvidence(mechanismItem))) {
+    } else if (canSupportTarget && (termsMatch(text, behavioralTerms) || (mechanismItem && isBehavioralMechanismEvidence(mechanismItem)))) {
       behavioralTargetEvidence.push(item);
-    } else if (isArchitecturalPatternEvidence(text, architecturalTerms) || (mechanismItem && isArchitecturalMechanismEvidence(mechanismItem, input.questionUnderstanding.targetConcept))) {
+    } else if (canSupportTarget && (isArchitecturalPatternEvidence(text, architecturalTerms) || (mechanismItem && isArchitecturalMechanismEvidence(mechanismItem, input.questionUnderstanding.targetConcept)))) {
       architecturalPatternEvidence.push(item);
     } else if (isLikelyNoiseEvidence(item, input.questionUnderstanding)) {
       noiseEvidence.push(item);
@@ -1131,6 +1608,71 @@ function isLikelyNoiseEvidence(item: ProjectQuestionEvidence, understanding: Pro
   return false;
 }
 
+function isSelfReferentialExplainEvidence(item: ProjectQuestionEvidence, understanding: ProjectQuestionUnderstanding) {
+  return isSelfReferentialExplainPath(item.path, understanding);
+}
+
+function filterSelfReferentialProjectIntelligenceGraph(
+  graph: ProjectIntelligenceGraph,
+  understanding: ProjectQuestionUnderstanding
+): ProjectIntelligenceGraph {
+  const rejectedSelfEvidence = graph.evidence.filter((item) => isSelfReferentialExplainPath(item.path, understanding));
+  if (!rejectedSelfEvidence.length) return graph;
+  const evidence = graph.evidence.filter((item) => !isSelfReferentialExplainPath(item.path, understanding));
+  const nodes = graph.nodes.filter((node) => !node.path || !isSelfReferentialExplainPath(node.path, understanding));
+  const edges = graph.edges.filter((edge) => {
+    const parsed = parseEvidenceRef(edge.evidenceRef);
+    return !parsed || !isSelfReferentialExplainPath(parsed.path, understanding);
+  });
+  return {
+    ...graph,
+    nodes,
+    edges,
+    evidence,
+    summary: summarizeFilteredProjectIntelligenceGraph(graph, nodes.length, edges.length, evidence),
+    testEndpointExpectations: evidence.filter((item) => item.role === "test_endpoint_expectation"),
+    targetScopedStorageEvidence: evidence.filter((item) => (item.role === "storage_target" || item.role === "storage_write" || item.role === "storage_read" || item.role === "log_append") && item.targetScoped !== false),
+    generalStorageEvidence: evidence.filter((item) => item.role === "general_storage" || ((item.role === "storage_target" || item.role === "storage_write" || item.role === "storage_read" || item.role === "log_append") && item.targetScoped === false)),
+    rejectedMechanismEvidence: uniqueMechanismEvidence([...graph.rejectedMechanismEvidence, ...rejectedSelfEvidence])
+  };
+}
+
+function summarizeFilteredProjectIntelligenceGraph(
+  graph: ProjectIntelligenceGraph,
+  nodeCount: number,
+  edgeCount: number,
+  evidence: MechanismEvidence[]
+): ProjectIntelligenceGraphSummary {
+  const roles = { ...graph.summary.roles };
+  for (const role of Object.keys(roles) as Array<keyof typeof roles>) roles[role] = 0;
+  for (const item of evidence) roles[item.role] = (roles[item.role] ?? 0) + 1;
+  return {
+    nodeCount,
+    edgeCount,
+    evidenceCount: evidence.length,
+    roles,
+    importantFiles: uniqueStrings(evidence.map((item) => item.path)).slice(0, 12)
+  };
+}
+
+function uniqueMechanismEvidence(items: MechanismEvidence[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.path}:${item.line}:${item.role}:${item.endpoint ?? item.storageTarget ?? item.symbol ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isSelfReferentialExplainPath(filePath: string, understanding: ProjectQuestionUnderstanding) {
+  const normalizedPath = filePath.replaceAll("\\", "/");
+  const explainPath = /apps\/agent-runtime\/src\/runtime\/(UniversalProjectQuestionEngine|ProjectQuestionConceptEngine|ProjectIntelligenceKernel|InspectExplainReadLanes|ProjectQuestionGrounding|EvidenceHygiene|LlmProjectExplainer)\.ts$/i.test(normalizedPath);
+  if (!explainPath) return false;
+  const promptText = `${understanding.topicPhrase} ${understanding.entities.join(" ")} ${understanding.normalizedTerms.join(" ")}`.toLowerCase();
+  return !/\b(explain|project question|grounding|evidence|provenance|universal project question|read lane|concept engine)\b/.test(promptText);
+}
+
 function evidenceText(item: ProjectQuestionEvidence) {
   return `${item.path}\n${item.title}\n${item.reason}\n${item.query}\n${item.snippet ?? ""}`;
 }
@@ -1226,6 +1768,83 @@ function structuredFactsToEvidence(facts: InspectExplainFacts): ProjectQuestionE
   return evidence;
 }
 
+function proveEvidenceItems(
+  items: ProjectQuestionEvidence[],
+  prompt: string,
+  fileExists: (relativePath: string) => boolean
+): ProjectQuestionEvidence[] {
+  return items.map((item) => {
+    const provenance = createEvidenceProvenance({
+      sourceFile: item.path,
+      citedPath: item.path,
+      line: item.line,
+      snippet: item.snippet,
+      prompt,
+      fileExists
+    });
+    return {
+      ...item,
+      confidence: lowerConfidence(item.confidence, provenance.confidence),
+      sourceRole: sourceRoleForProvenance(item.path, item.sourceRole, provenance),
+      provenance
+    };
+  });
+}
+
+function sourceRoleForProvenance(
+  filePath: string,
+  fallback: SourceRole,
+  provenance: EvidenceProvenance
+): SourceRole {
+  if (provenance.sourceType === "test_source" || provenance.sourceType === "fixture_generated_path") return "test";
+  if (provenance.sourceType === "documentation") return "documentation";
+  if (provenance.sourceType === "tmp_artifact" || provenance.sourceType === "memory_artifact" || provenance.sourceType === "generated_report" || provenance.sourceType === "runtime_state") return "unrelated_name_match";
+  return sourceRoleForPath(filePath) ?? fallback;
+}
+
+function lowerConfidence(left: "high" | "medium" | "low", right: "high" | "medium" | "low") {
+  const rank = { low: 0, medium: 1, high: 2 } as const;
+  return rank[left] < rank[right] ? left : right;
+}
+
+function evidenceProvenanceReport(items: ProjectQuestionEvidence[]): {
+  groundedEvidence: GroundedEvidenceItem[];
+  rejectedEvidence: RejectedEvidenceItem[];
+} {
+  const groundedEvidence: GroundedEvidenceItem[] = [];
+  const rejectedEvidence: RejectedEvidenceItem[] = [];
+  for (const item of items) {
+    if (!item.provenance) continue;
+    const reportItem = evidenceItemForReport({ ref: item.ref, provenance: item.provenance });
+    if ("existsOnDisk" in reportItem) groundedEvidence.push(reportItem);
+    else rejectedEvidence.push(reportItem);
+  }
+  return {
+    groundedEvidence: dedupeGroundedEvidence(groundedEvidence),
+    rejectedEvidence: dedupeRejectedEvidence(rejectedEvidence)
+  };
+}
+
+function dedupeGroundedEvidence(items: GroundedEvidenceItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.ref}:${item.sourceType}:${item.directness}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeRejectedEvidence(items: RejectedEvidenceItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.ref}:${item.sourceType}:${item.reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function readLaneFindingsToEvidence(artifacts: InspectExplainReadLaneArtifact[]): ProjectQuestionEvidence[] {
   const findings = artifacts.flatMap((artifact) => artifact.findings);
   return findings.map((finding) => ({
@@ -1265,6 +1884,7 @@ function sourceRoleForReadLaneFinding(finding: InspectExplainReadLaneFinding): S
 }
 
 function validateAnswer(input: {
+  question: string;
   answerMarkdown: string;
   intent: WorkspaceIntentUnderstanding;
   questionUnderstanding: ProjectQuestionUnderstanding;
@@ -1297,6 +1917,43 @@ function validateAnswer(input: {
   }
   if (hasEvidence && answerLooksLikeNotFound(input.answerMarkdown)) {
     errors.push("Answer says the topic was not found even though local evidence exists.");
+  }
+  if (isForecastingAssessmentQuestion(input.question, input.questionUnderstanding)) {
+    const repeatedGenericForecasting = (input.answerMarkdown.match(/forecasting implementation:\s*The implementation applies forecasting in this code block/gi) ?? []).length;
+    if (repeatedGenericForecasting >= 3) {
+      errors.push("Forecasting answer repeats a generic implementation template instead of synthesizing evidence.");
+    }
+    const routeLineOneRefs = (input.answerMarkdown.match(/\bbackend\/routes\.py:1\b/g) ?? []).length;
+    const arimaLineOneRefs = (input.answerMarkdown.match(/\bbackend\/services\/arima_model\.py:1\b/g) ?? []).length;
+    if (routeLineOneRefs + arimaLineOneRefs >= 3 && /\b(fit_cluster_models|get_cluster_state|trend_multiplier|normalized_trend|SARIMAX?|cluster)\b/i.test(input.positiveEvidence.map((item) => item.snippet ?? "").join("\n"))) {
+      errors.push("Forecasting answer cites only shallow line-1 locations while deeper forecasting evidence is available.");
+    }
+    const answerText = input.answerMarkdown;
+    const mentionsScope = /\b(cluster-level|per-cluster|per-segment|predicted_cluster|get_cluster_state|customer-level|per customer|aggregate|global)\b|(?:مستوى\s+cluster|لكل\s+cluster|للعميل|للـ\s*customer)/i.test(answerText);
+    if (!mentionsScope) {
+      errors.push("Forecasting answer must explain whether the forecast is cluster-level, aggregate, or customer-level.");
+    }
+    if (forecastingQuestionRequestsJudgment(input.question) && !/\b(wrong|correct|logical|reasonable|production|demo|academic|weak|flaw|issue)\b|(?:منطقي|غلط|مقبول|ضعيف|خلل|production|demo|أكاديمي|اكاديمي)/iu.test(answerText)) {
+      errors.push("Forecasting answer does not answer the requested logic/correctness judgment.");
+    }
+  }
+  const repeatedGenericImplementation = (input.answerMarkdown.match(/\b[\w -]+ implementation:\s*The implementation applies [\w -]+ in this code block\./gi) ?? []).length;
+  if (repeatedGenericImplementation >= 3) {
+    errors.push("Answer repeats a generic implementation template instead of synthesizing project evidence.");
+  }
+  const shallowLineOneRefs = (input.answerMarkdown.match(/\b(?:backend|frontend|src|app|services?)\/[A-Za-z0-9_./-]+\.(?:py|ts|tsx|js|jsx):1\b/g) ?? []).length;
+  const hasDeeperEvidence = input.positiveEvidence.some((item) => item.line > 1);
+  if (shallowLineOneRefs >= 5 && hasDeeperEvidence) {
+    errors.push("Answer over-cites shallow line-1 references while deeper target evidence is available.");
+  }
+  if (input.questionUnderstanding.targetConcept === "multi_agent_system") {
+    const answerText = input.answerMarkdown;
+    if (!/\b(build_default_agents|ReActOrchestrator|choose_route|agent_recommendations|agent_consensus|ActionExecutor|orchestrator)\b/i.test(answerText)) {
+      errors.push("Multi-agent answer does not mention the actual agent/orchestrator wiring.");
+    }
+    if (!/\b(logical|reasonable|advisory|lightweight|central orchestrator|wrong|incorrect)\b|(?:منطقي|مقبول|استشار|خفيف|غلط|خطأ)/iu.test(answerText)) {
+      errors.push("Multi-agent answer does not answer the requested logic/correctness judgment.");
+    }
   }
   if (responseLooksOffIntent(input.answerMarkdown, {
     intent: input.intent,
@@ -1348,6 +2005,103 @@ function validateAnswer(input: {
   };
 }
 
+function detectStaleCannedOuterloopAnswer(answerMarkdown: string, understanding: ProjectQuestionUnderstanding) {
+  const target = normalizeTerm(understanding.targetConcept);
+  if (target !== "outerloop" && !target.includes("loop")) return [];
+  const errors: string[] = [];
+  const oldArabicDirectClaim = /لقيت\s+`?outerloop`?\s+كدليل\s+مباشر/i.test(answerMarkdown);
+  const oldArabicSections = answerMarkdown.includes("## الفلو المثبت") && answerMarkdown.includes("## النواتج أو الحالات المثبتة");
+  const oldArabicBullets = /جزئي:\s*فيه\s+مرحلة\s+model\/decision\/action/i.test(answerMarkdown)
+    || /feedback\/outcome stage تربط القرار بنتيجة لاحقة/i.test(answerMarkdown);
+  const oldEnglishDirectClaim = /I found direct target evidence for `?outerloop`? and built the answer from compatible code links/i.test(answerMarkdown);
+  const oldEnglishSections = answerMarkdown.includes("## Proven Flow") && answerMarkdown.includes("## Proven Outputs Or States");
+  const oldSignalShape = answerMarkdown.includes("model/decision/action")
+    && answerMarkdown.includes("feedback/outcome stage")
+    && answerMarkdown.includes("ACTION_LOG_PATH")
+    && answerMarkdown.includes("observed_outcome");
+  if (oldArabicDirectClaim || (oldArabicSections && oldArabicBullets) || oldEnglishDirectClaim || oldEnglishSections || oldSignalShape) {
+    errors.push("answerMarkdown matches stale canned outerloop explanation template.");
+  }
+  return errors;
+}
+
+function guardFinalAnswerCitations(input: {
+  answerMarkdown: string;
+  evidenceRefs: string[];
+  prompt: string;
+  language: WorkspaceIntentUnderstanding["language"];
+  fileExists: (relativePath: string) => boolean;
+}) {
+  const warnings: string[] = [];
+  const allowedRefs = uniqueStrings(input.evidenceRefs.filter((ref) => {
+    const parsed = parseEvidenceRef(ref);
+    if (!parsed) return false;
+    const verdict = finalCitationVerdict(parsed.path, input.prompt, input.fileExists);
+    if (!verdict.allowed) warnings.push(`Removed invalid evidence ref ${ref}: ${verdict.reason}`);
+    return verdict.allowed;
+  }));
+  let answerMarkdown = input.answerMarkdown.replace(
+    /\[([^\]]+)\]\(hivo-file:([^)\s]+):(\d+)\)/g,
+    (full, _label: string, encodedPath: string, line: string) => {
+      let filePath = encodedPath;
+      try {
+        filePath = decodeURIComponent(encodedPath);
+      } catch {
+        // Keep the undecoded path for the rejection reason.
+      }
+      const verdict = finalCitationVerdict(filePath, input.prompt, input.fileExists);
+      if (verdict.allowed) return full;
+      warnings.push(`Removed invalid hivo-file citation ${filePath}:${line}: ${verdict.reason}`);
+      return invalidCitationReplacement(filePath, input.language);
+    }
+  );
+  answerMarkdown = answerMarkdown.replace(
+    /\b((?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]+\.[A-Za-z0-9]+):(\d+)\b/g,
+    (full, filePath: string, line: string) => {
+      const verdict = finalCitationVerdict(filePath, input.prompt, input.fileExists);
+      if (verdict.allowed) return full;
+      warnings.push(`Removed invalid plain citation ${filePath}:${line}: ${verdict.reason}`);
+      return invalidCitationReplacement(filePath, input.language);
+    }
+  );
+  return {
+    answerMarkdown,
+    evidenceRefs: allowedRefs,
+    warnings: uniqueStrings(warnings)
+  };
+}
+
+function finalCitationVerdict(
+  filePath: string,
+  prompt: string,
+  fileExists: (relativePath: string) => boolean
+): { allowed: true; reason: string } | { allowed: false; reason: string } {
+  const provenance = createEvidenceProvenance({
+    sourceFile: filePath,
+    citedPath: filePath,
+    prompt,
+    fileExists
+  });
+  if (!provenance.pathVerification.safePath) return { allowed: false, reason: "unsafe path" };
+  if (!provenance.pathVerification.existsOnDisk) return { allowed: false, reason: "path does not exist in workspace" };
+  if (provenance.sourceType === "fixture_generated_path") return { allowed: false, reason: "fixture-generated path" };
+  if (
+    provenance.sourceType === "tmp_artifact"
+    || provenance.sourceType === "memory_artifact"
+    || provenance.sourceType === "generated_report"
+    || provenance.sourceType === "runtime_state"
+  ) {
+    return { allowed: false, reason: `non-production artifact: ${provenance.sourceType}` };
+  }
+  return { allowed: true, reason: provenance.reason };
+}
+
+function invalidCitationReplacement(filePath: string, language: WorkspaceIntentUnderstanding["language"]) {
+  const normalized = filePath.replaceAll("\\", "/");
+  if (language === "arabic") return `\`${normalized}\` (مسار غير مثبت في workspace الحالي)`;
+  return `\`${normalized}\` (not a verified workspace citation)`;
+}
+
 function validateTargetEvidence(input: {
   answerMarkdown: string;
   questionUnderstanding: ProjectQuestionUnderstanding;
@@ -1358,6 +2112,7 @@ function validateTargetEvidence(input: {
   if (input.questionUnderstanding.questionScope !== "concept") return { valid: true, errors };
   const answer = normalizeTerm(input.answerMarkdown);
   const target = normalizeTerm(input.questionUnderstanding.targetConcept);
+  if (!target || target === "general") return { valid: true, errors };
   const hasTargetEvidence = conceptHasTargetEvidence(input.conceptResolution);
   if (input.conceptResolution.resolutionStatus === "not_found" && hasTargetEvidence) {
     errors.push("Concept resolution says not_found even though target evidence buckets are populated.");
@@ -1404,15 +2159,15 @@ function bucketMechanismEvidence(evidence: MechanismEvidence[]): MechanismEviden
 }
 
 function mergeReadLaneGraphIntoMechanismChain(chain: MechanismChain, readLaneRun: InspectExplainReadLaneRun): MechanismChain {
-  const existingRelations = new Set(chain.steps.map((step) => step.relation));
+  const baseSteps = [...chain.steps];
+  const existingRelations = new Set(baseSteps.map((step) => step.relation));
   const addedSteps: MechanismChain["steps"] = [];
   for (const edge of readLaneRun.synthesizedGraph.edges) {
     if (edge.status === "rejected" || edge.status === "unproven") continue;
-    if (existingRelations.has(edge.relation)) continue;
     const role = roleForLaneRelation(edge.relation);
     if (!role) continue;
-    addedSteps.push({
-      order: chain.steps.length + addedSteps.length + 1,
+    const stepFromEdge: MechanismChain["steps"][number] = {
+      order: baseSteps.length + addedSteps.length + 1,
       role,
       label: edge.reason,
       relation: edge.relation,
@@ -1423,10 +2178,19 @@ function mergeReadLaneGraphIntoMechanismChain(chain: MechanismChain, readLaneRun
       confidence: edge.confidence,
       evidenceRefs: edge.evidenceRefs,
       files: uniqueStrings(edge.evidenceRefs.map((ref) => ref.split(":").slice(0, -1).join(":")).filter(Boolean))
-    });
+    };
+    const existingIndex = baseSteps.findIndex((step) => step.relation === edge.relation);
+    if (existingIndex >= 0) {
+      const existing = baseSteps[existingIndex];
+      if (existing && proofStatusRank(edge.status) > proofStatusRank(existing.status)) {
+        baseSteps[existingIndex] = { ...stepFromEdge, order: existing.order };
+      }
+      continue;
+    }
+    addedSteps.push(stepFromEdge);
   }
-  if (!addedSteps.length) return chain;
-  const steps = [...chain.steps, ...addedSteps].map((step, index) => ({ ...step, order: index + 1 }));
+  const steps = [...baseSteps, ...addedSteps].map((step, index) => ({ ...step, order: index + 1 }));
+  if (!addedSteps.length && steps.every((step, index) => step === chain.steps[index])) return chain;
   const provenRelations = new Set(steps.filter((step) => step.status === "proven").map((step) => step.relation));
   const missingLinks = chain.missingLinks.filter((linkName) => !laneRelationSatisfiesMissingLink(linkName, provenRelations));
   const status = readLaneRun.synthesizedGraph.status === "confirmed" || (chain.status === "confirmed" && missingLinks.length === 0)
@@ -1442,6 +2206,13 @@ function mergeReadLaneGraphIntoMechanismChain(chain: MechanismChain, readLaneRun
     confirmedFiles: uniqueStrings([...chain.confirmedFiles, ...addedSteps.flatMap((step) => step.files)]),
     missingLinks
   };
+}
+
+function proofStatusRank(status: MechanismChain["steps"][number]["status"]) {
+  if (status === "proven") return 3;
+  if (status === "partial") return 2;
+  if (status === "unproven") return 1;
+  return 0;
 }
 
 function roleForLaneRelation(relation: string): MechanismChain["steps"][number]["role"] | undefined {
@@ -1474,6 +2245,7 @@ function isMechanismQuestion(understanding: ProjectQuestionUnderstanding, bucket
   const target = normalizeTerm(understanding.targetConcept);
   if (["svm", "dbscan", "fcm", "shap", "sarima"].includes(target)) return false;
   if (target === "feedback") return true;
+  if (target === "multi_agent_system") return true;
   if (["outerloop", "inner loop", "inner outer loop", "inner_outer_loop", "retraining loop", "human review loop", "action loop"].includes(target)
     || target.includes("loop")) return true;
   return Boolean(
@@ -1491,6 +2263,8 @@ function composeMechanismNarrativeAnswer(input: {
   mechanismChain: MechanismChain;
   mechanismEvidence: MechanismEvidenceBuckets;
   intent: WorkspaceIntentUnderstanding;
+  projectSourceFiles?: string[];
+  readFile?: (relativePath: string) => string;
 }) {
   return input.intent.language === "arabic"
     ? composeArabicMechanismFlowAnswer(input)
@@ -1507,6 +2281,30 @@ function composeArabicMechanismFlowAnswer(input: Parameters<typeof composeMechan
     lines.push(`وجدت أجزاء من \`${target}\` في المشروع، لكن المسار الكامل غير مثبت من الملفات المقروءة. يعني لا ينفع نقول إنه متوصل end-to-end إلا في الحدود المثبتة تحت.`);
   } else {
     lines.push(`لم أجد آلية مثبتة لـ \`${target}\` في الملفات التي تم فحصها.`);
+  }
+
+  if (target === "feedback") {
+    const hasRuntimePath = input.mechanismChain.steps.some((step) => step.relation === "frontend_to_api" && step.status === "proven")
+      && input.mechanismChain.steps.some((step) => step.relation === "api_to_backend" && step.status === "proven");
+    const hasStorage = input.mechanismChain.steps.some((step) => step.relation === "backend_to_storage" && step.status === "proven");
+    const negativeImpactEvidence = negativeFeedbackImpactEvidence(input);
+    lines.push(
+      "",
+      "## الحكم المختصر",
+      hasRuntimePath && hasStorage
+        ? "الربط الأساسي منطقي: الواجهة تبعت feedback، والـ backend يستقبله، وبعدها يحصل تسجيل/تحديث للحالة. فالمشكلة مش إن feedback متطبق غلط من ناحية wiring."
+        : "التصميم واضح جزئيا فقط: فيه إشارات feedback، لكن في روابط ناقصة تمنع الحكم إنه متوصل صح end-to-end.",
+      "التحفظ المهم: ده أقرب لـ simulated/customer-response feedback داخل المنتج، مش نظام feedback حر كامل. لو الهدف feedback حقيقي من مستخدمين حقيقيين، محتاج طبقة تحقق/مصدر بيانات أوضح."
+    );
+    if (negativeImpactEvidence.shouldExplain) {
+      lines.push(
+        "",
+        "## تأثير الرد السلبي",
+        negativeImpactEvidence.refs
+          ? `الرد السلبي مش بيتسجل بس: الكود يفسره كإشارة سلبية، يجعل \`should_trigger_outer_loop\` true، وبعدها مسار submit يشغل retraining عند تحقق الإشارة. ${negativeImpactEvidence.refs}`
+          : "الرد السلبي مش بيتسجل بس: الكود يتعامل معه كإشارة ممكن تشغل outer loop/retraining، لكن الأدلة المتاحة في هذه الإجابة لا تكفي لربط كل سطر."
+      );
+    }
   }
 
   if (input.mechanismChain.steps.length) {
@@ -1602,6 +2400,103 @@ function composeEnglishMechanismFlowAnswer(input: Parameters<typeof composeMecha
   return lines.join("\n");
 }
 
+function composeArabicEvidenceGraphLoopAnswer(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  const target = input.questionUnderstanding.targetConcept || input.questionUnderstanding.topicPhrase;
+  const chain = input.mechanismChain;
+  const resolution = input.conceptResolution;
+  const directEvidence = resolution.directTargetEvidence.slice(0, 5);
+  const allFiles = uniqueStrings([
+    ...chain.confirmedFiles,
+    ...chain.steps.flatMap((step) => step.files),
+    ...directEvidence.map((item) => item.path)
+  ]).slice(0, 10);
+  const lines: string[] = ["## الخلاصة"];
+
+  if (chain.status === "confirmed") {
+    lines.push(`الـ \`${target}\` هنا ظاهر كحلقة تشغيل حقيقية من كذا مرحلة، مش كجملة محفوظة: قرار/اختيار action، بعدها تنفيذ أو routing، بعدها outcome/feedback، وبعدها logging/state update ممكن يجهز الدورة التالية. الثقة: ${arabicConfidence(chain.confidence)}.`);
+  } else if (chain.status === "partial") {
+    lines.push(`الـ \`${target}\` هنا مثبت جزئيًا فقط: لقيت مراحل من الحلقة، لكن مش كل الروابط مقفولة end-to-end من الأدلة الحالية. الثقة: ${arabicConfidence(chain.confidence)}.`);
+  } else {
+    lines.push(`ماقدرتش أثبت \`${target}\` كحلقة تنفيذ من ملفات المشروع الحالية. أي تشابه في الأسماء هيتعامل كإشارة ضعيفة وليس implementation.`);
+  }
+
+  if (allFiles.length) {
+    lines.push(`الملفات اللي شايلة الدليل الأساسي: ${allFiles.map((file) => `\`${file}\``).join(", ")}.`);
+  }
+
+  lines.push("", "## مسار الحلقة من الأدلة");
+  if (chain.steps.length) {
+    for (const step of chain.steps) {
+      const refs = step.evidenceRefs.slice(0, 3).map((ref) => linkFromRef(ref)).join(", ");
+      lines.push(`- ${step.order}. ${arabicLoopStepTitle(step)}`);
+      lines.push(`  - الدور في الحلقة: ${arabicLoopStageExplanation(step.relation)}.`);
+      if (step.ownerSymbol || step.to || step.from) {
+        lines.push(`  - الرموز/الاتجاه: ${[step.ownerSymbol ? `owner=\`${step.ownerSymbol}\`` : "", step.from ? `from=\`${step.from}\`` : "", step.to ? `to=\`${step.to}\`` : ""].filter(Boolean).join(", ")}.`);
+      }
+      lines.push(`  - الدليل: ${refs || "لا يوجد ref مباشر في هذه الخطوة"}.`);
+    }
+  } else {
+    lines.push("- مفيش chain steps كفاية لبناء outerloop موثق.");
+  }
+
+  if (directEvidence.length) {
+    lines.push("", "## أدلة الاسم أو المفهوم");
+    for (const item of directEvidence) {
+      const sourceType = item.provenance?.sourceType ?? "unknown";
+      const directness = item.provenance?.directness ?? "unknown";
+      lines.push(`- ${item.markdownLink}: source=\`${sourceType}\`, directness=\`${directness}\`, confidence=\`${item.confidence}\`.`);
+      lines.push(`  - السبب: ${item.reason}`);
+      lines.push(`  - مقتطف: \`${compactSnippet(item.snippet ?? "")}\``);
+    }
+  }
+
+  const outputs = mechanismOutputNames(input.mechanismEvidence, chain);
+  if (outputs.length) {
+    lines.push("", "## البيانات التي تقفل أو تغذي الدورة");
+    lines.push(`- ${outputs.map((item) => `\`${item}\``).join(", ")}.`);
+    lines.push("- أتعامل معها كـ state/outcome/log targets، وليس كدليل كامل على retraining إلا لو ظهر consumer واضح يستخدمها في دورة لاحقة.");
+  }
+
+  const evidenceSlices = [
+    { title: "decision/action", items: input.mechanismEvidence.contextOnlyEvidence.concat(input.mechanismEvidence.directMechanismEvidence).slice(0, 4) },
+    { title: "feedback/outcome", items: input.mechanismEvidence.statusOnlyEvidence.slice(0, 4) },
+    { title: "storage/log/update", items: input.mechanismEvidence.targetScopedStorageEvidence.slice(0, 4) },
+    { title: "downstream/retraining", items: input.mechanismEvidence.downstreamConsumerEvidence.slice(0, 4) }
+  ].filter((group) => group.items.length);
+  if (evidenceSlices.length) {
+    lines.push("", "## طبقات الدليل");
+    for (const group of evidenceSlices) {
+      const refs = group.items.map((item) => linkFromRef(`${item.path}:${item.line}`)).slice(0, 3).join(", ");
+      const names = mechanismNames(group.items).slice(0, 5).map((item) => `\`${item}\``).join(", ");
+      lines.push(`- ${group.title}: ${names || "إشارات كود مرتبطة"} (${refs}).`);
+    }
+  }
+
+  const missing = uniqueStrings([
+    ...chain.missingLinks,
+    ...(input.mechanismEvidence.generalStorageEvidence.length ? ["general_storage_not_target_proof"] : []),
+    ...(input.mechanismEvidence.testEndpointExpectations.length ? ["test_expectation_not_runtime_flow"] : [])
+  ]);
+  lines.push("", "## حدود الثقة");
+  if (missing.length) {
+    for (const item of missing.slice(0, 6)) {
+      lines.push(`- ${arabicLoopUncertainty(item, target)}.`);
+    }
+  } else {
+    lines.push("- مفيش فجوة كبيرة ظهرت في chain الحالية، لكن الاستنتاج يظل مربوطًا بالملفات والسطور المذكورة فقط.");
+  }
+
+  lines.push("", "## الحكم العملي");
+  if (chain.status === "confirmed") {
+    lines.push(`أقدر أقول إن \`${target}\` متطبق كـ orchestration/control loop موثق: النظام يختار action، يراقب outcome/status، ويسجل state يمكن استخدامها في دورة لاحقة. لو قصدك ML retraining loop صارم، فده محتاج دليل إضافي على job/consumer يعيد تدريب النموذج من نفس الـ logs.`);
+  } else if (chain.status === "partial") {
+    lines.push(`أقدر أقول إن فيه أجزاء outerloop، لكن مش حلقة كاملة مثبتة. الجزء الناقص فوق هو اللي يمنعني أقول إنها closed loop بالكامل.`);
+  } else {
+    lines.push(`لا أقدر أقول إن outerloop متطبق هنا من غير دليل production مباشر.`);
+  }
+  return lines.join("\n");
+}
+
 function mechanismSentence(kind: "ui" | "api" | "backend" | "storage" | "downstream", evidence: MechanismEvidence[]) {
   const refs = mechanismRefs(evidence);
   const names = mechanismNames(evidence);
@@ -1619,6 +2514,12 @@ function mechanismSentence(kind: "ui" | "api" | "backend" | "storage" | "downstr
 }
 
 function composeArabicProjectInvestigationAnswer(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  if (input.questionUnderstanding.targetConcept === "multi_agent_system") {
+    return composeArabicMultiAgentSystemAnswer(input);
+  }
+  if (input.questionUnderstanding.targetConcept === "outerloop" || input.questionUnderstanding.targetConcept.includes("loop")) {
+    return composeArabicEvidenceGraphLoopAnswer(input);
+  }
   const target = input.questionUnderstanding.targetConcept || input.questionUnderstanding.topicPhrase;
   const resolution = input.conceptResolution;
   const pattern = resolution.inferredPatternName ?? resolution.resolvedName;
@@ -1647,15 +2548,40 @@ function composeArabicProjectInvestigationAnswer(input: Parameters<typeof compos
     lines.push("- لم تظهر روابط تنفيذ كافية لبناء flow موثق.");
   }
 
+  if (target === "feedback") {
+    const hasRuntimePath = input.mechanismChain.steps.some((step) => step.relation === "frontend_to_api" && step.status === "proven")
+      && input.mechanismChain.steps.some((step) => step.relation === "api_to_backend" && step.status === "proven");
+    const hasStorage = input.mechanismChain.steps.some((step) => step.relation === "backend_to_storage" && step.status === "proven");
+    const negativeImpactEvidence = negativeFeedbackImpactEvidence(input);
+    lines.push(
+      "",
+      "## الحكم المختصر",
+      hasRuntimePath && hasStorage
+        ? "الربط الأساسي منطقي: الواجهة تبعت feedback، والـ backend يستقبله، وبعدها يحصل تسجيل/تحديث للحالة. فالمشكلة مش إن feedback متطبق غلط من ناحية wiring."
+        : "التصميم واضح جزئيا فقط: فيه إشارات feedback، لكن في روابط ناقصة تمنع الحكم إنه متوصل صح end-to-end.",
+      "التحفظ المهم: ده أقرب لـ simulated/customer-response feedback داخل المنتج، مش نظام feedback حر كامل. لو الهدف feedback حقيقي من مستخدمين حقيقيين، محتاج طبقة تحقق/مصدر بيانات أوضح."
+    );
+    if (negativeImpactEvidence.shouldExplain) {
+      lines.push(
+        "",
+        "## تأثير الرد السلبي",
+        negativeImpactEvidence.refs
+          ? `الرد السلبي مش بيتسجل بس: الكود يفسره كإشارة سلبية، يجعل \`should_trigger_outer_loop\` true، وبعدها مسار submit يشغل retraining عند تحقق الإشارة. ${negativeImpactEvidence.refs}`
+          : "الرد السلبي مش بيتسجل بس: الكود يتعامل معه كإشارة ممكن تشغل outer loop/retraining، لكن الأدلة المتاحة في هذه الإجابة لا تكفي لربط كل سطر."
+      );
+    }
+  }
+
   const outputs = mechanismOutputNames(input.mechanismEvidence, input.mechanismChain);
   if (outputs.length) {
     lines.push("", "## النواتج أو الحالات المثبتة", `- ${outputs.map((item) => `\`${item}\``).join(", ")}.`);
   }
 
-  const tests = input.mechanismEvidence.testEndpointExpectations;
+  const hasProductionApiCall = input.mechanismChain.steps.some((step) => step.relation === "frontend_to_api" && step.status === "proven");
+  const tests = hasProductionApiCall ? [] : input.mechanismEvidence.testEndpointExpectations;
   const generalStorage = input.mechanismEvidence.generalStorageEvidence;
   const missing = input.mechanismChain.missingLinks;
-  if (tests.length || generalStorage.length || missing.length || input.mechanismEvidence.contextOnlyEvidence.length) {
+  if (tests.length || generalStorage.length || missing.length) {
     lines.push("", "## غير المثبت");
     if (tests.length) {
       lines.push(`- الاختبارات تثبت توقع endpoint مثل ${mechanismNames(tests).map((item) => `\`${item}\``).join(", ") || "`endpoint`"}، لكنها لا تثبت أن الواجهة تستدعيه فعليًا. ${mechanismRefs(tests)}`);
@@ -1670,7 +2596,155 @@ function composeArabicProjectInvestigationAnswer(input: Parameters<typeof compos
   return lines.join("\n");
 }
 
+function composeArabicMultiAgentSystemAnswer(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  const refs = multiAgentSystemEvidenceRefs(input);
+  const lines = [
+    "## الخلاصة",
+    "النظام هنا متطبق كـ multi-agentic decision-support خفيف: عنده agents متخصصة بتقترح قرارات، وبعدها orchestrator مركزي يوزن/يفصل بينها ويختار route/action. فالفكرة منطقية كتصميم decision routing، لكنها مش multi-agent system مستقل بالكامل بمعنى agents عندها أدوات وذاكرة وتخطيط منفصل.",
+    "",
+    "## الفلو الفعلي",
+    `- تعريف الـ agents: فيه agents متخصصة مثل Reliability/Forecast/ClusterHealth، وكل واحدة ترجع recommendation وreason وvote_weight.${refs.agentDefinitions ? ` ${refs.agentDefinitions}` : ""}`,
+    `- تهيئة التشغيل: النظام يبني \`ActionExecutor\`، يعمل \`build_default_agents()\`، وينشئ \`ReActOrchestrator\`.${refs.initialization ? ` ${refs.initialization}` : ""}`,
+    `- وقت القرار: كل agent يعمل \`recommend(model_context)\`، ثم \`orchestrator.choose_route(..., agent_recommendations)\` يقرر المسار النهائي.${refs.runtimeDecision ? ` ${refs.runtimeDecision}` : ""}`,
+    `- النتيجة بتتسجل في trace: \`agent_consensus\`, \`agent_recommendations\`, و\`orchestrator_snapshot\` تظهر ضمن reason/action trace.${refs.traceOutput ? ` ${refs.traceOutput}` : ""}`,
+    "",
+    "## الحكم المختصر",
+    "التطبيق منطقي لو المقصود agents استشارية فوق موديلات وRAG وrules. مش غلط من ناحية wiring: agents -> orchestrator -> action executor -> trace.",
+    "التحفظ المهم: ده مش swarm أو agents مستقلة بتنفذ مهام منفصلة؛ هو central orchestrator ومعاه rule-based specialist advisors. لو المنتج بيسميه multi-agentic system يبقى الوصف مقبول بشرط توضيح إنه advisory/lightweight، مش autonomous multi-agent orchestration."
+  ];
+  return lines.join("\n");
+}
+
+function composeEnglishMultiAgentSystemAnswer(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  const refs = multiAgentSystemEvidenceRefs(input);
+  const lines = [
+    "## Summary",
+    "This is implemented as a lightweight multi-agentic decision-support system: specialist agents recommend actions, then a central orchestrator weighs the recommendations and chooses the route/action. That is logical for decision routing, but it is not a fully autonomous multi-agent swarm.",
+    "",
+    "## Actual Flow",
+    `- Agent definitions: Reliability/Forecast/ClusterHealth-style agents return a recommendation, reason, and vote weight.${refs.agentDefinitions ? ` ${refs.agentDefinitions}` : ""}`,
+    `- Runtime setup: the system creates \`ActionExecutor\`, \`build_default_agents()\`, and \`ReActOrchestrator\`.${refs.initialization ? ` ${refs.initialization}` : ""}`,
+    `- Decision time: each agent calls \`recommend(model_context)\`, then \`orchestrator.choose_route(..., agent_recommendations)\` chooses the final route.${refs.runtimeDecision ? ` ${refs.runtimeDecision}` : ""}`,
+    `- Trace output: \`agent_consensus\`, \`agent_recommendations\`, and \`orchestrator_snapshot\` are stored in the result trace.${refs.traceOutput ? ` ${refs.traceOutput}` : ""}`,
+    "",
+    "## Verdict",
+    "The wiring is logical for advisory agents around models/RAG/rules. The caveat is naming: it is a central orchestrator with deterministic specialist advisors, not independent agents with separate tools, memory, and planning loops."
+  ];
+  return lines.join("\n");
+}
+
+function multiAgentSystemEvidenceRefs(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  const directRefs = directMultiAgentSystemRefs(input);
+  const evidence = uniqueMechanismEvidence([
+    ...input.mechanismEvidence.directMechanismEvidence,
+    ...input.mechanismEvidence.backendHandlerEvidence,
+    ...input.mechanismEvidence.downstreamConsumerEvidence,
+    ...input.mechanismEvidence.contextOnlyEvidence,
+    ...input.mechanismEvidence.statusOnlyEvidence
+  ]);
+  const refsFor = (pattern: RegExp, category: "agentDefinitions" | "initialization" | "runtimeDecision" | "traceOutput") => mechanismRefs(evidence
+    .filter((item) => pattern.test(`${item.path}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`))
+    .sort((left, right) => multiAgentEvidenceScore(right, category) - multiAgentEvidenceScore(left, category) || left.path.localeCompare(right.path) || left.line - right.line)
+    .slice(0, 3));
+  return {
+    agentDefinitions: directRefs.agentDefinitions || refsFor(/agents\.py|BaseAgent|ReliabilityAgent|ForecastAgent|ClusterHealthAgent|build_default_agents/i, "agentDefinitions"),
+    initialization: directRefs.initialization || refsFor(/\bagents\s*=\s*build_default_agents\(|\borchestrator\s*=\s*ReActOrchestrator\(|\baction_executor\s*=\s*ActionExecutor\(|build_default_agents|ReActOrchestrator|ActionExecutor/i, "initialization"),
+    runtimeDecision: directRefs.runtimeDecision || refsFor(/agent_recommendations\s*=|\bagent\.recommend\b|orchestrator\.choose_route|choose_route/i, "runtimeDecision"),
+    traceOutput: directRefs.traceOutput || refsFor(/agent_consensus|agent_recommendations|orchestrator_snapshot|decision_trace|reason/i, "traceOutput")
+  };
+}
+
+type MultiAgentSystemRefs = {
+  agentDefinitions: string;
+  initialization: string;
+  runtimeDecision: string;
+  traceOutput: string;
+};
+
+function directMultiAgentSystemRefs(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]): MultiAgentSystemRefs {
+  if (!input.readFile) {
+    return {
+      agentDefinitions: "",
+      initialization: "",
+      runtimeDecision: "",
+      traceOutput: ""
+    };
+  }
+  const evidenceFiles = uniqueMechanismEvidence([
+    ...input.mechanismEvidence.directMechanismEvidence,
+    ...input.mechanismEvidence.backendHandlerEvidence,
+    ...input.mechanismEvidence.downstreamConsumerEvidence,
+    ...input.mechanismEvidence.contextOnlyEvidence,
+    ...input.mechanismEvidence.statusOnlyEvidence
+  ]).map((item) => item.path);
+  const candidates = uniqueStrings([
+    ...(input.projectSourceFiles ?? []),
+    ...evidenceFiles
+  ]).filter((filePath) => SOURCE_FILE_RE.test(filePath) && /(agents?|orchestrator|routes?|main|action_executor)/i.test(filePath));
+  const refs = {
+    agentDefinitions: "",
+    initialization: "",
+    runtimeDecision: "",
+    traceOutput: ""
+  };
+  for (const filePath of candidates) {
+    let content = "";
+    try {
+      content = input.readFile(filePath);
+    } catch {
+      continue;
+    }
+    const lines = content.split(/\r?\n/);
+    const foundAgentDefinitions = refs.agentDefinitions || findMultiAgentRefs(filePath, lines, /class\s+(?:BaseAgent|ReliabilityAgent|ForecastAgent|ClusterHealthAgent)\b|def\s+build_default_agents\b/i);
+    const foundInitialization = refs.initialization || findMultiAgentRefs(filePath, lines, /\bagents\s*=\s*build_default_agents\(|\borchestrator\s*=\s*ReActOrchestrator\(|\baction_executor\s*=\s*ActionExecutor\(/i);
+    const foundRuntimeDecision = refs.runtimeDecision || findMultiAgentRefs(filePath, lines, /agent_recommendations\s*=.*agent\.recommend|orchestrator\.choose_route\(/i);
+    const foundTraceOutput = refs.traceOutput || findMultiAgentRefs(filePath, lines, /["']agent_consensus["']|["']agent_recommendations["']|["']orchestrator_snapshot["']/i);
+    refs.agentDefinitions = foundAgentDefinitions;
+    refs.initialization = foundInitialization;
+    refs.runtimeDecision = foundRuntimeDecision;
+    refs.traceOutput = foundTraceOutput;
+  }
+  return refs;
+}
+
+function findMultiAgentRefs(filePath: string, lines: string[], pattern: RegExp) {
+  const refs: string[] = [];
+  lines.forEach((lineText, index) => {
+    if (refs.length >= 3) return;
+    if (pattern.test(lineText)) refs.push(link(filePath, index + 1));
+  });
+  return refs.join(", ");
+}
+
+function multiAgentEvidenceScore(item: MechanismEvidence, category: "agentDefinitions" | "initialization" | "runtimeDecision" | "traceOutput") {
+  const text = `${item.path}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`;
+  let score = 0;
+  if (category === "agentDefinitions") {
+    if (/services\/agents\.py/i.test(item.path)) score += 140;
+    if (/class\s+(?:BaseAgent|ReliabilityAgent|ForecastAgent|ClusterHealthAgent)|build_default_agents/i.test(text)) score += 120;
+    if (/\brecommend\b|vote_weight|recommended_action_name|reasoning/i.test(text)) score += 40;
+  } else if (category === "initialization") {
+    if (/routes?\.py|main\.py/i.test(item.path)) score += 140;
+    if (/\bagents\s*=\s*build_default_agents\(|\borchestrator\s*=\s*ReActOrchestrator\(|\baction_executor\s*=\s*ActionExecutor\(/i.test(text)) score += 130;
+    if (/SYSTEM_STATE.*(?:agents|orchestrator|action_executor)|["'](?:agents|orchestrator|action_executor)["']\s*:/i.test(text)) score += 80;
+    if (/services\/agents\.py/i.test(item.path)) score -= 30;
+  } else if (category === "runtimeDecision") {
+    if (/routes?\.py/i.test(item.path)) score += 150;
+    if (/agent_recommendations\s*=.*agent\.recommend|orchestrator\.choose_route/i.test(text)) score += 150;
+    if (/services\/orchestrator\.py/i.test(item.path) && /choose_route|weighted_votes|weighted_winner/i.test(text)) score += 95;
+  } else {
+    if (/routes?\.py/i.test(item.path)) score += 150;
+    if (/decision_trace|["']reason["']|agent_consensus|agent_recommendations|orchestrator_snapshot/i.test(text)) score += 140;
+    if (/services\/orchestrator\.py/i.test(item.path) && /agent_consensus|weighted_votes/i.test(text)) score += 60;
+  }
+  if (/ActionExecutor|execute_action/i.test(text)) score += 20;
+  return score;
+}
+
 function composeEnglishProjectInvestigationAnswer(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  if (input.questionUnderstanding.targetConcept === "multi_agent_system") {
+    return composeEnglishMultiAgentSystemAnswer(input);
+  }
   const target = input.questionUnderstanding.targetConcept || input.questionUnderstanding.topicPhrase;
   const resolution = input.conceptResolution;
   const pattern = resolution.inferredPatternName ?? resolution.resolvedName;
@@ -1731,6 +2805,44 @@ function arabicMechanismRelation(step: MechanismChain["steps"][number]) {
   return `${status}: ${step.label}`;
 }
 
+function arabicLoopStepTitle(step: MechanismChain["steps"][number]) {
+  const status = step.status === "proven" ? "مثبت" : step.status === "partial" ? "جزئي" : "غير مثبت";
+  if (step.relation === "decision_action_stage" || step.relation === "inner_model_decision") return `مرحلة القرار واختيار الـ action (${status})`;
+  if (step.relation === "feedback_or_outcome_stage") return `مرحلة رجوع النتيجة أو الـ feedback بعد التنفيذ (${status})`;
+  if (step.relation === "state_log_or_retraining_update") return `مرحلة حفظ الحالة أو تحديث log يمكن أن يغذي الدورة التالية (${status})`;
+  if (step.relation === "downstream_consumer") return `مرحلة الاستهلاك اللاحق أو retraining/review (${status})`;
+  if (step.relation === "frontend_to_api") return `مرحلة إرسال event/request من الواجهة (${status})`;
+  if (step.relation === "api_to_backend") return `مرحلة استقبال الطلب في backend (${status})`;
+  if (step.relation === "backend_to_storage") return `مرحلة كتابة أثر القرار أو النتيجة في storage/log (${status})`;
+  return `${step.label} (${status})`;
+}
+
+function arabicLoopStageExplanation(relation: string) {
+  if (relation === "decision_action_stage" || relation === "inner_model_decision") return "دي بداية الحلقة: النظام بيحوّل model/score/context إلى action أو قرار قابل للتنفيذ";
+  if (relation === "feedback_or_outcome_stage") return "دي مرحلة الملاحظة بعد القرار: outcome أو feedback بيرجع يوضح نتيجة الاختيار";
+  if (relation === "state_log_or_retraining_update") return "دي ذاكرة الحلقة: النتيجة أو الحالة بتتسجل بحيث ينفع تستخدمها دورة لاحقة";
+  if (relation === "downstream_consumer") return "دي قفلة أقوى للحلقة: consumer لاحق يقرأ الناتج ويأثر على قرار أو تدريب جديد";
+  if (relation === "frontend_to_api") return "دي وصلة عبور من الواجهة إلى backend، مهمة لو الحلقة تبدأ من user/event";
+  if (relation === "api_to_backend") return "دي نقطة استقبال وتنفيذ في backend";
+  if (relation === "backend_to_storage") return "دي نقطة persist/log تحفظ أثر القرار أو النتيجة";
+  if (relation === "test_expected_endpoint") return "دي توقع اختبار فقط، مفيد للسلوك المتوقع لكنه ليس runtime proof";
+  return "إشارة مرتبطة بالحلقة، لكن معناها الدقيق يعتمد على السطر المذكور";
+}
+
+function arabicLoopUncertainty(value: string, target: string) {
+  if (value === "general_storage_not_target_proof") return `فيه storage عام، لكنه لا يثبت \`${target}\` إلا لو مربوط بنفس handler أو outcome`;
+  if (value === "test_expectation_not_runtime_flow") return "الدليل القادم من tests يثبت توقعات، وليس أن runtime production ينفذ المسار فعلا";
+  if (value === "next_cycle_effect") return "تأثير الدورة التالية غير مثبت بالكامل؛ محتاج consumer/job يقرأ الـ state ويغير قرار لاحق";
+  if (value === "downstream_feedback_consumer") return "لم يظهر consumer لاحق كافي يثبت أن feedback/outcome يدخل في قرار جديد";
+  if (value === "feedback_storage_or_log_usage") return "لم يظهر ربط كافي بين outcome/log وبين تخزين مستهدف للحلقة";
+  return `الرابط غير المثبت: ${value}`;
+}
+
+function compactSnippet(snippet: string, max = 180) {
+  const compact = snippet.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max - 1)}…` : compact;
+}
+
 function englishMechanismRelation(step: MechanismChain["steps"][number]) {
   const status = step.status === "proven" ? "Proven" : step.status === "partial" ? "Partial" : "Unproven";
   const target = step.to ? ` to \`${step.to}\`` : "";
@@ -1747,13 +2859,54 @@ function englishMechanismRelation(step: MechanismChain["steps"][number]) {
   return `${status}: ${step.label}`;
 }
 
+function negativeFeedbackImpactEvidence(input: Parameters<typeof composeMechanismNarrativeAnswer>[0]) {
+  const text = [
+    input.conceptResolution.labelsOrModifiers.join(" "),
+    input.conceptResolution.secondaryConcepts.join(" "),
+    input.questionUnderstanding.topicPhrase,
+    input.questionUnderstanding.topicTerms.join(" "),
+    input.questionUnderstanding.normalizedTerms.join(" ")
+  ].join("\n");
+  const shouldExplain = /\bnegative|retrain|retraining|retraining_loop\b/i.test(text)
+    || /(?:\u0633\u0644\u0628\u064a|\u0633\u0644\u0628\u0649|\u0627\u0639\u0627\u062f\u0629\s+\u062a\u062f\u0631\u064a\u0628|\u0625\u0639\u0627\u062f\u0629\s+\u062a\u062f\u0631\u064a\u0628)/.test(text);
+  if (!shouldExplain) return { shouldExplain: false, refs: "" };
+  const candidates = uniqueMechanismEvidence([
+    ...input.mechanismEvidence.directMechanismEvidence,
+    ...input.mechanismEvidence.backendHandlerEvidence,
+    ...input.mechanismEvidence.downstreamConsumerEvidence,
+    ...input.mechanismEvidence.targetScopedStorageEvidence,
+    ...input.mechanismEvidence.statusOnlyEvidence,
+    ...input.mechanismEvidence.contextOnlyEvidence
+  ]).filter((item) => /negative|should_trigger_outer_loop|retrain_with_rollback|interpret_customer_feedback|submit_customer_feedback|_append_customer_feedback_log/i.test(`${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`));
+  const sorted = candidates.sort((left, right) => negativeFeedbackEvidenceScore(right) - negativeFeedbackEvidenceScore(left) || left.path.localeCompare(right.path) || left.line - right.line);
+  return { shouldExplain: true, refs: mechanismRefs(sorted.slice(0, 5)) };
+}
+
+function negativeFeedbackEvidenceScore(item: MechanismEvidence) {
+  const text = `${item.path}\n${item.ownerSymbol ?? ""}\n${item.symbol ?? ""}\n${item.snippet}`;
+  let score = 0;
+  if (/interpret_customer_feedback/i.test(text)) score += 80;
+  if (/response_label.*negative|negative.*response_label|should_trigger_outer_loop/i.test(text)) score += 70;
+  if (/retrain_with_rollback/i.test(text)) score += 60;
+  if (/submit_customer_feedback/i.test(text)) score += 50;
+  if (/_append_customer_feedback_log|CUSTOMER_FEEDBACK_LOG_PATH/i.test(text)) score += 30;
+  return score;
+}
+
 function mechanismOutputNames(evidence: MechanismEvidenceBuckets, chain: MechanismChain) {
   return uniqueStrings([
     ...chain.steps.flatMap((step) => [step.to ?? "", step.relation.includes("status") ? "status/outcome" : ""]),
     ...evidence.statusOnlyEvidence.flatMap((item) => Array.from(item.snippet.matchAll(/\b(status|observed_outcome|selected_action_name|action_type|timing)\b/g)).map((match) => match[1] ?? "")),
     ...evidence.contextOnlyEvidence.flatMap((item) => Array.from(item.snippet.matchAll(/\b(status|selected_action_name|action_type|timing|low_gap|high_gap)\b/g)).map((match) => match[1] ?? "")),
     ...evidence.targetScopedStorageEvidence.flatMap((item) => item.storageTarget ? [item.storageTarget] : [])
-  ]).filter((item) => item && !/^\//.test(item)).slice(0, 10);
+  ]).filter((item) => item && !/^\//.test(item) && !/[\r\n]/.test(item)).sort((left, right) => feedbackNameScore(right) - feedbackNameScore(left)).slice(0, 10);
+}
+
+function feedbackNameScore(value: string) {
+  if (/\bcustomer_feedback|customer-feedback|customer feedback|feedback_log|feedback[-_]?log\b/i.test(value)) return 100;
+  if (/\bfeedback\b/i.test(value)) return 50;
+  if (/\bretrain|retraining\b/i.test(value)) return 10;
+  return 0;
 }
 
 function arabicConfidence(value: "high" | "medium" | "low") {
@@ -1804,6 +2957,326 @@ function linkFromRef(ref: string) {
   return link(match?.[1] ?? ref, match?.[2] ? Number(match[2]) : 1);
 }
 
+function parseEvidenceRef(ref: string) {
+  const match = ref.match(/^(.+):(\d+)$/);
+  if (!match) return undefined;
+  return {
+    path: (match[1] ?? "").replaceAll("\\", "/"),
+    line: Number(match[2])
+  };
+}
+
+type ForecastingAssessmentSignal =
+  | "model_type"
+  | "scope"
+  | "training_path"
+  | "runtime_path"
+  | "score_impact"
+  | "data_validity"
+  | "drift_logic";
+
+type ForecastingAssessmentEvidence = {
+  signal: ForecastingAssessmentSignal;
+  path: string;
+  line: number;
+  snippet: string;
+};
+
+type ForecastingAssessment = {
+  modelType: "SARIMAX/SARIMA" | "SARIMA" | "ARIMA" | "forecasting/trend logic" | "unknown";
+  scope: "cluster_level" | "per_customer" | "aggregate_global" | "mixed" | "unknown";
+  hasPersistenceFallback: boolean;
+  hasScoreNormalizationIssue: boolean;
+  hasSyntheticTimeSignals: boolean;
+  evidence: ForecastingAssessmentEvidence[];
+};
+
+function isForecastingAssessmentQuestion(question: string, understanding: ProjectQuestionUnderstanding) {
+  if (isDecisionPolicyQuestion(question, understanding)) return false;
+  const normalizedTarget = normalizeTerm(understanding.targetConcept);
+  const text = `${question}\n${understanding.topicPhrase}\n${understanding.topicTerms.join(" ")}\n${understanding.entities.join(" ")}`;
+  const asksForecasting = normalizedTarget === "sarima"
+    || /\b(forecast|forecasting|sarima|sarimax|arima|trend_multiplier|trend|drift)\b/i.test(text);
+  if (!asksForecasting) return false;
+  return true;
+}
+
+function isDecisionPolicyQuestion(question: string, understanding: ProjectQuestionUnderstanding) {
+  const text = normalizeTerm([
+    question,
+    understanding.topicPhrase,
+    understanding.targetConcept,
+    ...understanding.topicTerms,
+    ...understanding.normalizedTerms,
+    ...understanding.entities,
+    ...understanding.requiredFacets
+  ].join(" "));
+  const asksDecision =
+    /\b(when|why|how|decide|decides|decision|rule|rules|policy|route|routing|orchestrator|choose|instead|versus|vs|link|connect)\b/i.test(text)
+    || /(?:\u0627\u0645\u062a\u0649|\u064a\u0642\u0631\u0631|\u0644\u064a\u0647|\u0627\u0632\u0627\u064a|\u0627\u0631\u0628\u0637|\u0642\u0648\u0627\u0639\u062f|\u0642\u0631\u0627\u0631|\u0628\u062f\u0644|\u064a\u0628\u0639\u062a)/u.test(text);
+  const hasActionChoice =
+    /\b(re\s*[- ]?\s*cluster|recluster|offer|strong offer|retention offer|human review|no action|dispatch|selected_action_name|recommended_action_name|selected action|recommended action)\b/i.test(text);
+  const hasRoutingTerms =
+    /\b(orchestrator|choose_route|route_result|routing|weighted_votes|weighted_winner|agent_consensus|agent_recommendations|selected_action_name|recommended_action_name|selected action|recommended action|dispatch)\b/i.test(text);
+  const hasRoutingEvidence =
+    /\b(drift|drift_detected|drift detection|membership|membership_strength|fcm|orchestrator|choose_route|agent_recommendations|weighted_votes|weighted_winner|agent_consensus|route_result)\b/i.test(text);
+  return asksDecision && (hasActionChoice || (hasRoutingTerms && hasRoutingEvidence));
+}
+
+function forecastingQuestionRequestsJudgment(question: string) {
+  return /\b(wrong|correct|logical|logic|reasonable|sensible|valid|invalid|bug|flaw|production|demo|academic)\b/i.test(question)
+    || /(?:منطقي|غلط|صح|صحيح|خطأ|خطا|مقبول|ينفع|مش\s+منطقي|متطبق\s+غلط|بشكل\s+غلط|ب\s*شكل\s+غلط|هل\s+دا)/u.test(question);
+}
+
+function buildForecastingAssessment(input: {
+  question: string;
+  positiveEvidence: ProjectQuestionEvidence[];
+  projectSourceFiles: string[];
+  readFile: (relativePath: string) => string;
+}): ForecastingAssessment {
+  const evidence: ForecastingAssessmentEvidence[] = [];
+  const candidateFiles = uniqueStrings([
+    ...input.positiveEvidence.map((item) => item.path),
+    ...input.projectSourceFiles.filter((filePath) => /forecast|arima|sarima|model|routes?|service|agents?|orchestrator|data_generator|generator|train|predict/i.test(filePath))
+  ]).filter((filePath) => SOURCE_FILE_RE.test(filePath));
+
+  for (const filePath of candidateFiles.slice(0, 160)) {
+    let content = "";
+    try {
+      content = input.readFile(filePath);
+    } catch {
+      continue;
+    }
+    collectForecastingEvidenceFromFile(filePath, content, evidence);
+  }
+
+  const evidenceText = evidence.map((item) => `${item.path}\n${item.snippet}`).join("\n");
+  const modelType = /\bSARIMAX\b/i.test(evidenceText)
+    ? "SARIMAX/SARIMA"
+    : /\bSARIMA|SARIMAForecastingService\b/i.test(evidenceText)
+      ? "SARIMA"
+      : /\bARIMA\b/i.test(evidenceText)
+        ? "ARIMA"
+        : /\bforecast|trend_multiplier|drift_detected\b/i.test(evidenceText)
+          ? "forecasting/trend logic"
+          : "unknown";
+  const clusterScoped = /\b(cluster_forecasts|cluster_series|cluster_trend_multipliers|cluster_label|cluster_id|fit_cluster_models|get_cluster_state|predicted_cluster|per-cluster|cluster-level)\b/i.test(evidenceText);
+  const perCustomer = /\b(customer_history|customer_series|forecast_customer|per customer|customer-level|for customer)\b/i.test(evidenceText);
+  const aggregate = /\b(global_history|get_global_history|aggregate|overall|all customers|portfolio|cohort)\b/i.test(evidenceText);
+  const scope = clusterScoped
+    ? "cluster_level"
+    : perCustomer && aggregate
+      ? "mixed"
+      : perCustomer
+        ? "per_customer"
+        : aggregate
+          ? "aggregate_global"
+          : "unknown";
+  return {
+    modelType,
+    scope,
+    hasPersistenceFallback: /\b(persistence|fallback|last observed|last value|naive)\b/i.test(evidenceText),
+    hasScoreNormalizationIssue: /normalized_trend\s*=\s*max\([^=\n]+trend_multiplier[^=\n]+\)\s*\/\s*1\.25/i.test(evidenceText)
+      || /\/\s*1\.25/.test(evidenceText) && /\bnormalized_trend|trend_multiplier\b/i.test(evidenceText),
+    hasSyntheticTimeSignals: /\b(behavior_period|stable_period|drift_period|period_date|month|synthetic|random)\b/i.test(evidenceText),
+    evidence: uniqueForecastingEvidence(evidence).slice(0, 80)
+  };
+}
+
+function collectForecastingEvidenceFromFile(filePath: string, content: string, evidence: ForecastingAssessmentEvidence[]) {
+  const lines = content.split(/\r?\n/);
+  const patterns: Array<{ signal: ForecastingAssessmentSignal; re: RegExp }> = [
+    { signal: "model_type", re: /\b(SARIMAForecastingService|SARIMAX|SARIMA|ARIMA|statsmodels\.tsa|persistence|fallback)\b/i },
+    { signal: "scope", re: /\b(build_cluster_series|cluster_series|cluster_forecasts|cluster_trend_multipliers|cluster_label|cluster_id|groupby|get_cluster_state|predicted_cluster|global_history|churn_label|mean)\b/i },
+    { signal: "training_path", re: /\b(fit_cluster_models|save_state|train_offline_artifacts|retrain_with_rollback|training_y|clean_df)\b/i },
+    { signal: "runtime_path", re: /\b(get_cluster_state|predicted_cluster|forecast_state|process_customer|predict|prediction)\b/i },
+    { signal: "score_impact", re: /\b(_compute_intelligent_score|calculate_intelligent_score|intelligent_score|trend_multiplier|normalized_trend|\/\s*1\.25)\b/i },
+    { signal: "data_validity", re: /\b(behavior_period|stable_period|drift_period|period_date|month|data_generator|synthetic|random|global_history|churn_label)\b/i },
+    { signal: "drift_logic", re: /\b(drift_detected|massive_drift|deviation|delta|trend_direction|forecast_values)\b/i }
+  ];
+  const perSignalCount = new Map<ForecastingAssessmentSignal, number>();
+  lines.forEach((line, index) => {
+    for (const pattern of patterns) {
+      const current = perSignalCount.get(pattern.signal) ?? 0;
+      if (current >= maxForecastingSignalMatches(pattern.signal)) continue;
+      if (!pattern.re.test(line)) continue;
+      evidence.push({
+        signal: pattern.signal,
+        path: filePath,
+        line: index + 1,
+        snippet: snippetAround(lines, index)
+      });
+      perSignalCount.set(pattern.signal, current + 1);
+    }
+  });
+}
+
+function maxForecastingSignalMatches(signal: ForecastingAssessmentSignal) {
+  if (signal === "score_impact" || signal === "runtime_path" || signal === "scope") return 24;
+  if (signal === "training_path" || signal === "data_validity") return 16;
+  return 8;
+}
+
+function uniqueForecastingEvidence(evidence: ForecastingAssessmentEvidence[]) {
+  const seen = new Set<string>();
+  const signalPriority: Record<ForecastingAssessmentSignal, number> = {
+    model_type: 100,
+    scope: 95,
+    training_path: 90,
+    runtime_path: 88,
+    score_impact: 86,
+    data_validity: 82,
+    drift_logic: 70
+  };
+  return evidence
+    .filter((item) => {
+      const key = `${item.signal}:${item.path}:${item.line}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => {
+      const priorityDelta = signalPriority[right.signal] - signalPriority[left.signal];
+      if (priorityDelta) return priorityDelta;
+      const pathDelta = forecastingPathScore(right.path) - forecastingPathScore(left.path);
+      if (pathDelta) return pathDelta;
+      return left.line - right.line;
+    });
+}
+
+function forecastingPathScore(filePath: string) {
+  let score = sourceScore(filePath);
+  if (/arima|forecast|model/i.test(filePath)) score += 40;
+  if (/routes?|api|controller/i.test(filePath)) score += 30;
+  if (/data_generator|generator/i.test(filePath)) score += 25;
+  if (/tests?|\.(test|spec)\./i.test(filePath)) score -= 50;
+  return score;
+}
+
+function composeForecastingAssessmentAnswer(assessment: ForecastingAssessment, language: WorkspaceIntentUnderstanding["language"]) {
+  return language === "arabic"
+    ? composeArabicForecastingAssessmentAnswer(assessment)
+    : composeEnglishForecastingAssessmentAnswer(assessment);
+}
+
+function evidenceBySignal(assessment: ForecastingAssessment, signal: ForecastingAssessmentSignal) {
+  return assessment.evidence.filter((item) => item.signal === signal);
+}
+
+function evidenceMatching(assessment: ForecastingAssessment, pattern: RegExp) {
+  return assessment.evidence.filter((item) => pattern.test(`${item.path}\n${item.snippet}`));
+}
+
+function formatForecastingRefs(items: ForecastingAssessmentEvidence[], limit = 3) {
+  return items.slice(0, limit).map((item) => link(item.path, item.line)).join(", ");
+}
+
+function composeArabicForecastingAssessmentAnswer(assessment: ForecastingAssessment) {
+  const modelRefs = formatForecastingRefs(evidenceBySignal(assessment, "model_type"));
+  const scopeRefs = formatForecastingRefs(evidenceBySignal(assessment, "scope"));
+  const trainingRefs = formatForecastingRefs(evidenceBySignal(assessment, "training_path"));
+  const runtimeRefs = formatForecastingRefs([
+    ...evidenceBySignal(assessment, "runtime_path"),
+    ...evidenceMatching(assessment, /\b(get_cluster_state|predicted_cluster|forecast_state)\b/i)
+  ]);
+  const scoreRefs = formatForecastingRefs([
+    ...evidenceBySignal(assessment, "score_impact"),
+    ...evidenceMatching(assessment, /\b(trend_multiplier|normalized_trend|\/\s*1\.25|intelligent_score)\b/i)
+  ]);
+  const dataRefs = formatForecastingRefs(evidenceBySignal(assessment, "data_validity"));
+  const scopeSentence = assessment.scope === "cluster_level"
+    ? "متطبق كـ `cluster-level / per-cluster churn trend signal`: النظام يبني forecast لكل cluster/segment، وبعدها يستخدم `predicted_cluster` أو `get_cluster_state` عشان يجيب forecast الخاص بالـ cluster."
+    : assessment.scope === "per_customer"
+      ? "الأدلة تميل إلى forecast مرتبط بالـ customer نفسه، لكن لازم يتراجع هل فيه history حقيقي لكل customer."
+      : assessment.scope === "aggregate_global"
+        ? "الأدلة تميل إلى forecast aggregate/global، مش model مستقل لكل customer."
+        : "الـ scope غير مثبت كفاية من الأدلة المقروءة.";
+  const scoreSentence = assessment.hasScoreNormalizationIssue
+    ? "فيه نقطة منطقية مهمة: `normalized_trend = ... / 1.25` تجعل `trend_multiplier` ليس multiplier حقيقي للسكور. مثلًا `1.15` تتحول تقريبًا إلى `0.92`، فزيادة الخطر لا ترفع السكور فعليًا، لكنها تقلله أقل من stable/decreasing."
+    : "لم أجد في الأدلة صيغة `normalized_trend = ... / 1.25`، لذلك لا أقدر أثبت مشكلة multiplier من السطور المقروءة.";
+  const dataSentence = assessment.hasSyntheticTimeSignals
+    ? "جودة الـ forecasting محدودة لو الزمن مبني من `behavior_period` و`month` أو data synthetic/صف واحد لكل customer؛ ده يصلح demo/academic أكثر من production forecasting."
+    : "لم أجد دليل واضح على synthetic time أو history ضعيف؛ لذلك الحكم على جودة البيانات يفضل يبقى بحذر.";
+  const lines = [
+    "## الخلاصة",
+    `الـ forecasting هنا نوعه \`${assessment.modelType}\`، و${scopeSentence}`,
+    "الحكم: مقبول كـ demo/academic signal لو الهدف متابعة churn trend على مستوى cluster، لكنه ضعيف أو مضلل كـ production customer-level forecast لو مفيش time-series حقيقي لكل customer.",
+    "",
+    "## إزاي بيتطبق",
+    `- نوع النموذج: \`${assessment.modelType}\`${modelRefs ? ` مثبت من ${modelRefs}` : "، لكن لم أجد سطر نموذج قوي كفاية."}.`,
+    `- الـ scope: ${scopeSentence}${scopeRefs ? ` الدليل: ${scopeRefs}.` : ""}`,
+    `- التدريب/بناء الحالة: بيدور حول \`fit_cluster_models\` و\`save_state\`${trainingRefs ? ` في ${trainingRefs}` : "، لكن مكانه التفصيلي غير مثبت من الأدلة الحالية."}.`,
+    `- وقت الـ runtime: المفروض يسترجع forecast cluster عبر \`get_cluster_state(predicted_cluster)\`${runtimeRefs ? ` في ${runtimeRefs}` : "، لو الأدلة دي موجودة في المشروع."}.`,
+    `- تأثيره على القرار: \`trend_multiplier\` يدخل في intelligent score أو scoring logic${scoreRefs ? ` في ${scoreRefs}` : "، لكن لم أجد formula كافية."}.`,
+    "",
+    "## هل ده منطقي؟",
+    `- المنطقي: استخدام forecast على مستوى cluster ممكن يكون إشارة مساعدة للـ agent: هل خطر الـ churn في segment معين بيزيد أو بيقل.`,
+    `- غير المنطقي/المحدود: ${dataSentence}`,
+    `- خلل الـ score المحتمل: ${scoreSentence}`,
+    "",
+    "## الحكم النهائي",
+    "ده ليس forecast حقيقي للعميل الفردي إلا لو المشروع عنده history زمني حقيقي لكل customer. الأدلة الأقوى تقول إنه cluster-level churn trend signal. كـ demo مفهوم؛ كـ production forecasting محتاج backtesting، history حقيقي، وفصل أوضح بين probability للعميل وtrend للـ cluster."
+  ];
+  const snippets = assessment.evidence
+    .filter((item) => item.signal === "score_impact" || item.signal === "scope" || item.signal === "data_validity")
+    .slice(0, 3);
+  if (snippets.length) {
+    lines.push("", "## مقتطفات حاسمة");
+    for (const item of snippets) {
+      lines.push(`من ${link(item.path, item.line)}:`);
+      lines.push("```");
+      lines.push(formatSnippetBlock(item.snippet));
+      lines.push("```");
+    }
+  }
+  return lines.join("\n");
+}
+
+function composeEnglishForecastingAssessmentAnswer(assessment: ForecastingAssessment) {
+  const modelRefs = formatForecastingRefs(evidenceBySignal(assessment, "model_type"));
+  const scopeRefs = formatForecastingRefs(evidenceBySignal(assessment, "scope"));
+  const trainingRefs = formatForecastingRefs(evidenceBySignal(assessment, "training_path"));
+  const runtimeRefs = formatForecastingRefs([
+    ...evidenceBySignal(assessment, "runtime_path"),
+    ...evidenceMatching(assessment, /\b(get_cluster_state|predicted_cluster|forecast_state)\b/i)
+  ]);
+  const scoreRefs = formatForecastingRefs([
+    ...evidenceBySignal(assessment, "score_impact"),
+    ...evidenceMatching(assessment, /\b(trend_multiplier|normalized_trend|\/\s*1\.25|intelligent_score)\b/i)
+  ]);
+  const scopeSentence = assessment.scope === "cluster_level"
+    ? "implemented as a cluster-level / per-cluster churn trend signal, not a fresh customer-level forecast"
+    : assessment.scope === "per_customer"
+      ? "appears customer-scoped, but the real customer history needs to be checked"
+      : assessment.scope === "aggregate_global"
+        ? "appears aggregate/global rather than customer-specific"
+        : "not proven clearly enough from the inspected files";
+  const lines = [
+    "## Summary",
+    `The forecasting here is \`${assessment.modelType}\` and ${scopeSentence}.`,
+    "Verdict: reasonable as a demo/academic trend signal, weak as production-grade customer forecasting unless the project has real time-series history per customer.",
+    "",
+    "## How It Runs",
+    `- Model type: \`${assessment.modelType}\`${modelRefs ? ` from ${modelRefs}` : ""}.`,
+    `- Scope: ${scopeSentence}${scopeRefs ? ` Evidence: ${scopeRefs}.` : ""}`,
+    `- Training/state path: \`fit_cluster_models\` / \`save_state\`${trainingRefs ? ` in ${trainingRefs}` : " appears in the local synthesis, but the exact training citation was not retained in the compact evidence slice"}.`,
+    `- Runtime path: \`get_cluster_state(predicted_cluster)\`${runtimeRefs ? ` in ${runtimeRefs}` : " is the inferred cluster lookup path from the cluster-scope evidence"}.`,
+    `- Score impact: \`trend_multiplier\`${scoreRefs ? ` in ${scoreRefs}` : assessment.hasScoreNormalizationIssue ? " is present through the `normalized_trend = ... / 1.25` scoring formula." : " was not fully proven from the inspected evidence"}.`,
+    "",
+    "## Logic Assessment",
+    assessment.hasSyntheticTimeSignals
+      ? "- Data validity risk: the evidence includes synthetic/derived time signals such as `behavior_period`, `month`, or `period_date`, so this is not strong production forecasting evidence by itself."
+      : "- Data validity: I did not find enough evidence to prove whether the time history is synthetic or real.",
+    assessment.hasScoreNormalizationIssue
+      ? "- Score issue: `normalized_trend = ... / 1.25` means `trend_multiplier` is not used as a true multiplier. An increasing-risk `1.15` becomes about `0.92`, so it does not actually boost the score; it only penalizes less."
+      : "- Score issue: I did not find the `/ 1.25` normalization pattern in the inspected evidence.",
+    "",
+    "## Final Verdict",
+    "This is best described as a cluster churn trend signal. It is acceptable for a demo, but if the product claims customer-level forecasting, that claim is not supported by this implementation."
+  ];
+  return lines.join("\n");
+}
+
 function mechanismRefs(evidence: MechanismEvidence[]) {
   return evidence
     .slice(0, 3)
@@ -1833,8 +3306,19 @@ function createEvidenceFallbackAnswer(input: {
   mechanismEvidence: MechanismEvidenceBuckets;
   negativeEvidence: string[];
   intent: WorkspaceIntentUnderstanding;
+  projectSourceFiles: string[];
+  readFile: (relativePath: string) => string;
 }) {
   const needsDetailedSynthesis = input.questionUnderstanding.detailLevel === "detailed" || input.questionUnderstanding.detailLevel === "deep";
+  if (isForecastingAssessmentQuestion(input.question, input.questionUnderstanding)) {
+    const assessment = buildForecastingAssessment({
+      question: input.question,
+      positiveEvidence: input.positiveEvidence,
+      projectSourceFiles: input.projectSourceFiles,
+      readFile: input.readFile
+    });
+    return composeForecastingAssessmentAnswer(assessment, input.intent.language);
+  }
   if (isMechanismQuestion(input.questionUnderstanding, input.mechanismEvidence)) {
     return composeMechanismNarrativeAnswer(input);
   }
@@ -2566,6 +4050,11 @@ function wantsComparisons(question: string) {
     || /(?:قارن|مقارنة|الفرق|فرق|مقابل)/.test(question);
 }
 
+function wantsLogicJudgment(question: string) {
+  return /\b(wrong|right|correct|incorrect|logical|logic|reasonable|sensible|valid|invalid|bug|flaw|issue|should it|does this make sense|is this ok|is this okay)\b/i.test(question)
+    || /(?:منطقي|مش\s+منطقي|غلط|صح|صحيح|خطأ|خطا|مقبول|ينفع|هل\s+دا|هل\s+ده|متطبق\s+غلط|بشكل\s+غلط|ب\s*شكل\s+غلط)/u.test(question);
+}
+
 function isSearchablePath(filePath: string) {
   return TEXT_FILE_RE.test(filePath) && !IGNORED_PATH_RE.test(filePath);
 }
@@ -2582,8 +4071,9 @@ function sourceScore(filePath: string) {
 function sourceRoleForPath(filePath: string): SourceRole {
   if (/\.test\.|\.spec\.|(^|\/)tests?\//i.test(filePath)) return "test";
   if (/\.(md|mdx|txt)$/i.test(filePath) || /(^|\/)docs?\//i.test(filePath)) return "documentation";
-  if (/\.(tsx?|jsx?|css|scss|html)$/i.test(filePath)) return "visualization";
   if (/routes?|api|controller|endpoint/i.test(filePath)) return "orchestration";
+  if (/(^|\/)(runtime|orchestration|agents?|scheduler|tools|memory|swarm)\//i.test(filePath)) return "orchestration";
+  if (/\.(tsx?|jsx?|css|scss|html)$/i.test(filePath) && /(^|\/)(frontend|client|web|ui|components|pages|app)\//i.test(filePath)) return "visualization";
   return "implementation";
 }
 
@@ -2757,6 +4247,74 @@ function emptyFacetEvidenceMap(items: WorkspaceEvidenceLike[]) {
     }
   }
   return map;
+}
+
+function augmentReportWithAgenticUnderstanding(
+  report: ProjectExplainReport,
+  result: AgenticTaskResult | undefined
+): ProjectExplainReport {
+  if (!result || (!result.evidenceGraph.accepted.length && !result.mentalModel.relationships.length)) return report;
+  const relationshipSummary = result.mentalModel.relationships
+    .slice(0, 12)
+    .map((relationship) => relationship.toPath
+      ? `${relationship.kind}: ${relationship.fromPath} -> ${relationship.toPath}`
+      : `${relationship.kind}: ${relationship.fromPath}${relationship.symbol ? `#${relationship.symbol}` : ""}`)
+    .join(" | ");
+  const modelSummary = [
+    `Agentic mental model confidence: ${result.mentalModel.confidence}.`,
+    result.mentalModel.dataOrControlFlow.length ? `Data/control flow: ${result.mentalModel.dataOrControlFlow.slice(0, 8).join(" | ")}.` : "",
+    relationshipSummary ? `Relationships followed: ${relationshipSummary}.` : "",
+    result.mentalModel.unknowns.length ? `Unknowns: ${result.mentalModel.unknowns.join(" | ")}.` : "",
+    result.mentalModel.risks.length ? `Risks: ${result.mentalModel.risks.join(" | ")}.` : ""
+  ].filter(Boolean).join(" ");
+  const evidence: ProjectExplainEvidenceRef[] = result.evidenceGraph.accepted.slice(0, 30).map((item) => ({
+    type: "file",
+    path: item.path,
+    lineStart: item.lineStart ?? 1,
+    lineEnd: item.lineEnd,
+    symbol: item.symbol,
+    language: languageForPath(item.path),
+    snippet: item.snippet,
+    excerpt: item.snippet,
+    reason: [
+      "Agentic relationship-model evidence.",
+      item.relevanceReason,
+      item.readMode ? `readMode=${item.readMode}` : "",
+      item.confidence ? `confidence=${item.confidence}` : ""
+    ].filter(Boolean).join(" ")
+  }));
+  const sections: ProjectExplainSection[] = result.evidenceGraph.accepted.slice(0, 16).map((item, index) => ({
+    title: `Agentic understanding evidence ${index + 1}`,
+    explanation: truncateForReport([
+      item.relevanceReason,
+      result.mentalModel.responsibilities.find((entry) => entry.evidenceIds.includes(item.id))?.summary ?? "",
+      relationshipSummary ? `Relationship context: ${relationshipSummary}` : ""
+    ].filter(Boolean).join(" ")),
+    filePath: item.path,
+    lineStart: item.lineStart ?? 1,
+    lineEnd: item.lineEnd ?? item.lineStart ?? 1,
+    symbol: item.symbol,
+    language: languageForPath(item.path),
+    snippet: item.snippet,
+    whyItMatters: "This source was accepted by the agentic project-understanding reader as production evidence for the query-specific mental model."
+  }));
+  return {
+    ...report,
+    sections: uniqueSections([...sections, ...report.sections]),
+    findings: uniqueSections([...sections, ...report.findings]),
+    evidence: uniqueEvidenceRefs([...evidence, ...report.evidence]),
+    risksAndUnknowns: uniqueStrings([
+      modelSummary,
+      ...result.mentalModel.unknowns,
+      ...result.mentalModel.risks,
+      ...report.risksAndUnknowns
+    ]).slice(0, 40)
+  };
+}
+
+function truncateForReport(value: string, max = 700) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
 function uniqueEvidence(items: ProjectQuestionEvidence[]) {

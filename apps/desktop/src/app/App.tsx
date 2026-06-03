@@ -58,10 +58,12 @@ import { accessProfileDefaults, defaultSafetySettings } from "@hivo/protocol";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   approveRuntimePatch,
+  assertRuntimeAvailable,
   createRuntimeSession,
   getRuntimeSession,
   rejectRuntimePatch,
   reportRuntimePatchApplyResult,
+  RuntimeUnavailableError,
   runRuntimeTurn,
   subscribeRuntimeEvents
 } from "../lib/agentRuntime";
@@ -89,7 +91,7 @@ import {
   type ModelProviderConfigInput
 } from "../lib/tauri";
 import { canAutoRunRuntimeCommand, executeRuntimeCommandRequest } from "../lib/terminalOrchestrator";
-import { buildPrimaryActivityItems, describeCurrentStep, type ActivityStreamItem, type ActiveRuntimeCommand } from "./activityStream";
+import { buildPrimaryActivityItems, describeCurrentStep, describeNextProgressStep, type ActivityStreamItem, type ActiveRuntimeCommand } from "./activityStream";
 
 type ProviderPreset = {
   label: string;
@@ -325,6 +327,7 @@ export function App() {
   const [bootstrapped, setBootstrapped] = useState(false);
   const progressRailCloseTimerRef = useRef<number | null>(null);
   const titleMigrationStartedRef = useRef(false);
+  const accessMenuShellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -408,6 +411,27 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(PET_VISIBLE_KEY, hivoPetVisible ? "true" : "false");
   }, [hivoPetVisible]);
+
+  useEffect(() => {
+    if (!accessMenuOpen) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Node && accessMenuShellRef.current?.contains(target)) return;
+      setAccessMenuOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setAccessMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [accessMenuOpen]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(sidebarWidth)));
@@ -978,6 +1002,8 @@ export function App() {
       const sessionId = canReuseSession
         ? runtimeSession.id
         : await (async () => {
+            await assertRuntimeAvailable();
+            setRuntimeConnectionState("connected");
             const trustProfile = accessProfile === "auto_review" || accessProfile === "bounded_autonomy" || accessProfile === "full_access" ? "trusted_internal" : "strict_gated";
             const rustRun = await createRuntimeRun(input, trustProfile);
             sessionToken = rustRun.sessionToken;
@@ -991,7 +1017,8 @@ export function App() {
                     providerName: providerConfig.providerName,
                     baseUrl: providerConfig.baseUrl,
                     selectedModel: providerConfig.selectedModel,
-                    isValid: providerConfig.isValid
+                    isValid: providerConfig.isValid,
+                    apiKeyConfigured: providerConfig.apiKeyConfigured
                   }
                 : undefined;
             if (!wantsDemoProvider && !sanitizedProvider?.isValid) {
@@ -1001,6 +1028,7 @@ export function App() {
               await createRuntimeSession({
                 workspacePath: workspace.path,
                 mode: wantsDemoProvider ? "demo_mock" : "real_provider",
+                requireRealProvider: !wantsDemoProvider,
                 trustProfile,
                 providerConfig: sanitizedProvider,
                 activeProviderSource: wantsDemoProvider ? "runtime_default" : "desktop_saved_provider",
@@ -1032,7 +1060,12 @@ export function App() {
             (nextSession.status === "needs_approval" ? "Session is waiting for operator review." : "Session updated.")
       );
     } catch (error) {
-      setMessage(String(error));
+      if (error instanceof RuntimeUnavailableError) {
+        setRuntimeConnectionState("disconnected");
+        setMessage(error.message);
+      } else {
+        setMessage(String(error));
+      }
     } finally {
       setAgentBusy(false);
     }
@@ -1824,7 +1857,7 @@ export function App() {
                 />
                 <div className="composer-input-actions">
                   <div className="composer-input-left">
-                    <div className="access-menu-shell">
+                    <div className="access-menu-shell" ref={accessMenuShellRef}>
                       <button
                         className={`composer-chip access-chip ${accessProfile === "full_access" ? "danger-access-chip" : ""}`}
                         onClick={() => setAccessMenuOpen((current) => !current)}
@@ -1844,7 +1877,6 @@ export function App() {
                               type="button"
                             >
                               <strong>{option.label}</strong>
-                              <span>{option.description}</span>
                             </button>
                           ))}
                         </div>
@@ -2061,6 +2093,14 @@ export function App() {
                 <X size={16} />
               </button>
             </div>
+
+            <DrawerSection title="Live Progress">
+              {runtimeSession ? (
+                <LiveProgressDrawer session={runtimeSession} />
+              ) : (
+                <p className="muted">No active run progress yet.</p>
+              )}
+            </DrawerSection>
 
             <DrawerSection title="Session">
               {runtimeSession ? (
@@ -2300,6 +2340,7 @@ function ThreadFeed({
   const latestAssistantMessageId =
     lastAssistantMessageIndex >= 0 ? session.messages[lastAssistantMessageIndex]?.id ?? "" : "";
   const waitingForAssistant = agentBusy && lastUserMessageIndex > lastAssistantMessageIndex;
+  const currentActivityStep = describeCurrentStep(session, connectionState, activeRuntimeCommand);
   const animatedAssistantMessageIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -2367,7 +2408,7 @@ function ThreadFeed({
           <div className="thread-entry-header">
             <div className="thread-entry-label">{session.agentName}</div>
           </div>
-          <TypingIndicator />
+          <LiveRunStatus item={currentActivityStep} onOpenActivity={onOpenActivity} />
         </div>
       ) : null}
 
@@ -2495,14 +2536,87 @@ function AnimatedMessageMarkdown({
   );
 }
 
-function TypingIndicator() {
+function LiveRunStatus({
+  item,
+  onOpenActivity
+}: {
+  item: ActivityStreamItem;
+  onOpenActivity: () => void;
+}) {
+  const summary = item.summary || "Starting local run...";
+  const displayableSummary = stripProgressRationalePrefix(summary);
+  const [displaySummary, setDisplaySummary] = useState(displayableSummary);
+  const targetFiles = item.targetFiles?.slice(0, 3) ?? [];
+  const extraFileCount = Math.max(0, (item.targetFiles?.length ?? 0) - targetFiles.length);
+
+  useEffect(() => {
+    const tokens = tokenizeForReveal(displayableSummary);
+    let cancelled = false;
+    let cursor = 0;
+    let timer: number | undefined;
+
+    setDisplaySummary("");
+
+    const step = () => {
+      if (cancelled) return;
+      cursor = Math.min(tokens.length, cursor + 1);
+      setDisplaySummary(tokens.slice(0, cursor).join(""));
+      if (cursor < tokens.length) {
+        timer = window.setTimeout(step, cursor < 18 ? 22 : 34);
+      }
+    };
+
+    step();
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [displayableSummary, item.id]);
+
   return (
-    <div className="typing-indicator" aria-label="Assistant is typing">
-      <span />
-      <span />
-      <span />
+    <div
+      className={`live-run-status ${item.status}`}
+      aria-label="Show live progress details"
+      aria-live="polite"
+      onClick={onOpenActivity}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenActivity();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="live-run-status-top">
+        <span className={`live-run-status-dot ${item.status}`} />
+        <strong>{item.title || "Starting local run"}</strong>
+        {item.stage ? <small>{item.stage}</small> : null}
+      </div>
+      {item.rationaleLabel ? <div className="live-run-reason-label">{item.rationaleLabel}</div> : null}
+      <div className="live-run-status-copy" key={item.id}>
+        {displaySummary}
+        {displaySummary !== displayableSummary ? <span className="message-typing-cursor" aria-hidden="true" /> : null}
+      </div>
+      <div className="live-run-status-bottom">
+        {item.nextStepTitle ? (
+          <span className="live-run-next-step">{item.nextLabel ?? "Next"}: {item.nextStepTitle}</span>
+        ) : targetFiles.length ? (
+          <div className="live-run-file-row" aria-label="Target files">
+            {targetFiles.map((file) => (
+              <span key={file}>{file}</span>
+            ))}
+            {extraFileCount ? <span>+{extraFileCount}</span> : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function stripProgressRationalePrefix(text: string) {
+  return text.replace(/^(Why this step|ليه الخطوة دي)\s*:\s*/i, "");
 }
 
 function tokenizeForReveal(text: string) {
@@ -3340,7 +3454,8 @@ function ProgressHoverRail({
   onRunPendingCommands: () => void;
 }) {
   const title = currentStep.status === "completed" ? "Finished" : "Working now";
-  const visibleItems = items.slice(-6).reverse();
+  const visibleItems = [...items].reverse();
+  const nextStep = session ? describeNextProgressStep(session, currentStep) : currentStep.nextStepTitle;
   return (
     <div className="progress-rail-shell">
       <div className="progress-rail-hotzone" aria-hidden="true" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} />
@@ -3350,6 +3465,7 @@ function ProgressHoverRail({
           <span>{currentStep.title}</span>
         </div>
         <p className="progress-rail-summary">{currentStep.summary}</p>
+        {nextStep ? <p className="progress-rail-next">{currentStep.nextLabel ?? "Next"}: {nextStep}</p> : null}
         <div className="progress-rail-list">
           {visibleItems.map((item) => (
             <div key={item.id} className={`progress-rail-item ${item.status}`}>
@@ -3357,6 +3473,7 @@ function ProgressHoverRail({
               <div>
                 <strong>{item.title}</strong>
                 <span>{item.summary}</span>
+                {item.targetFiles?.length ? <small>{item.targetFiles.slice(0, 3).join(", ")}</small> : null}
               </div>
             </div>
           ))}
@@ -3370,6 +3487,43 @@ function ProgressHoverRail({
           <button onClick={onOpenActivity}>Show details</button>
         </div>
       </aside>
+    </div>
+  );
+}
+
+function LiveProgressDrawer({ session }: { session: AgentRuntimeSession }) {
+  const events = session.progressEvents;
+  if (!events.length) {
+    return (
+      <div className="timeline-list drawer-progress-list">
+        <div className="timeline-item running">
+          <span className="timeline-dot" />
+          <div>
+            <strong>Starting local run</strong>
+            <span>Starting local run...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="timeline-list drawer-progress-list">
+      {events.map((event) => (
+        <div key={event.id} className={`timeline-item ${event.status}`}>
+          <span className="timeline-dot" />
+          <div>
+            <strong>{event.taskTitle ?? event.stage}</strong>
+            <span>
+              {event.agentName ? `${event.agentName} | ` : ""}
+              {event.summary}
+            </span>
+            <small>
+              {event.stage}
+              {event.targetFiles.length ? ` | ${event.targetFiles.slice(0, 4).join(", ")}` : ""}
+            </small>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3754,7 +3908,7 @@ function ReviewGateCard({ session }: { session: AgentRuntimeSession }) {
 }
 
 function ProgressTimeline({ session }: { session: AgentRuntimeSession }) {
-  const events = session.progressEvents.slice(-12);
+  const events = session.progressEvents;
   if (!events.length && session.status !== "running") return null;
   return (
     <section className="run-card timeline-card">
@@ -4682,6 +4836,7 @@ function humanSessionStatus(
   if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
+  if (session.status === "failed_provider") return "Provider failed";
   if (session.status === "failed") return "Run failed";
   return "Session active";
 }
@@ -4698,6 +4853,9 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   }
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
     return session.runToGreen?.blockerReason ?? "The run needs attention before it can continue.";
+  }
+  if (session.status === "failed_provider") {
+    return "The real provider failed or was unavailable, and no mock response was used.";
   }
   if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
     return "A reviewed patch is waiting for explicit apply.";
@@ -4808,6 +4966,8 @@ function humanizeRuntimeStatus(status: string) {
   switch (status) {
     case "blocked":
       return "needs attention";
+    case "failed_provider":
+      return "provider failed";
     case "needs_approval":
       return "waiting for review";
     case "completed":

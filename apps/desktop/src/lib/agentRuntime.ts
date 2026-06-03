@@ -13,9 +13,49 @@ import type {
 
 const runtimeBaseUrl = import.meta.env.VITE_AGENT_RUNTIME_URL ?? "http://127.0.0.1:4317";
 
+export type RuntimeHealth = {
+  status: "ok";
+  mode: "demo_mock" | "real_provider";
+};
+
+export class RuntimeUnavailableError extends Error {
+  readonly code = "runtime_unavailable";
+
+  constructor(message = "Agent runtime disconnected. Start or restart the agent-runtime service on 127.0.0.1:4317, then retry.") {
+    super(message);
+    this.name = "RuntimeUnavailableError";
+  }
+}
+
+export async function checkRuntimeHealth(timeoutMs = 2500): Promise<RuntimeHealth> {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${runtimeBaseUrl}/health`, { signal: controller.signal });
+    if (!response.ok) {
+      throw new RuntimeUnavailableError(`Agent runtime disconnected. /health returned HTTP ${response.status}.`);
+    }
+    const health = await response.json() as RuntimeHealth;
+    if (health.status !== "ok") {
+      throw new RuntimeUnavailableError("Agent runtime disconnected. /health did not report an ok runtime.");
+    }
+    return health;
+  } catch (error) {
+    if (error instanceof RuntimeUnavailableError) throw error;
+    throw new RuntimeUnavailableError();
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
+}
+
+export async function assertRuntimeAvailable() {
+  return checkRuntimeHealth();
+}
+
 export async function createRuntimeSession(input: {
   workspacePath: string;
   mode: "demo_mock" | "real_provider";
+  requireRealProvider?: boolean;
   trustProfile?: "strict_gated" | "trusted_internal";
   providerConfig?: AgentRuntimeSession["providerConfig"];
   activeProviderSource?: AgentRuntimeSession["activeProviderSource"];
@@ -27,6 +67,7 @@ export async function createRuntimeSession(input: {
   userPrompt: string;
   safetySettings?: Partial<SafetySettings>;
 }) {
+  await assertRuntimeAvailable();
   return runtimeFetch<CreateRuntimeSessionResponse>("/sessions", {
     method: "POST",
     body: JSON.stringify(input)
@@ -34,6 +75,7 @@ export async function createRuntimeSession(input: {
 }
 
 export async function runRuntimeTurn(sessionId: string, message: string, sessionToken?: string) {
+  await assertRuntimeAvailable();
   return runtimeFetch<RuntimeTurnResponse>(`/sessions/${sessionId}/turn`, {
     method: "POST",
     body: JSON.stringify({ message }),
@@ -138,14 +180,19 @@ export function subscribeRuntimeEvents(
 
 async function runtimeFetch<T>(path: string, init?: RequestInit & { sessionToken?: string }): Promise<T> {
   const { sessionToken, ...requestInit } = init ?? {};
-  const response = await fetch(`${runtimeBaseUrl}${path}`, {
-    ...requestInit,
-    headers: {
-      "content-type": "application/json",
-      ...(sessionToken ? { "x-hivo-session-token": sessionToken } : {}),
-      ...(requestInit.headers ?? {})
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${runtimeBaseUrl}${path}`, {
+      ...requestInit,
+      headers: {
+        "content-type": "application/json",
+        ...(sessionToken ? { "x-hivo-session-token": sessionToken } : {}),
+        ...(requestInit.headers ?? {})
+      }
+    });
+  } catch {
+    throw new RuntimeUnavailableError();
+  }
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Runtime request failed with HTTP ${response.status}`);

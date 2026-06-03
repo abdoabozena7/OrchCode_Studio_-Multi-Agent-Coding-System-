@@ -110,6 +110,7 @@ export class SessionManager {
   async createSession(input: {
     workspacePath: string;
     mode: AgentRuntimeMode;
+    requireRealProvider?: boolean;
     executionMode?: AgentRuntimeSession["executionMode"];
     accessProfile?: AccessProfileInput;
     trustProfile?: import("@hivo/protocol").RunTrustProfile;
@@ -134,6 +135,7 @@ export class SessionManager {
       id: randomId("session"),
       workspacePath: input.workspacePath,
       mode: input.mode,
+      requireRealProvider: input.requireRealProvider,
       trustProfile,
       providerConfig: input.providerConfig,
       activeProviderSource: input.activeProviderSource,

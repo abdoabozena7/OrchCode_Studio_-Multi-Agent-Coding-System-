@@ -27,6 +27,7 @@ import {
   SecurityAgent,
 } from "../agents/workers/index.js";
 import { isThreeJsSnakePrompt, validateThreeJsSnakeProposal } from "../mock/threeJsSnake.js";
+import { createConversationUnderstanding } from "./ConversationUnderstanding.js";
 
 export class OrchestratedRuntime {
   constructor(private readonly sessionManager: SessionManager) {}
@@ -46,6 +47,8 @@ export class OrchestratedRuntime {
     if (lastMessage?.role !== "user" || lastMessage.content !== message) {
       await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
     }
+    const conversationUnderstanding = createConversationUnderstanding(message);
+    const orchestrationMessage = conversationUnderstanding.workspaceMessage || message;
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "running";
       draft.lifecycleStage = "PLAN";
@@ -72,7 +75,7 @@ export class OrchestratedRuntime {
         importantFiles: projectSummary.importantFiles
       };
 
-    const productBrief = new ProductOrchestrator().createBrief(message);
+    const productBrief = new ProductOrchestrator().createBrief(orchestrationMessage);
     await this.recordAgent(sessionId, "Product Orchestrator", "Product Orchestrator", "Create product brief");
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.orchestration!.productBrief = productBrief;
@@ -195,7 +198,7 @@ export class OrchestratedRuntime {
             businessBrief,
             technicalPlan: engineering.technicalPlan
           },
-          message
+          orchestrationMessage
         )
       });
       await this.sessionManager.updateSession(sessionId, (draft) => {
@@ -256,7 +259,7 @@ export class OrchestratedRuntime {
       });
       const result = await worker.execute(task, {
         sessionId,
-        userPrompt: message,
+        userPrompt: orchestrationMessage,
         workspacePath: session.workspacePath,
         projectMap,
         tools: toolsForWorker,
@@ -420,7 +423,7 @@ export class OrchestratedRuntime {
       outputs,
       mergeSummary.conflicts.map((conflict) => `Conflict on ${conflict.path}`)
     );
-    const qualityGates = runQualityGates(sessionId, message, session.patchProposals, outputs, securityReview.status === "passed", reviewerSummary.findings);
+    const qualityGates = runQualityGates(sessionId, orchestrationMessage, session.patchProposals, outputs, securityReview.status === "passed", reviewerSummary.findings);
     const gatesPassed = qualityGates.every((gate) => gate.status === "passed");
     await this.progress(sessionId, {
       stage: "reviewing",

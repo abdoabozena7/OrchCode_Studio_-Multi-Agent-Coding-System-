@@ -110,13 +110,36 @@ function conceptAliases(concept: string) {
   if (concept === "fcm") return ["fcm", "cmeans", "fuzzy c", "skfuzzy"];
   if (concept === "shap") return ["shap", "kernelexplainer", "shap_values"];
   if (concept === "sarima") return ["sarima", "sarimax", "arima"];
+  if (concept === "multi_agent_system") {
+    return [
+      "baseagent",
+      "reliabilityagent",
+      "forecastagent",
+      "clusterhealthagent",
+      "build_default_agents",
+      "reactorchestrator",
+      "agent_recommendations",
+      "agent_consensus",
+      "weighted_votes",
+      "choose_route",
+      "actionexecutor"
+    ];
+  }
   return [concept];
 }
 
 function summarizeConceptLine(concept: string, snippet: string) {
   if (concept === "dbscan") return "DBSCAN is applied in the clustering implementation, including its call, arguments, and assigned output.";
   if (concept === "fcm") return "Fuzzy C-Means is applied in the clustering implementation, including memberships or labels.";
-  return `The implementation applies ${concept} in this code block.`;
+  if (concept === "multi_agent_system") {
+    if (/\bbuild_default_agents\b/i.test(snippet)) return "Default specialist agents are assembled for runtime decision support.";
+    if (/\bclass\s+(?:BaseAgent|ReliabilityAgent|ForecastAgent|ClusterHealthAgent)\b/i.test(snippet)) return "A specialist agent class contributes recommendations, reasoning, or vote weight.";
+    if (/\bchoose_route\b|\bweighted_votes\b/i.test(snippet)) return "The central orchestrator weighs agent recommendations and chooses the final route.";
+    if (/\bagent_recommendations\b|\bagent_consensus\b/i.test(snippet)) return "Runtime traces keep agent recommendations and consensus visible for the decision.";
+    if (/\bActionExecutor\b/i.test(snippet)) return "The chosen route/action is handed to the action executor.";
+    return "This code is part of the specialist-agent and orchestrator decision path.";
+  }
+  return `This code block contains target-specific evidence for ${concept}.`;
 }
 
 function extractCallArgs(snippet: string) {

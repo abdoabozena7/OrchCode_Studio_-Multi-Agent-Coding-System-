@@ -18,6 +18,7 @@ import {
 import {
   inferWorkspaceIntent
 } from "./WorkspaceReasoningPipeline.js";
+import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
 import {
   evidencePathDecision,
   shouldIgnoreEvidenceDirectory
@@ -36,6 +37,7 @@ type BuildProjectExplainReportInput = {
   projectMap: ProjectMap;
   intake?: ProjectIntake;
   settings?: Partial<ProjectExplainSettings>;
+  conversationUnderstanding?: ConversationUnderstanding;
 };
 
 type InventoryFile = {
@@ -182,23 +184,31 @@ const SOURCE_EVIDENCE_EXT_RE = /\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|py|rs|ts|ts
 export function buildLargeProjectExplainReport(input: BuildProjectExplainReportInput): ProjectExplainReport {
   const settings = { ...DEFAULT_EXPLAIN_SETTINGS, ...input.settings };
   const workspaceRoot = resolveInsideWorkspace(input.workspacePath);
-  const inventory = collectInventory(workspaceRoot, settings.maxExplainFiles, input.message);
-  const modules = buildModules(inventory, input.projectMap, input.intake, settings, input.message);
-  const sampledFiles = readSampledFiles(workspaceRoot, inventory, modules, input, settings);
+  const conversationUnderstanding = input.conversationUnderstanding ?? createConversationUnderstanding(input.message);
+  const understandingMessage = conversationUnderstanding.workspaceMessage || input.message;
+  const workspaceIntent = conversationUnderstanding.workspaceIntent ?? inferWorkspaceIntent(input.message);
+  const understandingInput: BuildProjectExplainReportInput = {
+    ...input,
+    message: understandingMessage,
+    conversationUnderstanding
+  };
+  const inventory = collectInventory(workspaceRoot, settings.maxExplainFiles, understandingMessage);
+  const modules = buildModules(inventory, input.projectMap, input.intake, settings, understandingMessage);
+  const sampledFiles = readSampledFiles(workspaceRoot, inventory, modules, understandingInput, settings);
   const sampledByPath = new Map(sampledFiles.map((sample) => [sample.path, sample]));
-  const sections = createExplainSections(sampledFiles, input.message, settings);
+  const sections = createExplainSections(sampledFiles, understandingMessage, settings, workspaceIntent);
   const moduleMap = modules.map((module, index) => createExplainModule(module, index, sampledByPath, settings));
   const importantFiles = uniqueStrings([
     ...(input.intake?.importantFiles ?? []),
     ...input.projectMap.importantFiles,
     ...inventory.files.filter((file) => file.isManifest || file.isDoc || file.isEntryPoint).map((file) => file.path)
-  ].filter((file) => shouldIncludeAgentArtifact(file, input.message))).slice(0, 30);
+  ].filter((file) => shouldIncludeAgentArtifact(file, understandingMessage))).slice(0, 30);
   const entryPoints = uniqueStrings([
     ...(input.intake?.knownEntryPoints ?? []),
     ...input.projectMap.entryPoints,
     ...inventory.files.filter((file) => file.isEntryPoint).map((file) => file.path)
   ]).slice(0, 20);
-  const evidence = createReportEvidence(moduleMap, sampledFiles, importantFiles, input.message);
+  const evidence = createReportEvidence(moduleMap, sampledFiles, importantFiles, understandingMessage);
   const howToRun = uniqueStrings([
     ...(input.intake?.buildCommands ?? []),
     ...(input.intake?.knownCommands ?? []),
@@ -209,11 +219,11 @@ export function buildLargeProjectExplainReport(input: BuildProjectExplainReportI
     .sort((left, right) => right[1] - left[1])
     .map(([root, files]) => ({ path: root, files }))
     .slice(0, 30);
-  const risksAndUnknowns = createRisksAndUnknowns(input, inventory, moduleMap, entryPoints);
+  const risksAndUnknowns = createRisksAndUnknowns(understandingInput, inventory, moduleMap, entryPoints);
 
   return {
-    overview: createOverview(input, inventory, moduleMap),
-    architecture: createArchitectureSummary(input, rootFolders, moduleMap),
+    overview: createOverview(understandingInput, inventory, moduleMap),
+    architecture: createArchitectureSummary(understandingInput, rootFolders, moduleMap),
     sections,
     findings: sections,
     moduleMap,
@@ -253,11 +263,11 @@ export function buildLargeProjectExplainReport(input: BuildProjectExplainReportI
 function createExplainSections(
   sampledFiles: SampledFile[],
   message: string,
-  settings: ProjectExplainSettings
+  settings: ProjectExplainSettings,
+  workspaceIntent = inferWorkspaceIntent(message)
 ): ProjectExplainSection[] {
   const normalized = message.toLowerCase();
   const requestedConcept = extractRequestedConcept(message);
-  const workspaceIntent = inferWorkspaceIntent(message);
   const factHeavyQuestion = isFactHeavyConcept(requestedConcept);
   const pageInventoryQuestion = requestedConcept.evidenceGroups?.some((group) => group.id === "page_structure") ?? false;
   const algorithmQuestion = workspaceIntent.requiredFacets.includes("algorithms_models");
@@ -958,9 +968,14 @@ function createReportEvidence(
   const conceptSamples = requestedConcept.specific
     ? pickSamples(sampledFiles, (sample) => textSupportsRequestedConcept(sampleText(sample), requestedConcept), 12)
     : [];
-  const sourceSamples = pickSamples(sampledFiles, (sample) => SOURCE_EVIDENCE_EXT_RE.test(sample.path) && sample.anchors.length > 0, 10);
-  const docSamples = pickSamples(sampledFiles, (sample) => isDocFile(sample.path) || isManifestFile(sample.path), 8);
-  const remainingSamples = sampledFiles.slice(0, 16);
+  const conceptScopedEvidence = requestedConcept.specific && conceptSamples.length > 0;
+  const sourceSamples = conceptScopedEvidence
+    ? []
+    : pickSamples(sampledFiles, (sample) => SOURCE_EVIDENCE_EXT_RE.test(sample.path) && sample.anchors.length > 0, 10);
+  const docSamples = conceptScopedEvidence
+    ? []
+    : pickSamples(sampledFiles, (sample) => isDocFile(sample.path) || isManifestFile(sample.path), 8);
+  const remainingSamples = conceptScopedEvidence ? [] : sampledFiles.slice(0, 16);
   const numericAnchorEvidence = requestedConcept.evidenceGroups?.some((group) => group.id === "threshold_fact")
     ? numericSamples.flatMap((sample) => sample.anchors
       .filter((anchor) => NUMERIC_FACT_EVIDENCE_RE.test(`${anchor.title}\n${anchor.snippet}`) || /-?\d+(?:\.\d+)?/.test(anchor.snippet))

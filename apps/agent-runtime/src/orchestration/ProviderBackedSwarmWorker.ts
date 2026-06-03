@@ -40,7 +40,7 @@ export class ProviderBackedSwarmWorker {
   private readonly fallbackWorker: SwarmWorker;
 
   constructor(private readonly options: ProviderBackedSwarmWorkerOptions) {
-    this.mode = options.mode ?? "mock";
+    this.mode = options.mode ?? (options.providerFactory ? "provider_read_only" : "mock");
     this.artifactStore = new SwarmArtifactStore(options.workspacePath, options.memoryDir);
     this.traceWriter = new FactoryTraceWriter({ workspacePath: options.workspacePath, memoryDir: options.memoryDir, sourceComponent: "ProviderBackedSwarmWorker" });
     this.metadata = new FactoryMetadataAdapter(options.workspacePath, options.memoryDir);

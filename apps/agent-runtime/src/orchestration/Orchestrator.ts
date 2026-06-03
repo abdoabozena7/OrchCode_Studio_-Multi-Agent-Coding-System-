@@ -920,15 +920,16 @@ export class CoreOrchestrator {
     const storageDir = path.join(run.artifacts_path, "runtime_session");
     const sessionManager = new SessionManager(storageDir, new EventBus(), { runtimeEventLoader: async () => [] });
     await sessionManager.load();
+    const provider = this.providerFactory ? this.providerFactory(task.role_required) : undefined;
     const session = await sessionManager.createSession({
       workspacePath: this.workspacePath,
-      mode: "demo_mock",
+      mode: provider ? "real_provider" : "demo_mock",
       executionMode: "simple_mode",
       userPrompt: invocation.prompt,
-      accessProfile: "default_permissions"
+      accessProfile: "default_permissions",
+      activeProviderSource: provider ? "session_override" : "runtime_default"
     });
-    const provider = this.providerFactory ? this.providerFactory(task.role_required) : new MockLlmProvider();
-    const seniorAgent = new SeniorCodingAgent(provider, sessionManager);
+    const seniorAgent = new SeniorCodingAgent(provider ?? new MockLlmProvider(), sessionManager);
     const completed = await seniorAgent.runTurn(session.id, invocation.prompt);
     invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, completed);
     return summarizeSeniorSession(completed, task, pack, invocation.raw_output_ref);
@@ -1671,7 +1672,7 @@ export class CoreOrchestrator {
       artifacts_path: run.artifacts_path,
       limitations: uniqueStrings([
         "Phase 4 keeps parallel execution conservative by default; it is not a full background swarm yet.",
-        "ExecutorAgent uses mock provider mode unless a future phase wires provider selection.",
+        executorProviderTruthLimitation(outputs),
         ...validationTruthLimitations(run, outputs),
         ...outputs.flatMap((output) => output.limitations),
         ...extraLimitations
@@ -3084,6 +3085,12 @@ function multiPlanLimitations(result: MultiPlanFactoryResult) {
   ];
 }
 
+function executorProviderTruthLimitation(outputs: ParsedAgentOutput[]) {
+  return outputs.some((output) => output.limitations.some((entry) => /provider-backed planner/i.test(entry)))
+    ? "ExecutorAgent used a provider-backed SeniorCodingAgent planner; legacy scan/search orchestration remains deterministic around provider-authored inspect answers."
+    : "ExecutorAgent uses mock provider mode unless providerFactory is explicitly wired into the orchestrator.";
+}
+
 function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: ContextPack, rawOutputRef: string): ParsedAgentOutput {
   const patchFiles = uniqueStrings(session.patchProposals.flatMap((proposal) => proposal.filesChanged.map((file) => file.path)));
   const outsideScope = patchFiles.filter((file) => task.allowed_files_to_edit.length > 0 && !task.allowed_files_to_edit.includes(file));
@@ -3105,7 +3112,7 @@ function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: 
     ],
     artifacts: [rawOutputRef],
     limitations: [
-      "ExecutorAgent invoked the existing SeniorCodingAgent path in demo mock mode.",
+      seniorSessionProviderTruthLimitation(session),
       ...outsideScope.map((file) => `Proposed file outside allowed scope: ${file}`)
     ],
     next_recommendations: [
@@ -3113,6 +3120,13 @@ function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: 
       "Inspect Phase 4 review, validation, and patch safety artifacts before applying changes."
     ]
   };
+}
+
+function seniorSessionProviderTruthLimitation(session: AgentRuntimeSession) {
+  if (session.mode === "real_provider") {
+    return "ExecutorAgent invoked the existing SeniorCodingAgent path with a provider-backed planner; inspect answers require a provider final answer while scan/search orchestration remains deterministic.";
+  }
+  return "ExecutorAgent invoked the existing SeniorCodingAgent path in demo mock mode.";
 }
 
 function deterministicSummary(role: AgentRoleName, task: Task, pack: ContextPack) {

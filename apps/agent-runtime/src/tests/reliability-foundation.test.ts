@@ -3,12 +3,21 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { EventBus } from "../runtime/EventBus.js";
 import { RunEngine } from "../runtime/RunEngine.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("runtime session state is restored from durable snapshots across restarts", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-persist-${Date.now()}`);
@@ -81,6 +90,7 @@ test("run engine includes concrete file excerpts in provider prompts", async () 
   const session = await sessionManager.createSession({
     workspacePath: workspace,
     mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: "fix App.tsx"
   });
 

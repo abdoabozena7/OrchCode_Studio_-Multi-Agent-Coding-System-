@@ -71,7 +71,7 @@ export class SwarmAutopilotRuntime {
     this.artifactStore = new SwarmArtifactStore(this.workspacePath, this.memoryDir);
     this.traceWriter = new FactoryTraceWriter({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, sourceComponent: "SwarmAutopilotRuntime" });
     this.worker = options.worker;
-    this.workerMode = options.workerMode ?? envSwarmWorkerMode();
+    this.workerMode = options.workerMode ?? (options.providerFactory ? "provider_read_only" : envSwarmWorkerMode());
     this.providerFactory = options.providerFactory;
     this.providerName = options.providerName;
     this.modelName = options.modelName;

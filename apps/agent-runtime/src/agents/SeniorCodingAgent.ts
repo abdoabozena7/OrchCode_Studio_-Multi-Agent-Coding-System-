@@ -263,6 +263,56 @@ export class SeniorCodingAgent {
       searchMatches.length ? `Search hits for "${searchTerm}": ${searchMatches.length}.` : `No search hits for "${searchTerm}".`,
       `Plan summary: ${plan.summary}`
     ];
+    const session = this.sessionManager.getSession(sessionId);
+    let assistantMessage = summaryLines.join("\n");
+    if (session?.mode === "real_provider") {
+      try {
+        assistantMessage = await this.createProviderInspectAnswer({
+          sessionId,
+          intent,
+          message,
+          scan,
+          plan,
+          searchTerm,
+          searchMatchCount: searchMatches.length,
+          readableTarget,
+          readPreview,
+          localEvidenceSummary: summaryLines.join("\n")
+        });
+      } catch (error) {
+        const failure = `Provider failed while drafting the final inspect answer: ${formatError(error)}`;
+        await this.finish(
+          sessionId,
+          "DONE",
+          "failed",
+          failure,
+          {
+            status: "failed",
+            summary: failure,
+            filesChanged: [],
+            appliedPatchIds: [],
+            proposedPatchIds: [],
+            commandResults: [],
+            gates: [{
+              name: "Provider final inspect answer",
+              status: "failed",
+              notes: [failure]
+            }],
+            nextAction: "Retry with a working provider or switch explicitly to demo/mock mode.",
+            createdAt: new Date().toISOString()
+          },
+          undefined,
+          [
+            "I stopped before returning a local inspect summary.",
+            "",
+            failure,
+            "",
+            "This session is provider-backed, so using the legacy local summary as the final answer would make deterministic text look like LLM understanding."
+          ].join("\n")
+        );
+        return;
+      }
+    }
 
     await this.finish(
       sessionId,
@@ -281,8 +331,48 @@ export class SeniorCodingAgent {
         createdAt: new Date().toISOString()
       },
       undefined,
-      summaryLines.join("\n")
+      assistantMessage
     );
+  }
+
+  private async createProviderInspectAnswer(input: {
+    sessionId: string;
+    intent: Extract<SimpleIntent, "explain" | "inspect" | "preview_result">;
+    message: string;
+    scan: WorkspaceScan;
+    plan: AgentPlan;
+    searchTerm: string;
+    searchMatchCount: number;
+    readableTarget?: string;
+    readPreview: string;
+    localEvidenceSummary: string;
+  }) {
+    await this.trace(input.sessionId, "working", "Tool call", "provider.generate_text (final inspect answer)", "running");
+    const answer = await this.llmProvider.generateText({
+      systemPrompt: [
+        "You are the final provider-backed inspector for a legacy coding agent path.",
+        "Use only the supplied workspace scan, search/read evidence, and plan summary.",
+        "Do not invent files, citations, implementation details, or validation results.",
+        "If evidence is insufficient, say what is unknown instead of filling gaps with a template."
+      ].join("\n"),
+      userPrompt: input.message,
+      context: {
+        intent: input.intent,
+        projectSummary: input.scan.projectSummary,
+        importantFiles: input.scan.projectSummary.importantFiles.slice(0, 12),
+        gitStatus: input.scan.gitStatus,
+        planSummary: input.plan.summary,
+        searchTerm: input.searchTerm,
+        searchMatchCount: input.searchMatchCount,
+        readableTarget: input.readableTarget,
+        readPreview: input.readPreview,
+        localEvidenceSummary: input.localEvidenceSummary
+      }
+    });
+    const trimmed = answer.trim();
+    if (!trimmed) throw new Error("provider returned an empty final inspect answer");
+    await this.trace(input.sessionId, "working", "Observed result", "Provider final inspect answer received.", "completed");
+    return trimmed;
   }
 
   private async handleRunProject(
@@ -864,6 +954,10 @@ function buildRunProjectSummary(
 
 function shouldRunInBackground(command: string) {
   return /\b(dev|serve|http\.server|uvicorn|vite|next dev|react-scripts start)\b/i.test(command);
+}
+
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function stageLabel(stage: AgentLifecycleStage) {

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ProjectContextPack, ProjectIntake, ProjectKind, ProjectMap, ProjectRunIntent, ProjectSignal } from "@hivo/protocol";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { WorkspaceTools } from "../tools/WorkspaceTools.js";
+import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
 import { buildProjectIntelligenceGraph, resolveMechanismChain } from "./ProjectIntelligenceKernel.js";
 import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 
@@ -11,6 +12,7 @@ type ProjectIntakeInput = {
   message: string;
   projectMap: ProjectMap;
   tools: ToolRegistry;
+  conversationUnderstanding?: ConversationUnderstanding;
 };
 
 type SearchHit = {
@@ -21,6 +23,7 @@ type SearchHit = {
 
 export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
   const { workspacePath, message, projectMap, tools } = input;
+  const conversationUnderstanding = input.conversationUnderstanding ?? createConversationUnderstanding(message);
   const workspace = tools.workspace;
   const files = workspace.listFiles(500).filter((entry) => !entry.isDir && !entry.isSecretCandidate);
   const filePaths = files.map((entry) => entry.path);
@@ -206,7 +209,7 @@ export function buildProjectIntake(input: ProjectIntakeInput): ProjectIntake {
     gitChanges: gitChanges.length,
     todoHits: todoHits.length
   });
-  const runIntent = classifyRunIntent(message);
+  const runIntent = classifyRunIntent(message, conversationUnderstanding);
   const guardrails = createGuardrails();
   const contextPack = buildContextPack({
     message,
@@ -258,9 +261,12 @@ export function shouldTreatProjectAsExisting(projectKind: ProjectKind) {
   return projectKind === "existing_project" || projectKind === "mid_progress_project";
 }
 
-export function classifyRunIntent(message: string): ProjectRunIntent {
+export function classifyRunIntent(message: string, conversationUnderstanding?: ConversationUnderstanding): ProjectRunIntent {
+  const understanding = conversationUnderstanding ?? createConversationUnderstanding(message);
+  const preRetrievalDecision = understanding.intentDecision;
+  if (preRetrievalDecision.kind === "direct_conversation") return "unknown";
   const normalized = message.toLowerCase();
-  const workspaceIntent = inferWorkspaceIntent(message);
+  const workspaceIntent = understanding.workspaceIntent ?? inferWorkspaceIntent(message);
   
   if (
     /\b(run to green|make it run|fix until it starts|fix until it runs|boot it|start it working)\b/.test(normalized) ||

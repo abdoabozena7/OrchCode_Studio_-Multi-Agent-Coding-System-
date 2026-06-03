@@ -3,8 +3,17 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("auto mode keeps small tasks in a single agent", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-auto-simple-${Date.now()}`);
@@ -59,6 +68,37 @@ test("auto mode chooses orchestrated workers dynamically and respects explicit c
   await rm(storageDir, { recursive: true, force: true });
 });
 
+test("real-provider orchestrated mode stops before deterministic mock workers run", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-real-orch-stop-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-real-orch-stop-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const prompt = "use 3 agents to build a dashboard";
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
+    executionMode: "orchestrated_mode",
+    accessProfile: "full_access",
+    userPrompt: prompt
+  });
+  const turn = await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+
+  assert.equal(turn.status, "failed");
+  assert.equal(session?.status, "failed");
+  assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+  assert.equal(session?.orchestration?.workerOutputs.length, 0);
+  assert.equal(session?.patchProposals.length, 0);
+  assert.match(session?.messages.at(-1)?.content ?? "", /deterministic\/mock-worker based|does not call the configured LLM provider/i);
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
 test("explicit one-agent request still uses one worker plus mandatory gates", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-one-agent-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-one-agent-storage-${Date.now()}`);
@@ -77,6 +117,39 @@ test("explicit one-agent request still uses one worker plus mandatory gates", as
 
   assert.ok((session?.tasks.length ?? 0) >= 1);
   assert.equal(session?.status, "failed");
+
+  await app.close();
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("orchestrated planning uses cleaned conversation request for task graph", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-orch-clean-preamble-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-orch-clean-preamble-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
+
+  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const prompt = "هاي use 3 agents to make a html css js 3d snake game with threejs";
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "demo_mock",
+    executionMode: "orchestrated_mode",
+    accessProfile: "full_access",
+    thinkFirst: true,
+    userPrompt: prompt
+  });
+  await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+  const taskText = session?.tasks.map((task) => `${task.title} ${task.agentRole}`).join("\n") ?? "";
+  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+
+  assert.equal(session?.status, "needs_approval");
+  assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+  assert.ok((session?.tasks.length ?? 0) > 0);
+  assert.doesNotMatch(taskText, /هاي/);
+  assert.doesNotMatch(assistantMessage, /هاي use 3 agents/);
+  assert.doesNotMatch(assistantMessage, /هاي/);
 
   await app.close();
   await rm(workspace, { recursive: true, force: true });

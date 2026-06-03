@@ -13,6 +13,7 @@ import {
   evidenceItemSupportsPageInventory,
   findUnsupportedDomainClaims,
   isForecastingScopeConcept,
+  isDecisionPolicyConcept,
   isPageInventoryConcept,
   isThresholdInventoryConcept,
   selectGroundingEvidenceRefs,
@@ -39,6 +40,8 @@ export type ProjectExplainResult = ProjectExplainLlmResponse & {
   fallbackReason?: string;
 };
 
+export type ProjectExplainProviderAnswerMode = "structured_json" | "natural_text";
+
 type EvidenceItem = GroundingEvidenceItem & {
   ref: string;
   markdownLink: string;
@@ -49,17 +52,30 @@ type EvidenceItem = GroundingEvidenceItem & {
   snippet?: string;
 };
 
+type RepairEvidenceGroup = NonNullable<ProjectQuestionGrounding["concept"]["evidenceGroups"]>[number];
+
 const MAX_EVIDENCE_ITEMS = 120;
+const MAX_NATURAL_TEXT_EVIDENCE_ITEMS = 45;
+const MAX_REPAIR_TEXT_EVIDENCE_ITEMS = 75;
 const MAX_SNIPPET_CHARS = 700;
 
 export async function explainProjectWithLlm(input: {
   provider: LlmProvider;
   userPrompt: string;
   report: ProjectExplainReport;
+  requireProviderForConceptNotFound?: boolean;
+  providerFailureBehavior?: "deterministic_synthesis" | "notice_only";
+  providerAnswerMode?: ProjectExplainProviderAnswerMode;
 }): Promise<ProjectExplainResult> {
+  const providerFailureBehavior = input.providerFailureBehavior ?? "notice_only";
+  const providerAnswerMode = input.providerAnswerMode ?? "structured_json";
+  const requireProviderForConceptNotFound = input.requireProviderForConceptNotFound ?? true;
   const evidenceItems = createEvidenceItems(input.report);
   const grounding = analyzeProjectQuestionGrounding(input.userPrompt, input.report, evidenceItems);
-  if (grounding.concept.specific && !grounding.conceptFound) {
+  const providerEvidenceItems = providerAnswerMode === "natural_text"
+    ? selectProviderEvidenceItems(evidenceItems, grounding)
+    : evidenceItems;
+  if (grounding.concept.specific && !grounding.conceptFound && !requireProviderForConceptNotFound) {
     return {
       answerMarkdown: createDeterministicNotFoundAnswer(grounding),
       usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, evidenceItems),
@@ -72,45 +88,122 @@ export async function explainProjectWithLlm(input: {
     };
   }
 
-  const firstRequest = createExplainRequest(input.userPrompt, input.report, evidenceItems, grounding);
+  const firstRequest = createExplainRequest(input.userPrompt, input.report, providerEvidenceItems, grounding);
   let first: ProjectExplainLlmResponse;
   try {
-    first = await input.provider.generateStructured<ProjectExplainLlmResponse>(firstRequest, projectExplainSchema);
+    first = providerAnswerMode === "natural_text"
+      ? naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextExplainRequest(input.userPrompt, input.report, providerEvidenceItems, grounding)))
+      : await input.provider.generateStructured<ProjectExplainLlmResponse>(firstRequest, projectExplainSchema);
   } catch (error) {
-    return createProviderFailureFallback(grounding, evidenceItems, error, 0);
+    if (providerFailureBehavior === "notice_only") {
+      return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 0);
+    }
+    return createProviderFailureFallback(grounding, providerEvidenceItems, error, 0);
   }
-  const firstValidation = validateProjectExplainResponse(first, input.userPrompt, evidenceItems, grounding);
+  const firstValidation = validateProjectExplainResponse(first, input.userPrompt, providerEvidenceItems, grounding);
   if (firstValidation.valid) {
     return normalizeProjectExplainResponse(first, 0, firstValidation.warnings, grounding);
   }
 
   let revision: ProjectExplainLlmResponse;
   try {
-    revision = await input.provider.generateStructured<ProjectExplainLlmResponse>(
-      createRevisionRequest(input.userPrompt, input.report, evidenceItems, grounding, first, firstValidation.errors),
-      projectExplainSchema
-    );
+    revision = providerAnswerMode === "natural_text"
+      ? naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextRevisionRequest(input.userPrompt, input.report, providerEvidenceItems, grounding, first, firstValidation.errors)))
+      : await input.provider.generateStructured<ProjectExplainLlmResponse>(
+          createRevisionRequest(input.userPrompt, input.report, providerEvidenceItems, grounding, first, firstValidation.errors),
+          projectExplainSchema
+        );
   } catch (error) {
-    return createProviderFailureFallback(grounding, evidenceItems, error, 1, firstValidation.errors);
+    if (providerFailureBehavior === "notice_only") {
+      return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 1, firstValidation.errors);
+    }
+    return createProviderFailureFallback(grounding, providerEvidenceItems, error, 1, firstValidation.errors);
   }
-  const revisionValidation = validateProjectExplainResponse(revision, input.userPrompt, evidenceItems, grounding);
+  const revisionValidation = validateProjectExplainResponse(revision, input.userPrompt, providerEvidenceItems, grounding);
   if (revisionValidation.valid) {
     return normalizeProjectExplainResponse(revision, 1, revisionValidation.warnings, grounding);
+  }
+
+  const repairEvidenceItems = providerAnswerMode === "natural_text"
+    ? selectRepairEvidenceItems(evidenceItems, providerEvidenceItems, grounding, [...firstValidation.errors, ...revisionValidation.errors])
+    : providerEvidenceItems;
+  if (providerAnswerMode === "natural_text" && repairEvidenceItems.length > providerEvidenceItems.length) {
+    let repairRevision: ProjectExplainLlmResponse;
+    try {
+      repairRevision = naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextRevisionRequest(
+        input.userPrompt,
+        input.report,
+        repairEvidenceItems,
+        grounding,
+        revision,
+        [
+          ...firstValidation.errors,
+          ...revisionValidation.errors,
+          "Additional evidence refs were added for this repair attempt. Use them when they support the missing claim, concept, or relationship."
+        ]
+      )));
+    } catch (error) {
+      if (providerFailureBehavior === "notice_only") {
+        return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 2, [...firstValidation.errors, ...revisionValidation.errors]);
+      }
+      return createProviderFailureFallback(grounding, repairEvidenceItems, error, 2, [...firstValidation.errors, ...revisionValidation.errors]);
+    }
+    const repairValidation = validateProjectExplainResponse(repairRevision, input.userPrompt, repairEvidenceItems, grounding);
+    if (repairValidation.valid) {
+      return normalizeProjectExplainResponse(repairRevision, 2, repairValidation.warnings, grounding);
+    }
+    revision = repairRevision;
+    revisionValidation.errors = [...revisionValidation.errors, ...repairValidation.errors];
+    revisionValidation.warnings = [...revisionValidation.warnings, ...repairValidation.warnings];
   }
 
   const validationErrors = [
     ...firstValidation.errors,
     ...revisionValidation.errors
   ];
+  if (providerFailureBehavior === "notice_only") {
+    return {
+      answerMarkdown: createUnableToSafelyExplainMessage(input.userPrompt, input.report, "provider_validation_failed"),
+      usedEvidenceRefs: [],
+      unsupportedOrUnclearParts: validationErrors,
+      revisionCount: 1,
+      validationWarnings: revisionValidation.warnings,
+      grounding,
+      fallbackUsed: true,
+      fallbackReason: "provider_answer_failed_local_validation"
+    };
+  }
   return {
     answerMarkdown: createDeterministicGroundedFallbackAnswer(grounding, validationErrors),
-    usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, evidenceItems),
+    usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, providerEvidenceItems),
     unsupportedOrUnclearParts: validationErrors,
     revisionCount: 1,
     validationWarnings: revisionValidation.warnings,
     grounding,
     fallbackUsed: true,
     fallbackReason: "provider_answer_failed_local_validation"
+  };
+}
+
+function createProviderFailureNotice(
+  userPrompt: string,
+  report: ProjectExplainReport,
+  grounding: ProjectQuestionGrounding,
+  error: unknown,
+  revisionCount: number,
+  priorValidationErrors: string[] = []
+): ProjectExplainResult {
+  const providerError = `Provider failed during project explanation: ${formatProviderError(error)}`;
+  const validationErrors = [...priorValidationErrors, providerError];
+  return {
+    answerMarkdown: createUnableToSafelyExplainMessage(userPrompt, report, "provider_failed"),
+    usedEvidenceRefs: [],
+    unsupportedOrUnclearParts: validationErrors,
+    revisionCount,
+    validationWarnings: [...grounding.unknowns, providerError],
+    grounding,
+    fallbackUsed: true,
+    fallbackReason: providerError
   };
 }
 
@@ -165,6 +258,37 @@ function createExplainRequest(
   };
 }
 
+function createNaturalTextExplainRequest(
+  userPrompt: string,
+  report: ProjectExplainReport,
+  evidenceItems: EvidenceItem[],
+  grounding: ProjectQuestionGrounding
+) {
+  return {
+    systemPrompt: [
+      createSystemPrompt(grounding).replace("Return strict JSON only. Do not wrap it in markdown.", "Return Markdown only. Do not return JSON."),
+      "Your answer must cite the provided hivo-file links inline for every concrete code-behavior claim.",
+      "Do not include a separate metadata object. The runtime will extract refs from your Markdown links."
+    ].join("\n"),
+    userPrompt: [
+      "User prompt:",
+      userPrompt,
+      "",
+      "Grounding gate:",
+      createGroundingPackText(grounding),
+      "",
+      createWorkspaceReasoningPrompt(grounding.workspaceReasoning),
+      "",
+      "Project evidence pack:",
+      createEvidencePackText(report, evidenceItems, grounding),
+      "",
+      "Write the final answer as Markdown prose.",
+      "Use only the hivo-file links listed in the evidence pack, copied exactly.",
+      "If the evidence does not prove part of the answer, say that plainly instead of filling the gap."
+    ].join("\n")
+  };
+}
+
 function createRevisionRequest(
   userPrompt: string,
   report: ProjectExplainReport,
@@ -180,6 +304,9 @@ function createRevisionRequest(
       "",
       "Validation errors:",
       ...errors.map((error) => `- ${error}`),
+      "",
+      "Validation repair instructions:",
+      createValidationRepairInstructions(errors, grounding),
       "",
       "Original user prompt:",
       userPrompt,
@@ -198,6 +325,74 @@ function createRevisionRequest(
       "Return corrected strict JSON only."
     ].join("\n")
   };
+}
+
+function createNaturalTextRevisionRequest(
+  userPrompt: string,
+  report: ProjectExplainReport,
+  evidenceItems: EvidenceItem[],
+  grounding: ProjectQuestionGrounding,
+  previous: ProjectExplainLlmResponse,
+  errors: string[]
+) {
+  return {
+    systemPrompt: [
+      createSystemPrompt(grounding).replace("Return strict JSON only. Do not wrap it in markdown.", "Return Markdown only. Do not return JSON."),
+      "Your revised answer must fix the validation errors and cite only provided hivo-file links."
+    ].join("\n"),
+    userPrompt: [
+      "Revise the previous project explanation. It failed local validation.",
+      "",
+      "Validation errors:",
+      ...errors.map((error) => `- ${error}`),
+      "",
+      "Validation repair instructions:",
+      createValidationRepairInstructions(errors, grounding),
+      "",
+      "Original user prompt:",
+      userPrompt,
+      "",
+      "Previous Markdown answer:",
+      previous.answerMarkdown,
+      "",
+      "Grounding gate:",
+      createGroundingPackText(grounding),
+      "",
+      createWorkspaceReasoningPrompt(grounding.workspaceReasoning),
+      "",
+      "Project evidence pack:",
+      createEvidencePackText(report, evidenceItems, grounding),
+      "",
+      "Return corrected Markdown only."
+    ].join("\n")
+  };
+}
+
+function createValidationRepairInstructions(errors: string[], grounding: ProjectQuestionGrounding) {
+  const lines = [
+    "Use the validation errors as a repair plan, not as text to quote to the user.",
+    "Keep the same user question. Do not switch to a different specialized flow.",
+    "Every repaired claim must cite an allowed hivo-file link from the evidence pack."
+  ];
+  const errorText = errors.join("\n");
+  if (/no hivo-file citations|must include at least one provided hivo-file link|unknown hivo-file ref|ungrounded plain file ref/i.test(errorText)) {
+    lines.push("Citation repair: replace plain paths or uncited claims with exact hivo-file links copied from the evidence pack.");
+  }
+  if (/directly supports the requested concept|requested concept was not found|requested evidence group/i.test(errorText)) {
+    lines.push(`Concept repair: cite refs whose reason, title, snippet, or relationship context directly supports \`${grounding.concept.label}\`; if support is missing, say which relationship is not proven.`);
+  }
+  if (/wrong flow|different topic|does not appear to directly answer/i.test(errorText)) {
+    lines.push("Intent repair: answer the original question directly before adding context; remove unrelated overview material.");
+  }
+  if (/too shallow|too few sections|detailed flow/i.test(errorText)) {
+    lines.push("Depth repair: expand the concrete chain of files, functions, data/control-flow handoffs, inputs, outputs, and limits, with citations for each step.");
+  }
+  if (/forecasting|threshold|page inventory|numeric|domain|project identity/i.test(errorText)) {
+    lines.push("Shape repair: only satisfy the specialized shape if it truly applies to this question; otherwise keep the answer centered on the requested concept and supported relationships.");
+  }
+  lines.push("If the evidence pack includes 'Agentic relationship-model evidence' or 'Relationships followed', use those refs to explain cross-file relationships instead of relying only on isolated snippets.");
+  lines.push("If a validator asks for evidence that is not present in the pack, do not invent it; state the missing proof boundary clearly.");
+  return lines.map((line) => `- ${line}`).join("\n");
 }
 
 function createSystemPrompt(grounding: ProjectQuestionGrounding) {
@@ -226,6 +421,9 @@ function createSystemPrompt(grounding: ProjectQuestionGrounding) {
       : "",
     isForecastingScopeConcept(grounding)
       ? "For forecasting questions: identify the proven forecasting type, inputs, outputs, and whether the scope is per-customer or aggregate/global. Say 'not proven' for scope if refs do not show it."
+      : "",
+    isDecisionPolicyConcept(grounding)
+      ? "For decision-policy questions: explain the full condition chain across model signals, agent recommendation rules, orchestrator voting/routing rules, and final selected action. Do not answer as only an FCM implementation or only a forecasting scope question."
       : "",
     isPageInventoryConcept(grounding)
       ? "For page/screen inventory questions: inspect UI entrypoints, routes, nav/sidebar, sections, tabs, and rendered components first. Classify each item as route/page/section/tab/component. CSS or page titles are styling/context only and must never be counted as pages. Include what each item does, confidence, and UI evidence refs. Do not give threshold, formula, or forecasting tables unless the user asked for those."
@@ -349,6 +547,100 @@ function createEvidenceItems(report: ProjectExplainReport): EvidenceItem[] {
   return [...byRef.values()].slice(0, MAX_EVIDENCE_ITEMS);
 }
 
+function selectProviderEvidenceItems(evidenceItems: EvidenceItem[], grounding: ProjectQuestionGrounding) {
+  if (evidenceItems.length <= MAX_NATURAL_TEXT_EVIDENCE_ITEMS) return evidenceItems;
+  const byRef = new Map(evidenceItems.map((item) => [item.ref, item]));
+  const selected: EvidenceItem[] = [];
+  const addRef = (ref: string) => {
+    const item = byRef.get(normalizeRefString(ref));
+    if (item && !selected.some((candidate) => candidate.ref === item.ref)) selected.push(item);
+  };
+  const addItem = (item: EvidenceItem | undefined) => {
+    if (item && !selected.some((candidate) => candidate.ref === item.ref)) selected.push(item);
+  };
+
+  for (const ref of selectGroundingEvidenceRefs(grounding, evidenceItems)) addRef(ref);
+  for (const ref of grounding.projectDomain.evidenceRefs) addRef(ref);
+  for (const ref of grounding.projectDomain.sourceEvidenceRefs) addRef(ref);
+  for (const ref of grounding.projectDomain.documentationEvidenceRefs) addRef(ref);
+  for (const ref of grounding.supportingRefs) addRef(ref);
+  for (const item of evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning)) addRef(item.ref);
+  for (const item of grounding.understanding.validationEvidence) addRef(item.ref);
+  if (grounding.concept.specific) {
+    for (const item of evidenceItems) {
+      if (evidenceItemSupportsConcept(item, grounding.concept)) addItem(item);
+      if (selected.length >= MAX_NATURAL_TEXT_EVIDENCE_ITEMS) break;
+    }
+  }
+  for (const item of evidenceItems) {
+    addItem(item);
+    if (selected.length >= MAX_NATURAL_TEXT_EVIDENCE_ITEMS) break;
+  }
+  return selected.slice(0, MAX_NATURAL_TEXT_EVIDENCE_ITEMS);
+}
+
+function selectRepairEvidenceItems(
+  evidenceItems: EvidenceItem[],
+  currentItems: EvidenceItem[],
+  grounding: ProjectQuestionGrounding,
+  errors: string[]
+) {
+  if (evidenceItems.length <= currentItems.length) return currentItems;
+  const selected: EvidenceItem[] = [...currentItems];
+  const addItem = (item: EvidenceItem | undefined) => {
+    if (item && !selected.some((candidate) => candidate.ref === item.ref)) selected.push(item);
+  };
+  const addRef = (ref: string) => addItem(evidenceItems.find((item) => item.ref === normalizeRefString(ref)));
+  const errorText = errors.join("\n");
+
+  for (const ref of selectGroundingEvidenceRefs(grounding, evidenceItems)) addRef(ref);
+  for (const ref of grounding.supportingRefs) addRef(ref);
+  for (const ref of grounding.projectDomain.evidenceRefs) addRef(ref);
+  for (const ref of grounding.projectDomain.sourceEvidenceRefs) addRef(ref);
+  for (const item of evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning)) addRef(item.ref);
+
+  if (/requested evidence group|directly supports the requested concept|wrong flow|too shallow|detailed flow/i.test(errorText)) {
+    for (const item of evidenceItems) {
+      const text = evidenceItemText(item);
+      if (/Agentic relationship-model evidence|Relationships followed|Data\/control flow|mental model/i.test(text)) addItem(item);
+      if (grounding.concept.specific && evidenceItemSupportsConcept(item, grounding.concept)) addItem(item);
+      if (selected.length >= MAX_REPAIR_TEXT_EVIDENCE_ITEMS) break;
+    }
+  }
+
+  if (grounding.concept.evidenceGroups?.length) {
+    for (const group of grounding.concept.evidenceGroups) {
+      for (const item of evidenceItems) {
+        if (itemSupportsEvidenceGroup(item, group)) addItem(item);
+        if (selected.length >= MAX_REPAIR_TEXT_EVIDENCE_ITEMS) break;
+      }
+      if (selected.length >= MAX_REPAIR_TEXT_EVIDENCE_ITEMS) break;
+    }
+  }
+
+  for (const item of evidenceItems) {
+    addItem(item);
+    if (selected.length >= MAX_REPAIR_TEXT_EVIDENCE_ITEMS) break;
+  }
+  return selected.slice(0, MAX_REPAIR_TEXT_EVIDENCE_ITEMS);
+}
+
+function itemSupportsEvidenceGroup(item: EvidenceItem, group: RepairEvidenceGroup) {
+  const normalizedText = normalizeRepairEvidenceText(evidenceItemText(item));
+  return [...group.aliases, ...group.coreTerms].some((term) => {
+    const normalizedTerm = normalizeRepairEvidenceText(term);
+    return normalizedTerm.length > 1 && normalizedText.includes(normalizedTerm);
+  });
+}
+
+function normalizeRepairEvidenceText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function validateProjectExplainResponse(
   response: ProjectExplainLlmResponse,
   userPrompt: string,
@@ -383,11 +675,18 @@ function validateProjectExplainResponse(
       errors.push(`answerMarkdown contains an unknown hivo-file ref: ${ref}`);
     }
   }
+  const plainRefs = extractPlainPathRefs(response.answerMarkdown ?? "");
+  for (const ref of plainRefs) {
+    if (!allowedRefs.has(ref)) {
+      errors.push(`answerMarkdown contains an ungrounded plain file ref: ${ref}`);
+    }
+  }
   if (evidenceItems.length && linkedRefs.length === 0) {
     errors.push("answerMarkdown must include at least one provided hivo-file link.");
   }
   const citedRefs = uniqueStrings([
     ...linkedRefs,
+    ...plainRefs,
     ...(Array.isArray(response.usedEvidenceRefs) ? response.usedEvidenceRefs.map((ref) => typeof ref === "string" ? normalizeRefString(ref) : "") : [])
   ]);
   if (responseLooksOffIntent(response.answerMarkdown ?? "", grounding.workspaceReasoning)) {
@@ -423,6 +722,7 @@ function validateProjectExplainResponse(
       if (!expandedCitedItems.some((item) => /\b(forecast|forecasting|arima|sarima|trend|prediction|delta|deviation)\b/i.test(evidenceItemText(item)))) {
         errors.push("forecasting answers must cite current-workspace lines that support the forecasting type or trend logic.");
       }
+      errors.push(...validateForecastingAnswerShape(response.answerMarkdown ?? "", userPrompt, expandedCitedItems));
     }
     if (isPageInventoryConcept(grounding)) {
       if (!expandedCitedItems.some((item) => evidenceItemSupportsPageInventory(item))) {
@@ -485,6 +785,18 @@ function validateProjectExplainResponse(
   return { valid: errors.length === 0, errors, warnings };
 }
 
+function naturalTextToProjectExplainResponse(markdown: string): ProjectExplainLlmResponse {
+  const answerMarkdown = markdown.trim();
+  return {
+    answerMarkdown,
+    usedEvidenceRefs: uniqueStrings([
+      ...extractOrchcodeRefs(answerMarkdown),
+      ...extractPlainPathRefs(answerMarkdown)
+    ]),
+    unsupportedOrUnclearParts: []
+  };
+}
+
 function normalizeProjectExplainResponse(
   response: ProjectExplainLlmResponse,
   revisionCount: number,
@@ -502,15 +814,25 @@ function normalizeProjectExplainResponse(
   };
 }
 
-function createUnableToSafelyExplainMessage(userPrompt: string, report: ProjectExplainReport) {
+function createUnableToSafelyExplainMessage(
+  userPrompt: string,
+  report: ProjectExplainReport,
+  reason: "provider_failed" | "provider_validation_failed" = "provider_validation_failed"
+) {
   const arabic = /[\u0600-\u06ff]/.test(userPrompt);
   const evidence = report.evidence
     .filter((entry) => entry.type !== "directory")
     .slice(0, 5)
     .map((entry) => `- ${formatFileLineLink(entry.path, entry.lineStart ?? 1)}: ${entry.reason}`);
+  const englishReason = reason === "provider_failed"
+    ? "the provider failed before returning a trustworthy answer"
+    : "the provider response failed local evidence validation";
+  const arabicReasonLine = reason === "provider_failed"
+    ? "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0627\u0644\u0645\u0632\u0648\u062f \u0641\u0634\u0644 \u0642\u0628\u0644 \u0645\u0627 \u064a\u0637\u0644\u0639 \u0631\u062f \u0645\u0648\u062b\u0648\u0642."
+    : "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0631\u062f \u0627\u0644\u0645\u0632\u0648\u062f \u0645\u0627\u0639\u062f\u0627\u0634 \u062a\u062d\u0642\u0642 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.";
   if (arabic) {
     return [
-      "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0631\u062f \u0627\u0644\u0645\u0632\u0648\u062f \u0645\u0627\u0639\u062f\u0627\u0634 \u062a\u062d\u0642\u0642 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.",
+      arabicReasonLine,
       "",
       "\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u062a\u062e\u0632\u0646 \u0648\u0641\u064a\u0647 \u0627\u0644\u0623\u062f\u0644\u0629 \u062f\u064a \u0643\u0628\u062f\u0627\u064a\u0629:",
       ...(evidence.length ? evidence : ["- \u0645\u0641\u064a\u0634 \u0623\u062f\u0644\u0629 \u0643\u0641\u0627\u064a\u0629 \u0645\u062d\u0641\u0648\u0638\u0629 \u0641\u064a \u0627\u0644\u062a\u0642\u0631\u064a\u0631."]),
@@ -535,7 +857,7 @@ function createUnableToSafelyExplainMessage(userPrompt: string, report: ProjectE
     ].join("\n");
   }
   return [
-    "I could not safely produce a grounded project explanation because the LLM response failed local evidence validation.",
+    `I could not safely produce a grounded project explanation because ${englishReason}.`,
     "",
     "The read-only evidence report was stored. Starting evidence:",
     ...(evidence.length ? evidence : ["- No enough evidence refs were stored in the report."]),
@@ -575,6 +897,29 @@ function answerLooksLikeWrongSpecializedFlow(answer: string, expected: ProjectQu
     return thresholdMentions && !pageMentions && (normalized.includes("| signal |") || normalized.includes("threshold"));
   }
   return false;
+}
+
+function validateForecastingAnswerShape(answer: string, userPrompt: string, citedItems: EvidenceItem[]) {
+  const errors: string[] = [];
+  const repeatedGeneric = (answer.match(/forecasting implementation:\s*The implementation applies forecasting in this code block/gi) ?? []).length;
+  if (repeatedGeneric >= 3) {
+    errors.push("forecasting answer repeats a generic implementation template instead of explaining the evidence.");
+  }
+  const shallowLineOneRefs = (answer.match(/\bbackend\/(?:routes|services\/arima_model)\.py:1\b/g) ?? []).length;
+  const evidenceText = citedItems.map(evidenceItemText).join("\n");
+  if (shallowLineOneRefs >= 3 && /\b(fit_cluster_models|get_cluster_state|trend_multiplier|normalized_trend|SARIMAX?|cluster)\b/i.test(evidenceText)) {
+    errors.push("forecasting answer cites only shallow line-1 locations while deeper forecasting evidence is available.");
+  }
+  const mentionsScope = /\b(cluster-level|per-cluster|per-segment|predicted_cluster|get_cluster_state|customer-level|per customer|aggregate|global)\b|(?:مستوى\s+cluster|لكل\s+cluster|للعميل|للـ\s*customer)/iu.test(answer);
+  if (!mentionsScope) {
+    errors.push("forecasting answer must identify whether the forecast is cluster-level, aggregate, or customer-level.");
+  }
+  const requestsJudgment = /\b(wrong|correct|logical|logic|reasonable|sensible|valid|invalid|bug|flaw|production|demo|academic)\b/i.test(userPrompt)
+    || /(?:منطقي|غلط|صح|صحيح|خطأ|خطا|مقبول|ينفع|مش\s+منطقي|متطبق\s+غلط|بشكل\s+غلط|ب\s*شكل\s+غلط|هل\s+دا)/u.test(userPrompt);
+  if (requestsJudgment && !/\b(wrong|correct|logical|reasonable|production|demo|academic|weak|flaw|issue)\b|(?:منطقي|غلط|مقبول|ضعيف|خلل|production|demo|أكاديمي|اكاديمي)/iu.test(answer)) {
+    errors.push("forecasting answer must answer the requested logic/correctness judgment.");
+  }
+  return errors;
 }
 
 function answerMentionsPageInventory(answer: string) {
@@ -635,6 +980,16 @@ function extractOrchcodeRefs(markdown: string) {
     }
   }
   return refs;
+}
+
+function extractPlainPathRefs(markdown: string) {
+  const refs: string[] = [];
+  for (const match of markdown.matchAll(/\b((?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]+\.[A-Za-z0-9]+):(\d+)\b/g)) {
+    const path = match[1] ?? "";
+    if (!path || path.startsWith("http/") || path.includes("hivo-file")) continue;
+    refs.push(normalizeRef(path, Number(match[2])));
+  }
+  return uniqueStrings(refs);
 }
 
 function normalizeRefString(ref: string) {

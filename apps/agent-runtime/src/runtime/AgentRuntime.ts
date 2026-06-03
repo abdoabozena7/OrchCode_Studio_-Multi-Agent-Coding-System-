@@ -47,6 +47,14 @@ import {
   getCurrentRunToGreenAttempt,
   markNextRunToGreenAttempt
 } from "./RunToGreen.js";
+import {
+  createDirectConversationReply,
+  directConversationProgressSummary,
+  directConversationProgressTitle,
+  type IntentDecision
+} from "./IntentDecisionEngine.js";
+import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
+import { executionModeForConversationRoute } from "./ConversationRouter.js";
 
 type PlanClarifyAction = {
   kind: "clarify_plan";
@@ -72,10 +80,16 @@ export class AgentRuntime {
 
   async createSession(input: CreateRuntimeSessionRequest): Promise<CreateRuntimeSessionResponse> {
     const mode = input.mode ?? this.config.defaultMode;
+    assertProviderGate({
+      mode,
+      requireRealProvider: input.requireRealProvider,
+      providerConfig: input.providerConfig
+    });
     const session = await this.sessionManager.createSession({
       workspacePath: input.workspacePath,
       mode,
       trustProfile: input.trustProfile,
+      requireRealProvider: input.requireRealProvider,
       providerConfig: input.providerConfig,
       activeProviderSource: input.activeProviderSource ?? inferActiveProviderSource(mode, input.providerConfig),
       sessionToken: input.sessionToken,
@@ -118,13 +132,19 @@ export class AgentRuntime {
       return { sessionId, status: this.requireSession(sessionId).status };
     }
 
+    const providerTelemetry = createProviderTelemetryRecorder({
+      mode: session.mode,
+      providerConfig: session.providerConfig,
+      activeProviderSource: session.activeProviderSource
+    });
     try {
-      const providerTelemetry = createProviderTelemetryRecorder({
-        mode: session.mode,
-        providerConfig: session.providerConfig,
-        activeProviderSource: session.activeProviderSource
-      });
-      const provider = new TelemetryLlmProvider(this.getProvider(session), providerTelemetry);
+      let provider: TelemetryLlmProvider | undefined;
+      const conversationUnderstanding = pendingAction.resumePrompt
+        ? undefined
+        : createConversationUnderstanding(promptForExecution);
+      if (conversationUnderstanding?.intentDecision.kind === "direct_conversation") {
+        return this.completeDirectConversationTurn(sessionId, promptForExecution, conversationUnderstanding.intentDecision);
+      }
       const tools = new ToolRegistry(session.workspacePath);
       const projectSummary = tools.workspace.getProjectSummary();
       const projectMap = {
@@ -134,16 +154,29 @@ export class AgentRuntime {
         entryPoints: projectSummary.importantFiles.filter((file) => /main|index|app|server|lib\.rs/.test(file)).slice(0, 8),
         importantFiles: projectSummary.importantFiles
       };
+      const parsedDirective = parsePromptDirective(promptForExecution);
+      const routedExecutionMode = conversationUnderstanding
+        ? executionModeForConversationRoute(conversationUnderstanding.routeDecision.route)
+        : undefined;
       const modeResolution =
         session.executionMode === "auto_mode"
-          ? resolveExecutionMode(promptForExecution, projectMap)
+          ? parsedDirective.explicitMode || routedExecutionMode
+            ? {
+                mode: parsedDirective.explicitMode ?? routedExecutionMode!,
+                directive: parsedDirective,
+                complexity: createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }).estimatedComplexity
+              }
+            : resolveExecutionMode(promptForExecution, projectMap)
           : {
               mode: session.executionMode,
-              directive: parsePromptDirective(promptForExecution),
+              directive: parsedDirective,
               complexity: createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }).estimatedComplexity
             };
 
       const requestedAgentCount = modeResolution.directive.requestedAgentCount ?? 0;
+      if (modeResolution.mode === "orchestrated_mode" && session.mode === "real_provider") {
+        return this.stopRealProviderDeterministicOrchestration(sessionId, promptForExecution);
+      }
       if (modeResolution.mode === "orchestrated_mode" && shouldConfirmSingleFilePygamePlan(promptForExecution, requestedAgentCount)) {
         await this.sessionManager.updateSession(sessionId, (draft) => {
           draft.status = "needs_approval";
@@ -174,9 +207,10 @@ export class AgentRuntime {
           workspacePath: session.workspacePath,
           message: promptForExecution,
           projectMap,
-          tools
+          tools,
+          conversationUnderstanding
         });
-        const clarification = buildPlanClarification(promptForExecution, intake);
+        const clarification = buildPlanClarification(promptForExecution, intake, conversationUnderstanding);
         if (clarification) {
           await this.sessionManager.updateSession(sessionId, (draft) => {
             draft.status = "needs_approval";
@@ -191,23 +225,35 @@ export class AgentRuntime {
           return { sessionId, status: this.requireSession(sessionId).status };
         }
       }
-      const updated =
-        modeResolution.mode === "orchestrated_mode"
-          ? await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst)
-          : await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, promptForExecution, {
-              resolvedMode: modeResolution.mode,
-              projectMap,
-              thinkFirst
-            });
+      let updated: AgentRuntimeSession;
+      if (modeResolution.mode === "orchestrated_mode") {
+        updated = await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst, conversationUnderstanding);
+      } else {
+        provider ??= new TelemetryLlmProvider(this.getProvider(session), providerTelemetry);
+        updated = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, promptForExecution, {
+          resolvedMode: modeResolution.mode,
+          projectMap,
+          thinkFirst,
+          conversationUnderstanding
+        });
+      }
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.resolvedExecutionMode = modeResolution.mode;
       });
       return { sessionId, status: updated.status };
     } catch (error) {
-      const failureMessage = formatRunTurnFailureMessage(promptForExecution, error);
+      providerTelemetry.markProviderError(error);
+      const providerGateFailure = isProviderGateFailure(error, session);
+      if (providerGateFailure) {
+        providerTelemetry.markFallback(providerGateFailure);
+      }
+      const failureMessage = providerGateFailure
+        ? formatProviderFailureMessage(promptForExecution, error)
+        : formatRunTurnFailureMessage(promptForExecution, error);
       await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.status = "failed";
+        draft.status = providerGateFailure ? "failed_provider" : "failed";
         draft.lifecycleStage = "FAILED";
+        draft.providerTelemetry = providerTelemetry.snapshot();
         draft.reasoningSummaries.push(formatRuntimeError(error));
         draft.runSummary = {
           status: "failed",
@@ -230,8 +276,55 @@ export class AgentRuntime {
       if (lastAssistantMessage?.content !== failureMessage) {
         await this.sessionManager.addMessage(sessionId, { role: "assistant", content: failureMessage });
       }
-      return { sessionId, status: "failed" };
+      return { sessionId, status: providerGateFailure ? "failed_provider" : "failed" };
     }
+  }
+
+  private async completeDirectConversationTurn(sessionId: string, message: string, decision: IntentDecision): Promise<RuntimeTurnResponse> {
+    const session = this.requireSession(sessionId);
+    const lastMessage = session.messages.at(-1);
+    if (lastMessage?.role !== "user" || lastMessage.content !== message) {
+      await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
+    }
+    const answer = createDirectConversationReply(decision);
+    const now = new Date().toISOString();
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "completed";
+      draft.lifecycleStage = "DONE";
+      draft.resolvedExecutionMode = draft.executionMode === "auto_mode" ? "simple_mode" : draft.executionMode;
+      draft.agentName = "Local Run";
+      draft.nextAction = undefined;
+      draft.runPhases = [];
+    });
+    await this.sessionManager.addProgressEvent(sessionId, {
+      id: `progress_${randomUUID()}`,
+      sessionId,
+      stage: "completed",
+      status: "completed",
+      agentName: "IntentDecisionEngine",
+      role: "Direct Conversation",
+      taskTitle: directConversationProgressTitle(decision.language),
+      summary: directConversationProgressSummary(decision),
+      targetFiles: [],
+      createdAt: now
+    });
+    await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answer });
+    await this.sessionManager.setRunSummary(sessionId, {
+      status: "completed",
+      summary: answer,
+      filesChanged: [],
+      appliedPatchIds: [],
+      proposedPatchIds: [],
+      commandResults: [],
+      gates: [{
+        name: "Pre-retrieval intent decision",
+        status: "passed",
+        notes: [decision.rationale]
+      }],
+      nextAction: "Send a project question, run request, or coding task when ready.",
+      createdAt: now
+    });
+    return { sessionId, status: this.requireSession(sessionId).status };
   }
 
   getSession(sessionId: string): AgentRuntimeSession | undefined {
@@ -530,12 +623,56 @@ export class AgentRuntime {
     return this.requireSession(sessionId);
   }
 
+  private async stopRealProviderDeterministicOrchestration(sessionId: string, message: string): Promise<RuntimeTurnResponse> {
+    const summary = "Orchestrated mode is currently deterministic/mock-worker based and does not call the configured LLM provider for worker understanding.";
+    const content = [
+      "I stopped before starting the multi-agent run.",
+      "",
+      summary,
+      "",
+      "Running it in real-provider mode would make deterministic worker output look like provider-backed understanding. Use simple mode with the real provider, or explicitly choose demo/mock orchestration."
+    ].join("\n");
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "failed";
+      draft.lifecycleStage = "FAILED";
+      draft.resolvedExecutionMode = "orchestrated_mode";
+      draft.agentName = "Dynamic Working Team";
+      draft.orchestration ??= createEmptyOrchestration(draft);
+      draft.reasoningSummaries.push(summary);
+      draft.runSummary = {
+        status: "failed",
+        summary,
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: [{
+          name: "Provider-backed orchestration",
+          status: "failed",
+          notes: [summary]
+        }],
+        nextAction: "Use simple mode with the real provider, or explicitly run demo/mock orchestration.",
+        createdAt: new Date().toISOString()
+      };
+    });
+    const lastMessage = this.requireSession(sessionId).messages.at(-1);
+    if (lastMessage?.role !== "user" || lastMessage.content !== message) {
+      await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
+    }
+    await this.sessionManager.addMessage(sessionId, { role: "assistant", content });
+    return { sessionId, status: this.requireSession(sessionId).status };
+  }
+
   private getProvider(session: AgentRuntimeSession) {
     if (this.options.providerFactory) {
-      return this.options.providerFactory(session);
+      const provider = this.options.providerFactory(session);
+      if ((session.mode === "real_provider" || session.requireRealProvider) && provider instanceof MockLlmProvider) {
+        throw new ProviderConfigurationError("provider_mock_forbidden", "MockProvider is forbidden when a real provider is required.");
+      }
+      return provider;
     }
     return session.mode === "real_provider"
-      ? createRealProvider(session.providerConfig)
+      ? createRealProvider(session.providerConfig, this.config.providerRequestTimeoutMs)
       : new MockLlmProvider();
   }
 
@@ -722,8 +859,13 @@ export class AgentRuntime {
       diagnosis.evidence.filePath ?? "",
       ...modulePlan.relevantFiles
     ]));
+    const repairObjectiveSource = session.runToGreen?.objective ?? session.userPrompt;
+    const repairUnderstanding = createConversationUnderstanding(repairObjectiveSource);
+    const repairObjective = repairUnderstanding.intentDecision.kind === "direct_conversation"
+      ? repairObjectiveSource
+      : repairUnderstanding.workspaceMessage || repairObjectiveSource;
     const prompt = buildRepairPatchPrompt({
-      objective: session.runToGreen?.objective ?? session.userPrompt,
+      objective: repairObjective,
       command: record.command,
       diagnosis,
       modulePlan,
@@ -1002,7 +1144,8 @@ export class AgentRuntime {
     sessionId: string,
     message: string,
     projectMap: import("@hivo/protocol").ProjectMap,
-    thinkFirst: boolean
+    thinkFirst: boolean,
+    conversationUnderstanding?: ConversationUnderstanding
   ) {
     const session = this.sessionManager.getSession(sessionId)!;
     const mappedMode: import("../orchestration/OrchestrationConfig.js").ExecutionMode = session.executionMode === "auto_mode" ? "deep" : session.executionMode === "simple_mode" ? "fast" : "exhaustive";
@@ -1028,9 +1171,10 @@ export class AgentRuntime {
       draft.lifecycleStage = "PLAN";
     });
 
-    const result = thinkFirst 
-      ? await orchestrator.planOnly(message)
-      : await orchestrator.runAgenticTask(message);
+    const orchestrationRequest = conversationUnderstanding?.workspaceMessage || message;
+    const result = thinkFirst
+      ? await orchestrator.planOnly(orchestrationRequest)
+      : await orchestrator.runAgenticTask(orchestrationRequest);
 
     const patches = await loadPatchHistory(session.workspacePath, result.run.id);
     const mappedPatches: import("@hivo/protocol").PatchProposal[] = [];
@@ -1321,7 +1465,7 @@ export class AgentRuntime {
       agent.status =
         draft.status === "completed"
           ? "completed"
-          : draft.status === "failed"
+          : draft.status === "failed" || draft.status === "failed_provider"
             ? "failed"
             : draft.status === "blocked"
               ? "blocked"
@@ -1369,14 +1513,15 @@ export class AgentRuntime {
 
 function buildPlanClarification(
   message: string,
-  intake: ReturnType<typeof buildProjectIntake>
+  intake: ReturnType<typeof buildProjectIntake>,
+  conversationUnderstanding?: ConversationUnderstanding
 ): PlanClarifyAction | null {
   const normalized = message.trim().toLowerCase();
   const genericPlanPrompt =
     normalized.length < 100 &&
     !/\b(auth|api|ui|frontend|backend|database|tests?|deploy|runtime|module|component|page|screen|schema)\b/.test(normalized) &&
     (/\b(plan|think|analyze|review|understand|explain)\b/.test(normalized) || /(خط|خطة|حلل|اشرح|راجع|افهم)/.test(normalized));
-  const unknownIntent = classifyRunIntent(message) === "unknown";
+  const unknownIntent = classifyRunIntent(message, conversationUnderstanding) === "unknown";
   const manyAreas = (intake.moduleSummary?.length ?? 0) >= 4 || intake.importantFiles.length >= 8;
   if (!genericPlanPrompt && !(unknownIntent && manyAreas)) return null;
 
@@ -1451,17 +1596,56 @@ function setRunPhaseState(
   );
 }
 
-function createRealProvider(config: AgentRuntimeSession["providerConfig"]) {
-  if (!config?.isValid) {
-    throw new Error("real_provider requires a valid provider configuration.");
+export class ProviderConfigurationError extends Error {
+  constructor(
+    public readonly code:
+      | "provider_missing"
+      | "provider_api_key_missing"
+      | "provider_validation_failed"
+      | "provider_mock_forbidden",
+    message: string
+  ) {
+    super(message);
   }
-  if (config.providerType === "ollama") {
-    return new OllamaProvider(config.baseUrl, config.selectedModel);
+}
+
+function assertProviderGate(input: {
+  mode: AgentRuntimeSession["mode"];
+  requireRealProvider?: boolean;
+  providerConfig?: AgentRuntimeSession["providerConfig"];
+}) {
+  if (input.requireRealProvider && input.mode !== "real_provider") {
+    throw new ProviderConfigurationError("provider_mock_forbidden", "MockProvider is forbidden when a real provider is required.");
+  }
+  if (input.mode !== "real_provider") return;
+  validateRealProviderConfig(input.providerConfig);
+}
+
+function validateRealProviderConfig(config: AgentRuntimeSession["providerConfig"]): asserts config is NonNullable<AgentRuntimeSession["providerConfig"]> {
+  if (!config) {
+    throw new ProviderConfigurationError("provider_missing", "real_provider requires a provider configuration.");
+  }
+  if (!config.isValid || !config.baseUrl?.trim() || !config.selectedModel?.trim()) {
+    throw new ProviderConfigurationError("provider_validation_failed", "real_provider requires a valid provider configuration.");
   }
   if (config.providerType === "openai_compatible") {
-    return new OpenAIProvider(process.env.OPENAI_API_KEY, config.baseUrl, config.selectedModel);
+    const apiKeyEnv = config.apiKeyEnv?.trim() || "OPENAI_API_KEY";
+    if (!process.env[apiKeyEnv]?.trim()) {
+      throw new ProviderConfigurationError("provider_api_key_missing", `API key environment variable ${apiKeyEnv} is not configured.`);
+    }
   }
-  throw new Error(`Unsupported provider type: ${config.providerType}`);
+}
+
+function createRealProvider(config: AgentRuntimeSession["providerConfig"], timeoutMs: number) {
+  validateRealProviderConfig(config);
+  if (config.providerType === "ollama") {
+    return new OllamaProvider(config.baseUrl, config.selectedModel, timeoutMs);
+  }
+  if (config.providerType === "openai_compatible") {
+    const apiKeyEnv = config.apiKeyEnv?.trim() || "OPENAI_API_KEY";
+    return new OpenAIProvider(process.env[apiKeyEnv], config.baseUrl, config.selectedModel, timeoutMs);
+  }
+  throw new ProviderConfigurationError("provider_validation_failed", `Unsupported provider type: ${config.providerType}`);
 }
 
 function formatCommandResultMessage(record: CommandExecutionRecord) {
@@ -1689,8 +1873,9 @@ function shouldConfirmSingleFilePygamePlan(message: string, requestedAgentCount:
 function shouldAnswerExplainEvidenceQuestion(message: string, session: AgentRuntimeSession) {
   if (!session.explainReport) return false;
   const normalized = message.toLowerCase();
-  const english = /\b(where|source|sources|evidence|links?|references?|files?|came from|why these)\b/i.test(message)
-    && /\b(file|files|link|links|reference|references|source|sources|evidence|came from)\b/i.test(message);
+  const english = /\b(came from|why these)\b/i.test(message)
+    || (/\bwhere\b/i.test(message) && /\b(file|files|link|links|reference|references|source|sources|evidence)\b/i.test(message))
+    || (/\b(source|sources|links?|references?)\b/i.test(message) && /\b(of|for)\s+(these|this|the)\b/i.test(message));
   const arabic = /(جبت|جاب|فين|منين|مصدر|مصادر|دليل|أدلة|ادلة|روابط|لينكات|ملفات|الملفات|اللينكات|الروابط)/.test(normalized)
     && /(ملف|ملفات|رابط|روابط|لينك|لينكات|مصدر|مصادر|دليل|أدلة|ادلة|جبت|منين)/.test(normalized);
   return english || arabic;
@@ -1756,6 +1941,27 @@ function formatRunTurnFailureMessage(prompt: string, error: unknown) {
   ].join("\n");
 }
 
+function formatProviderFailureMessage(_prompt: string, error: unknown) {
+  const detail = formatRuntimeError(error);
+  return [
+    "The real model provider was required, but the provider gate failed before I could produce a trusted answer.",
+    "",
+    `Reason: ${detail}`,
+    "",
+    "I did not use MockProvider or a deterministic fallback as a successful assistant reply. Fix the provider configuration/runtime and retry."
+  ].join("\n");
+}
+
+function isProviderGateFailure(error: unknown, session: AgentRuntimeSession) {
+  if (!(session.mode === "real_provider" || session.requireRealProvider)) return undefined;
+  const detail = formatRuntimeError(error);
+  if (error instanceof ProviderConfigurationError) return `provider_gate_failed:${error.code}`;
+  if (/MockProvider is forbidden|provider_missing|provider_validation|provider_api_key|real_provider requires|Unsupported provider type/i.test(detail)) {
+    return "provider_gate_failed";
+  }
+  return undefined;
+}
+
 function formatRuntimeError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -1781,7 +1987,7 @@ function createEmptyOrchestration(session?: AgentRuntimeSession): NonNullable<Ag
 
 function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonNullable<AgentRuntimeSession["verificationResult"]>): RunSummary {
   const status = (
-    session.status === "failed"
+    session.status === "failed" || session.status === "failed_provider"
       ? "failed"
       : session.status === "blocked" || session.lifecycleStage === "BLOCKED"
         ? "blocked"
@@ -1796,7 +2002,7 @@ function buildRuntimeRunSummary(session: AgentRuntimeSession, verification: NonN
         ? session.runToGreen.blockerReason
         : session.status === "needs_approval"
           ? session.nextAction?.message ?? "Review the pending runtime action."
-          : session.status === "failed"
+          : session.status === "failed" || session.status === "failed_provider"
             ? "Inspect the recorded patch or command failure."
             : "Review the active run state and latest verification evidence.";
   return buildDiffAwareRunSummary(

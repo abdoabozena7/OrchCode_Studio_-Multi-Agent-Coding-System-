@@ -10,6 +10,7 @@ const IGNORED_DIRECTORIES = new Set([
   ".agent_memory",
   ".git",
   ".hivo-agent-runtime",
+  ".orchcode-agent-runtime",
   ".playwright-mcp",
   "node_modules",
   "dist",

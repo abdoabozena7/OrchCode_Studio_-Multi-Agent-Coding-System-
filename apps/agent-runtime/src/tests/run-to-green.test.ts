@@ -3,12 +3,21 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { loadConfig } from "../config.js";
 import { buildServer } from "../server.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("run this project initializes run_to_green before provider task planning", async () => {
   const fixture = await createStaticFixture();
@@ -18,6 +27,7 @@ test("run this project initializes run_to_green before provider task planning", 
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "run this project"
     });
     await runtime.runTurn(created.sessionId, "run this project");
@@ -103,23 +113,24 @@ test("run_to_green completes safely when no known command can be selected", asyn
   }
 });
 
-test("malformed provider task JSON uses deterministic fallback and does not crash", async () => {
+test("malformed provider task JSON stops implementation instead of inventing a deterministic plan", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
   const runtime = await createRuntimeWithProvider(fixture.storageDir, new InvalidPlanProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "add a small note"
     });
     const turn = await runtime.runTurn(created.sessionId, "add a small note");
     const session = runtime.getSession(created.sessionId);
 
-    assert.notEqual(turn.status, "failed");
-    assert.equal(session?.tasks.length, 3);
-    assert.equal(session?.tasks[0]?.title, "Build context pack");
-    assert.equal(session?.tasks[0]?.agentRole, "Project Mapper");
+    assert.equal(turn.status, "failed");
+    assert.equal(session?.status, "failed");
+    assert.equal(session?.tasks.length, 0);
     assert.ok(session?.reasoningSummaries.includes("Model returned malformed structured output; deterministic fallback plan was used."));
+    assert.match(session?.messages.at(-1)?.content ?? "", /no deterministic implementation plan was invented|stopped here instead of creating a canned plan/i);
   } finally {
     await fixture.close();
   }
@@ -632,6 +643,9 @@ class RepairProvider implements LlmProvider {
 
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(input.userPrompt) as T;
+    }
     if (schemaName === "run-plan") {
       return {
         summary: "Repair plan",
@@ -675,9 +689,13 @@ class RepairProvider implements LlmProvider {
 class CountingProvider implements LlmProvider {
   structuredCalls = 0;
 
-  async generateStructured<T>(): Promise<T> {
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.structuredCalls += 1;
-    throw new Error("provider should not be called");
+    const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(input.userPrompt) as T;
+    }
+    throw new Error("provider should not be called after intent classification");
   }
 
   async generateText(): Promise<string> {
@@ -688,6 +706,9 @@ class CountingProvider implements LlmProvider {
 class InvalidPlanProvider implements LlmProvider {
   async generateStructured<T>(_input: LlmRequest, schema: unknown): Promise<T> {
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(_input.userPrompt) as T;
+    }
     if (schemaName === "run-plan") {
       return {
         summary: "broken",
@@ -702,4 +723,17 @@ class InvalidPlanProvider implements LlmProvider {
   async generateText(): Promise<string> {
     return "";
   }
+}
+
+function intentDecisionForPrompt(prompt: string) {
+  const message = prompt.match(/Classify this single user message before retrieval:\n([\s\S]*?)\n\nReturn JSON/i)?.[1]?.trim() ?? prompt;
+  const run = /\b(run|start|launch|open|preview|test|build)\b/i.test(message);
+  return {
+    kind: run ? "run_request" : "workspace_action",
+    language: /[\u0600-\u06ff]/.test(message) ? "arabic" : "english",
+    needsWorkspace: true,
+    confidence: "high",
+    rationale: run ? "The provider classified this as a run request." : "The provider classified this as a workspace action.",
+    workspaceMessage: message
+  };
 }
