@@ -59,6 +59,36 @@ test("provider-backed worker accepts read-only scout planner reviewer and specia
   }
 });
 
+test("provider-backed worker sends bounded file excerpts as evidence context", async () => {
+  const workspace = await fixtureWorkspace("provider-worker-file-excerpts");
+  try {
+    await writeFile(
+      path.join(workspace, "src", "index.ts"),
+      "export function chooseRoute(score: number) { return score > 0.8 ? 'direct dispatch' : 'human review'; }\n",
+      "utf8"
+    );
+    const provider = new FakeProvider();
+    const input = workerInput(workspace, {
+      role: "ScoutAgent",
+      type: "scout",
+      userGoal: "Inspect routing policy from real file content"
+    });
+    await new SwarmArtifactStore(workspace).saveSwarmRun(input.run);
+    const result = await new ProviderBackedSwarmWorker({
+      workspacePath: workspace,
+      mode: "provider_read_only",
+      providerFactory: () => provider
+    }).run(input);
+
+    assert.equal(result.status, "succeeded");
+    const context = provider.calls[0]?.context as { file_excerpts?: Array<{ path: string; content: string }> };
+    assert.equal(context.file_excerpts?.[0]?.path, "src/index.ts");
+    assert.match(context.file_excerpts?.[0]?.content ?? "", /chooseRoute|direct dispatch|human review/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("provider-backed worker accepts risk tester and reporter roles without claiming validation passed", async () => {
   const workspace = await fixtureWorkspace("provider-worker-more-roles");
   try {
@@ -296,6 +326,104 @@ test("provider invalid output and provider errors produce failed worker results 
   }
 });
 
+test("provider answer-shaped JSON is repaired into read-only schema with audit metadata", async () => {
+  const workspace = await fixtureWorkspace("provider-worker-answer-repair");
+  try {
+    const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
+    await new SwarmArtifactStore(workspace).saveSwarmRun(input.run);
+    const result = await new ProviderBackedSwarmWorker({
+      workspacePath: workspace,
+      mode: "provider_read_only",
+      providerFactory: () => new FakeProvider("answer")
+    }).run(input);
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.structured_output_valid, true);
+    assert.match(result.summary, /answer-shaped provider output/i);
+    assert.equal(result.confidence, 0.35);
+
+    const providerDir = path.join(input.run.artifacts_path, "provider_workers", input.workItem.id);
+    const validation = JSON.parse(await readFile(path.join(providerDir, "schema_validation.json"), "utf8")) as { repaired?: boolean; repair_reasons?: string[] };
+    const parsed = JSON.parse(await readFile(path.join(providerDir, "parsed_output.json"), "utf8")) as { findings?: string[]; confidence?: number };
+    assert.equal(validation.repaired, true);
+    assert.ok(validation.repair_reasons?.some((reason) => /answer-shaped/i.test(reason)));
+    assert.deepEqual(parsed.findings, ["Answer-shaped provider output from a real model."]);
+    assert.equal(parsed.confidence, 0.35);
+
+    const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: input.run.id });
+    assert.ok(trace.events.some((event) => event.event_type === "provider_output_schema_repaired"));
+
+    const metadata = await FactoryMetadataStore.open({ workspacePath: workspace, readOnly: true });
+    try {
+      const row = metadata.get<{ output_schema_status: string; metadata_json: string }>(
+        "SELECT output_schema_status, metadata_json FROM factory_worker_invocations WHERE run_id = ? AND work_item_id = ?",
+        input.run.id,
+        input.workItem.id
+      );
+      assert.equal(row?.output_schema_status, "passed");
+      assert.match(row?.metadata_json ?? "", /schema_repaired/);
+    } finally {
+      metadata.close();
+    }
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("provider single-string array fields are repaired into read-only arrays", async () => {
+  const workspace = await fixtureWorkspace("provider-worker-string-array-repair");
+  try {
+    const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
+    await new SwarmArtifactStore(workspace).saveSwarmRun(input.run);
+    const result = await new ProviderBackedSwarmWorker({
+      workspacePath: workspace,
+      mode: "provider_read_only",
+      providerFactory: () => new FakeProvider("stringFindings")
+    }).run(input);
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.structured_output_valid, true);
+    assert.deepEqual(result.findings, ["Single finding from a real model."]);
+
+    const validation = JSON.parse(await readFile(
+      path.join(input.run.artifacts_path, "provider_workers", input.workItem.id, "schema_validation.json"),
+      "utf8"
+    )) as { repaired?: boolean; repair_reasons?: string[] };
+    assert.equal(validation.repaired, true);
+    assert.ok(validation.repair_reasons?.some((reason) => /findings must be an array/i.test(reason)));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("provider confidence labels are repaired without falling back to mock workers", async () => {
+  const workspace = await fixtureWorkspace("provider-worker-confidence-label-repair");
+  try {
+    const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
+    await new SwarmArtifactStore(workspace).saveSwarmRun(input.run);
+    const result = await new ProviderBackedSwarmWorker({
+      workspacePath: workspace,
+      mode: "provider_read_only",
+      providerFactory: () => new FakeProvider("stringFieldsConfidenceLabel")
+    }).run(input);
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.structured_output_valid, true);
+    assert.deepEqual(result.findings, ["Provider found the runtime log artifact path."]);
+    assert.deepEqual(result.relevant_files, ["backend/main.py"]);
+    assert.equal(result.confidence, 0.55);
+
+    const validation = JSON.parse(await readFile(
+      path.join(input.run.artifacts_path, "provider_workers", input.workItem.id, "schema_validation.json"),
+      "utf8"
+    )) as { repaired?: boolean; repair_reasons?: string[] };
+    assert.equal(validation.repaired, true);
+    assert.ok(validation.repair_reasons?.some((reason) => /confidence must be a finite number/i.test(reason)));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("read-only swarm structured output schemas validate required role shapes", () => {
   assert.equal(validateReadOnlySwarmOutput(validOutput("swarm_scout_output"), swarmScoutOutputSchema).valid, true);
   assert.equal(validateReadOnlySwarmOutput(validOutput("swarm_planner_output"), swarmPlannerOutputSchema).valid, true);
@@ -342,12 +470,35 @@ test("SwarmScheduler can run provider-backed read-only worker while preserving s
 
 class FakeProvider implements LlmProvider {
   calls: LlmRequest[] = [];
-  constructor(private readonly mode: "valid" | "invalid" | "error" = "valid") {}
+  constructor(private readonly mode: "valid" | "invalid" | "error" | "answer" | "stringFindings" | "stringFieldsConfidenceLabel" = "valid") {}
 
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.calls.push(input);
     if (this.mode === "error") throw new Error("fake provider failure");
     if (this.mode === "invalid") return "free form invalid output" as T;
+    if (this.mode === "answer") {
+      return { answer: "Answer-shaped provider output from a real model." } as T;
+    }
+    if (this.mode === "stringFindings") {
+      return {
+        findings: "Single finding from a real model.",
+        relevant_files: ["src/index.ts"],
+        risks: [],
+        unknowns: [],
+        suggested_next_steps: [],
+        confidence: 0.71
+      } as T;
+    }
+    if (this.mode === "stringFieldsConfidenceLabel") {
+      return {
+        findings: "Provider found the runtime log artifact path.",
+        relevant_files: "backend/main.py",
+        risks: "",
+        unknowns: "",
+        suggested_next_steps: "Compare training artifacts with runtime logs.",
+        confidence: "medium"
+      } as T;
+    }
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "swarm_specialist_output";
     return validOutput(schemaName) as T;
   }

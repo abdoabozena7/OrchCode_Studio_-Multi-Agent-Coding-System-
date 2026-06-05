@@ -1,4 +1,4 @@
-import type { LlmProvider, LlmRequest } from "./LlmProvider.js";
+import { userPromptWithContext, type LlmProvider, type LlmRequest } from "./LlmProvider.js";
 
 export class OpenAIProvider implements LlmProvider {
   constructor(
@@ -41,7 +41,7 @@ export class OpenAIProvider implements LlmProvider {
           model: this.model,
           messages: [
             { role: "system", content: input.systemPrompt },
-            { role: "user", content: input.userPrompt }
+            { role: "user", content: userPromptWithContext(input) }
           ],
           temperature: 0.1
         }),

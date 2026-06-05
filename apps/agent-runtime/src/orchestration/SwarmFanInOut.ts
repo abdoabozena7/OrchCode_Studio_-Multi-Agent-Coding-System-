@@ -249,6 +249,13 @@ export function createConsensusGroup(input: {
   const confidence = input.findings.length
     ? Math.round((consolidated.reduce((sum, finding) => sum + finding.confidence, 0) / input.findings.length) * 100) / 100
     : 0;
+  const decision = input.findings.length === 0
+    ? "blocked_no_review"
+    : consolidated.length === 0
+      ? "blocked_with_dissent"
+      : dissent.length
+        ? "accepted_with_dissent"
+        : "accepted";
   return {
     schema_version: SWARM_SCHEMA_VERSION,
     id: `consensus_${randomUUID()}`,
@@ -256,7 +263,7 @@ export function createConsensusGroup(input: {
     topic: input.topic,
     participant_work_items: uniqueStrings(input.participantWorkItems),
     quorum_policy: input.quorumPolicy ?? "reviewer_quorum",
-    decision: dissent.length ? "accepted_with_dissent" : "accepted",
+    decision,
     consolidated_findings: uniqueStrings(consolidated.map((finding) => finding.finding)),
     dissenting_findings: uniqueStrings(dissent.map((finding) => finding.finding)),
     confidence,

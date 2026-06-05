@@ -32,6 +32,10 @@ type SessionTokenRecord = {
   expiresAt: string;
 };
 
+export type SessionTokenValidation =
+  | { ok: true }
+  | { ok: false; code: "unauthorized" | "token_expired"; message: string };
+
 type PersistedState = {
   sessions: AgentRuntimeSession[];
   sessionTokens: Array<{
@@ -70,6 +74,14 @@ type ManagedTaskState = RuntimeTaskState & {
 type SessionManagerOptions = {
   runtimeEventLoader?: (sessionId: string) => Promise<DurableRuntimeEvent[]>;
 };
+
+const MAX_PERSISTED_SESSIONS = 40;
+const MAX_PERSISTED_MESSAGES = 40;
+const MAX_PERSISTED_EVENTS = 160;
+const MAX_PERSISTED_ITEMS = 80;
+const MAX_PERSISTED_STRING_LENGTH = 4_000;
+const MAX_PERSISTED_OBJECT_DEPTH = 4;
+const MAX_PERSISTED_OBJECT_KEYS = 80;
 
 export class SessionManager {
   private readonly sessions = new Map<string, AgentRuntimeSession>();
@@ -208,14 +220,21 @@ export class SessionManager {
   }
 
   validateSessionToken(sessionId: string, token: string | undefined) {
+    return this.checkSessionToken(sessionId, token).ok;
+  }
+
+  checkSessionToken(sessionId: string, token: string | undefined): SessionTokenValidation {
     const record = this.sessionTokens.get(sessionId);
-    if (!record) return true;
-    if (!token || hashToken(token) !== record.tokenHash) return false;
+    if (!record) return { ok: true };
+    if (!token || hashToken(token) !== record.tokenHash) {
+      return { ok: false, code: "unauthorized", message: "Missing or invalid session token." };
+    }
     const isValid = Date.parse(record.expiresAt) > Date.now();
     if (!isValid) {
       void this.markSessionExpired(sessionId, "Session token expired.");
+      return { ok: false, code: "token_expired", message: "Session token expired." };
     }
-    return isValid;
+    return { ok: true };
   }
 
   getSession(sessionId: string) {
@@ -654,13 +673,19 @@ export class SessionManager {
 
   private async persist() {
     await mkdir(path.dirname(this.statePath), { recursive: true });
+    const sessions = this.listSessions()
+      .slice(-MAX_PERSISTED_SESSIONS)
+      .map(createPersistedSessionSnapshot);
+    const sessionIds = new Set(sessions.map((session) => session.id));
     const state: PersistedState = {
-      sessions: this.listSessions(),
-      sessionTokens: [...this.sessionTokens.entries()].map(([sessionId, record]) => ({
-        sessionId,
-        tokenHash: record.tokenHash,
-        expiresAt: record.expiresAt
-      }))
+      sessions,
+      sessionTokens: [...this.sessionTokens.entries()]
+        .filter(([sessionId]) => sessionIds.has(sessionId))
+        .map(([sessionId, record]) => ({
+          sessionId,
+          tokenHash: record.tokenHash,
+          expiresAt: record.expiresAt
+        }))
     };
     await writeFile(this.statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   }
@@ -688,6 +713,85 @@ export class SessionManager {
       return [];
     }
   }
+}
+
+function createPersistedSessionSnapshot(session: AgentRuntimeSession): AgentRuntimeSession {
+  return sanitizePersistedValue({
+    ...session,
+    messages: session.messages.slice(-MAX_PERSISTED_MESSAGES).map((message) => ({
+      ...message,
+      content: truncatePersistedString(message.content, MAX_PERSISTED_STRING_LENGTH)
+    })),
+    runPhases: session.runPhases.slice(-MAX_PERSISTED_ITEMS),
+    decisionLedger: session.decisionLedger.slice(-MAX_PERSISTED_ITEMS),
+    tasks: session.tasks.slice(-MAX_PERSISTED_ITEMS),
+    toolCalls: session.toolCalls.slice(-MAX_PERSISTED_ITEMS),
+    toolIntents: session.toolIntents.slice(-MAX_PERSISTED_ITEMS),
+    artifacts: session.artifacts.slice(-MAX_PERSISTED_ITEMS),
+    patchProposals: session.patchProposals.slice(-MAX_PERSISTED_ITEMS),
+    commandRequests: session.commandRequests.slice(-MAX_PERSISTED_ITEMS),
+    commandExecutions: session.commandExecutions.slice(-MAX_PERSISTED_ITEMS),
+    backgroundJobs: session.backgroundJobs.slice(-MAX_PERSISTED_ITEMS),
+    moduleExecutionSummaries: session.moduleExecutionSummaries?.slice(-MAX_PERSISTED_ITEMS),
+    reasoningSummaries: session.reasoningSummaries.slice(-MAX_PERSISTED_MESSAGES),
+    progressEvents: session.progressEvents.slice(-MAX_PERSISTED_EVENTS),
+    agentWorkStatuses: session.agentWorkStatuses.slice(-MAX_PERSISTED_ITEMS),
+    orchestration: session.orchestration
+      ? {
+          ...session.orchestration,
+          agentRuns: session.orchestration.agentRuns.slice(-MAX_PERSISTED_ITEMS),
+          workerOutputs: session.orchestration.workerOutputs.slice(-MAX_PERSISTED_ITEMS),
+          securityReviews: session.orchestration.securityReviews.slice(-MAX_PERSISTED_ITEMS),
+          reviewerSummaries: session.orchestration.reviewerSummaries.slice(-MAX_PERSISTED_ITEMS),
+          orchestrationEvents: session.orchestration.orchestrationEvents.slice(-MAX_PERSISTED_EVENTS),
+          approvalDecisions: session.orchestration.approvalDecisions.slice(-MAX_PERSISTED_ITEMS),
+          selectedWorkerAgents: session.orchestration.selectedWorkerAgents.slice(-MAX_PERSISTED_ITEMS),
+          workOrders: session.orchestration.workOrders.slice(-MAX_PERSISTED_ITEMS),
+          qualityGateResults: session.orchestration.qualityGateResults.slice(-MAX_PERSISTED_ITEMS)
+        }
+      : undefined
+  }, 0, new WeakSet()) as AgentRuntimeSession;
+}
+
+function sanitizePersistedValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return truncatePersistedString(value, MAX_PERSISTED_STRING_LENGTH);
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return "[circular]";
+  if (Array.isArray(value) && value.every(isPersistablePrimitive)) {
+    return value.slice(-MAX_PERSISTED_ITEMS).map((item) =>
+      typeof item === "string" ? truncatePersistedString(item, MAX_PERSISTED_STRING_LENGTH) : item
+    );
+  }
+  if (depth >= MAX_PERSISTED_OBJECT_DEPTH) {
+    if (Array.isArray(value)) return { __truncated: true, kind: "array", length: value.length };
+    return { __truncated: true, kind: "object", keys: Object.keys(value).slice(0, 20) };
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const trimmed = value.slice(-MAX_PERSISTED_ITEMS).map((item) => sanitizePersistedValue(item, depth + 1, seen));
+    seen.delete(value);
+    return value.length > trimmed.length
+      ? [{ __truncated: true, omittedItems: value.length - trimmed.length }, ...trimmed]
+      : trimmed;
+  }
+  const entries = Object.entries(value).slice(0, MAX_PERSISTED_OBJECT_KEYS);
+  const result: Record<string, unknown> = {};
+  for (const [key, entryValue] of entries) {
+    result[key] = sanitizePersistedValue(entryValue, depth + 1, seen);
+  }
+  if (Object.keys(value).length > entries.length) {
+    result.__truncatedKeys = Object.keys(value).length - entries.length;
+  }
+  seen.delete(value);
+  return result;
+}
+
+function isPersistablePrimitive(value: unknown) {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null;
+}
+
+function truncatePersistedString(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}... [truncated ${value.length - maxLength} chars]` : value;
 }
 
 export function randomId(prefix: string) {

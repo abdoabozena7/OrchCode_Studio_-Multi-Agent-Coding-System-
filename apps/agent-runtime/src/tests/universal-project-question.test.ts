@@ -53,6 +53,49 @@ class GroundedProvider implements LlmProvider {
   }
 }
 
+class LineOneFlowProvider implements LlmProvider {
+  constructor(private readonly plainOnly = false) {}
+
+  async generateStructured<T>(): Promise<T> {
+    return {
+      answerMarkdown: this.answer(),
+      usedEvidenceRefs: [
+        "backend/main.py:1",
+        "backend/routes.py:1",
+        "frontend/app.js:1",
+        "backend/services/action_executor.py:1",
+        "backend/services/agents.py:1",
+        "backend/services/arima_model.py:1"
+      ],
+      unsupportedOrUnclearParts: []
+    } as T;
+  }
+
+  async generateText(): Promise<string> {
+    return this.answer();
+  }
+
+  private answer() {
+    if (this.plainOnly) {
+      return [
+        "The project flow starts in backend/main.py:1, which creates the backend app.",
+        "backend/routes.py:1 exposes the API surface and delegates to services.",
+        "frontend/app.js:1 is the browser entry script that calls the backend.",
+        "backend/services/action_executor.py:1, backend/services/agents.py:1, and backend/services/arima_model.py:1 form the service layer."
+      ].join("\n");
+    }
+    return [
+      "The project flow starts in `backend/main.py`, which creates the FastAPI app and mounts the router. [backend/main.py:1](hivo-file:backend%2Fmain.py:1)",
+      "",
+      "`backend/routes.py` exposes the API surface and delegates work into service modules. [backend/routes.py:1](hivo-file:backend%2Froutes.py:1)",
+      "",
+      "`frontend/app.js` is the browser entry script that calls those API routes. [frontend/app.js:1](hivo-file:frontend%2Fapp.js:1)",
+      "",
+      "The backend service layer fans out through action execution, agent coordination, and forecasting helpers: [backend/services/action_executor.py:1](hivo-file:backend%2Fservices%2Faction_executor.py:1), [backend/services/agents.py:1](hivo-file:backend%2Fservices%2Fagents.py:1), [backend/services/arima_model.py:1](hivo-file:backend%2Fservices%2Farima_model.py:1)."
+    ].join("\n");
+  }
+}
+
 class ShortDetailedProvider implements LlmProvider {
   async generateStructured<T>(_input: LlmRequest, _schema: unknown): Promise<T> {
     return {
@@ -152,6 +195,119 @@ class NaturalDecisionPolicyProvider implements LlmProvider {
       `\u0627\u0644\u0640 orchestrator \u0628\u064a\u0628\u0646\u064a \`weighted_votes\`\u060c \u064a\u062e\u062a\u0627\u0631 \`weighted_winner\`\u060c \u0648\u064a\u062d\u0633\u0628 \`agent_consensus\`. \u0648\u0645\u0645\u0643\u0646 \u0644\u0633\u0647 \u064a\u0631\u062c\u0639 \`No Action\` \u0623\u0648 \`Human Review\` \u0642\u0628\u0644 \u0645\u0627 \u064a\u0639\u0645\u0644 dispatch \u0644\u0644\u0623\u0643\u0634\u0646 \u0627\u0644\u0643\u0633\u0628\u0627\u0646. ${orchestrator}`,
       "",
       "\u0628\u0627\u0644\u062a\u0627\u0644\u064a: \u0627\u0644\u0646\u0638\u0627\u0645 \u064a\u0642\u0631\u0631 \`Re-cluster\` \u0644\u0648 \u0642\u0627\u0639\u062f\u0629 \u0635\u062d\u0629 \u0627\u0644\u0643\u0644\u0633\u062a\u0631 \u0635\u0648\u062a\u062a \u0644\u0647 \u0648\u0627\u0644\u0640 weighted routing \u0633\u0645\u062d \u0644\u0644\u0635\u0648\u062a \u062f\u0647 \u064a\u0643\u0633\u0628 \u0628\u0640 score/consensus \u0643\u0627\u0641\u064a. \u063a\u064a\u0631 \u0643\u062f\u0647 \u0645\u0645\u0643\u0646 \u064a\u0637\u0644\u0639 \`Offer\` \u0623\u0648 \`Strong Offer\` \u0623\u0648 \`Human Review\` \u0623\u0648 \`No Action\`."
+    ].join("\n");
+  }
+}
+
+class NaturalHumanReviewPolicyProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("human review policy provider should use natural text project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    const links = Array.from(input.userPrompt.matchAll(/\[[^\]]+\]\(hivo-file:[^)]+\)/g)).map((match) => match[0]);
+    const agents = links.find((link) => link.includes("backend/services/agents.py")) ?? links[0];
+    const orchestrator = links.find((link) => link.includes("backend/services/orchestrator.py")) ?? links[1] ?? agents;
+    const routes = links.find((link) => link.includes("backend/routes.py")) ?? links[2] ?? agents;
+    const executor = links.find((link) => link.includes("backend/services/action_executor.py")) ?? links[3] ?? agents;
+    if (!agents || !orchestrator || !routes || !executor) {
+      throw new Error("human review policy prompt did not include the expected evidence links");
+    }
+    return [
+      "## Routing policy",
+      "",
+      `The agents only propose actions: ` +
+        "`ReliabilityAgent`, `ForecastAgent`, and `ClusterHealthAgent` return `recommended_action_name` values that become `agent_recommendations`. " +
+        `${agents}`,
+      "",
+      `The orchestrator does the routing decision. It aggregates ` +
+        "`weighted_votes`, chooses a `weighted_winner`, and computes `agent_consensus`; if the score is below `minimum_score` it rejects, and if `agent_consensus < 0.60` or the score is below `borderline_low` it returns `route_name: 'review'` with `selected_action_name: 'Human Review'`. " +
+        `Only otherwise does it direct dispatch with ` +
+        "`route_name: 'dispatch'` and the winning action. " +
+        `${orchestrator}`,
+      "",
+      `The route wires that policy by building ` +
+        "`agent_recommendations`, calling `orchestrator.choose_route`, and then passing `selected_action_name` to `ActionExecutor.execute`. " +
+        `${routes} ${executor}`,
+      "",
+      "So Human Review is not an agent proposal being blindly executed; it is the orchestration gate for low consensus or borderline score. Direct dispatch happens only after the central route decision accepts the weighted winner."
+    ].join("\n");
+  }
+}
+
+class ArabicHumanReviewPolicyProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("arabic human review policy provider should use natural text project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    const links = Array.from(input.userPrompt.matchAll(/\[[^\]]+\]\(hivo-file:[^)]+\)/g)).map((match) => match[0]);
+    const agents = links.find((link) => link.includes("backend/services/agents.py")) ?? links[0];
+    const orchestrator = links.find((link) => link.includes("backend/services/orchestrator.py")) ?? links[1] ?? agents;
+    const routes = links.find((link) => link.includes("backend/routes.py")) ?? links[2] ?? agents;
+    const executor = links.find((link) => link.includes("backend/services/action_executor.py")) ?? links[3] ?? agents;
+    if (!agents || !orchestrator || !routes || !executor) {
+      throw new Error("arabic human review policy prompt did not include the expected evidence links");
+    }
+    return [
+      "## سياسة التوجيه",
+      "",
+      `الـ agents بتقترح إجراءات فقط، ونتائجها بتتجمع كـ \`agent_recommendations\`. ${agents}`,
+      "",
+      `الـ orchestrator هو اللي يقرر: لو \`agent_consensus\` قليل أو الـ score في المنطقة الحدية، يحول إلى المراجعة البشرية بدل التنفيذ المباشر. ${orchestrator}`,
+      "",
+      `لو القرار المركزي قبل الـ weighted winner، ساعتها يحصل التنفيذ المباشر ويُمرر \`selected_action_name\` إلى \`ActionExecutor.execute\`. ${routes} ${executor}`,
+      "",
+      "الخلاصة: المراجعة البشرية هي بوابة مراجعة عند ضعف الثقة أو الإجماع، أما التنفيذ المباشر فيحصل فقط بعد قبول قرار التوجيه المركزي."
+    ].join("\n");
+  }
+}
+
+class NaturalSourceFlowProvider implements LlmProvider {
+  structuredCalls = 0;
+  textCalls = 0;
+
+  async generateStructured(): Promise<never> {
+    this.structuredCalls += 1;
+    throw new Error("source flow provider should use natural text project explain");
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.textCalls += 1;
+    const links = Array.from(input.userPrompt.matchAll(/\[[^\]]+\]\(hivo-file:[^)]+\)/g)).map((match) => match[0]);
+    const main = links.find((link) => link.includes("backend/main.py")) ?? links[0];
+    const routes = links.find((link) => link.includes("backend/routes.py")) ?? links[1] ?? main;
+    const arima = links.find((link) => link.includes("backend/services/arima_model.py")) ?? links[2] ?? routes;
+    const frontend = links.find((link) => link.includes("frontend/app.js")) ?? links[3] ?? routes;
+    if (!main || !routes || !arima || !frontend) {
+      throw new Error("source flow prompt did not include expected evidence links");
+    }
+    return [
+      "## Backend to frontend flow",
+      "",
+      `The backend starts from ` +
+        "`backend/main.py`, which imports or mounts the route layer so the FastAPI app has HTTP endpoints. " +
+        `${main}`,
+      "",
+      `The route layer in ` +
+        "`backend/routes.py` is the bridge from requests into services: it imports `forecast` from `backend/services/arima_model.py` and exposes the backend response shape. " +
+        `${routes} ${arima}`,
+      "",
+      `The frontend in ` +
+        "`frontend/app.js` calls the backend with `fetch('/api/forecast')`, receives JSON, and uses that response to drive the browser UI. " +
+        `${frontend}`,
+      "",
+      "So the connection is: backend app startup -> route handler -> service function -> frontend fetch/render path."
     ].join("\n");
   }
 }
@@ -277,6 +433,179 @@ test("UniversalProjectQuestionEngine notice-only accepts natural provider Markdo
     assert.equal(result.fallbackUsed, false);
     assert.equal(result.answerStrategy.finalAnswerSource, "provider");
     assert.match(result.answerMarkdown, /key code evidence|hivo-file/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine treats smoke entrypoint inventory as structural project context", async () => {
+  const workspace = await createWorkspace("universal-entrypoint-inventory");
+  try {
+    await mkdir(path.join(workspace, "backend"), { recursive: true });
+    await mkdir(path.join(workspace, "frontend"), { recursive: true });
+    await writeFile(path.join(workspace, "backend", "main.py"), "from backend.routes import app\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "routes.py"), "app = object()\n", "utf8");
+    await writeFile(path.join(workspace, "frontend", "app.js"), "export function boot() { return 'ui'; }\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "What are the main entrypoint files in this project? Use the detected candidates backend/main.py, backend/routes.py, frontend/app.js.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python", "JavaScript"],
+        importantFiles: ["backend/main.py", "backend/routes.py", "frontend/app.js"],
+        entryPoints: ["backend/main.py", "backend/routes.py", "frontend/app.js"]
+      }
+    });
+    const provider = new NaturalUniversalProvider();
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.questionUnderstanding.targetConcept, "general");
+    assert.equal(result.grounding.concept.specific, false);
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      unsupportedOrUnclearParts: result.unsupportedOrUnclearParts,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.match(result.answerMarkdown, /backend\/main\.py|backend\/routes\.py|frontend\/app\.js|hivo-file/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine does not reject general flow answers only for line-one citations", async () => {
+  const workspace = await createWorkspace("universal-line-one-flow");
+  try {
+    await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
+    await mkdir(path.join(workspace, "frontend"), { recursive: true });
+    await writeFile(path.join(workspace, "backend", "main.py"), "from backend.routes import router\napp = object()\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "routes.py"), "from backend.services.action_executor import execute_action\nrouter = object()\n", "utf8");
+    await writeFile(path.join(workspace, "frontend", "app.js"), "export async function boot() { return fetch('/api/action'); }\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "action_executor.py"), "def execute_action(payload):\n    return payload\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "agents.py"), "def select_agent(task):\n    return task\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "arima_model.py"), "def forecast(values):\n    return values\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How do these detected source files connect the project flow? Use only project files such as backend/main.py, backend/routes.py, frontend/app.js, backend/services/action_executor.py, backend/services/agents.py, backend/services/arima_model.py.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python", "JavaScript"],
+        importantFiles: ["backend/main.py", "backend/routes.py", "frontend/app.js", "backend/services/action_executor.py", "backend/services/agents.py", "backend/services/arima_model.py"],
+        entryPoints: ["backend/main.py", "backend/routes.py", "frontend/app.js"]
+      }
+    });
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider: new LineOneFlowProvider(),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.fallbackUsed, false, JSON.stringify(result.validationErrors));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.doesNotMatch(result.answerMarkdown, /provider_validation_notice|local synthesis was not used/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine accepts verified plain file refs when provider omits hivo links", async () => {
+  const workspace = await createWorkspace("universal-plain-flow-refs");
+  try {
+    await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
+    await mkdir(path.join(workspace, "frontend"), { recursive: true });
+    await writeFile(path.join(workspace, "backend", "main.py"), "from backend.routes import router\napp = object()\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "routes.py"), "from backend.services.action_executor import execute_action\nrouter = object()\n", "utf8");
+    await writeFile(path.join(workspace, "frontend", "app.js"), "export async function boot() { return fetch('/api/action'); }\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "action_executor.py"), "def execute_action(payload):\n    return payload\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "agents.py"), "def select_agent(task):\n    return task\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "arima_model.py"), "def forecast(values):\n    return values\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How do these detected source files connect the project flow? Use only project files such as backend/main.py, backend/routes.py, frontend/app.js, backend/services/action_executor.py, backend/services/agents.py, backend/services/arima_model.py.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python", "JavaScript"],
+        importantFiles: ["backend/main.py", "backend/routes.py", "frontend/app.js", "backend/services/action_executor.py", "backend/services/agents.py", "backend/services/arima_model.py"],
+        entryPoints: ["backend/main.py", "backend/routes.py", "frontend/app.js"]
+      }
+    });
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider: new LineOneFlowProvider(true),
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(result.fallbackUsed, false, JSON.stringify(result.validationErrors));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.match(result.answerMarkdown, /backend\/main\.py:1|frontend\/app\.js:1/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine treats smoke backend/frontend flow prompt as structural context", async () => {
+  const workspace = await createWorkspace("universal-source-flow");
+  try {
+    await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
+    await mkdir(path.join(workspace, "frontend"), { recursive: true });
+    await writeFile(path.join(workspace, "backend", "__init__.py"), "", "utf8");
+    await writeFile(path.join(workspace, "backend", "main.py"), "from backend.routes import app\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "routes.py"), "from backend.services.arima_model import forecast\napp = object()\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "services", "arima_model.py"), "def forecast(): return []\n", "utf8");
+    await writeFile(path.join(workspace, "frontend", "app.js"), "fetch('/api/forecast').then(response => response.json())\n", "utf8");
+    const tools = new ToolRegistry(workspace);
+    const prompt = "How do the detected source files connect the backend and frontend flow? Use only project files such as backend/__init__.py, backend/main.py, backend/routes.py, backend/services/arima_model.py, frontend/app.js.";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python", "JavaScript"],
+        importantFiles: ["backend/__init__.py", "backend/main.py", "backend/routes.py", "backend/services/arima_model.py", "frontend/app.js"],
+        entryPoints: ["backend/main.py", "frontend/app.js"]
+      }
+    });
+    const provider = new NaturalSourceFlowProvider();
+
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.questionUnderstanding.targetConcept, "general");
+    assert.equal(result.grounding.concept.specific, false);
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      unsupportedOrUnclearParts: result.unsupportedOrUnclearParts,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.doesNotMatch(result.fallbackReason ?? "", /SARIMA|provider_answer_failed_local_validation/i);
+    assert.match(result.answerMarkdown, /backend\/main\.py|backend\/routes\.py|frontend\/app\.js|hivo-file/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1173,6 +1502,106 @@ test("UniversalProjectQuestionEngine accepts provider decision-policy answers wi
     assert.equal(result.answerShapeValidation.valid, true);
     assert.doesNotMatch(result.fallbackReason ?? "", /Forecasting answer|Downstream stage/i);
     assert.match(result.answerMarkdown, /drift_detected|membership_strength|ClusterHealthAgent|Re-cluster|Offer|agent_recommendations|weighted_votes|agent_consensus|choose_route/);
+    assert.match(result.answerMarkdown, /backend\/services\/agents\.py|backend\/services\/orchestrator\.py|backend\/routes\.py/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine accepts human review policy answers using aliases instead of internal concept keys", async () => {
+  const workspace = await createMultiAgentDecisionWorkspace();
+  const provider = new NaturalHumanReviewPolicyProvider();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "When does the orchestrator direct dispatch, and when does it send Human Review even if agents propose an action?";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: [
+          "backend/routes.py",
+          "backend/services/agents.py",
+          "backend/services/orchestrator.py",
+          "backend/services/action_executor.py"
+        ]
+      }
+    });
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report,
+      providerFailureSynthesis: "notice_only"
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.questionUnderstanding.targetConcept, "human_review_loop");
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      unsupportedOrUnclearParts: result.unsupportedOrUnclearParts,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.equal(result.answerShapeValidation.valid, true);
+    assert.equal(result.coverageValidation.valid, true);
+    assert.doesNotMatch(result.answerMarkdown, /human_review_loop/);
+    assert.match(result.answerMarkdown, /Human Review|route_name: 'review'|agent_consensus|direct dispatch|ActionExecutor/);
+    assert.match(result.answerMarkdown, /backend\/services\/agents\.py|backend\/services\/orchestrator\.py|backend\/routes\.py/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UniversalProjectQuestionEngine accepts Arabic human-review policy wording without memorized fallback", async () => {
+  const workspace = await createMultiAgentDecisionWorkspace();
+  const provider = new ArabicHumanReviewPolicyProvider();
+  try {
+    const tools = new ToolRegistry(workspace);
+    const prompt = "امتى الـ orchestrator يعمل direct dispatch؟ وامتى يحوّل لـ human review حتى لو فيه agents بتقترح action؟";
+    const report = buildLargeProjectExplainReport({
+      workspacePath: workspace,
+      message: prompt,
+      projectMap: {
+        ...projectMap,
+        stack: ["Python"],
+        entryPoints: ["backend/routes.py"],
+        importantFiles: [
+          "backend/routes.py",
+          "backend/services/agents.py",
+          "backend/services/orchestrator.py",
+          "backend/services/action_executor.py"
+        ]
+      }
+    });
+    const result = await answerUniversalProjectQuestionRaw({
+      provider,
+      tools,
+      userPrompt: prompt,
+      explainReport: report,
+      providerFailureSynthesis: "notice_only"
+    });
+
+    assert.equal(provider.structuredCalls, 0);
+    assert.ok(provider.textCalls >= 1);
+    assert.equal(result.questionUnderstanding.targetConcept, "human_review_loop");
+    assert.equal(result.fallbackUsed, false, JSON.stringify({
+      fallbackReason: result.fallbackReason,
+      validationErrors: result.validationErrors,
+      unsupportedOrUnclearParts: result.unsupportedOrUnclearParts,
+      answerMarkdown: result.answerMarkdown
+    }, null, 2));
+    assert.equal(result.answerStrategy.strategy, "provider_final");
+    assert.equal(result.answerStrategy.finalAnswerSource, "provider");
+    assert.equal(result.answerShapeValidation.valid, true);
+    assert.equal(result.coverageValidation.valid, true);
+    assert.doesNotMatch(result.answerMarkdown, /local synthesis was not used|provider_validation_notice|human_review_loop/i);
+    assert.match(result.answerMarkdown, /المراجعة البشرية|التنفيذ المباشر|agent_consensus|ActionExecutor/);
     assert.match(result.answerMarkdown, /backend\/services\/agents\.py|backend\/services\/orchestrator\.py|backend\/routes\.py/);
   } finally {
     await rm(workspace, { recursive: true, force: true });

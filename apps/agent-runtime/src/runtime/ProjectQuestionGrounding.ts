@@ -472,6 +472,9 @@ export function detectProjectAnswerShape(userPrompt: string): ProjectAnswerShape
 
 export function extractRequestedConcept(userPrompt: string): RequestedConcept {
   const styleStripped = stripStylePhrases(userPrompt);
+  if (isStructuralFileContextQuestion(styleStripped) || isStructuralFileContextQuestion(userPrompt)) {
+    return { specific: false, label: "this project", terms: [], coreTerms: [], aliases: [], confidence: "unknown" };
+  }
   const pageInventory = detectPageInventoryConcept(styleStripped) ?? detectPageInventoryConcept(userPrompt);
   if (pageInventory) return pageInventory;
   const decisionPolicy = detectDecisionPolicyConcept(styleStripped) ?? detectDecisionPolicyConcept(userPrompt);
@@ -508,6 +511,24 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
     aliases,
     confidence: terms.length ? "medium" : "low"
   };
+}
+
+function isStructuralFileContextQuestion(userPrompt: string) {
+  return isEntrypointInventoryQuestion(userPrompt) || isSourceFlowFileQuestion(userPrompt);
+}
+
+function isEntrypointInventoryQuestion(userPrompt: string) {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  return /\b(?:main\s+)?entry\s*points?\b|\bentrypoints?\b|\bentry\s+files?\b/.test(normalized)
+    || /\bwhat\s+are\s+the\s+main\s+files\b/.test(normalized)
+    || /\buse\s+the\s+detected\s+candidates\b/.test(normalized) && /\bmain\b|\bentry\b|\bbackend\/main\b|\bapp\.(?:js|ts|tsx|jsx)\b/.test(normalized);
+}
+
+function isSourceFlowFileQuestion(userPrompt: string) {
+  const normalized = normalizeForGroundingSearch(userPrompt);
+  return /\bdetected\s+source\s+files\b/.test(normalized) && /\bconnect\b/.test(normalized) && /\bflow\b/.test(normalized)
+    || /\bbackend\b/.test(normalized) && /\bfrontend\b/.test(normalized) && /\b(connect|wire|flow|source\s+files)\b/.test(normalized)
+    || /\buse\s+only\s+project\s+files\s+such\s+as\b/.test(normalized) && /\b(connect|flow|backend|frontend)\b/.test(normalized);
 }
 
 function conceptFromInvestigationResolution(userPrompt: string): RequestedConcept | undefined {

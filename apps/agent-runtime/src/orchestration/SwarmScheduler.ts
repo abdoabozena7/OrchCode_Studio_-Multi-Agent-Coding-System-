@@ -250,8 +250,11 @@ export class SwarmScheduler {
       attempt_count: input.workItem.attempt_count
     }, input.workItem.id);
     if (input.workItem.type === "execute") {
-      await this.event(input.run.id, "swarm.executor.patch_proposed", `Executor prepared a scoped patch proposal for ${input.workItem.id}.`, {
-        write_files: input.workItem.write_files
+      await this.event(input.run.id, "swarm.executor.patch_proposed", `Executor started with planned write targets for ${input.workItem.id}; no patch has been accepted or applied yet.`, {
+        write_files: input.workItem.write_files,
+        planned_only: true,
+        patch_accepted: false,
+        patch_applied: false
       }, input.workItem.id);
     }
     if (input.workItem.type === "test") {

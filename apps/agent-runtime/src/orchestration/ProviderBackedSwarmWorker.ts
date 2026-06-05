@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
@@ -12,9 +14,9 @@ import {
   type PromptArtifactMetadata
 } from "./PromptSystem.js";
 import {
+  normalizeReadOnlySwarmOutput,
   schemaForReadOnlySwarmRole,
-  summarizeReadOnlySwarmOutput,
-  validateReadOnlySwarmOutput
+  summarizeReadOnlySwarmOutput
 } from "./ReadOnlySwarmWorkerSchemas.js";
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
 import { defaultMockWorker, type SwarmWorker } from "./SwarmScheduler.js";
@@ -132,12 +134,13 @@ export class ProviderBackedSwarmWorker {
     const createdAt = new Date().toISOString();
     const outputSchema = schemaForReadOnlySwarmRole(input.workItem.required_role, input.workItem.type);
     const teamContextScope = await this.resolveTeamContextScope(input);
+    const contextSummary = await buildContextSummary(input, teamContextScope, this.options.workspacePath);
     const contextRef = await this.artifactStore.saveProviderWorkerArtifact({
       runId: input.run.id,
       workItemId: input.workItem.id,
       name: "context_summary",
       extension: "json",
-      value: buildContextSummary(input, teamContextScope),
+      value: contextSummary,
       metadata: { worker_invocation_id: invocationId, team_id: teamContextScope?.team_id }
     });
     const promptResult = renderPromptTemplate(swarmPromptTemplateIdForRole(input.workItem.required_role, input.workItem.type), {
@@ -256,7 +259,7 @@ export class ProviderBackedSwarmWorker {
       rawOutput = await provider.generateStructured({
         systemPrompt: "You are a read-only swarm worker. Return strict JSON only. Never propose patches, commands, or file writes.",
         userPrompt: promptResult.rendered.text,
-        context: buildContextSummary(input, teamContextScope)
+        context: contextSummary
       }, outputSchema);
       await this.traceWriter.write({
         run_id: input.run.id,
@@ -327,27 +330,45 @@ export class ProviderBackedSwarmWorker {
       })
     });
 
-    const validation = validateReadOnlySwarmOutput(rawOutput, outputSchema);
+    const normalizedOutput = normalizeReadOnlySwarmOutput(rawOutput, outputSchema);
+    const validation = normalizedOutput.validation;
     const validationRef = await this.artifactStore.saveProviderWorkerArtifact({
       runId: input.run.id,
       workItemId: input.workItem.id,
       name: "schema_validation",
       extension: "json",
-      value: validation,
-      metadata: { worker_invocation_id: invocationId, output_schema_status: validation.valid ? "passed" : "failed" }
+      value: {
+        ...validation,
+        repaired: normalizedOutput.repaired,
+        repair_reasons: normalizedOutput.repair_reasons
+      },
+      metadata: {
+        worker_invocation_id: invocationId,
+        output_schema_status: validation.valid ? "passed" : "failed",
+        schema_repaired: normalizedOutput.repaired
+      }
     });
     const schemaTrace = await this.traceWriter.write({
       run_id: input.run.id,
       task_id: input.workItem.id,
-      event_type: validation.valid ? "provider_output_schema_validated" : "provider_output_schema_failed",
+      event_type: validation.valid
+        ? normalizedOutput.repaired
+          ? "provider_output_schema_repaired"
+          : "provider_output_schema_validated"
+        : "provider_output_schema_failed",
       lifecycle_stage: "executing",
-      severity: validation.valid ? "info" : "error",
-      summary: validation.valid ? "Provider read-only output schema validated." : "Provider read-only output schema failed.",
-      reason: validation.errors.join("; ") || undefined,
+      severity: validation.valid ? normalizedOutput.repaired ? "warning" : "info" : "error",
+      summary: validation.valid
+        ? normalizedOutput.repaired
+          ? "Provider read-only output schema was repaired and validated."
+          : "Provider read-only output schema validated."
+        : "Provider read-only output schema failed.",
+      reason: validation.valid && normalizedOutput.repaired ? normalizedOutput.repair_reasons.join("; ") : validation.errors.join("; ") || undefined,
       artifact_refs: [validationRef],
       metadata_json: traceMetadata(input, {
         output_schema_name: outputSchema.name,
-        output_schema_status: validation.valid ? "passed" : "failed"
+        output_schema_status: validation.valid ? "passed" : "failed",
+        schema_repaired: normalizedOutput.repaired
       })
     });
 
@@ -371,14 +392,18 @@ export class ProviderBackedSwarmWorker {
       return result;
     }
 
-    const summary = summarizeReadOnlySwarmOutput(rawOutput);
+    const summary = summarizeReadOnlySwarmOutput(normalizedOutput.value);
     const parsedRef = await this.artifactStore.saveProviderWorkerArtifact({
       runId: input.run.id,
       workItemId: input.workItem.id,
       name: "parsed_output",
       extension: "json",
-      value: rawOutput,
-      metadata: { worker_invocation_id: invocationId, output_schema_name: outputSchema.name }
+      value: normalizedOutput.value,
+      metadata: {
+        worker_invocation_id: invocationId,
+        output_schema_name: outputSchema.name,
+        schema_repaired: normalizedOutput.repaired
+      }
     });
     const result: WorkItemResult = {
       schema_version: SWARM_SCHEMA_VERSION,
@@ -406,7 +431,15 @@ export class ProviderBackedSwarmWorker {
       outputSchemaName: outputSchema.name,
       outputSchemaStatus: "passed",
       traceEventId: schemaTrace.trace_event_id,
-      metadata: { prompt_ref: promptRef, prompt_quality_ref: promptQualityRef, schema_validation_ref: validationRef, team_id: teamContextScope?.team_id, team_memory_scope: teamContextScope?.memory_scope }
+      metadata: {
+        prompt_ref: promptRef,
+        prompt_quality_ref: promptQualityRef,
+        schema_validation_ref: validationRef,
+        schema_repaired: normalizedOutput.repaired,
+        repair_reasons: normalizedOutput.repair_reasons,
+        team_id: teamContextScope?.team_id,
+        team_memory_scope: teamContextScope?.memory_scope
+      }
     });
     return result;
   }
@@ -540,7 +573,8 @@ function readOnlyGuard(input: Parameters<SwarmWorker>[0]): { ok: true } | { ok: 
   return { ok: true };
 }
 
-function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContextScope?: TeamContextScope) {
+async function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContextScope: TeamContextScope | undefined, workspacePath: string) {
+  const fileExcerpts = await readFileExcerpts(workspacePath, input.workItem.read_files);
   return {
     run_id: input.run.id,
     work_item_id: input.workItem.id,
@@ -548,6 +582,7 @@ function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContextScope
     role: input.workItem.required_role,
     work_item_type: input.workItem.type,
     read_files: input.workItem.read_files,
+    file_excerpts: fileExcerpts,
     write_files: input.workItem.write_files,
     risk_level: input.workItem.risk_level,
     context_pack_ref: input.workItem.context_pack_ref,
@@ -581,10 +616,43 @@ function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContextScope
     confidence: input.workItem.context_pack_ref ? "medium" : "low",
     inclusion_metadata: {
       source: input.workItem.context_pack_ref ? "work_item.context_pack_ref" : "fallback_work_item_summary",
-      inclusion_reason: teamContextScope ? "Team-aware read-only context metadata for provider-backed swarm worker." : "Minimal read-only context for provider-backed swarm worker.",
+      inclusion_reason: fileExcerpts.length
+        ? "Read-only file excerpts were included so provider-backed workers can inspect evidence, not just file names."
+        : teamContextScope
+          ? "Team-aware read-only context metadata for provider-backed swarm worker."
+          : "Minimal read-only context for provider-backed swarm worker.",
       access_mode: "reference_only"
     }
   };
+}
+
+async function readFileExcerpts(workspacePath: string, readFiles: string[]) {
+  const excerpts: Array<{ path: string; content: string; truncated: boolean; chars: number }> = [];
+  let remaining = 18_000;
+  for (const file of readFiles.filter((entry) => !looksLikeCommand(entry)).slice(0, 8)) {
+    if (remaining <= 0) break;
+    if (!isUsefulTextPath(file)) continue;
+    const resolved = path.resolve(workspacePath, file);
+    const root = path.resolve(workspacePath);
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) continue;
+    const raw = await readFile(resolved, "utf8").catch(() => "");
+    if (!raw.trim()) continue;
+    const limit = Math.min(3_000, remaining);
+    const content = raw.slice(0, limit);
+    remaining -= content.length;
+    excerpts.push({
+      path: file.replaceAll("\\", "/"),
+      content,
+      truncated: raw.length > content.length,
+      chars: content.length
+    });
+  }
+  return excerpts;
+}
+
+function isUsefulTextPath(file: string) {
+  return /\.(c|cc|conf|cpp|cs|go|h|hpp|html|java|js|json|jsx|kt|md|mjs|py|rs|sh|sql|swift|toml|ts|tsx|txt|yaml|yml)$/i.test(file)
+    && !/(^|[\\/])(\.git|node_modules|dist|build|coverage|target|venv|\.venv|__pycache__)([\\/]|$)/i.test(file);
 }
 
 function traceMetadata(input: Parameters<SwarmWorker>[0], extra: Record<string, unknown> = {}) {

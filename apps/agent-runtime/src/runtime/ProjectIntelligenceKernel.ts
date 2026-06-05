@@ -302,8 +302,34 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
   fcm: ["fcm", "FCM", "cmeans", "fuzzy c"],
   svm: ["svm", "SVM", "SVC", "support vector"],
   retraining_loop: ["retraining loop", "retrain", "retraining", "training job", "scheduler", "feedback log"],
-  human_review_loop: ["human review", "manual review", "review loop", "awaiting_feedback", "review"],
-  action_loop: ["action loop", "action executor", "selected_action", "selected_action_name", "retention offer", "recommendation"]
+  human_review_loop: [
+    "human review",
+    "manual review",
+    "review loop",
+    "awaiting_feedback",
+    "review",
+    "\u0645\u0631\u0627\u062c\u0639\u0629 \u0628\u0634\u0631\u064a\u0629",
+    "\u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0628\u0634\u0631\u064a\u0629",
+    "\u0645\u0631\u0627\u062c\u0639\u0629 \u064a\u062f\u0648\u064a\u0629",
+    "\u062a\u062d\u0648\u064a\u0644 \u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629",
+    "\u0628\u0648\u0627\u0628\u0629 \u0645\u0631\u0627\u062c\u0639\u0629",
+    "\u062a\u062f\u062e\u0644 \u0628\u0634\u0631\u064a"
+  ],
+  action_loop: [
+    "action loop",
+    "action executor",
+    "direct dispatch",
+    "dispatch",
+    "selected_action",
+    "selected_action_name",
+    "retention offer",
+    "recommendation",
+    "\u062a\u0646\u0641\u064a\u0630 \u0645\u0628\u0627\u0634\u0631",
+    "\u062a\u0648\u062c\u064a\u0647 \u0645\u0628\u0627\u0634\u0631",
+    "\u0625\u0631\u0633\u0627\u0644 \u0645\u0628\u0627\u0634\u0631",
+    "\u0627\u0644\u0625\u062c\u0631\u0627\u0621 \u0627\u0644\u0641\u0627\u0626\u0632",
+    "\u0627\u0644\u0623\u0643\u0634\u0646"
+  ]
 };
 
 const ARCHITECTURE_PATTERN_ALIASES = [
@@ -414,11 +440,13 @@ export function resolveInvestigationConcept(question: string): InvestigationConc
     targetConcept = "retraining_loop";
     requestedConceptText = "retraining loop";
     inferredPatternName = "feedback-to-retraining loop";
-  } else if (/\b(?:human review|manual review|review loop)\b/i.test(normalized)) {
+  } else if (/\b(?:human review|manual review|review loop)\b/i.test(normalized)
+    || /(?:\u0645\u0631\u0627\u062c\u0639\u0629\s+\u0628\u0634\u0631\u064a\u0629|\u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629\s+\u0627\u0644\u0628\u0634\u0631\u064a\u0629|\u0645\u0631\u0627\u062c\u0639\u0629\s+\u064a\u062f\u0648\u064a\u0629|\u062a\u062d\u0648\u064a\u0644\s+\u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629|\u062a\u062f\u062e\u0644\s+\u0628\u0634\u0631\u064a)/.test(question)) {
     targetConcept = "human_review_loop";
     requestedConceptText = "human review loop";
     inferredPatternName = "review/action loop";
-  } else if (/\b(?:action loop|action executor|selected_action|retention offer)\b/i.test(normalized)) {
+  } else if (/\b(?:action loop|action executor|direct dispatch|dispatch|selected_action|retention offer)\b/i.test(normalized)
+    || /(?:\u062a\u0646\u0641\u064a\u0630\s+\u0645\u0628\u0627\u0634\u0631|\u062a\u0648\u062c\u064a\u0647\s+\u0645\u0628\u0627\u0634\u0631|\u0625\u0631\u0633\u0627\u0644\s+\u0645\u0628\u0627\u0634\u0631|\u0627\u0644\u0625\u062c\u0631\u0627\u0621\s+\u0627\u0644\u0641\u0627\u0626\u0632)/.test(question)) {
     targetConcept = "action_loop";
     requestedConceptText = "action loop";
     inferredPatternName = "decision/action loop";
@@ -1348,7 +1376,7 @@ function normalizeConcept(value: string) {
     .replace(/^ال/i, "")
     .replace(/^[\u0627][\u0644]/, "")
     .toLowerCase()
-    .replace(/[^a-z0-9_\-\s]/g, "");
+    .replace(/[^\u0600-\u06ffa-z0-9_\-\s]/g, "");
 }
 
 function includesTerm(text: string, term: string) {

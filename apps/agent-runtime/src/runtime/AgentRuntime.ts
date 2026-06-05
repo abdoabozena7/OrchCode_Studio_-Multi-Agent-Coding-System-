@@ -12,6 +12,7 @@ import type {
 } from "@hivo/protocol";
 import { accessProfileDefaults } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type { RuntimeConfig } from "../config.js";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
@@ -31,6 +32,7 @@ import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkComman
 import { RunEngine } from "./RunEngine.js";
 import { OrchestratedRuntime } from "./OrchestratedRuntime.js";
 import { CoreOrchestrator, loadPatchHistory, readRunArtifact } from "../orchestration/Orchestrator.js";
+import { SwarmAutopilotRuntime } from "../orchestration/SwarmRuntime.js";
 import { buildProjectIntake, classifyRunIntent } from "./ProjectIntake.js";
 import {
   appendAgentJournalEntry,
@@ -174,9 +176,6 @@ export class AgentRuntime {
             };
 
       const requestedAgentCount = modeResolution.directive.requestedAgentCount ?? 0;
-      if (modeResolution.mode === "orchestrated_mode" && session.mode === "real_provider") {
-        return this.stopRealProviderDeterministicOrchestration(sessionId, promptForExecution);
-      }
       if (modeResolution.mode === "orchestrated_mode" && shouldConfirmSingleFilePygamePlan(promptForExecution, requestedAgentCount)) {
         await this.sessionManager.updateSession(sessionId, (draft) => {
           draft.status = "needs_approval";
@@ -226,7 +225,10 @@ export class AgentRuntime {
         }
       }
       let updated: AgentRuntimeSession;
-      if (modeResolution.mode === "orchestrated_mode") {
+      if (modeResolution.mode === "orchestrated_mode" && session.mode === "real_provider") {
+        provider ??= new TelemetryLlmProvider(this.getProvider(session), providerTelemetry);
+        updated = await this.runProviderBackedSwarmTurn(sessionId, promptForExecution, provider, providerTelemetry, conversationUnderstanding);
+      } else if (modeResolution.mode === "orchestrated_mode") {
         updated = await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst, conversationUnderstanding);
       } else {
         provider ??= new TelemetryLlmProvider(this.getProvider(session), providerTelemetry);
@@ -1252,6 +1254,147 @@ export class AgentRuntime {
     return this.sessionManager.getSession(sessionId)!;
   }
 
+  private async runProviderBackedSwarmTurn(
+    sessionId: string,
+    message: string,
+    provider: LlmProvider,
+    providerTelemetry: ReturnType<typeof createProviderTelemetryRecorder>,
+    conversationUnderstanding?: ConversationUnderstanding
+  ) {
+    const session = this.sessionManager.getSession(sessionId)!;
+    const lastMessage = session.messages.at(-1);
+    if (lastMessage?.role !== "user" || lastMessage.content !== message) {
+      await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
+    }
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "running";
+      draft.lifecycleStage = "EXECUTION_DRAFT";
+      draft.resolvedExecutionMode = "orchestrated_mode";
+      draft.agentName = "Provider-Backed Swarm";
+      draft.orchestration ??= createEmptyOrchestration(draft);
+      draft.reasoningSummaries.push("Real-provider orchestration is using provider-backed read-only swarm workers; deterministic mock workers are not accepted as the assistant answer.");
+    });
+
+    const swarmGoal = conversationUnderstanding?.workspaceMessage || message;
+    const swarm = new SwarmAutopilotRuntime({
+      workspacePath: session.workspacePath,
+      mode: "deep",
+      workerMode: "provider_read_only",
+      providerFactory: () => provider,
+      providerName: session.providerConfig?.providerName,
+      modelName: session.providerConfig?.selectedModel
+    });
+    const result = await swarm.run(swarmGoal);
+    const workResults = await loadSwarmWorkResults(result.workItems);
+    const terminalStatus = mapSwarmRunStatus(result.run.status, providerTelemetry.snapshot().lastError);
+    const completedAt = new Date().toISOString();
+    const summary = formatProviderBackedSwarmAnswer({
+      finalReport: result.finalReport,
+      providerCallCount: providerTelemetry.snapshot().providerRequestCount,
+      workerCount: result.staffingPlan.recommended_total_logical_agents,
+      workResults,
+      status: terminalStatus,
+      providerFailures: providerTelemetry.snapshot().providerFailureCount,
+      providerTimeouts: providerTelemetry.snapshot().providerTimeoutCount,
+      invalidStructuredOutputs: result.metrics.invalid_structured_outputs,
+      retries: result.metrics.retries
+    });
+
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = terminalStatus;
+      draft.lifecycleStage = terminalStatus === "completed" ? "DONE" : terminalStatus === "blocked" ? "BLOCKED" : "FAILED";
+      draft.nextAction = undefined;
+      draft.providerTelemetry = providerTelemetry.snapshot();
+      draft.resolvedExecutionMode = "orchestrated_mode";
+      draft.delegationDecision = {
+        resolvedMode: "orchestrated_mode",
+        selectedAgentCount: result.staffingPlan.recommended_total_logical_agents,
+        selectedAgentRoles: Object.entries(result.staffingPlan.role_counts)
+          .filter(([, count]) => count > 0)
+          .map(([role, count]) => `${role} x${count}`),
+        agentRoleReasons: result.staffingPlan.reasoning.map((reason, index) => ({
+          agentName: `staffing_reason_${index + 1}`,
+          reason
+        })),
+        estimatedComplexity: result.staffingPlan.task_complexity === "tiny" || result.staffingPlan.task_complexity === "small" ? "low" : result.staffingPlan.task_complexity === "medium" ? "medium" : "high",
+        rationale: "Provider-backed swarm selected read-only agents automatically from repository scope, risk, and task complexity."
+      };
+      draft.tasks = result.workItems.map((item) => ({
+        id: item.id,
+        sessionId,
+        title: `${item.required_role} ${item.type}`,
+        status: mapSwarmWorkStatus(item.status),
+        agentRole: item.required_role,
+        createdAt: item.created_at
+      }));
+      draft.orchestration ??= createEmptyOrchestration(draft);
+      draft.orchestration.selectedWorkerAgents = Object.entries(result.staffingPlan.role_counts)
+        .filter(([, count]) => count > 0)
+        .map(([role, count]) => `${role} x${count}`);
+      draft.orchestration.agentRuns = result.agentInstances.map((agent) => ({
+        id: agent.id,
+        sessionId,
+        agentName: agent.role,
+        displayName: agent.role,
+        role: agent.role,
+        roleTitle: agent.role,
+        lifecycleStage: terminalStatus === "completed" ? "DONE" : terminalStatus === "blocked" ? "BLOCKED" : "FAILED",
+        artifactJson: {
+          swarmRunId: result.run.id,
+          currentWorkItemId: agent.current_work_item_id,
+          workerMode: "provider_read_only"
+        },
+        objective: `Provider-backed read-only ${agent.role} work for ${swarmGoal}`,
+        currentTask: agent.current_work_item_id,
+        status: mapSwarmAgentStatus(agent.status),
+        lastEvent: `Completed ${agent.completed_work_item_count} work item(s); failures ${agent.failure_count}.`,
+        startedAt: agent.created_at,
+        completedAt
+      }));
+      draft.orchestration.workerOutputs = workResults.map((workResult) => ({
+        id: `worker_output_${workResult.work_item_id}`,
+        sessionId,
+        taskId: workResult.work_item_id,
+        agentName: result.workItems.find((item) => item.id === workResult.work_item_id)?.required_role ?? "SwarmWorker",
+        summary: workResult.summary,
+        details: [...workResult.findings, ...workResult.unknowns.map((unknown) => `Unknown: ${unknown}`)],
+        patchProposalIds: [],
+        commandRequestIds: [],
+        risks: workResult.risks,
+        status: workResult.status === "succeeded" ? "completed" : workResult.status,
+        createdAt: completedAt
+      }));
+      draft.runSummary = {
+        status: terminalStatus === "completed" ? "completed" : terminalStatus === "blocked" ? "pending" : "failed",
+        summary: `Provider-backed swarm ${result.run.status}; ${result.staffingPlan.recommended_total_logical_agents} logical agent(s), ${providerTelemetry.snapshot().providerRequestCount} provider request(s).`,
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: [{
+          name: "Provider-backed read-only swarm",
+          status: terminalStatus === "completed" ? "passed" : terminalStatus === "blocked" ? "blocked" : "failed",
+          notes: [
+            `workerMode=provider_read_only`,
+            `providerRequests=${providerTelemetry.snapshot().providerRequestCount}`,
+            `providerFailures=${providerTelemetry.snapshot().providerFailureCount}`,
+            `providerTimeouts=${providerTelemetry.snapshot().providerTimeoutCount}`,
+            `invalidStructuredOutputs=${result.metrics.invalid_structured_outputs}`,
+            `retries=${result.metrics.retries}`,
+            `fallbackUsed=${providerTelemetry.snapshot().fallbackUsed ? "yes" : "no"}`
+          ]
+        }],
+        nextAction: terminalStatus === "completed" ? "Provider-backed session update completed." : "Inspect provider and swarm worker artifacts before retrying.",
+        createdAt: completedAt
+      };
+    });
+    await this.sessionManager.addMessage(sessionId, {
+      role: "assistant",
+      content: summary
+    });
+    return this.sessionManager.getSession(sessionId)!;
+  }
+
   private async syncSessionOutcome(sessionId: string) {
     const before = this.requireSession(sessionId);
     const verification = buildRuntimeVerification(before);
@@ -1868,6 +2011,102 @@ function shouldConfirmSingleFilePygamePlan(message: string, requestedAgentCount:
   return /\bpython\b/.test(normalized)
     && /\bpy\s*game\b|\bpygame\b/.test(normalized)
     && /\bone python code\b|\bsingle file\b|\bone file\b/.test(normalized);
+}
+
+async function loadSwarmWorkResults(workItems: Array<{ result_ref?: string }>) {
+  const results: Array<{
+    work_item_id: string;
+    status: "succeeded" | "failed" | "blocked";
+    summary: string;
+    findings: string[];
+    risks: string[];
+    unknowns: string[];
+  }> = [];
+  for (const item of workItems) {
+    if (!item.result_ref) continue;
+    try {
+      const parsed = JSON.parse(await readFile(item.result_ref, "utf8"));
+      if (typeof parsed?.work_item_id !== "string") continue;
+      results.push({
+        work_item_id: parsed.work_item_id,
+        status: parsed.status === "succeeded" || parsed.status === "failed" || parsed.status === "blocked" ? parsed.status : "failed",
+        summary: typeof parsed.summary === "string" ? parsed.summary : "Worker completed without a textual summary.",
+        findings: Array.isArray(parsed.findings) ? parsed.findings.filter((entry: unknown): entry is string => typeof entry === "string") : [],
+        risks: Array.isArray(parsed.risks) ? parsed.risks.filter((entry: unknown): entry is string => typeof entry === "string") : [],
+        unknowns: Array.isArray(parsed.unknowns) ? parsed.unknowns.filter((entry: unknown): entry is string => typeof entry === "string") : []
+      });
+    } catch {}
+  }
+  return results;
+}
+
+function mapSwarmRunStatus(status: string, providerError?: string): RuntimeSessionStatus {
+  if (status === "succeeded") return "completed";
+  if (providerError) return "failed_provider";
+  if (status === "blocked") return "blocked";
+  return "failed";
+}
+
+function mapSwarmWorkStatus(status: string): "todo" | "in_progress" | "done" | "blocked" {
+  if (status === "succeeded") return "done";
+  if (status === "running" || status === "leased" || status === "ready") return "in_progress";
+  if (status === "queued") return "todo";
+  return "blocked";
+}
+
+function mapSwarmAgentStatus(status: string): "idle" | "running" | "completed" | "blocked" | "failed" {
+  if (status === "succeeded") return "completed";
+  if (status === "failed") return "failed";
+  if (status === "running" || status === "leased") return "running";
+  return "idle";
+}
+
+function formatProviderBackedSwarmAnswer(input: {
+  finalReport: string;
+  providerCallCount: number;
+  workerCount: number;
+  workResults: Array<{ summary: string; findings: string[]; risks: string[]; unknowns: string[] }>;
+  status: RuntimeSessionStatus;
+  providerFailures: number;
+  providerTimeouts: number;
+  invalidStructuredOutputs: number;
+  retries: number;
+}) {
+  const heading = input.status === "completed"
+    ? "Provider-backed swarm completed successfully."
+    : input.status === "blocked"
+      ? "Provider-backed swarm blocked before producing an accepted answer."
+      : input.status === "failed_provider"
+        ? "Provider-backed swarm failed because the model provider failed."
+        : "Provider-backed swarm failed before producing an accepted answer.";
+  const workerSummaries = input.workResults
+    .slice(0, 8)
+    .map((result, index) => {
+      const findings = result.findings.slice(0, 3).map((finding) => `  - ${finding}`).join("\n");
+      return [`${index + 1}. ${result.summary}`, findings].filter(Boolean).join("\n");
+    })
+    .join("\n");
+  const reliabilityNotes = [
+    `- Logical agents selected: ${input.workerCount}`,
+    `- Provider requests recorded: ${input.providerCallCount}`,
+    `- Provider failures recorded: ${input.providerFailures}`,
+    `- Provider timeouts recorded: ${input.providerTimeouts}`,
+    `- Structured-output retries: ${input.retries}`,
+    `- Invalid structured outputs: ${input.invalidStructuredOutputs}`,
+    `- Worker mode: provider_read_only`,
+    `- Deterministic/mock worker output accepted as final answer: no`
+  ];
+  return [
+    heading,
+    "",
+    workerSummaries ? "Answer from provider worker evidence:" : "Answer from provider worker evidence: none recorded.",
+    workerSummaries,
+    "",
+    "Runtime truth:",
+    ...reliabilityNotes,
+    "",
+    input.finalReport
+  ].filter((line) => line !== undefined).join("\n");
 }
 
 function shouldAnswerExplainEvidenceQuestion(message: string, session: AgentRuntimeSession) {

@@ -18,6 +18,7 @@ import {
   SwarmStaffingPlanner,
   aggregateScoutResults,
   createAgentInstancesForPlan,
+  createInitialSwarmWorkItems,
   createConsensusGroup,
   createSwarmAgentTemplates,
   type AgentInstance,
@@ -75,6 +76,45 @@ test("Phase 5 staffing planner scales scouts for large read-only and caps risky 
   assert.ok(riskyEdit.executor_limit <= 1);
   assert.equal(riskyEdit.requires_human_approval, true);
   assert.ok(riskyEdit.recommended_total_logical_agents <= MAX_SUPPORTED_LOGICAL_AGENTS);
+});
+
+test("Phase 5 staffing planner treats artifact inventory questions as read-only", () => {
+  const repo = fixtureRepoIndex({
+    indexedFiles: 48,
+    sourceFiles: ["backend/services/action_executor.py", "backend/services/arima_model.py", "backend/routes.py"],
+    importantFiles: ["backend/services/action_executor.py", "backend/services/arima_model.py", "backend/routes.py"]
+  });
+  const plan = new SwarmStaffingPlanner().createPlan({
+    swarmRunId: "swarm_artifact_inventory",
+    userGoal: "Which project files produce durable artifacts such as models, data, and logs? What is the difference between training artifacts and runtime logs? Answer from current project files only.",
+    repoIndex: repo,
+    commandInventory: fixtureCommandInventory()
+  });
+
+  assert.equal(plan.executor_count, 0);
+  assert.equal(plan.executor_limit, 0);
+  assert.equal(plan.write_agent_limit, 0);
+  assert.equal(plan.read_only_ratio, 1);
+  assert.ok(plan.reasoning.some((reason) => /read-only/i.test(reason)));
+  const workItems = createInitialSwarmWorkItems({
+    swarmRunId: "swarm_artifact_inventory",
+    userGoal: "Which project files produce durable artifacts such as models, data, and logs? What is the difference between training artifacts and runtime logs? Answer from current project files only.",
+    staffingPlan: plan,
+    repoIndex: repo,
+    validationCommands: fixtureCommandInventory().byKind.test
+  });
+  assert.equal(workItems.some((item) => item.type === "execute"), false);
+  assert.equal(workItems.some((item) => item.write_files.length > 0), false);
+
+  const arabicPlan = new SwarmStaffingPlanner().createPlan({
+    swarmRunId: "swarm_arabic_artifact_inventory",
+    userGoal: "إيه الملفات اللي بتنتج artifacts ثابتة زي models/data/logs؟ وإيه الفرق بين training artifacts و runtime logs؟",
+    repoIndex: repo,
+    commandInventory: fixtureCommandInventory()
+  });
+  assert.equal(arabicPlan.executor_count, 0);
+  assert.equal(arabicPlan.executor_limit, 0);
+  assert.equal(arabicPlan.write_agent_limit, 0);
 });
 
 test("Phase 5 staffing planner supports user-free count selection and capped advanced override", () => {
@@ -240,6 +280,17 @@ test("Phase 5 fan-in aggregates scouts and consensus preserves dissent", () => {
   assert.deepEqual(aggregate.risks, ["risk"]);
   assert.equal(consensus.decision, "accepted_with_dissent");
   assert.deepEqual(consensus.dissenting_findings, ["missing validation"]);
+
+  const blockedConsensus = createConsensusGroup({
+    swarmRunId: "swarm_consensus_blocked",
+    topic: "Patch readiness",
+    participantWorkItems: ["review_failed"],
+    findings: [
+      { finding: "review_failed did not complete cleanly", confidence: 0.4, dissent: true }
+    ]
+  });
+  assert.equal(blockedConsensus.decision, "blocked_with_dissent");
+  assert.deepEqual(blockedConsensus.consolidated_findings, []);
 });
 
 test("Phase 5 runtime writes artifacts, metrics, trace, and explanatory final report", async () => {
@@ -255,6 +306,36 @@ test("Phase 5 runtime writes artifacts, metrics, trace, and explanatory final re
     assert.ok(result.metrics.role_distribution.ExecutorAgent >= 1);
     assert.match(result.finalReport, /The system selected \d+ internal logical agent/);
     assert.match(result.finalReport, /300 is treated as the maximum supported internal capacity/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Phase 5 failed swarm reports planned write targets without claiming changed files", async () => {
+  const workspace = await fixtureWorkspace("swarm-failed-truth");
+  try {
+    const failingWorker = async (input: Parameters<import("../orchestration/SwarmScheduler.js").SwarmWorker>[0]) => ({
+      schema_version: SWARM_SCHEMA_VERSION,
+      work_item_id: input.workItem.id,
+      status: "failed" as const,
+      summary: "Provider output schema failed: findings must be an array; relevant_files must be an array",
+      relevant_files: input.workItem.read_files,
+      findings: [],
+      risks: ["provider output did not match the required schema"],
+      unknowns: [],
+      confidence: 0,
+      structured_output_valid: false,
+      created_at: new Date().toISOString()
+    });
+    const result = await new SwarmAutopilotRuntime({ workspacePath: workspace, worker: failingWorker }).run("Fix a small bug in src/file0.ts");
+
+    assert.equal(result.run.status, "failed");
+    assert.match(result.finalReport, /- Work items completed: 0/);
+    assert.match(result.finalReport, /- Consensus decision: blocked_with_dissent/);
+    assert.match(result.finalReport, /- Terminal status: failed/);
+    assert.match(result.finalReport, /No work item completed successfully, so no integration or patch was accepted/);
+    assert.match(result.finalReport, /## Files Changed\s+- none/);
+    assert.match(result.finalReport, /## Planned Write Targets\s+- src\/file0\.ts \(planned only; no accepted patch is implied\)/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

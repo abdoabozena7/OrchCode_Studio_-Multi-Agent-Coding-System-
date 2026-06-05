@@ -101,6 +101,65 @@ test("InspectExplainReadLanes builds separate artifacts for confirmed feedback f
   }
 });
 
+test("WorkspaceTools listFiles and project summary ignore memory/runtime artifacts", async () => {
+  const workspace = await createWorkspace("workspace-tools-artifacts");
+  try {
+    await mkdir(path.join(workspace, ".agent_memory"), { recursive: true });
+    await mkdir(path.join(workspace, ".hivo-agent-runtime"), { recursive: true });
+    await mkdir(path.join(workspace, "backend"), { recursive: true });
+    await writeFile(path.join(workspace, ".agent_memory", "README.md"), "# Saved memory\n", "utf8");
+    await writeFile(path.join(workspace, ".hivo-agent-runtime", "sessions.json"), "{}\n", "utf8");
+    await writeFile(path.join(workspace, "backend", "main.py"), "print('real project')\n", "utf8");
+    await writeFile(path.join(workspace, "README.md"), "# Real project\n", "utf8");
+
+    const tools = new WorkspaceTools(workspace);
+    const listed = tools.listFiles(100).map((file) => file.path);
+    const summary = tools.getProjectSummary();
+
+    assert.equal(listed.some((file) => file.startsWith(".agent_memory/")), false);
+    assert.equal(listed.some((file) => file.startsWith(".hivo-agent-runtime/")), false);
+    assert.equal(listed.includes("backend/main.py"), true);
+    assert.equal(summary.importantFiles.includes(".agent_memory/README.md"), false);
+    assert.equal(summary.importantFiles.includes("README.md"), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Large project explain inventory ignores memory artifacts even for artifact questions", async () => {
+  const workspace = await createWorkspace("project-explain-artifacts");
+  try {
+    await mkdir(path.join(workspace, ".agent_memory"), { recursive: true });
+    await mkdir(path.join(workspace, "backend"), { recursive: true });
+    await writeFile(path.join(workspace, ".agent_memory", "README.md"), "# Saved answer\n", "utf8");
+    await writeFile(
+      path.join(workspace, "backend", "main.py"),
+      "MODEL_PATH = 'models/model.pkl'\nLOG_PATH = 'logs/runtime.log'\n",
+      "utf8"
+    );
+
+    const tools = new WorkspaceTools(workspace);
+    const filePaths = tools.listFiles(100).filter((file) => !file.isDir).map((file) => file.path);
+    const run = runInspectExplainReadLanes({
+      userPrompt: "What files produce artifacts like models/data/logs?",
+      targetConcept: "artifact",
+      topic: "code_flow",
+      filePaths,
+      readFile: (relativePath) => tools.readWholeFile(relativePath)
+    });
+
+    const artifactPaths = run.artifacts.flatMap((artifact) => [
+      ...artifact.inspectedFiles,
+      ...artifact.findings.map((finding) => finding.path),
+      ...artifact.rejectedEvidence.map((finding) => finding.path)
+    ]);
+    assert.equal(filePaths.some((file) => file.startsWith(".agent_memory/")), false);
+    assert.equal(artifactPaths.some((file) => file.startsWith(".agent_memory/")), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("InspectExplainReadLanes downgrades UI-only feedback instead of proving backend flow", async () => {
   const workspace = await createWorkspace("read-lanes-feedback-ui-only");
   try {

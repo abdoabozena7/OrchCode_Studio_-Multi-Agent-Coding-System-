@@ -267,6 +267,9 @@ export function classifyRunIntent(message: string, conversationUnderstanding?: C
   if (preRetrievalDecision.kind === "direct_conversation") return "unknown";
   const normalized = message.toLowerCase();
   const workspaceIntent = understanding.workspaceIntent ?? inferWorkspaceIntent(message);
+  if (understanding.routeDecision.route === "inspect_explain" || understanding.routeDecision.route === "swarm_readonly") {
+    return "inspect_only";
+  }
   
   if (
     /\b(run to green|make it run|fix until it starts|fix until it runs|boot it|start it working)\b/.test(normalized) ||

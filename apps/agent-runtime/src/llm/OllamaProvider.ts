@@ -1,4 +1,4 @@
-import type { LlmProvider, LlmRequest } from "./LlmProvider.js";
+import { userPromptWithContext, type LlmProvider, type LlmRequest } from "./LlmProvider.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 
 type OllamaChatResponse = {
@@ -50,7 +50,7 @@ export class OllamaProvider implements LlmProvider {
           stream: false,
           messages: [
             { role: "system", content: input.systemPrompt },
-            { role: "user", content: input.userPrompt }
+            { role: "user", content: userPromptWithContext(input) }
           ]
         }),
         signal: controller.signal

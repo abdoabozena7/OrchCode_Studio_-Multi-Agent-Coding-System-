@@ -11,7 +11,7 @@ import type {
   RuntimeTurnResponse
 } from "@hivo/protocol";
 
-const runtimeBaseUrl = import.meta.env.VITE_AGENT_RUNTIME_URL ?? "http://127.0.0.1:4317";
+const runtimeBaseUrl = import.meta.env?.VITE_AGENT_RUNTIME_URL ?? "http://127.0.0.1:4317";
 
 export type RuntimeHealth = {
   status: "ok";
@@ -26,6 +26,40 @@ export class RuntimeUnavailableError extends Error {
     this.name = "RuntimeUnavailableError";
   }
 }
+
+export type RuntimeAuthFailureCode = "unauthorized" | "token_expired";
+
+export class RuntimeHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: RuntimeAuthFailureCode | "runtime_request_failed"
+  ) {
+    super(message);
+    this.name = "RuntimeHttpError";
+  }
+}
+
+export type RuntimeEventConnectionStatus =
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "reconnecting"
+  | "unauthorized"
+  | "token_expired";
+
+export type RuntimeEventSubscriptionState = {
+  status: RuntimeEventConnectionStatus;
+  connected: boolean;
+  disconnected: boolean;
+  reconnecting: boolean;
+  unauthorized: boolean;
+  tokenExpired: boolean;
+  lastEventAt?: string;
+  lastError?: string;
+  retryAttempt: number;
+  nextRetryAt?: string;
+};
 
 export async function checkRuntimeHealth(timeoutMs = 2500): Promise<RuntimeHealth> {
   const controller = new AbortController();
@@ -133,12 +167,41 @@ export function subscribeRuntimeEvents(
   handlers: {
     onEvent?: (event: AppEvent) => void;
     onSession?: (session: AgentRuntimeSession) => void;
-    onError?: () => void;
+    onStateChange?: (state: RuntimeEventSubscriptionState) => void;
+    onReconnect?: (state: RuntimeEventSubscriptionState) => void;
+    onError?: (state: RuntimeEventSubscriptionState) => void;
   }
 ) {
+  let source: EventSource | null = null;
+  let stopped = false;
+  let reconnectTimer: number | undefined;
+  let retryAttempt = 0;
+  let lastEventAt: string | undefined;
+  let lastError: string | undefined;
+
   const tokenQuery = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
-  const source = new EventSource(`${runtimeBaseUrl}/sessions/${sessionId}/events${tokenQuery}`);
+
+  const emitState = (status: RuntimeEventConnectionStatus, extras: Partial<RuntimeEventSubscriptionState> = {}) => {
+    const state: RuntimeEventSubscriptionState = {
+      status,
+      connected: status === "connected",
+      disconnected: status === "disconnected" || status === "unauthorized" || status === "token_expired",
+      reconnecting: status === "reconnecting",
+      unauthorized: status === "unauthorized",
+      tokenExpired: status === "token_expired",
+      lastEventAt,
+      lastError,
+      retryAttempt,
+      ...extras
+    };
+    handlers.onStateChange?.(state);
+    return state;
+  };
+
   const handleEvent = (raw: MessageEvent<string>) => {
+    lastEventAt = new Date().toISOString();
+    lastError = undefined;
+    emitState("connected");
     const event = JSON.parse(raw.data) as AppEvent;
     handlers.onEvent?.(event);
     if (event.type === "runtime.session.updated") {
@@ -146,16 +209,23 @@ export function subscribeRuntimeEvents(
     }
   };
   const eventTypes: AppEvent["type"][] = [
+    "runtime.session.created",
     "runtime.session.updated",
     "runtime.session.restored",
     "runtime.session.expired",
+    "runtime.session.completed",
+    "runtime.session.failed",
+    "runtime.stage.changed",
+    "runtime.tool_call.updated",
     "runtime.progress.updated",
     "runtime.tool_intent.updated",
     "runtime.artifact.created",
     "runtime.verification.pending",
+    "runtime.verification.running",
     "runtime.verification.passed",
     "runtime.verification.failed",
     "runtime.verification.unavailable",
+    "runtime.verification.not_run",
     "runtime.verification.skipped",
     "runtime.patch.stats.updated",
     "runtime.run.completed",
@@ -166,16 +236,71 @@ export function subscribeRuntimeEvents(
     "runtime.patch.applied",
     "runtime.patch.apply_failed",
     "runtime.command.requested",
+    "runtime.command.approved",
+    "runtime.command.rejected",
     "runtime.command.started",
     "runtime.command.completed",
     "runtime.command.failed",
     "runtime.command.blocked"
   ];
-  for (const type of eventTypes) {
-    source.addEventListener(type, handleEvent as EventListener);
-  }
-  source.onerror = () => handlers.onError?.();
-  return () => source.close();
+
+  const open = () => {
+    if (stopped) return;
+    const reconnecting = retryAttempt > 0;
+    emitState(reconnecting ? "reconnecting" : "connecting");
+    source = new EventSource(`${runtimeBaseUrl}/sessions/${sessionId}/events${tokenQuery}`);
+    source.onopen = () => {
+      lastError = undefined;
+      const state = emitState("connected");
+      if (reconnecting) handlers.onReconnect?.(state);
+    };
+    source.onmessage = (raw) => {
+      try {
+        handleEvent(raw);
+      } catch (error) {
+        lastError = `Failed to decode runtime event: ${String(error)}`;
+        const state = emitState("connected");
+        handlers.onError?.(state);
+      }
+    };
+    for (const type of eventTypes) {
+      source.addEventListener(type, handleEvent as EventListener);
+    }
+    source.onerror = () => {
+      if (stopped) return;
+      source?.close();
+      source = null;
+      void handleDisconnect();
+    };
+  };
+
+  const handleDisconnect = async () => {
+    const authFailure = await getSessionAuthFailure(sessionId, sessionToken);
+    if (stopped) return;
+    if (authFailure) {
+      lastError = authFailure.message;
+      const state = emitState(authFailure.code);
+      handlers.onError?.(state);
+      return;
+    }
+    retryAttempt += 1;
+    lastError = "SSE disconnected.";
+    const retryDelayMs = nextReconnectDelayMs(retryAttempt);
+    const nextRetryAt = new Date(Date.now() + retryDelayMs).toISOString();
+    const state = emitState("reconnecting", { nextRetryAt });
+    handlers.onError?.(state);
+    reconnectTimer = window.setTimeout(open, retryDelayMs);
+  };
+
+  open();
+
+  return () => {
+    stopped = true;
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+    source?.close();
+    source = null;
+    emitState("disconnected");
+  };
 }
 
 async function runtimeFetch<T>(path: string, init?: RequestInit & { sessionToken?: string }): Promise<T> {
@@ -195,7 +320,49 @@ async function runtimeFetch<T>(path: string, init?: RequestInit & { sessionToken
   }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Runtime request failed with HTTP ${response.status}`);
+    const parsed = parseRuntimeError(text);
+    throw new RuntimeHttpError(
+      parsed.message || `Runtime request failed with HTTP ${response.status}`,
+      response.status,
+      response.status === 401 ? parsed.code ?? "unauthorized" : parsed.code ?? "runtime_request_failed"
+    );
   }
   return response.json() as Promise<T>;
+}
+
+async function getSessionAuthFailure(sessionId: string, sessionToken: string | undefined): Promise<{ code: RuntimeAuthFailureCode; message: string } | null> {
+  if (!sessionToken) {
+    return { code: "unauthorized", message: "Session event stream requires a session token." };
+  }
+  try {
+    const response = await fetch(`${runtimeBaseUrl}/sessions/${sessionId}`, {
+      headers: { "x-hivo-session-token": sessionToken }
+    });
+    if (response.status === 401) {
+      const parsed = parseRuntimeError(await response.text());
+      return {
+        code: parsed.code === "token_expired" ? "token_expired" : "unauthorized",
+        message: parsed.message || "Session event stream is unauthorized."
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function nextReconnectDelayMs(attempt: number) {
+  const base = Math.min(10_000, 500 * 2 ** Math.max(0, attempt - 1));
+  const jitter = Math.floor(Math.random() * 250);
+  return base + jitter;
+}
+
+function parseRuntimeError(text: string): { message: string; code?: RuntimeAuthFailureCode | "runtime_request_failed" } {
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; code?: unknown };
+    const code = parsed.code === "token_expired" || parsed.code === "unauthorized" ? parsed.code : undefined;
+    return { message: typeof parsed.error === "string" ? parsed.error : text, code };
+  } catch {
+    return { message: text };
+  }
 }

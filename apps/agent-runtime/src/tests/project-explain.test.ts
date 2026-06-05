@@ -227,6 +227,24 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"]
   },
   {
+    name: "Smoke entrypoint inventory prompt is structural, not backendmainpy concept",
+    prompt: "What are the main entrypoint files in this project? Use the detected candidates backend/main.py, backend/routes.py, frontend/app.js.",
+    expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
+    expectedConceptLabel: "this project",
+    expectedSpecific: false,
+    forbiddenConceptPattern: /backendmainpy|main/
+  },
+  {
+    name: "Smoke backend/frontend source-flow prompt is structural, not SARIMA concept from file list",
+    prompt: "How do the detected source files connect the backend and frontend flow? Use only project files such as backend/__init__.py, backend/main.py, backend/routes.py, backend/services/arima_model.py, frontend/app.js.",
+    expectedStyle: "default",
+    expectedAnswerShape: "concise_explanation",
+    expectedConceptLabel: "this project",
+    expectedSpecific: false,
+    forbiddenConceptPattern: /sarima|arima/
+  },
+  {
     name: "Arabic threshold inventory typo prompt",
     prompt: ARABIC_THRESHOLD_PROMPT,
     expectedStyle: "default",

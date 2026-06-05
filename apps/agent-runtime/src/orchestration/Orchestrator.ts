@@ -885,7 +885,9 @@ export class CoreOrchestrator {
     try {
       const output = role.name === "ExecutorAgent"
         ? await this.invokeExecutor(run, task, pack, invocation)
-        : await this.invokeDeterministicRole(run, task, pack, invocation);
+        : await this.shouldInvokeProviderReadOnlyRole(task)
+          ? await this.invokeProviderReadOnlyRole(run, task, pack, invocation)
+          : await this.invokeDeterministicRole(run, task, pack, invocation);
       invocation.finished_at = new Date().toISOString();
       invocation.status = output.status === "succeeded" ? "succeeded" : "failed";
       invocation.parsed_output_ref = await this.artifactStore.saveParsedOutput(run.id, invocation.id, output);
@@ -933,6 +935,56 @@ export class CoreOrchestrator {
     const completed = await seniorAgent.runTurn(session.id, invocation.prompt);
     invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, completed);
     return summarizeSeniorSession(completed, task, pack, invocation.raw_output_ref);
+  }
+
+  private async shouldInvokeProviderReadOnlyRole(task: Task) {
+    if (!this.providerFactory) return false;
+    if (task.allowed_files_to_edit.length > 0) return false;
+    const provider = this.providerFactory(task.role_required);
+    return !(provider instanceof MockLlmProvider);
+  }
+
+  private async invokeProviderReadOnlyRole(run: Run, task: Task, pack: ContextPack, invocation: AgentInvocation): Promise<ParsedAgentOutput> {
+    const provider = this.providerFactory?.(task.role_required);
+    if (!provider || provider instanceof MockLlmProvider) {
+      return this.invokeDeterministicRole(run, task, pack, invocation);
+    }
+    const generated = await provider.generateStructured<unknown>({
+      systemPrompt: [
+        `You are ${task.role_required}, a read-only worker inside Hivo Studio's CoreOrchestrator.`,
+        "Return only strict JSON matching this TypeScript shape:",
+        "{ summary: string, status: 'succeeded' | 'failed' | 'blocked', files_changed: string[], validation_results: { command: string, status: 'passed' | 'failed' | 'blocked' | 'skipped' | 'timed_out' | 'not_run', summary?: string }[], artifacts: string[], limitations: string[], next_recommendations: string[] }",
+        "You may inspect and reason from the provided context only.",
+        "Do not claim files were changed. Do not claim validation passed unless the context proves a command actually ran.",
+        "If evidence is insufficient, set status to blocked or include the uncertainty in limitations."
+      ].join("\n"),
+      userPrompt: invocation.prompt,
+      context: {
+        run_id: run.id,
+        task_id: task.id,
+        role: task.role_required,
+        objective: task.objective,
+        expected_output_schema: task.expected_output_schema,
+        relevant_files: pack.relevant_files,
+        repo_index_refs: pack.repo_index_refs,
+        validation_requirements: pack.validation_requirements,
+        warnings: pack.warnings,
+        context_pack_ref: invocation.context_pack_ref
+      }
+    }, { name: "parsed-agent-output" });
+    const output = normalizeProviderReadOnlyOutput(generated);
+    invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, {
+      role: task.role_required,
+      provider_backed: true,
+      context_pack_ref: invocation.context_pack_ref,
+      output: generated
+    });
+    output.artifacts.push(invocation.raw_output_ref);
+    output.limitations = uniqueStrings([
+      `Provider-backed read-only ${task.role_required} invocation used the configured provider; no deterministic role fallback was accepted.`,
+      ...output.limitations
+    ]);
+    return output;
   }
 
   private async invokeDeterministicRole(run: Run, task: Task, pack: ContextPack, invocation: AgentInvocation): Promise<ParsedAgentOutput> {
@@ -3086,8 +3138,11 @@ function multiPlanLimitations(result: MultiPlanFactoryResult) {
 }
 
 function executorProviderTruthLimitation(outputs: ParsedAgentOutput[]) {
+  if (outputs.some((output) => output.limitations.some((entry) => /Provider-backed read-only/i.test(entry)))) {
+    return "Read-only Scout/Planner/Reporter roles used configured provider calls; write-capable ExecutorAgent remains separately gated through SeniorCodingAgent and review/validation authority.";
+  }
   return outputs.some((output) => output.limitations.some((entry) => /provider-backed planner/i.test(entry)))
-    ? "ExecutorAgent used a provider-backed SeniorCodingAgent planner; legacy scan/search orchestration remains deterministic around provider-authored inspect answers."
+    ? "ExecutorAgent used a provider-backed SeniorCodingAgent planner; write output remains gated by review, validation, and patch authority."
     : "ExecutorAgent uses mock provider mode unless providerFactory is explicitly wired into the orchestrator.";
 }
 
@@ -3124,9 +3179,32 @@ function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: 
 
 function seniorSessionProviderTruthLimitation(session: AgentRuntimeSession) {
   if (session.mode === "real_provider") {
-    return "ExecutorAgent invoked the existing SeniorCodingAgent path with a provider-backed planner; inspect answers require a provider final answer while scan/search orchestration remains deterministic.";
+    return "ExecutorAgent invoked the existing SeniorCodingAgent path with a provider-backed planner; write output remains gated by review, validation, and patch authority.";
   }
   return "ExecutorAgent invoked the existing SeniorCodingAgent path in demo mock mode.";
+}
+
+function normalizeProviderReadOnlyOutput(value: unknown): ParsedAgentOutput {
+  if (!isRecord(value)) {
+    return {
+      summary: "Provider returned invalid read-only role output.",
+      status: "failed",
+      files_changed: [],
+      validation_results: [],
+      artifacts: [],
+      limitations: ["Provider-backed read-only role output was not a JSON object; no deterministic fallback was accepted."],
+      next_recommendations: ["Inspect the raw provider output artifact and retry with a schema-following provider response."]
+    };
+  }
+  return {
+    summary: typeof value.summary === "string" && value.summary.trim() ? value.summary : "Provider-backed read-only role returned no summary.",
+    status: value.status === "succeeded" || value.status === "failed" || value.status === "blocked" ? value.status : "failed",
+    files_changed: [],
+    validation_results: Array.isArray(value.validation_results) ? value.validation_results as ParsedAgentOutput["validation_results"] : [],
+    artifacts: Array.isArray(value.artifacts) ? value.artifacts.filter((entry): entry is string => typeof entry === "string") : [],
+    limitations: Array.isArray(value.limitations) ? value.limitations.filter((entry): entry is string => typeof entry === "string") : [],
+    next_recommendations: Array.isArray(value.next_recommendations) ? value.next_recommendations.filter((entry): entry is string => typeof entry === "string") : []
+  };
 }
 
 function deterministicSummary(role: AgentRoleName, task: Task, pack: ContextPack) {

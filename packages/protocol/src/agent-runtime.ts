@@ -63,6 +63,11 @@ export type ProviderPromptLatency = {
   latencyMs: number;
   status: "success" | "failure" | "timeout";
   errorSummary?: string;
+  systemPromptChars?: number;
+  userPromptChars?: number;
+  contextChars?: number;
+  promptChars?: number;
+  responseChars?: number;
 };
 
 export type ProviderTruthTelemetry = {
@@ -77,6 +82,9 @@ export type ProviderTruthTelemetry = {
   providerFailureCount: number;
   providerTimeoutCount: number;
   totalProviderLatencyMs: number;
+  totalProviderPromptChars: number;
+  totalProviderResponseChars: number;
+  totalProviderContextChars: number;
   perPromptProviderLatencyMs: ProviderPromptLatency[];
   fallbackUsed: boolean;
   fallbackReason?: string;

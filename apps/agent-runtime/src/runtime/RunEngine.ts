@@ -7,6 +7,7 @@ import type {
   CommandRequest,
   DecisionRecord,
   EvidenceRef,
+  EvidenceTruthReport,
   PatchFileChange,
   PatchProposal,
   ProjectMap,
@@ -1066,9 +1067,9 @@ export class RunEngine {
     await this.updateStage(sessionId, "DONE", "completed", "running", progressCopy.finalReport.title, progressCopy.finalReport.summary, evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8));
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.explainReport = questionResult.augmentedReport;
+      draft.explainReport = createSessionExplainReportSummary(questionResult.augmentedReport);
       draft.providerTelemetry = providerTelemetry;
-      draft.evidenceReport = evidenceReport;
+      draft.evidenceReport = createSessionEvidenceTruthReportSummary(evidenceReport);
       if (providerTelemetry?.fallbackUsed && !draft.reasoningSummaries.some((entry) => entry.includes("Provider truth: fallback was used"))) {
         draft.reasoningSummaries.push(`Provider truth: fallback was used (${providerTelemetry.fallbackReason ?? "reason unavailable"}).`);
       }
@@ -1566,7 +1567,7 @@ export class RunEngine {
       type,
       title,
       summary,
-      payload,
+      payload: createSessionArtifactPayload(payload),
       createdAt: new Date().toISOString()
     });
   }
@@ -2268,7 +2269,7 @@ function describeProviderTruth(telemetry: NonNullable<AgentRuntimeSession["provi
       ? "real"
       : "unknown";
   const fallback = telemetry.fallbackUsed ? `fallback yes${telemetry.fallbackReason ? ` (${telemetry.fallbackReason})` : ""}` : "fallback no";
-  return `Provider ${providerKind}: ${telemetry.providerName}${telemetry.modelName ? `/${telemetry.modelName}` : ""}; calls ${telemetry.providerRequestCount}/${telemetry.providerResponseCount}/${telemetry.providerFailureCount}/${telemetry.providerTimeoutCount} request/response/error/timeout; ${fallback}.`;
+  return `Provider ${providerKind}: ${telemetry.providerName}${telemetry.modelName ? `/${telemetry.modelName}` : ""}; calls ${telemetry.providerRequestCount}/${telemetry.providerResponseCount}/${telemetry.providerFailureCount}/${telemetry.providerTimeoutCount} request/response/error/timeout; prompt chars ${telemetry.totalProviderPromptChars ?? 0}; response chars ${telemetry.totalProviderResponseChars ?? 0}; ${fallback}.`;
 }
 
 function createRunSummary(session: AgentRuntimeSession, verification: VerificationResult): RunSummary {
@@ -2354,10 +2355,10 @@ function inferLocalRunMode(
 ): RunMode {
   const normalized = message.toLowerCase();
   if (runIntent === "run_to_green") return "run_to_green" as RunMode;
-  if (runIntent === "inspect_only") return "inspect_only" as RunMode;
   if (/\b(paranoid|double check|double-check|review twice)\b/.test(normalized)) return "paranoid_mode";
   if (/\b(soak|stability|burn in|burn-in|retry a lot)\b/.test(normalized)) return "soak_mode";
   if (/\b(audit|deep|inspect thoroughly|thorough|analyze deeply)\b/.test(normalized)) return "deep_audit";
+  if (runIntent === "inspect_only") return "inspect_only" as RunMode;
   if (resolvedMode === "simple_mode" && /\b(tiny|small|quick|minor)\b/.test(normalized)) return "quick_fix";
   return "normal_run";
 }
@@ -2602,6 +2603,106 @@ function mergeRiskRefs(existing: AgentRiskRef[] | undefined, next: AgentRiskRef[
     }
   }
   return merged.slice(-12);
+}
+
+function createSessionExplainReportSummary(report: NonNullable<AgentRuntimeSession["explainReport"]>): NonNullable<AgentRuntimeSession["explainReport"]> {
+  return {
+    overview: report.overview,
+    architecture: report.architecture,
+    sections: report.sections.slice(0, 6),
+    findings: report.findings.slice(0, 8),
+    moduleMap: report.moduleMap.slice(0, 12).map((module) => ({
+      ...module,
+      importantFiles: module.importantFiles.slice(0, 12),
+      entryPoints: module.entryPoints.slice(0, 8),
+      tests: module.tests.slice(0, 8),
+      dependencies: module.dependencies.slice(0, 12),
+      risksAndUnknowns: module.risksAndUnknowns.slice(0, 8),
+      evidence: module.evidence.slice(0, 12)
+    })),
+    entryPoints: report.entryPoints.slice(0, 20),
+    dataFlow: report.dataFlow,
+    importantFiles: report.importantFiles.slice(0, 30),
+    howToRun: report.howToRun.slice(0, 12),
+    risksAndUnknowns: report.risksAndUnknowns.slice(0, 12),
+    suggestedNextQuestions: report.suggestedNextQuestions.slice(0, 8),
+    evidence: report.evidence.slice(0, 40),
+    contextPack: {
+      inventory: {
+        ...report.contextPack.inventory,
+        ignoredDirectories: report.contextPack.inventory.ignoredDirectories.slice(0, 40),
+        rootFolders: report.contextPack.inventory.rootFolders.slice(0, 40)
+      },
+      readBudget: report.contextPack.readBudget,
+      sampledFiles: report.contextPack.sampledFiles.slice(0, 30).map((file) => ({
+        ...file,
+        summary: truncateText(file.summary, 1_000)
+      }))
+    }
+  };
+}
+
+function createSessionEvidenceTruthReportSummary(report: EvidenceTruthReport): EvidenceTruthReport {
+  return {
+    topEvidenceFiles: report.topEvidenceFiles.slice(0, 30),
+    evidenceFilesByTier: Object.fromEntries(
+      Object.entries(report.evidenceFilesByTier).map(([tier, files]) => [tier, files.slice(0, 40)])
+    ) as EvidenceTruthReport["evidenceFilesByTier"],
+    excludedEvidenceCandidates: report.excludedEvidenceCandidates.slice(0, 60),
+    exclusionReasons: Object.fromEntries(Object.entries(report.exclusionReasons).slice(0, 80)),
+    finalEvidenceFilesActuallyUsed: report.finalEvidenceFilesActuallyUsed.slice(0, 40),
+    groundedEvidence: report.groundedEvidence?.slice(0, 40).map((item) => ({
+      ...item,
+      reason: truncateText(item.reason, 1_500)
+    })),
+    rejectedEvidence: report.rejectedEvidence?.slice(0, 40),
+    generatedEvidenceExcludedCount: report.generatedEvidenceExcludedCount,
+    generatedEvidenceIncludedCount: report.generatedEvidenceIncludedCount,
+    generatedEvidenceIncluded: report.generatedEvidenceIncluded,
+    allowGeneratedEvidence: report.allowGeneratedEvidence,
+    updatedAt: report.updatedAt
+  };
+}
+
+function createSessionArtifactPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeSessionPayloadValue(payload, 0, new WeakSet<object>()) as Record<string, unknown>;
+}
+
+function sanitizeSessionPayloadValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return truncateText(value, 8_000);
+  if (typeof value === "undefined") return undefined;
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "[Circular]";
+  if (depth >= 5) return summarizePayloadContainer(value);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const limit = depth <= 1 ? 40 : 20;
+    const items = value.slice(0, limit).map((item) => sanitizeSessionPayloadValue(item, depth + 1, seen));
+    return value.length > limit
+      ? [...items, { __truncated: true, omittedItems: value.length - limit }]
+      : items;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const limit = depth === 0 ? 160 : depth === 1 ? 80 : 35;
+  const output: Record<string, unknown> = {};
+  for (const [key, entryValue] of entries.slice(0, limit)) {
+    output[key] = sanitizeSessionPayloadValue(entryValue, depth + 1, seen);
+  }
+  if (entries.length > limit) {
+    output.__truncated = true;
+    output.omittedKeys = entries.length - limit;
+  }
+  return output;
+}
+
+function summarizePayloadContainer(value: object) {
+  if (Array.isArray(value)) return { __truncated: true, kind: "array", length: value.length };
+  return { __truncated: true, kind: "object", keys: Object.keys(value).slice(0, 20) };
+}
+
+function truncateText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}... [truncated ${value.length - maxLength} chars]` : value;
 }
 
 function findOwningAgentId(session: AgentRuntimeSession, filePath: string) {

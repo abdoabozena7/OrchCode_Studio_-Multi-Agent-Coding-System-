@@ -170,7 +170,7 @@ export async function explainProjectWithLlm(input: {
       validationWarnings: revisionValidation.warnings,
       grounding,
       fallbackUsed: true,
-      fallbackReason: "provider_answer_failed_local_validation"
+      fallbackReason: providerValidationFailureReason(validationErrors)
     };
   }
   return {
@@ -181,8 +181,15 @@ export async function explainProjectWithLlm(input: {
     validationWarnings: revisionValidation.warnings,
     grounding,
     fallbackUsed: true,
-    fallbackReason: "provider_answer_failed_local_validation"
+    fallbackReason: providerValidationFailureReason(validationErrors)
   };
+}
+
+function providerValidationFailureReason(errors: string[]) {
+  const details = errors.slice(0, 3).filter(Boolean).join("; ");
+  return details
+    ? `provider_answer_failed_local_validation: ${details}`
+    : "provider_answer_failed_local_validation";
 }
 
 function createProviderFailureNotice(
@@ -390,6 +397,9 @@ function createValidationRepairInstructions(errors: string[], grounding: Project
   if (/forecasting|threshold|page inventory|numeric|domain|project identity/i.test(errorText)) {
     lines.push("Shape repair: only satisfy the specialized shape if it truly applies to this question; otherwise keep the answer centered on the requested concept and supported relationships.");
   }
+  if (/dependency|configuration|config|manifest|requirements|package/i.test(errorText) || isDependencyOrConfigurationGrounding(grounding)) {
+    lines.push("Dependency/config repair: cite dependency or configuration evidence from README.md, requirements.txt, package.json, pyproject.toml, Cargo.toml, entrypoint config, or detected script/config files when those refs are present.");
+  }
   lines.push("If the evidence pack includes 'Agentic relationship-model evidence' or 'Relationships followed', use those refs to explain cross-file relationships instead of relying only on isolated snippets.");
   lines.push("If a validator asks for evidence that is not present in the pack, do not invent it; state the missing proof boundary clearly.");
   return lines.map((line) => `- ${line}`).join("\n");
@@ -566,6 +576,12 @@ function selectProviderEvidenceItems(evidenceItems: EvidenceItem[], grounding: P
   for (const ref of grounding.supportingRefs) addRef(ref);
   for (const item of evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning)) addRef(item.ref);
   for (const item of grounding.understanding.validationEvidence) addRef(item.ref);
+  if (isDependencyOrConfigurationGrounding(grounding)) {
+    for (const item of evidenceItems) {
+      if (isDependencyOrConfigurationEvidencePath(item.path)) addItem(item);
+      if (selected.length >= MAX_NATURAL_TEXT_EVIDENCE_ITEMS) break;
+    }
+  }
   if (grounding.concept.specific) {
     for (const item of evidenceItems) {
       if (evidenceItemSupportsConcept(item, grounding.concept)) addItem(item);
@@ -598,6 +614,12 @@ function selectRepairEvidenceItems(
   for (const ref of grounding.projectDomain.evidenceRefs) addRef(ref);
   for (const ref of grounding.projectDomain.sourceEvidenceRefs) addRef(ref);
   for (const item of evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning)) addRef(item.ref);
+  if (isDependencyOrConfigurationGrounding(grounding)) {
+    for (const item of evidenceItems) {
+      if (isDependencyOrConfigurationEvidencePath(item.path)) addItem(item);
+      if (selected.length >= MAX_REPAIR_TEXT_EVIDENCE_ITEMS) break;
+    }
+  }
 
   if (/requested evidence group|directly supports the requested concept|wrong flow|too shallow|detailed flow/i.test(errorText)) {
     for (const item of evidenceItems) {
@@ -641,6 +663,21 @@ function normalizeRepairEvidenceText(value: string) {
     .trim();
 }
 
+function isDependencyOrConfigurationGrounding(grounding: ProjectQuestionGrounding) {
+  const text = [
+    grounding.workspaceReasoning.intent.topicPhrase,
+    ...grounding.workspaceReasoning.intent.topicTerms,
+    grounding.concept.label
+  ].join(" ");
+  return /\b(dependenc(?:y|ies)|configuration|config|runtime|package manager|package\.json|requirements?\.txt|manifest|scripts?|pyproject|Cargo\.toml|README\.md)\b/i.test(text);
+}
+
+function isDependencyOrConfigurationEvidencePath(filePath: string) {
+  const normalized = filePath.replaceAll("\\", "/");
+  return /(^|\/)(README\.md|requirements(?:-[\w.-]+)?\.txt|package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|pyproject\.toml|poetry\.lock|Pipfile|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|deno\.jsonc?|vite\.config\.[cm]?[jt]s|tsconfig\.json|backend\/main\.py|frontend\/app\.js)$/i.test(normalized)
+    || /(^|\/)(config|settings|scripts?)[\w./-]*\.(?:json|toml|ya?ml|js|ts|py|sh|ps1)$/i.test(normalized);
+}
+
 function validateProjectExplainResponse(
   response: ProjectExplainLlmResponse,
   userPrompt: string,
@@ -681,20 +718,26 @@ function validateProjectExplainResponse(
       errors.push(`answerMarkdown contains an ungrounded plain file ref: ${ref}`);
     }
   }
-  if (evidenceItems.length && linkedRefs.length === 0) {
-    errors.push("answerMarkdown must include at least one provided hivo-file link.");
-  }
   const citedRefs = uniqueStrings([
     ...linkedRefs,
     ...plainRefs,
     ...(Array.isArray(response.usedEvidenceRefs) ? response.usedEvidenceRefs.map((ref) => typeof ref === "string" ? normalizeRefString(ref) : "") : [])
   ]);
+  if (evidenceItems.length && citedRefs.length === 0) {
+    errors.push("answerMarkdown must include at least one provided hivo-file link or verified plain file ref.");
+  }
   if (responseLooksOffIntent(response.answerMarkdown ?? "", grounding.workspaceReasoning)) {
     errors.push(`answer appears to follow the wrong flow for topic: ${grounding.workspaceReasoning.intent.topicPhrase}`);
   }
   const primaryEvidenceRefs = new Set(evidenceItemsForWorkspaceReasoning(grounding.workspaceReasoning).map((item) => item.ref));
   if (grounding.workspaceReasoning.intent.requiredFacets.length && citedRefs.length && !citedRefs.some((ref) => primaryEvidenceRefs.has(ref))) {
     warnings.push(`answer did not cite the top unified workspace evidence for topic: ${grounding.workspaceReasoning.intent.topicPhrase}`);
+  }
+  if (isDependencyOrConfigurationGrounding(grounding)) {
+    const dependencyConfigItems = evidenceItems.filter((item) => isDependencyOrConfigurationEvidencePath(item.path));
+    if (dependencyConfigItems.length && citedRefs.length && !citedRefs.some((ref) => dependencyConfigItems.some((item) => item.ref === ref))) {
+      errors.push(`dependency/configuration answers must cite available dependency or configuration refs: ${dependencyConfigItems.slice(0, 8).map((item) => item.ref).join(", ")}`);
+    }
   }
   if (grounding.concept.specific) {
     const citedItems = citedRefs
@@ -762,7 +805,10 @@ function validateProjectExplainResponse(
       errors.push(`answer must cite source evidence for project identity/domain when source evidence exists: ${grounding.projectDomain.label}`);
     }
   }
-  const unsupportedDomainClaims = findUnsupportedDomainClaims(response.answerMarkdown ?? "", evidenceItems, grounding.concept);
+  const structuralFileContext = isStructuralFileContextQuestion(userPrompt);
+  const unsupportedDomainClaims = structuralFileContext
+    ? []
+    : findUnsupportedDomainClaims(response.answerMarkdown ?? "", evidenceItems, grounding.concept);
   if (unsupportedDomainClaims.length) {
     errors.push(`answer mentions unsupported project/domain claim(s): ${unsupportedDomainClaims.join(", ")}`);
   }
@@ -775,7 +821,7 @@ function validateProjectExplainResponse(
     if (answerText.trim().length < 900 || sectionCount < 3) {
       errors.push(`detailed walkthrough answer is too shallow: ${answerText.trim().length} chars and ${sectionCount} section(s).`);
     }
-    if (grounding.workspaceReasoning.intent.answerGoal === "trace_flow" && !/\b(def|function|class|endpoint|route|api|fit|predict|predict_proba|SVC|SHAP|joblib|pickle|train_|predict_)\b/i.test(answerText)) {
+    if (!structuralFileContext && grounding.workspaceReasoning.intent.answerGoal === "trace_flow" && !/\b(def|function|class|endpoint|route|api|fit|predict|predict_proba|SVC|SHAP|joblib|pickle|train_|predict_)\b/i.test(answerText)) {
       errors.push("detailed flow answer must mention concrete functions, endpoints, or implementation symbols from the evidence.");
     }
   }
@@ -783,6 +829,16 @@ function validateProjectExplainResponse(
     errors.push("answerMarkdown does not appear to directly answer the user's prompt.");
   }
   return { valid: errors.length === 0, errors, warnings };
+}
+
+function isStructuralFileContextQuestion(userPrompt: string) {
+  const normalized = normalizeRepairEvidenceText(userPrompt).replace(/[.\\/]+/g, " ");
+  return /\b(?:main\s+)?entry\s*points?\b|\bentrypoints?\b|\bentry\s+files?\b/.test(normalized)
+    || /\bwhat\s+are\s+the\s+main\s+files\b/.test(normalized)
+    || /\buse\s+the\s+detected\s+candidates\b/.test(normalized) && /\bmain\b|\bentry\b|\bbackend\s+main\b|\bapp\s+js\b|\bapp\s+ts\b|\bapp\s+tsx\b|\bapp\s+jsx\b/.test(normalized)
+    || /\bdetected\s+source\s+files\b/.test(normalized) && /\bconnect\b/.test(normalized) && /\bflow\b/.test(normalized)
+    || /\bbackend\b/.test(normalized) && /\bfrontend\b/.test(normalized) && /\b(connect|wire|flow|source\s+files)\b/.test(normalized)
+    || /\buse\s+only\s+project\s+files\s+such\s+as\b/.test(normalized) && /\b(connect|flow|backend|frontend)\b/.test(normalized);
 }
 
 function naturalTextToProjectExplainResponse(markdown: string): ProjectExplainLlmResponse {

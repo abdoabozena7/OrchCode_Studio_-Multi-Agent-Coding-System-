@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
-import type { LlmRequest } from "../llm/LlmProvider.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { ensureMemoryLayout, writeJson } from "../memory/ProjectMemory.js";
 import type { CommandInventory, FileSummaryRecord, RepoIndex } from "../memory/types.js";
 import { SeniorCodingAgent } from "../agents/SeniorCodingAgent.js";
@@ -191,7 +191,31 @@ test("provider-backed orchestrator executor is not reported as demo mock", async
     assert.equal(provider.structuredCalls > 0, true);
     assert.ok(result.report.limitations.some((entry) => /provider-backed SeniorCodingAgent planner/i.test(entry)));
     assert.equal(result.report.limitations.some((entry) => /ExecutorAgent uses mock provider mode unless/i.test(entry)), false);
+    assert.equal(result.report.limitations.some((entry) => /legacy scan\/search orchestration remains deterministic/i.test(entry)), false);
     assert.ok((result.report.unresolved_risks ?? []).some((entry) => /provider-backed planner/i.test(entry)));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("provider-backed orchestrator uses provider calls for read-only worker roles", async () => {
+  const workspace = await createFixtureWorkspace("hivo-orchestrator-provider-readonly");
+  const provider = new ProviderRoleOutputProvider();
+  try {
+    const result = await new CoreOrchestrator({
+      workspacePath: workspace,
+      maxContextFiles: 3,
+      maxContextChars: 2500,
+      providerFactory: (role) => role === "ExecutorAgent" ? undefined as unknown as LlmProvider : provider
+    }).runAgenticTask("Explain src/index.ts and do not change files.");
+
+    assert.equal(result.run.status, "succeeded");
+    assert.equal(provider.parsedAgentOutputCalls >= 3, true);
+    assert.ok(result.report.limitations.some((entry) => /Read-only Scout\/Planner\/Reporter roles used configured provider calls/i.test(entry)));
+    assert.ok(result.report.limitations.some((entry) => /Provider-backed read-only ScoutAgent/i.test(entry)));
+    assert.ok(result.report.limitations.some((entry) => /Provider-backed read-only PlannerAgent/i.test(entry)));
+    assert.ok(result.report.limitations.some((entry) => /Provider-backed read-only ReporterAgent/i.test(entry)));
+    assert.equal(result.report.limitations.some((entry) => /legacy scan\/search orchestration remains deterministic/i.test(entry)), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -296,6 +320,31 @@ class FinalInspectProvider extends MockLlmProvider {
     this.textCalls += 1;
     if (this.behavior === "fail") throw new Error("provider final inspect failure");
     return `PROVIDER_FINAL_INSPECT: ${input.userPrompt}`;
+  }
+}
+
+class ProviderRoleOutputProvider implements LlmProvider {
+  parsedAgentOutputCalls = 0;
+
+  async generateStructured<T>(_input: LlmRequest, schema: unknown): Promise<T> {
+    const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "parsed-agent-output") {
+      this.parsedAgentOutputCalls += 1;
+      return {
+        summary: "Provider-backed read-only role completed from context.",
+        status: "succeeded",
+        files_changed: [],
+        validation_results: [],
+        artifacts: [],
+        limitations: [],
+        next_recommendations: ["Continue through gated review and validation."]
+      } as T;
+    }
+    return {} as T;
+  }
+
+  async generateText(_input: LlmRequest): Promise<string> {
+    return "Provider final inspect answer for src/index.ts. [src/index.ts:1](hivo-file:src%2Findex.ts:1)";
   }
 }
 

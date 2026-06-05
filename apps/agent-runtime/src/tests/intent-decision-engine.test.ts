@@ -31,8 +31,9 @@ test("ConversationRouter routes unknown and normal Arabic prompts to chat", () =
   assert.equal(routeConversation("\u0639\u0627\u0645\u0644 \u0627\u064a\u0647 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647\u061f").route, "chat");
 });
 
-test("ConversationRouter keeps project questions and code changes out of swarm by default", () => {
-  assert.equal(routeConversation("How does the provider telemetry work in this project?").route, "inspect_explain");
+test("ConversationRouter sends deep architecture questions to read-only swarm and keeps bounded changes simple", () => {
+  assert.equal(routeConversation("How does the provider telemetry work in this project?").route, "swarm_readonly");
+  assert.equal(routeConversation("امتى الـ orchestrator يعمل direct dispatch؟ وامتى يحوّل لـ human review حتى لو فيه agents بتقترح action؟").route, "swarm_readonly");
   assert.equal(routeConversation("Fix one file so the status label handles provider failure").route, "simple_run");
   assert.equal(routeConversation("Refactor auth, database, and frontend state across many files").route, "orchestrated_run");
   assert.equal(routeConversation("Audit the whole repo read-only with swarm scouts").route, "swarm_readonly");

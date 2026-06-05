@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -344,6 +344,49 @@ test("command execution emits an explicit runtime completion event instead of re
   assert.equal(events.filter((type) => type === "runtime.command.requested").length, 1);
   assert.equal(updated?.taskState.transitions.some((entry) => entry.type === "command.started"), true);
   assert.equal(updated?.taskState.transitions.some((entry) => entry.type === "command.completed"), true);
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("session persistence stores compact snapshots instead of unbounded runtime payloads", async () => {
+  const storageDir = path.join(os.tmpdir(), `hivo-runtime-compact-storage-${Date.now()}`);
+  const manager = new SessionManager(storageDir, new EventBus());
+  await manager.load();
+  const session = await manager.createSession({
+    workspacePath: storageDir,
+    mode: "demo_mock",
+    userPrompt: "compact persistence"
+  });
+  const hugeText = "x".repeat(250_000);
+
+  await manager.updateSession(session.id, (draft) => {
+    for (let index = 0; index < 60; index += 1) {
+      draft.messages.push({
+        id: `msg_${index}`,
+        role: "assistant",
+        content: hugeText,
+        createdAt: new Date().toISOString()
+      });
+    }
+    draft.artifacts.push({
+      id: "artifact_large_payload",
+      sessionId: session.id,
+      type: "summary",
+      title: "Large runtime payload",
+      summary: hugeText,
+      payload: {
+        hugeText,
+        largeArray: Array.from({ length: 200 }, (_, index) => ({ index, hugeText }))
+      },
+      createdAt: new Date().toISOString()
+    });
+  });
+
+  const persisted = await readFile(path.join(storageDir, "sessions.json"), "utf8");
+  assert.equal(persisted.length < 2_000_000, true);
+  assert.match(persisted, /truncated/);
+  const parsed = JSON.parse(persisted) as { sessions: Array<{ messages: unknown[] }> };
+  assert.equal(parsed.sessions.length, 1);
+  assert.equal(parsed.sessions[0]?.messages.length, 40);
   await rm(storageDir, { recursive: true, force: true });
 });
 

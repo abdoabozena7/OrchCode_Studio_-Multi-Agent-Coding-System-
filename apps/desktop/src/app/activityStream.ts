@@ -93,7 +93,7 @@ export function describeCurrentStep(
     };
   }
 
-  if (!["completed", "blocked", "failed"].includes(session.status)) {
+  if (!["completed", "blocked", "failed", "failed_provider", "needs_approval", "expired"].includes(session.status)) {
     const currentProgress = selectCurrentProgressEvent(session.progressEvents);
     if (currentProgress) {
       return annotateCurrentItem(mapProgressEventToActivityItem(currentProgress), session, session.progressEvents);
@@ -154,6 +154,24 @@ export function describeCurrentStep(
     };
   }
 
+  if (session.status === "needs_approval") {
+    return {
+      id: "current-needs-approval",
+      title: "Review required",
+      summary: session.nextAction?.message ?? session.runSummary?.summary ?? "The run is waiting for operator review.",
+      status: "blocked"
+    };
+  }
+
+  if (session.status === "expired") {
+    return {
+      id: "current-expired",
+      title: "Session expired",
+      summary: session.taskState.restoreState?.reason ?? "The runtime session token expired.",
+      status: "failed"
+    };
+  }
+
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
     return {
       id: "current-attention",
@@ -179,6 +197,15 @@ export function describeCurrentStep(
       id: "current-failed",
       title: "Run failed",
       summary: session.runSummary?.summary ?? "The run failed.",
+      status: "failed"
+    };
+  }
+
+  if (session.status === "failed_provider") {
+    return {
+      id: "current-provider-failed",
+      title: "Provider failed",
+      summary: session.providerTelemetry?.lastError ?? session.runSummary?.summary ?? "The real provider failed or was unavailable.",
       status: "failed"
     };
   }

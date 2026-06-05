@@ -418,7 +418,8 @@ export async function answerUniversalProjectQuestion(input: {
   const investigationConceptResolution = resolveInvestigationConcept(understandingPrompt);
   const questionUnderstanding = applyInvestigationConceptResolution(
     createQuestionUnderstanding(understandingPrompt, intent, topic),
-    investigationConceptResolution
+    investigationConceptResolution,
+    understandingPrompt
   );
   const readLaneRun = runInspectExplainReadLanes({
     userPrompt: understandingPrompt,
@@ -540,7 +541,7 @@ export async function answerUniversalProjectQuestion(input: {
   const localSynthesisStoppedForProviderIssue =
     providerFailureSynthesis === "notice_only" &&
     explainResult.fallbackUsed &&
-    (/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") || explainResult.fallbackReason === "provider_answer_failed_local_validation");
+    (/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") || isProviderAnswerValidationFailure(explainResult.fallbackReason));
   const allowLocalFinalAnswer = providerFailureSynthesis === "allow_local_synthesis";
   if (localSynthesisStoppedForProviderIssue) {
     answerMarkdown = createProviderNoSynthesisNotice({
@@ -881,7 +882,7 @@ function createProjectAnswerStrategy(input: {
     return {
       strategy: "provider_validation_notice",
       finalAnswerSource: "local_notice",
-      providerDraftStatus: input.explainResult.fallbackReason === "provider_answer_failed_local_validation" ? "failed_local_validation" : "replaced_by_local_validation",
+      providerDraftStatus: isProviderAnswerValidationFailure(input.explainResult.fallbackReason) ? "failed_local_validation" : "replaced_by_local_validation",
       fallbackUsed: true,
       reason
     };
@@ -904,7 +905,7 @@ function createProjectAnswerStrategy(input: {
       reason
     };
   }
-  if (input.explainResult.fallbackReason === "provider_answer_failed_local_validation") {
+  if (isProviderAnswerValidationFailure(input.explainResult.fallbackReason)) {
     return {
       strategy: "local_synthesis_after_provider_validation_failure",
       finalAnswerSource: "local_evidence_synthesis",
@@ -924,9 +925,13 @@ function createProjectAnswerStrategy(input: {
 
 function providerFallbackStatus(reason: string | undefined): ProjectAnswerStrategy["providerDraftStatus"] {
   if (reason === "concept_not_found_without_provider_answer") return "not_called";
-  if (reason === "provider_answer_failed_local_validation") return "failed_local_validation";
+  if (isProviderAnswerValidationFailure(reason)) return "failed_local_validation";
   if (/provider failed during project explanation/i.test(reason ?? "")) return "failed";
   return "replaced_by_local_validation";
+}
+
+function isProviderAnswerValidationFailure(reason: string | undefined) {
+  return /^provider_answer_failed_local_validation\b/i.test(reason ?? "");
 }
 
 function shouldUseInsufficientEvidenceNotice(input: {
@@ -1174,8 +1179,10 @@ function createQuestionUnderstanding(
 
 function applyInvestigationConceptResolution(
   understanding: ProjectQuestionUnderstanding,
-  resolution: InvestigationConceptResolution
+  resolution: InvestigationConceptResolution,
+  question: string
 ): ProjectQuestionUnderstanding {
+  if (isStructuralFileContextQuestion(question)) return understanding;
   if (!resolution.isTargeted || !resolution.targetConcept || resolution.targetConcept === "general") return understanding;
   if (resolution.resolutionStatus === "not_found" && isStructuralResolutionTarget(resolution.targetConcept)) return understanding;
   return {
@@ -1209,6 +1216,24 @@ function applyInvestigationConceptResolution(
       ...(resolution.targetConcept === "feedback" || resolution.targetConcept.includes("loop") ? ["downstream_usage", "output", "uncertainty"] as RequestedQuestionFacet[] : [])
     ]) as RequestedQuestionFacet[]
   };
+}
+
+function isStructuralFileContextQuestion(question: string) {
+  return isEntrypointInventoryQuestion(question) || isSourceFlowFileQuestion(question);
+}
+
+function isEntrypointInventoryQuestion(question: string) {
+  const normalized = normalizeTerm(question);
+  return /\b(?:main\s+)?entry\s*points?\b|\bentrypoints?\b|\bentry\s+files?\b/.test(normalized)
+    || /\bwhat\s+are\s+the\s+main\s+files\b/.test(normalized)
+    || /\buse\s+the\s+detected\s+candidates\b/.test(normalized) && /\bmain\b|\bentry\b|\bbackend\s+main\b|\bapp\s+js\b|\bapp\s+ts\b|\bapp\s+tsx\b|\bapp\s+jsx\b/.test(normalized);
+}
+
+function isSourceFlowFileQuestion(question: string) {
+  const normalized = normalizeTerm(question);
+  return /\bdetected\s+source\s+files\b/.test(normalized) && /\bconnect\b/.test(normalized) && /\bflow\b/.test(normalized)
+    || /\bbackend\b/.test(normalized) && /\bfrontend\b/.test(normalized) && /\b(connect|wire|flow|source\s+files)\b/.test(normalized)
+    || /\buse\s+only\s+project\s+files\s+such\s+as\b/.test(normalized) && /\b(connect|flow|backend|frontend)\b/.test(normalized);
 }
 
 function isStructuralResolutionTarget(targetConcept: string) {
@@ -1912,8 +1937,8 @@ function validateAnswer(input: {
       : 0;
   const minSectionCount = input.questionUnderstanding.detailLevel === "deep" || input.questionUnderstanding.detailLevel === "detailed" ? 3 : 0;
   let tooShallow = false;
-  if (hasEvidence && !/hivo-file:/i.test(input.answerMarkdown)) {
-    errors.push("Answer has local evidence but no hivo-file citations.");
+  if (hasEvidence && !answerHasWorkspaceCitation(input.answerMarkdown)) {
+    errors.push("Answer has local evidence but no workspace citations.");
   }
   if (hasEvidence && answerLooksLikeNotFound(input.answerMarkdown)) {
     errors.push("Answer says the topic was not found even though local evidence exists.");
@@ -1941,9 +1966,11 @@ function validateAnswer(input: {
   if (repeatedGenericImplementation >= 3) {
     errors.push("Answer repeats a generic implementation template instead of synthesizing project evidence.");
   }
-  const shallowLineOneRefs = (input.answerMarkdown.match(/\b(?:backend|frontend|src|app|services?)\/[A-Za-z0-9_./-]+\.(?:py|ts|tsx|js|jsx):1\b/g) ?? []).length;
+  const citationLineRefs = Array.from(input.answerMarkdown.matchAll(/\b(?:backend|frontend|src|app|services?)\/[A-Za-z0-9_./-]+\.(?:py|ts|tsx|js|jsx):(\d+)\b/g));
+  const shallowLineOneRefs = citationLineRefs.filter((match) => Number(match[1]) === 1).length;
+  const hasDeeperAnswerRef = citationLineRefs.some((match) => Number(match[1]) > 1);
   const hasDeeperEvidence = input.positiveEvidence.some((item) => item.line > 1);
-  if (shallowLineOneRefs >= 5 && hasDeeperEvidence) {
+  if (targetSpecific && shallowLineOneRefs >= 8 && hasDeeperEvidence && !hasDeeperAnswerRef && (input.questionUnderstanding.detailLevel === "deep" || input.questionUnderstanding.detailLevel === "detailed")) {
     errors.push("Answer over-cites shallow line-1 references while deeper target evidence is available.");
   }
   if (input.questionUnderstanding.targetConcept === "multi_agent_system") {
@@ -2023,6 +2050,11 @@ function detectStaleCannedOuterloopAnswer(answerMarkdown: string, understanding:
     errors.push("answerMarkdown matches stale canned outerloop explanation template.");
   }
   return errors;
+}
+
+function answerHasWorkspaceCitation(answerMarkdown: string) {
+  return /hivo-file:/i.test(answerMarkdown)
+    || /\b(?:[A-Za-z0-9_.-]+\/){1,}[A-Za-z0-9_.-]+\.[A-Za-z0-9]+:\d+\b/.test(answerMarkdown);
 }
 
 function guardFinalAnswerCitations(input: {
@@ -2992,6 +3024,7 @@ type ForecastingAssessment = {
 };
 
 function isForecastingAssessmentQuestion(question: string, understanding: ProjectQuestionUnderstanding) {
+  if (isStructuralFileContextQuestion(question)) return false;
   if (isDecisionPolicyQuestion(question, understanding)) return false;
   const normalizedTarget = normalizeTerm(understanding.targetConcept);
   const text = `${question}\n${understanding.topicPhrase}\n${understanding.topicTerms.join(" ")}\n${understanding.entities.join(" ")}`;

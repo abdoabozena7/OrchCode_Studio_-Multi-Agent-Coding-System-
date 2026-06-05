@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentRuntimeSession, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { userPromptWithContext, type LlmProvider, type LlmRequest } from "../llm/LlmProvider.js";
 import { MockLlmProvider } from "../llm/MockLlmProvider.js";
+import { TelemetryLlmProvider, createProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { SessionManager } from "../runtime/SessionManager.js";
@@ -24,6 +25,60 @@ class TimeoutProvider implements LlmProvider {
     throw new Error("real_provider.timeout: Ollama request timed out");
   }
 }
+
+class EchoTextProvider implements LlmProvider {
+  async generateStructured<T>(): Promise<T> {
+    return { ok: true } as T;
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    return `echo:${input.userPrompt}`;
+  }
+}
+
+test("provider telemetry records prompt context and response character volume", async () => {
+  const recorder = createProviderTelemetryRecorder({
+    mode: "real_provider",
+    providerConfig: validOllamaConfig,
+    activeProviderSource: "explicit_cli"
+  });
+  const provider = new TelemetryLlmProvider(new EchoTextProvider(), recorder);
+
+  await provider.generateText({
+    systemPrompt: "system prompt",
+    userPrompt: "explain the workspace",
+    context: { files: ["backend/main.py", "frontend/app.js"], evidence: { count: 2 } }
+  });
+
+  const snapshot = recorder.snapshot();
+  assert.equal(snapshot.providerRequestCount, 1);
+  assert.equal(snapshot.totalProviderPromptChars > "system prompt".length + "explain the workspace".length, true);
+  assert.equal(snapshot.totalProviderContextChars > 0, true);
+  assert.equal(snapshot.totalProviderResponseChars > 0, true);
+  assert.equal(snapshot.perPromptProviderLatencyMs[0]?.promptChars, snapshot.totalProviderPromptChars);
+  assert.equal(snapshot.perPromptProviderLatencyMs[0]?.contextChars, snapshot.totalProviderContextChars);
+  assert.equal(snapshot.perPromptProviderLatencyMs[0]?.responseChars, snapshot.totalProviderResponseChars);
+});
+
+test("provider user prompt includes serialized context so real models can inspect evidence", () => {
+  const prompt = userPromptWithContext({
+    systemPrompt: "system",
+    userPrompt: "answer from the evidence",
+    context: {
+      file_excerpts: [
+        {
+          path: "src/runtime.ts",
+          content: "export const routingPolicy = 'direct dispatch or human review';"
+        }
+      ]
+    }
+  });
+
+  assert.match(prompt, /Provider context/);
+  assert.match(prompt, /src\/runtime\.ts/);
+  assert.match(prompt, /routingPolicy/);
+  assert.match(prompt, /direct dispatch or human review/);
+});
 
 class UngroundedProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {

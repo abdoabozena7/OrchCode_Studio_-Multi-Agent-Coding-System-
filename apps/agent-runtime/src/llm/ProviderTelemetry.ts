@@ -21,6 +21,9 @@ export class ProviderTelemetryRecorder {
   private providerFailureCount = 0;
   private providerTimeoutCount = 0;
   private totalProviderLatencyMs = 0;
+  private totalProviderPromptChars = 0;
+  private totalProviderResponseChars = 0;
+  private totalProviderContextChars = 0;
   private perPromptProviderLatencyMs: ProviderPromptLatency[] = [];
   private fallbackUsed = false;
   private fallbackReason: string | undefined;
@@ -28,8 +31,9 @@ export class ProviderTelemetryRecorder {
 
   constructor(private readonly input: ProviderTelemetryInput) {}
 
-  async measure<T>(requestType: ProviderRequestType, operation: () => Promise<T>): Promise<T> {
+  async measure<T>(requestType: ProviderRequestType, request: LlmRequest, operation: () => Promise<T>): Promise<T> {
     const requestId = `provider_${Date.now()}_${this.providerRequestCount + 1}`;
+    const promptSize = measureProviderPromptSize(request);
     const startedAt = Date.now();
     this.providerRequestCount += 1;
     try {
@@ -38,7 +42,9 @@ export class ProviderTelemetryRecorder {
         requestId,
         requestType,
         latencyMs: Date.now() - startedAt,
-        status: "success"
+        status: "success",
+        ...promptSize,
+        responseChars: estimateSerializedChars(result)
       });
       this.providerResponseCount += 1;
       return result;
@@ -50,7 +56,8 @@ export class ProviderTelemetryRecorder {
         requestType,
         latencyMs: Date.now() - startedAt,
         status: timeout ? "timeout" : "failure",
-        errorSummary: summarizeProviderError(error)
+        errorSummary: summarizeProviderError(error),
+        ...promptSize
       });
       this.providerFailureCount += 1;
       if (timeout) this.providerTimeoutCount += 1;
@@ -82,6 +89,9 @@ export class ProviderTelemetryRecorder {
       providerFailureCount: this.providerFailureCount,
       providerTimeoutCount: this.providerTimeoutCount,
       totalProviderLatencyMs: this.totalProviderLatencyMs,
+      totalProviderPromptChars: this.totalProviderPromptChars,
+      totalProviderResponseChars: this.totalProviderResponseChars,
+      totalProviderContextChars: this.totalProviderContextChars,
       perPromptProviderLatencyMs: this.perPromptProviderLatencyMs,
       fallbackUsed: this.fallbackUsed,
       fallbackReason: this.fallbackReason,
@@ -96,6 +106,9 @@ export class ProviderTelemetryRecorder {
 
   private recordLatency(input: Omit<ProviderPromptLatency, "providerName" | "modelName">) {
     this.totalProviderLatencyMs += input.latencyMs;
+    this.totalProviderPromptChars += input.promptChars ?? 0;
+    this.totalProviderResponseChars += input.responseChars ?? 0;
+    this.totalProviderContextChars += input.contextChars ?? 0;
     this.perPromptProviderLatencyMs.push({
       ...input,
       providerName: this.providerName(),
@@ -121,11 +134,11 @@ export class TelemetryLlmProvider implements LlmProvider {
   ) {}
 
   generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
-    return this.recorder.measure("structured", () => this.inner.generateStructured<T>(input, schema));
+    return this.recorder.measure("structured", input, () => this.inner.generateStructured<T>(input, schema));
   }
 
   generateText(input: LlmRequest): Promise<string> {
-    return this.recorder.measure("text", () => this.inner.generateText(input));
+    return this.recorder.measure("text", input, () => this.inner.generateText(input));
   }
 }
 
@@ -167,4 +180,33 @@ function isProviderTimeout(error: unknown) {
 function summarizeProviderError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function measureProviderPromptSize(request: LlmRequest) {
+  const systemPromptChars = request.systemPrompt.length;
+  const userPromptChars = request.userPrompt.length;
+  const contextChars = request.context === undefined ? 0 : estimateSerializedChars(request.context);
+  return {
+    systemPromptChars,
+    userPromptChars,
+    contextChars,
+    promptChars: systemPromptChars + userPromptChars + contextChars
+  };
+}
+
+function estimateSerializedChars(value: unknown, depth = 0, seen = new WeakSet<object>()): number {
+  if (value === null) return 4;
+  if (typeof value === "string") return value.length + 2;
+  if (typeof value === "number" || typeof value === "boolean") return String(value).length;
+  if (typeof value === "undefined") return 0;
+  if (typeof value !== "object") return String(value).length;
+  if (seen.has(value)) return 12;
+  if (depth > 6) return 64;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return 2 + value.reduce((sum, item, index) => sum + (index ? 1 : 0) + estimateSerializedChars(item, depth + 1, seen), 0);
+  }
+  return 2 + Object.entries(value as Record<string, unknown>).reduce((sum, [key, entry]) => {
+    return sum + key.length + 3 + estimateSerializedChars(entry, depth + 1, seen);
+  }, 0);
 }

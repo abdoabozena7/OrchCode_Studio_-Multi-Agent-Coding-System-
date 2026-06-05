@@ -63,6 +63,8 @@ import {
   getRuntimeSession,
   rejectRuntimePatch,
   reportRuntimePatchApplyResult,
+  RuntimeHttpError,
+  type RuntimeEventSubscriptionState,
   RuntimeUnavailableError,
   runRuntimeTurn,
   subscribeRuntimeEvents
@@ -174,6 +176,15 @@ const ARCHIVED_SESSIONS_KEY = "hivo.archivedSessions";
 const PINNED_SESSIONS_KEY = "hivo.pinnedSessions";
 const SESSION_TITLE_MIGRATION_KEY = "hivo.sessionTitleMigration.v1";
 const PET_VISIBLE_KEY = "hivo.petVisible";
+const INITIAL_SSE_STATE: RuntimeEventSubscriptionState = {
+  status: "disconnected",
+  connected: false,
+  disconnected: true,
+  reconnecting: false,
+  unauthorized: false,
+  tokenExpired: false,
+  retryAttempt: 0
+};
 const MIGRATED_STORAGE_KEYS = [
   RECENT_WORKSPACES_KEY,
   RECENT_SESSIONS_KEY,
@@ -313,6 +324,7 @@ export function App() {
   const [expandedSessionProjectPaths, setExpandedSessionProjectPaths] = useState<string[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [runtimeConnectionState, setRuntimeConnectionState] = useState<"connected" | "disconnected">("connected");
+  const [sseConnectionState, setSseConnectionState] = useState<RuntimeEventSubscriptionState>(INITIAL_SSE_STATE);
   const [activeRuntimeCommand, setActiveRuntimeCommand] = useState<ActiveRuntimeCommand | null>(null);
   const [showFullAccessBanner, setShowFullAccessBanner] = useState(false);
   const [progressRailOpen, setProgressRailOpen] = useState(false);
@@ -618,8 +630,9 @@ export function App() {
             runtimeSessionToken || undefined
           );
           if (cancelled) return;
-          setRuntimeSession(updated);
+          applyCanonicalRuntimeSession(updated);
           setMessage(applied.message);
+          await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_result");
           await refreshWorkspaceState();
         } catch (error) {
           if (!cancelled) {
@@ -630,7 +643,8 @@ export function App() {
                 { status: "failed", message: String(error) },
                 runtimeSessionToken || undefined
               );
-              setRuntimeSession(updated);
+              applyCanonicalRuntimeSession(updated);
+              await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_failed_result");
             } catch {
               // Keep the original apply error visible.
             }
@@ -698,6 +712,7 @@ export function App() {
     runtimeSession && !archivedSessionIdSet.has(runtimeSession.id)
       ? runtimeSession
       : null;
+  const liveConnectionState: "connected" | "disconnected" = sseConnectionState.connected ? "connected" : "disconnected";
   const sidebarProjects = buildSidebarProjects({
     workspace,
     runtimeSession: visibleRuntimeSession,
@@ -705,19 +720,19 @@ export function App() {
     recentSessions: visibleRecentSessions,
     pinnedSessionIds,
     agentBusy,
-    runtimeConnectionState
+    runtimeConnectionState: liveConnectionState
   });
   const allProjectsCollapsed =
     sidebarProjects.length > 0 &&
     sidebarProjects.every((project) => collapsedProjectPaths.includes(normalizeWorkspacePath(project.path)));
 
   const sessionSummary = runtimeSession
-    ? humanSessionStatus(runtimeSession, agentBusy, runtimeConnectionState)
+    ? humanSessionStatus(runtimeSession, agentBusy, liveConnectionState)
     : workspace
       ? `Connected to ${workspace.name}`
       : "Open a workspace to begin";
   const railActivityItems = runtimeSession ? buildPrimaryActivityItems(runtimeSession, activeRuntimeCommand) : [];
-  const railCurrentStep = runtimeSession ? describeCurrentStep(runtimeSession, runtimeConnectionState, activeRuntimeCommand) : null;
+  const railCurrentStep = runtimeSession ? describeCurrentStep(runtimeSession, liveConnectionState, activeRuntimeCommand) : null;
   const showProgressRail = Boolean(runtimeSession && (railCurrentStep || railActivityItems.length));
   const hasPromptDraft = prompt.trim().length > 0;
   const sendButtonDisabled = !workspace || !hasPromptDraft;
@@ -760,6 +775,7 @@ export function App() {
     setRuntimeSession(null);
     setRuntimeSessionToken("");
     setRuntimeConnectionState("connected");
+    setSseConnectionState(INITIAL_SSE_STATE);
     const nextWorkspace = await openWorkspace(normalizedPath);
     setWorkspacePath(normalizedPath);
     setWorkspace(nextWorkspace);
@@ -843,11 +859,11 @@ export function App() {
   function subscribeToRuntimeSession(sessionId: string, sessionToken?: string) {
     runtimeEventUnsubscribeRef.current?.();
     setRuntimeConnectionState("connected");
+    setSseConnectionState({ ...INITIAL_SSE_STATE, status: "connecting", disconnected: false });
     runtimeEventUnsubscribeRef.current = subscribeRuntimeEvents(sessionId, sessionToken, {
       onSession: (session) => {
         setRuntimeConnectionState("connected");
-        setRuntimeSession(session);
-        void mirrorRuntimeSession(session);
+        applyCanonicalRuntimeSession(session);
       },
       onEvent: (event: AppEvent) => {
         setRuntimeConnectionState("connected");
@@ -859,11 +875,77 @@ export function App() {
           setMessage(event.summary.nextAction ?? event.summary.summary);
         }
       },
-      onError: () => {
-        setRuntimeConnectionState("disconnected");
-        setMessage("Live updates disconnected. Session state may be stale until the next refresh or runtime completion.");
+      onStateChange: (state) => {
+        setSseConnectionState(state);
+        if (state.connected) {
+          setRuntimeConnectionState("connected");
+        }
+        if (state.tokenExpired || state.unauthorized) {
+          forgetPersistedSessionToken(sessionId);
+          setRuntimeSessionToken("");
+        }
+      },
+      onReconnect: () => {
+        void reconcileRuntimeSession(sessionId, sessionToken, "sse_reconnect");
+      },
+      onError: (state) => {
+        if (state.tokenExpired) {
+          setMessage("Session token expired. Live updates stopped; open a new chat or restore with a fresh token.");
+          void reconcileRuntimeSession(sessionId, sessionToken, "token_expired");
+          return;
+        }
+        if (state.unauthorized) {
+          setMessage("Session event stream is unauthorized. Live updates stopped for this chat.");
+          void reconcileRuntimeSession(sessionId, sessionToken, "unauthorized");
+          return;
+        }
+        setMessage(state.reconnecting ? "Live updates reconnecting; canonical session will be refreshed when the stream returns." : "Live updates disconnected. Session state may be stale until the next refresh.");
       }
     });
+  }
+
+  function applyCanonicalRuntimeSession(session: AgentRuntimeSession) {
+    const merged = mergeRuntimeSessionState(runtimeSession, session);
+    setRuntimeSession((current) => mergeRuntimeSessionState(current, session));
+    void mirrorRuntimeSession(merged);
+    if (isTerminalOrOperatorHeldSession(merged)) {
+      setAgentBusy(false);
+    }
+    return merged;
+  }
+
+  async function reconcileRuntimeSession(sessionId: string, sessionToken: string | undefined, reason: string) {
+    try {
+      const canonical = await getRuntimeSession(sessionId, sessionToken);
+      applyCanonicalRuntimeSession(canonical);
+      setRuntimeConnectionState("connected");
+      return canonical;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 401) {
+        const tokenExpired = error.code === "token_expired";
+        setSseConnectionState((current) => ({
+          ...current,
+          status: tokenExpired ? "token_expired" : "unauthorized",
+          connected: false,
+          disconnected: true,
+          reconnecting: false,
+          unauthorized: !tokenExpired,
+          tokenExpired,
+          lastError: error.message
+        }));
+        forgetPersistedSessionToken(sessionId);
+        setRuntimeSessionToken("");
+        setMessage(tokenExpired ? "Session token expired. Start a new chat to continue." : "Session token is unauthorized. Start a new chat to continue.");
+        return null;
+      }
+      if (error instanceof RuntimeUnavailableError) {
+        setRuntimeConnectionState("disconnected");
+        setMessage(error.message);
+        return null;
+      }
+      setMessage(`Session reconciliation failed after ${reason}: ${String(error)}`);
+      return null;
+    }
   }
 
   async function mirrorRuntimeSession(session: AgentRuntimeSession) {
@@ -949,7 +1031,7 @@ export function App() {
         subscribeToRuntimeSession(sessionId, persistedToken.token);
         const restoredSession = await getRuntimeSession(sessionId, persistedToken.token);
         setRuntimeSessionToken(persistedToken.token);
-        setRuntimeSession(restoredSession);
+        applyCanonicalRuntimeSession(restoredSession);
         setRuntimeConnectionState("connected");
         return restoredSession;
       } catch {
@@ -959,7 +1041,7 @@ export function App() {
     const savedSession = await getSavedRuntimeSession(sessionId);
     setRuntimeSessionToken("");
     setRuntimeConnectionState("disconnected");
-    setRuntimeSession(savedSession);
+    applyCanonicalRuntimeSession(savedSession);
     return savedSession;
   }
 
@@ -989,6 +1071,8 @@ export function App() {
     setAgentBusy(true);
     setActivityOpen(false);
     setBottomView("none");
+    let activeSessionIdForReconcile: string | undefined;
+    let activeSessionTokenForReconcile: string | undefined;
     try {
       const canReuseSession =
         runtimeSession &&
@@ -1042,28 +1126,32 @@ export function App() {
               })
             ).sessionId;
           })();
+      activeSessionIdForReconcile = sessionId;
+      activeSessionTokenForReconcile = sessionToken;
       if (sessionToken && sessionTokenExpiresAt) {
         rememberPersistedSessionToken(sessionId, sessionToken, sessionTokenExpiresAt);
       }
       subscribeToRuntimeSession(sessionId, sessionToken);
-      setRuntimeSession(await getRuntimeSession(sessionId, sessionToken));
+      await reconcileRuntimeSession(sessionId, sessionToken, "session_created");
       setPrompt("");
       await runRuntimeTurn(sessionId, input, sessionToken);
-      const nextSession = await getRuntimeSession(sessionId, sessionToken);
-      setRuntimeSession(nextSession);
-      await mirrorRuntimeSession(nextSession);
+      const nextSession = await reconcileRuntimeSession(sessionId, sessionToken, "turn_completed");
       await refreshWorkspaceState();
       setMessage(
         queuedMode === "steer"
           ? "Steer request completed."
-          : nextSession.nextAction?.message ??
-            (nextSession.status === "needs_approval" ? "Session is waiting for operator review." : "Session updated.")
+          : nextSession?.nextAction?.message ??
+            (nextSession?.status === "needs_approval" ? "Session is waiting for operator review." : "Session updated.")
       );
     } catch (error) {
       if (error instanceof RuntimeUnavailableError) {
         setRuntimeConnectionState("disconnected");
         setMessage(error.message);
       } else {
+        const sessionIdForError = activeSessionIdForReconcile ?? runtimeSession?.id;
+        if (sessionIdForError) {
+          void reconcileRuntimeSession(sessionIdForError, activeSessionTokenForReconcile, "runtime_session_error");
+        }
         setMessage(String(error));
       }
     } finally {
@@ -1084,11 +1172,11 @@ export function App() {
     try {
       const activeToken = runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token;
       if (!activeToken) {
-        setRuntimeSession(await getSavedRuntimeSession(runtimeSession.id));
+        applyCanonicalRuntimeSession(await getSavedRuntimeSession(runtimeSession.id));
         setRuntimeConnectionState("disconnected");
         return;
       }
-      setRuntimeSession(await getRuntimeSession(runtimeSession.id, activeToken));
+      await reconcileRuntimeSession(runtimeSession.id, activeToken, "manual_refresh");
     } catch (error) {
       setMessage(String(error));
     }
@@ -1125,9 +1213,9 @@ export function App() {
         },
         runtimeSessionToken || undefined
       );
-      setRuntimeSession(updated);
+      applyCanonicalRuntimeSession(updated);
       setMessage(applied.message);
-      await refreshRuntimeSession();
+      await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_result");
       await refreshWorkspaceState();
     } catch (error) {
       try {
@@ -1137,7 +1225,8 @@ export function App() {
           { status: "failed", message: String(error) },
           runtimeSessionToken || undefined
         );
-        setRuntimeSession(updated);
+        applyCanonicalRuntimeSession(updated);
+        await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_failed_result");
       } catch {
         // Keep the original apply error visible even if runtime reporting also fails.
       }
@@ -1173,7 +1262,8 @@ export function App() {
         safetySettings: commandSafetySettings(safetySettings),
         sessionToken: runtimeSessionToken || undefined
       });
-      setRuntimeSession((current) => current && current.id === session.id ? execution.updatedSession : current);
+      applyCanonicalRuntimeSession(execution.updatedSession);
+      await reconcileRuntimeSession(session.id, runtimeSessionToken || undefined, "command_result");
       return execution.result;
     } catch (error) {
       await refreshRuntimeSession();
@@ -1236,6 +1326,7 @@ export function App() {
     setBottomView("none");
     setTerminalResult(null);
     setRuntimeConnectionState("connected");
+    setSseConnectionState(INITIAL_SSE_STATE);
     setMessage(statusMessage);
   }
 
@@ -1825,7 +1916,8 @@ export function App() {
             {runtimeSession ? (
               <ThreadFeed
                 session={runtimeSession}
-                connectionState={runtimeConnectionState}
+                connectionState={liveConnectionState}
+                sseState={sseConnectionState}
                 canReconnect={Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token)}
                 activeRuntimeCommand={activeRuntimeCommand}
                 agentBusy={agentBusy}
@@ -2111,8 +2203,30 @@ export function App() {
                   <dd>{humanizeRuntimeStatus(runtimeSession.status)}</dd>
                   <dt>Stage</dt>
                   <dd>{humanizeLifecycleStage(runtimeSession.lifecycleStage)}</dd>
-                  <dt>Connection</dt>
-                  <dd>{runtimeConnectionState === "connected" ? "Live updates connected" : "Live updates disconnected; state may be stale"}</dd>
+                  <dt>Runtime</dt>
+                  <dd>{runtimeConnectionState}</dd>
+                  <dt>SSE</dt>
+                  <dd>{describeSseState(sseConnectionState, Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token))}</dd>
+                  <dt>Last Event</dt>
+                  <dd>{formatOptionalTimestamp(sseConnectionState.lastEventAt)}</dd>
+                  <dt>Auth</dt>
+                  <dd>{sseConnectionState.tokenExpired ? "token_expired" : sseConnectionState.unauthorized ? "unauthorized" : "ok"}</dd>
+                  <dt>Provider Source</dt>
+                  <dd>{runtimeSession.providerTelemetry?.activeProviderSource ?? runtimeSession.activeProviderSource ?? "unknown"}</dd>
+                  <dt>Mock Used</dt>
+                  <dd>{runtimeSession.providerTelemetry?.mockProviderUsed ? "yes" : "no"}</dd>
+                  <dt>Fallback Used</dt>
+                  <dd>{runtimeSession.providerTelemetry?.fallbackUsed ? "yes" : "no"}</dd>
+                  <dt>Request Count</dt>
+                  <dd>{runtimeSession.providerTelemetry?.providerRequestCount ?? 0}</dd>
+                  <dt>Prompt Chars</dt>
+                  <dd>{formatCount(runtimeSession.providerTelemetry?.totalProviderPromptChars ?? 0)}</dd>
+                  <dt>Context Chars</dt>
+                  <dd>{formatCount(runtimeSession.providerTelemetry?.totalProviderContextChars ?? 0)}</dd>
+                  <dt>Response Chars</dt>
+                  <dd>{formatCount(runtimeSession.providerTelemetry?.totalProviderResponseChars ?? 0)}</dd>
+                  <dt>Last Error</dt>
+                  <dd>{runtimeSession.providerTelemetry?.lastError ?? sseConnectionState.lastError ?? "none"}</dd>
                   <dt>Restore</dt>
                   <dd>{runtimeSessionToken || (runtimeSession && getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token) ? "This app session can still attempt reconnects." : "This chat is open from saved local history."}</dd>
                 </dl>
@@ -2307,9 +2421,48 @@ function DrawerSection({
   );
 }
 
+function SessionTruthStrip({
+  session,
+  connectionState,
+  sseState,
+  canReconnect
+}: {
+  session: AgentRuntimeSession;
+  connectionState: "connected" | "disconnected";
+  sseState: RuntimeEventSubscriptionState;
+  canReconnect: boolean;
+}) {
+  const provider = session.providerTelemetry;
+  const status = sessionStatusTruth(session);
+  return (
+    <section className={`thread-status-row ${status.kind}`}>
+      <div className="thread-status-head">
+        <div className={`thread-status-dot ${status.kind}`} />
+        <div>
+          <strong>{status.label}</strong>
+          <span>{describeSseState(sseState, canReconnect)}</span>
+        </div>
+      </div>
+      <div className="thread-status-meta">
+        <span>Runtime {connectionState === "connected" ? "connected" : "disconnected"}</span>
+        <span>SSE {humanizeRuntimeStatus(sseState.status)}</span>
+        <span>Last event {formatOptionalTimestamp(sseState.lastEventAt)}</span>
+        {sseState.tokenExpired ? <span>token_expired</span> : null}
+        {sseState.unauthorized ? <span>unauthorized</span> : null}
+        <span>Provider {provider?.activeProviderSource ?? session.activeProviderSource ?? "unknown"}</span>
+        <span>Requests {provider?.providerRequestCount ?? 0}</span>
+        <span>Mock {provider?.mockProviderUsed ? "yes" : "no"}</span>
+        <span>Fallback {provider?.fallbackUsed ? "yes" : "no"}</span>
+        {provider?.lastError ? <span>Error {truncateLabel(provider.lastError, 64)}</span> : null}
+      </div>
+    </section>
+  );
+}
+
 function ThreadFeed({
   session,
   connectionState,
+  sseState,
   canReconnect,
   activeRuntimeCommand,
   agentBusy,
@@ -2323,6 +2476,7 @@ function ThreadFeed({
 }: {
   session: AgentRuntimeSession;
   connectionState: "connected" | "disconnected";
+  sseState: RuntimeEventSubscriptionState;
   canReconnect: boolean;
   activeRuntimeCommand: ActiveRuntimeCommand | null;
   agentBusy: boolean;
@@ -2362,6 +2516,7 @@ function ThreadFeed({
 
   return (
     <div className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
+      <SessionTruthStrip session={session} connectionState={connectionState} sseState={sseState} canReconnect={canReconnect} />
       {session.messages.map((message) => {
         const isUserMessage = message.role === "user";
         const shouldAnimateAssistantMessage =
@@ -4801,6 +4956,57 @@ function isAccessOptionSelected(profile: AccessProfile, option: AccessProfile) {
   return profile === "default_permissions" || profile === "custom_config";
 }
 
+export function mergeRuntimeSessionState(
+  _current: AgentRuntimeSession | null,
+  canonical: AgentRuntimeSession
+): AgentRuntimeSession {
+  return {
+    ...canonical,
+    messages: dedupeRuntimeRecords(canonical.messages),
+    tasks: dedupeRuntimeRecords(canonical.tasks),
+    toolCalls: dedupeRuntimeRecords(canonical.toolCalls),
+    toolIntents: dedupeRuntimeRecords(canonical.toolIntents),
+    artifacts: dedupeRuntimeRecords(canonical.artifacts),
+    patchProposals: dedupeRuntimeRecords(canonical.patchProposals),
+    commandRequests: dedupeRuntimeRecords(canonical.commandRequests),
+    commandExecutions: dedupeRuntimeRecords(canonical.commandExecutions),
+    backgroundJobs: dedupeRuntimeRecordsBy(canonical.backgroundJobs, (record) => record.jobId),
+    progressEvents: dedupeRuntimeRecords(canonical.progressEvents),
+    agentWorkStatuses: dedupeRuntimeRecordsBy(
+      canonical.agentWorkStatuses,
+      (record) => `${record.agentName}:${record.role}:${record.taskTitle}:${record.updatedAt}`
+    )
+  };
+}
+
+export function isTerminalOrOperatorHeldSession(session: Pick<AgentRuntimeSession, "status" | "lifecycleStage">) {
+  return session.status === "completed"
+    || session.status === "failed"
+    || session.status === "failed_provider"
+    || session.status === "blocked"
+    || session.status === "needs_approval"
+    || session.status === "expired"
+    || session.lifecycleStage === "BLOCKED"
+    || session.lifecycleStage === "FAILED"
+    || session.lifecycleStage === "DONE";
+}
+
+function dedupeRuntimeRecords<T extends { id: string }>(records: T[]): T[] {
+  return dedupeRuntimeRecordsBy(records, (record) => record.id);
+}
+
+function dedupeRuntimeRecordsBy<T>(records: T[], getKey: (record: T) => string): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+  for (const record of records) {
+    const key = getKey(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(record);
+  }
+  return deduped;
+}
+
 function humanSessionStatus(
   session: AgentRuntimeSession | null,
   agentBusy = false,
@@ -4808,7 +5014,7 @@ function humanSessionStatus(
 ) {
   if (!session) return "Open a workspace to begin";
   if (connectionState === "disconnected" && session.status === "running") return "Live updates disconnected";
-  if (agentBusy) return "Working on your request";
+  if (agentBusy && !isTerminalOrOperatorHeldSession(session)) return "Working on your request";
 
   switch (session.nextAction?.kind) {
     case "clarify_plan":
@@ -4830,6 +5036,7 @@ function humanSessionStatus(
   if (restoreDisposition === "non_restorable") return "Restore unavailable";
   if (restoreDisposition === "reconciliation_required") return "Manual inspection required";
   if (restoreDisposition === "expired") return "Expired";
+  if (session.status === "expired") return "Expired";
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
     return "Needs attention";
   }
@@ -4945,7 +5152,42 @@ function describeProviderTruth(session: AgentRuntimeSession) {
   if (!truth) return "No provider telemetry recorded yet.";
   const providerKind = truth.mockProviderUsed ? "mock" : truth.realProviderUsed ? "real" : "unknown";
   const fallback = truth.fallbackUsed ? "yes" : "no";
-  return `${providerKind} | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | fallback ${fallback}`;
+  return `${providerKind} | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | prompt ${formatCount(truth.totalProviderPromptChars ?? 0)} chars | response ${formatCount(truth.totalProviderResponseChars ?? 0)} chars | fallback ${fallback}`;
+}
+
+function describeSseState(state: RuntimeEventSubscriptionState, canReconnect: boolean) {
+  if (state.tokenExpired) return "token_expired";
+  if (state.unauthorized) return "unauthorized";
+  if (state.connected) return `connected${state.lastEventAt ? `, last event ${formatOptionalTimestamp(state.lastEventAt)}` : ""}`;
+  if (state.reconnecting) return canReconnect ? `reconnecting${state.nextRetryAt ? `, next ${formatOptionalTimestamp(state.nextRetryAt)}` : ""}` : "disconnected, no reconnect token";
+  if (state.status === "connecting") return "connecting";
+  return canReconnect ? "disconnected" : "disconnected, no reconnect token";
+}
+
+function formatOptionalTimestamp(value: string | undefined) {
+  if (!value) return "never";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function sessionStatusTruth(session: AgentRuntimeSession): { label: string; kind: "running" | "completed" | "blocked" | "failed" } {
+  if (session.status === "completed") return { label: "Session completed", kind: "completed" };
+  if (session.status === "failed_provider") return { label: "Provider failed", kind: "failed" };
+  if (session.status === "failed") return { label: "Session failed", kind: "failed" };
+  if (session.status === "expired") return { label: "Session expired", kind: "failed" };
+  if (session.status === "blocked") return { label: "Session blocked", kind: "blocked" };
+  if (session.status === "needs_approval") return { label: "Review required", kind: "blocked" };
+  if (session.status === "running") return { label: "Session running", kind: "running" };
+  return { label: `Session ${humanizeRuntimeStatus(session.status)}`, kind: "running" };
 }
 
 function describeEvidenceTruth(session: AgentRuntimeSession) {
@@ -4976,6 +5218,18 @@ function humanizeRuntimeStatus(status: string) {
       return "running";
     case "failed":
       return "failed";
+    case "expired":
+      return "expired";
+    case "token_expired":
+      return "token expired";
+    case "unauthorized":
+      return "unauthorized";
+    case "reconnecting":
+      return "reconnecting";
+    case "disconnected":
+      return "disconnected";
+    case "connected":
+      return "connected";
     case "created":
       return "created";
     default:

@@ -226,7 +226,7 @@ function inferTaskComplexity(goal: string, repoIndex: RepoIndex, relevantFiles: 
     "across the project"
   ])) return "huge";
   if (matches(normalized, ["large", "migration", "cross-cutting", "cross-module", "multi-module", "repository-wide"])) return "large";
-  if (matches(normalized, ["feature", "refactor", "several files", "add tests", "touching several", "orchestration", "runtime", "shared ui", "shared component"])) return "medium";
+  if (matches(normalized, ["feature", "refactor", "several files", "add tests", "touching several", "orchestration", "orchestrator", "multi-agent", "runtime", "shared ui", "shared component"])) return "medium";
   if (matches(normalized, ["copy text", "label text", "wording", "small html", "simple html", "typo", "one line", "rename label"])) return "tiny";
   if (mode === "exhaustive" && repoIndex.totals.indexedFiles > 250 && isReadOnlyGoal(goal)) return "large";
   if (relevantFiles.length <= 1 && matches(normalized, ["change", "fix", "update"])) return "tiny";
@@ -351,11 +351,41 @@ function isSimpleTextGoal(normalizedGoal: string) {
 
 function isReadOnlyGoal(goal: string) {
   const normalized = goal.toLowerCase();
+  const hasWriteAction = matches(normalized, [
+    "implement",
+    "fix",
+    "change",
+    "update",
+    "edit",
+    "write",
+    "migrate",
+    "refactor",
+    "add ",
+    "delete",
+    "remove",
+    "create",
+    "build",
+    "apply"
+  ]);
+  const hasQuestionIntent =
+    /\b(what|which|when|where|why|how|explain|describe|list|show|tell me|answer)\b/.test(normalized)
+    || /\b(answer|use)\s+(from|only)\s+(current\s+)?project files?\b/.test(normalized)
+    || normalized.includes("current project files only");
+  const hasUnicodeArabicQuestionOrReview = /(?:\u0627\u064a\u0647|\u0625\u064a\u0647|\u0627\u0645\u062a\u0649|\u0645\u062a\u0649|\u0627\u0632\u0627\u064a|\u0625\u0632\u0627\u064a|\u0643\u064a\u0641|\u0644\u064a\u0647|\u0644\u0645\u0627\u0630\u0627|\u0627\u0634\u0631\u062d|\u0631\u0627\u062c\u0639|\u062d\u0644\u0644|\u0627\u0641\u062d\u0635|\u0627\u0639\u0631\u0641|\u0645\u0631\u0627\u062c\u0639\u0629|\u0645\u0631\u0627\u062c\u0639\u0647)/u.test(goal);
+  const hasUnicodeArabicWriteAction = /(?:\u0635\u0644\u062d|\u0639\u062f\u0644|\u063a\u064a\u0631|\u0646\u0641\u0630|\u0627\u0643\u062a\u0628|\u0627\u0639\u0645\u0644|\u0627\u0628\u0646\u064a|\u0627\u0636\u0641|\u0623\u0636\u0641|\u0627\u062d\u0630\u0641|\u0628\u062f\u0644|\u0637\u0628\u0651\u0642|\u0637\u0628\u0642)/u.test(goal);
+  const hasArabicQuestionOrReview = /(?:امتى|متى|ازاي|إزاي|كيف|ليه|لماذا|اشرح|راجع|حلل|افحص|اعرف|مراجعة|مراجعه)/u.test(goal);
+  const hasArabicWriteAction = /(?:صلح|عدل|غير|نفذ|اكتب|اعمل|ابني|اضف|أضف|احذف|بدل|طبّق|طبق)/u.test(goal);
+  if ((hasArabicQuestionOrReview || hasUnicodeArabicQuestionOrReview) && !(hasArabicWriteAction || hasUnicodeArabicWriteAction)) {
+    return true;
+  }
+  if (hasQuestionIntent && !hasWriteAction) {
+    return true;
+  }
   if (/\b(do not|don't|without)\s+(edit|change|write|modify)\b/.test(normalized)) {
     return !matches(normalized, ["implement", "fix", "migrate", "refactor"]);
   }
   if (matches(normalized, ["do not change", "read-only", "readonly", "inspect", "explain", "audit", "review", "map", "analyze", "report"])) {
-    return !matches(normalized, ["implement", "fix", "change", "update", "edit", "write", "migrate", "refactor"]);
+    return !hasWriteAction;
   }
   return false;
 }

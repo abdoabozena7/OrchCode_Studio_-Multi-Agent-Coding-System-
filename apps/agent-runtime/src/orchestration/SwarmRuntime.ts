@@ -183,12 +183,12 @@ export class SwarmAutopilotRuntime {
     run.active_agent_count = scheduled.metrics.peak_active_agents;
     run.metrics_ref = "metrics.json";
 
+    const reviewItems = scheduled.workItems.filter((item) => item.type === "review");
     const consensus = createConsensusGroup({
       swarmRunId: run.id,
       topic: "Final integration readiness",
-      participantWorkItems: scheduled.workItems.filter((item) => item.type === "review").map((item) => item.id),
-      findings: scheduled.workItems
-        .filter((item) => item.type === "review")
+      participantWorkItems: reviewItems.map((item) => item.id),
+      findings: reviewItems
         .slice(0, Math.max(1, planned.staffingPlan.reviewer_count))
         .map((item) => ({
           finding: item.status === "succeeded" ? `${item.id} accepted reviewed work.` : `${item.id} did not complete cleanly.`,
@@ -230,7 +230,8 @@ export class SwarmAutopilotRuntime {
       staffingPlan: planned.staffingPlan,
       workItems: scheduled.workItems,
       metrics: scheduled.metrics,
-      consensusDecision: consensus.decision
+      consensusDecision: consensus.decision,
+      workerMode: this.workerMode
     });
     const finalReportRef = await this.artifactStore.saveFinalReport(run.id, finalReport);
     run.final_report_ref = path.relative(run.artifacts_path, finalReportRef).replaceAll("\\", "/");
@@ -603,8 +604,17 @@ function buildFinalReport(input: {
   workItems: WorkItem[];
   metrics: SwarmMetrics;
   consensusDecision: string;
+  workerMode: SwarmProviderWorkerMode;
 }) {
-  const changedFiles = uniqueStrings(input.workItems.flatMap((item) => item.write_files));
+  const plannedWriteTargets = uniqueStrings(input.workItems.flatMap((item) => item.write_files));
+  const actualChangedFiles: string[] = [];
+  const terminalStatus = input.run.status;
+  const completedItems = input.workItems.filter((item) => item.status === "succeeded").length;
+  const integrationTruth = terminalStatus === "succeeded"
+    ? "Swarm finished successfully; accepted patch/application evidence is still reported separately from planned write targets."
+    : completedItems === 0
+      ? "No work item completed successfully, so no integration or patch was accepted."
+      : "Some work items completed, but the swarm did not reach a successful integration state.";
   const roleDistribution = Object.entries(input.metrics.role_distribution)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([role, count]) => `- ${role}: ${count}`)
@@ -651,6 +661,8 @@ function buildFinalReport(input: {
     `- Edit work items: ${input.metrics.edit_items}`,
     `- Review work items: ${input.metrics.review_items}`,
     `- Consensus decision: ${input.consensusDecision}`,
+    `- Terminal status: ${terminalStatus}`,
+    `- Integration truth: ${integrationTruth}`,
     "",
     `## Review And Validation`,
     `- Reviewer peak count: ${input.metrics.reviewer_peak_count}`,
@@ -664,11 +676,18 @@ function buildFinalReport(input: {
     `- Conflicts detected: ${input.metrics.conflicts_detected}`,
     "",
     `## Files Changed`,
-    changedFiles.length ? changedFiles.map((file) => `- ${file}`).join("\n") : "- none",
+    actualChangedFiles.length ? actualChangedFiles.map((file) => `- ${file}`).join("\n") : "- none",
+    "",
+    `## Planned Write Targets`,
+    plannedWriteTargets.length ? plannedWriteTargets.map((file) => `- ${file} (planned only; no accepted patch is implied)`).join("\n") : "- none",
     "",
     `## Risks And Limitations`,
     `- Logical agents are internal scheduling units and do not map one-to-one to OS processes.`,
-    `- Mock worker execution is used for scale and scheduler tests; real model calls are intentionally not used by stress tests.`,
+    input.workerMode === "provider_read_only"
+      ? `- Provider-backed read-only workers were used for eligible non-writing work items; write-capable work remains guarded by approval and validation gates.`
+      : input.workerMode === "auto"
+        ? `- Auto worker mode may fall back to deterministic workers only when provider-backed workers are unavailable; fallback status is recorded in artifacts.`
+        : `- Mock worker execution is used for scale and scheduler tests; real model calls are intentionally not used by stress tests.`,
     `- Any high-risk write path still requires approval and validation before integration.`
   ].join("\n");
 }

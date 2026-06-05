@@ -128,7 +128,37 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
   outerloop: ["outerloop", "outer loop", "outer_loop", "orchestrator", "actionexecutor", "action executor", "feedback loop", "decision loop", "human review", "retention offer"],
   inner_loop: ["inner loop", "inner_loop", "innerloop", "model pipeline", "prediction", "decision"],
   inner_outer_loop: ["inner loop", "outer loop", "feedback loop", "decision loop", "action executor"],
-  multi_agent_system: ["multi agent", "multi-agent", "multi agentic", "multi-agentic", "multiagent", "agentic system", "specialist agents", "build_default_agents", "reactorchestrator", "agent_recommendations", "agent_consensus", "weighted_votes"]
+  multi_agent_system: ["multi agent", "multi-agent", "multi agentic", "multi-agentic", "multiagent", "agentic system", "specialist agents", "build_default_agents", "reactorchestrator", "agent_recommendations", "agent_consensus", "weighted_votes"],
+  human_review_loop: [
+    "human review",
+    "manual review",
+    "review loop",
+    "review route",
+    "route_name review",
+    "awaiting_feedback",
+    "selected_action_name human review",
+    "\u0645\u0631\u0627\u062c\u0639\u0629 \u0628\u0634\u0631\u064a\u0629",
+    "\u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0628\u0634\u0631\u064a\u0629",
+    "\u0645\u0631\u0627\u062c\u0639\u0629 \u064a\u062f\u0648\u064a\u0629",
+    "\u062a\u062d\u0648\u064a\u0644 \u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629",
+    "\u0628\u0648\u0627\u0628\u0629 \u0645\u0631\u0627\u062c\u0639\u0629",
+    "\u062a\u062f\u062e\u0644 \u0628\u0634\u0631\u064a"
+  ],
+  action_loop: [
+    "action loop",
+    "action executor",
+    "direct dispatch",
+    "dispatch",
+    "selected_action",
+    "selected_action_name",
+    "retention offer",
+    "recommendation",
+    "\u062a\u0646\u0641\u064a\u0630 \u0645\u0628\u0627\u0634\u0631",
+    "\u062a\u0648\u062c\u064a\u0647 \u0645\u0628\u0627\u0634\u0631",
+    "\u0625\u0631\u0633\u0627\u0644 \u0645\u0628\u0627\u0634\u0631",
+    "\u0627\u0644\u0625\u062c\u0631\u0627\u0621 \u0627\u0644\u0641\u0627\u0626\u0632",
+    "\u0627\u0644\u0623\u0643\u0634\u0646"
+  ]
 };
 
 const STYLE_TERMS = new Set([
@@ -144,6 +174,7 @@ export function inferTargetConcept(input: {
   topicTerms: string[];
   entities: string[];
 }) {
+  if (isStructuralFileContextQuestion(input.question)) return "general";
   const investigationConcept = resolveInvestigationConcept(input.question);
   if (
     investigationConcept.isTargeted
@@ -166,6 +197,24 @@ export function inferTargetConcept(input: {
   }
   if (looksLikeRelationshipExploration(input.question)) return "general";
   return candidates.find((candidate) => !STYLE_TERMS.has(candidate) && candidate.length > 2) ?? normalizeConceptTerm(input.topicPhrase);
+}
+
+function isStructuralFileContextQuestion(question: string) {
+  return isEntrypointInventoryQuestion(question) || isSourceFlowFileQuestion(question);
+}
+
+function isEntrypointInventoryQuestion(question: string) {
+  const normalized = normalizeConceptTerm(question);
+  return /\b(?:main\s+)?entry\s*points?\b|\bentrypoints?\b|\bentry\s+files?\b/.test(normalized)
+    || /\bwhat\s+are\s+the\s+main\s+files\b/.test(normalized)
+    || /\buse\s+the\s+detected\s+candidates\b/.test(normalized) && /\bmain\b|\bentry\b|\bbackend\s+main\b|\bapp\s+js\b|\bapp\s+ts\b|\bapp\s+tsx\b|\bapp\s+jsx\b/.test(normalized);
+}
+
+function isSourceFlowFileQuestion(question: string) {
+  const normalized = normalizeConceptTerm(question);
+  return /\bdetected\s+source\s+files\b/.test(normalized) && /\bconnect\b/.test(normalized) && /\bflow\b/.test(normalized)
+    || /\bbackend\b/.test(normalized) && /\bfrontend\b/.test(normalized) && /\b(connect|wire|flow|source\s+files)\b/.test(normalized)
+    || /\buse\s+only\s+project\s+files\s+such\s+as\b/.test(normalized) && /\b(connect|flow|backend|frontend)\b/.test(normalized);
 }
 
 function looksLikeRelationshipExploration(question: string) {
@@ -325,19 +374,19 @@ export function validateConceptCoverage(input: {
   const answer = normalizeConceptTerm(input.answerMarkdown);
   const covered = new Set<RequestedQuestionFacet>();
   if (!input.targetConcept || input.targetConcept === "general") return { valid: true, coveredFacets: [], missingFacets: [], errors: [] };
-  if (!answer.includes(input.targetConcept)) errors.push(`Answer does not stay centered on target concept "${input.targetConcept}".`);
+  if (!answerMentionsTargetConcept(answer, input.targetConcept)) errors.push(`Answer does not stay centered on target concept "${input.targetConcept}".`);
   if (input.implementationEvidence.some((item) => item.semanticRole === "implementation") && /tests?\//i.test(input.answerMarkdown) && !/implementation|source|service|backend|src\//i.test(input.answerMarkdown)) {
     errors.push("Answer relies on test evidence while implementation evidence exists.");
   }
   if (input.requestedFacets.includes("parameters") && coversParameters(input.answerMarkdown, input.conceptFlow)) covered.add("parameters");
-  if (input.requestedFacets.includes("input_data") && /\b(input|feature|features|payload|data|dataset|argument)\b/i.test(input.answerMarkdown)) covered.add("input_data");
-  if (input.requestedFacets.includes("output") && /\b(output|return|returns|label|labels|cluster|clusters|noise|result)\b/i.test(input.answerMarkdown)) covered.add("output");
-  if (input.requestedFacets.includes("order") && /\b(before|after|then|next|followed|pipeline|flow|upstream|downstream|قبل|بعد)\b/i.test(input.answerMarkdown)) covered.add("order");
-  if (input.requestedFacets.includes("downstream_usage") && /\b(used|feeds|consumer|route|api|endpoint|svm|training|next|downstream)\b/i.test(input.answerMarkdown)) covered.add("downstream_usage");
+  if (input.requestedFacets.includes("input_data") && mentionsInputData(input.answerMarkdown)) covered.add("input_data");
+  if (input.requestedFacets.includes("output") && mentionsOutput(input.answerMarkdown)) covered.add("output");
+  if (input.requestedFacets.includes("order") && mentionsOrder(input.answerMarkdown)) covered.add("order");
+  if (input.requestedFacets.includes("downstream_usage") && mentionsDownstreamUsage(input.answerMarkdown)) covered.add("downstream_usage");
   if (input.requestedFacets.includes("location") && /hivo-file:/i.test(input.answerMarkdown)) covered.add("location");
   if (input.requestedFacets.includes("code_snippets") && /```/.test(input.answerMarkdown)) covered.add("code_snippets");
-  if (input.requestedFacets.includes("uncertainty") && /\b(uncertain|not proven|not confirmed|غير مثبت|غير مؤكد)\b/i.test(input.answerMarkdown)) covered.add("uncertainty");
-  if (input.requestedFacets.includes("persistence") && /\b(joblib|pickle|save|load|dump|persist|store|storage|تخزين)\b/i.test(input.answerMarkdown)) covered.add("persistence");
+  if (input.requestedFacets.includes("uncertainty") && mentionsUncertainty(input.answerMarkdown)) covered.add("uncertainty");
+  if (input.requestedFacets.includes("persistence") && mentionsPersistence(input.answerMarkdown)) covered.add("persistence");
   const required = input.requestedFacets.filter((facet) => facet !== "uncertainty" && facet !== "persistence");
   const missing = required.filter((facet) => !covered.has(facet));
   if (required.length >= 3 && missing.length > Math.floor(required.length / 2)) {
@@ -355,6 +404,67 @@ export function validateConceptCoverage(input: {
     missingFacets: missing,
     errors
   };
+}
+
+function answerMentionsTargetConcept(normalizedAnswer: string, targetConcept: string) {
+  return aliasesForConcept(targetConcept).some((alias) => normalizedAnswer.includes(alias));
+}
+
+function mentionsInputData(value: string) {
+  return hasAnyTerm(value, [
+    "input", "feature", "features", "payload", "data", "dataset", "argument",
+    "\u0645\u062f\u062e\u0644", "\u0645\u062f\u062e\u0644\u0627\u062a", "\u0628\u064a\u0627\u0646\u0627\u062a", "\u062f\u0627\u062a\u0627"
+  ]);
+}
+
+function mentionsOutput(value: string) {
+  return hasAnyTerm(value, [
+    "output", "return", "returns", "label", "labels", "cluster", "clusters", "noise", "result",
+    "selected action", "route name", "recommendation",
+    "\u0645\u062e\u0631\u062c", "\u0645\u062e\u0631\u062c\u0627\u062a", "\u0646\u0627\u062a\u062c", "\u0646\u062a\u064a\u062c\u0629",
+    "\u0628\u064a\u0637\u0644\u0639", "\u0628\u064a\u0631\u062c\u0639", "\u064a\u0631\u062c\u0639", "\u064a\u0637\u0644\u0639", "\u064a\u0645\u0631\u0631"
+  ]);
+}
+
+function mentionsOrder(value: string) {
+  return hasAnyTerm(value, [
+    "before", "after", "then", "next", "followed", "pipeline", "flow", "upstream", "downstream",
+    "\u0642\u0628\u0644", "\u0628\u0639\u062f", "\u0628\u0639\u062f\u0647\u0627", "\u0628\u0627\u0644\u062a\u0627\u0644\u064a", "\u062a\u0633\u0644\u0633\u0644", "\u0645\u0633\u0627\u0631"
+  ]);
+}
+
+function mentionsDownstreamUsage(value: string) {
+  return hasAnyTerm(value, [
+    "used", "usage", "feeds", "consumer", "route", "api", "endpoint", "svm", "training", "next", "downstream",
+    "dispatch", "executor", "actionexecutor", "execute",
+    "\u0627\u0633\u062a\u062e\u062f\u0627\u0645", "\u064a\u0633\u062a\u062e\u062f\u0645", "\u0628\u0639\u062f\u0647\u0627", "\u0628\u064a\u0631\u0648\u062d",
+    "\u0628\u064a\u062f\u062e\u0644", "\u062a\u0646\u0641\u064a\u0630", "\u064a\u062a\u0646\u0641\u0630", "\u064a\u0645\u0631\u0631", "\u0627\u0644\u0645\u0633\u0627\u0631"
+  ]);
+}
+
+function mentionsUncertainty(value: string) {
+  return hasAnyTerm(value, [
+    "uncertain", "not proven", "not confirmed",
+    "\u063a\u064a\u0631 \u0645\u062b\u0628\u062a", "\u063a\u064a\u0631 \u0645\u0624\u0643\u062f", "\u0645\u0634 \u0645\u062b\u0628\u062a"
+  ]);
+}
+
+function mentionsPersistence(value: string) {
+  return hasAnyTerm(value, [
+    "joblib", "pickle", "save", "load", "dump", "persist", "store", "storage",
+    "\u062a\u062e\u0632\u064a\u0646", "\u064a\u062a\u062e\u0632\u0646", "\u064a\u062a\u062d\u0645\u0644", "\u062d\u0641\u0638"
+  ]);
+}
+
+function hasAnyTerm(value: string, terms: string[]) {
+  const normalized = normalizeConceptTerm(value);
+  return terms.some((term) => {
+    const normalizedTerm = normalizeConceptTerm(term);
+    return normalizedTerm.length > 0 && (
+      normalized.includes(normalizedTerm)
+      || new RegExp(`\\b${escapeRegex(normalizedTerm)}\\b`, "i").test(value)
+    );
+  });
 }
 
 export function validateRoleClassification(input: {
@@ -498,7 +608,8 @@ function extractAsciiTokens(value: string) {
 
 function normalizeConceptTerm(value: string) {
   const ascii = extractAsciiTokens(value);
-  const base = ascii.length ? ascii.join(" ") : value;
+  const arabic = Array.from(value.matchAll(/[\u0600-\u06ff]+/gu)).map((match) => match[0] ?? "");
+  const base = ascii.length || arabic.length ? uniqueStrings([...ascii, ...arabic]).join(" ") : value;
   return base.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 

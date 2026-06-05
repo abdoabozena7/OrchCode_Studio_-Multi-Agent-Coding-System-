@@ -465,8 +465,31 @@ function renderSwarmReadOnlyPrompt(input: PromptTemplateInput) {
     "- Treat all files as reference context only.",
     "- Do not claim validation passed unless a validation artifact proves it.",
     "",
-    `Return strict JSON matching schema: ${schema}.`
+    `Return strict JSON matching schema: ${schema}.`,
+    "Use exactly these top-level keys for the selected schema:",
+    readOnlySchemaKeyInstruction(schema),
+    "Do not wrap the JSON in markdown. Do not return an answer key instead of the schema keys."
   ].join("\n");
+}
+
+function readOnlySchemaKeyInstruction(schema: string) {
+  switch (schema) {
+    case "swarm_scout_output":
+      return '{"findings":["..."],"relevant_files":["path/or/module"],"risks":[],"unknowns":[],"suggested_next_steps":[],"confidence":0.7}';
+    case "swarm_planner_output":
+      return '{"plan_summary":"...","task_drafts":["..."],"dependencies":[],"risks":[],"validation_strategy":[],"assumptions":[],"confidence":0.7}';
+    case "swarm_risk_analyst_output":
+      return '{"risks":["..."],"severity":"low|medium|high|critical","impacted_files_or_modules":[],"mitigation":[],"blockers":[],"confidence":0.7}';
+    case "swarm_reviewer_output":
+      return '{"decision":"accepted|needs_changes|blocked","severity":"low|medium|high|critical","findings":["..."],"required_changes":[],"validation_recommendations":[],"confidence":0.7}';
+    case "swarm_tester_planner_output":
+      return '{"recommended_validation":[],"required_commands":[],"optional_commands":[],"smoke_checks":[],"blocked_or_missing_validation":[],"confidence":0.7}';
+    case "swarm_reporter_output":
+      return '{"summary":"...","evidence_refs":[],"unresolved_risks":[],"next_steps":[],"confidence":0.7}';
+    case "swarm_specialist_output":
+    default:
+      return '{"specialty":"...","findings":["..."],"recommendations":[],"risks":[],"confidence":0.7}';
+  }
 }
 
 function roleTemplateId(role: string): PromptTemplateId {
