@@ -79,6 +79,7 @@ impl ModelProviderService {
         {
             return Err("Selected model was not found in Ollama /api/tags".to_string());
         }
+        validate_reasoning_role_models(config, &models)?;
         Ok(())
     }
 
@@ -109,7 +110,7 @@ impl ModelProviderService {
                     .iter()
                     .any(|model| model.name == config.selected_model)
                 {
-                    Ok(())
+                    validate_reasoning_role_models(config, &models)
                 } else {
                     Err("Selected model was not found in /v1/models".to_string())
                 }
@@ -219,6 +220,14 @@ fn sanitize_config(input: &ModelProviderConfigInput) -> ModelProviderConfig {
         provider_name: input.provider_name.clone(),
         base_url: input.base_url.clone(),
         selected_model: input.selected_model.clone(),
+        router_model: optional_model(input.router_model.as_deref()),
+        verifier_model: optional_model(input.verifier_model.as_deref()),
+        embedding_model: input
+            .embedding_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         api_key_configured: matches!(input.provider_type, ModelProviderType::OpenaiCompatible)
             && input
                 .api_key
@@ -231,6 +240,31 @@ fn sanitize_config(input: &ModelProviderConfigInput) -> ModelProviderConfig {
         last_validated_at: None,
         last_validation_error: None,
     }
+}
+
+fn optional_model(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_reasoning_role_models(
+    config: &ModelProviderConfigInput,
+    models: &[ModelInfo],
+) -> Result<(), String> {
+    for (role, model) in [
+        ("router", config.router_model.as_deref()),
+        ("verifier", config.verifier_model.as_deref()),
+    ] {
+        let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if !models.iter().any(|entry| entry.name == model) {
+            return Err(format!("{role} model was not found in the provider model list"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

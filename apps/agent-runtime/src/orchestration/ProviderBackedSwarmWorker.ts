@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import { AgentTeamManager } from "./AgentTeamManager.js";
@@ -19,10 +20,10 @@ import {
   summarizeReadOnlySwarmOutput
 } from "./ReadOnlySwarmWorkerSchemas.js";
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
-import { defaultMockWorker, type SwarmWorker } from "./SwarmScheduler.js";
+import type { SwarmWorker } from "./SwarmScheduler.js";
 import { SWARM_SCHEMA_VERSION, type WorkItemResult } from "./SwarmModels.js";
 
-export type SwarmProviderWorkerMode = "mock" | "provider_read_only" | "auto";
+export type SwarmProviderWorkerMode = "provider_read_only";
 
 export type ProviderBackedSwarmWorkerOptions = {
   workspacePath: string;
@@ -31,7 +32,7 @@ export type ProviderBackedSwarmWorkerOptions = {
   providerFactory?: (role: string) => LlmProvider | undefined;
   providerName?: string;
   modelName?: string;
-  fallbackWorker?: SwarmWorker;
+  responseLanguage?: "ar" | "en";
 };
 
 export class ProviderBackedSwarmWorker {
@@ -39,14 +40,12 @@ export class ProviderBackedSwarmWorker {
   private readonly artifactStore: SwarmArtifactStore;
   private readonly traceWriter: FactoryTraceWriter;
   private readonly metadata: FactoryMetadataAdapter;
-  private readonly fallbackWorker: SwarmWorker;
 
   constructor(private readonly options: ProviderBackedSwarmWorkerOptions) {
-    this.mode = options.mode ?? (options.providerFactory ? "provider_read_only" : "mock");
+    this.mode = "provider_read_only";
     this.artifactStore = new SwarmArtifactStore(options.workspacePath, options.memoryDir);
     this.traceWriter = new FactoryTraceWriter({ workspacePath: options.workspacePath, memoryDir: options.memoryDir, sourceComponent: "ProviderBackedSwarmWorker" });
     this.metadata = new FactoryMetadataAdapter(options.workspacePath, options.memoryDir);
-    this.fallbackWorker = options.fallbackWorker ?? defaultMockWorker;
   }
 
   asWorker(): SwarmWorker {
@@ -54,7 +53,6 @@ export class ProviderBackedSwarmWorker {
   }
 
   async run(input: Parameters<SwarmWorker>[0]): Promise<WorkItemResult> {
-    if (this.mode === "mock") return this.fallbackWorker(input);
     const provider = this.options.providerFactory?.(input.workItem.required_role);
     if (!provider) {
       await this.traceWriter.write({
@@ -62,7 +60,7 @@ export class ProviderBackedSwarmWorker {
         task_id: input.workItem.id,
         event_type: "worker_provider_unavailable",
         lifecycle_stage: "executing",
-        severity: this.mode === "auto" ? "warning" : "error",
+        severity: "error",
         summary: "Provider-backed swarm worker is unavailable.",
         reason: "No provider factory/provider was configured for this role.",
         metadata_json: traceMetadata(input, {
@@ -70,22 +68,6 @@ export class ProviderBackedSwarmWorker {
           fallback_reason: "provider_unavailable"
         })
       });
-      if (this.mode === "auto") {
-        await this.traceWriter.write({
-          run_id: input.run.id,
-          task_id: input.workItem.id,
-          event_type: "provider_worker_fallback_to_mock",
-          lifecycle_stage: "executing",
-          severity: "warning",
-          summary: "Falling back to mock swarm worker.",
-          reason: "Provider unavailable in auto mode.",
-          metadata_json: traceMetadata(input, {
-            worker_mode: this.mode,
-            fallback_reason: "provider_unavailable"
-          })
-        });
-        return this.fallbackWorker(input);
-      }
       return this.blockedResult(input, "Provider-backed worker requested but no provider is configured.");
     }
 
@@ -256,8 +238,14 @@ export class ProviderBackedSwarmWorker {
         })
       });
       startedTraceId = started.trace_event_id;
-      rawOutput = await provider.generateStructured({
-        systemPrompt: "You are a read-only swarm worker. Return strict JSON only. Never propose patches, commands, or file writes.",
+      rawOutput = await invokeReasoningProviderStructured(provider, {
+        purpose: "escalate",
+        systemPrompt: [
+          "You are a read-only swarm worker. Return strict JSON only. Never propose patches, commands, or file writes.",
+          this.options.responseLanguage === "ar"
+            ? "The user's response language is Arabic. Write natural-language findings, risks, unknowns, and next steps in Arabic where possible, while preserving code terms and file paths exactly."
+            : "The user's response language is English. Write concise user-facing English findings."
+        ].join(" "),
         userPrompt: promptResult.rendered.text,
         context: contextSummary
       }, outputSchema);

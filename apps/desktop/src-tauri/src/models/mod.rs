@@ -229,6 +229,9 @@ pub struct ModelProviderConfig {
     pub provider_name: String,
     pub base_url: String,
     pub selected_model: String,
+    pub router_model: Option<String>,
+    pub verifier_model: Option<String>,
+    pub embedding_model: Option<String>,
     pub api_key_configured: bool,
     pub is_valid: bool,
     pub last_validated_at: Option<String>,
@@ -243,6 +246,9 @@ pub struct ModelProviderConfigInput {
     pub provider_name: String,
     pub base_url: String,
     pub selected_model: String,
+    pub router_model: Option<String>,
+    pub verifier_model: Option<String>,
+    pub embedding_model: Option<String>,
     pub api_key: Option<String>,
 }
 

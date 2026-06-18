@@ -190,7 +190,7 @@ export class OrchestratedRuntime {
 
     if (options.thinkFirst) {
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
         content: formatOrchestratedPlanModeMessage(
           {
             delegationDecision: engineering.delegationDecision,
@@ -499,7 +499,7 @@ export class OrchestratedRuntime {
       patchStats: runSummary.filesChanged
     });
     await this.sessionManager.addMessage(sessionId, {
-      role: "assistant",
+      role: "system",
       content: formatRunSummaryMessage(runSummary)
     });
 
@@ -643,7 +643,7 @@ function createRunSummary(
 function formatRunSummaryMessage(summary: RunSummary) {
   const lines = [summary.summary];
   if (summary.filesChanged.length) {
-    lines.push("", "Files changed:");
+    lines.push("", summary.appliedPatchIds.length ? "Files changed:" : "Files proposed:");
     lines.push(...summary.filesChanged.map((file) => `- ${file.path} +${file.added} -${file.removed}`));
   }
   if (summary.gates.length) {

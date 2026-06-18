@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  MEMORY_DATABASE_FILENAME,
+  SqliteMemoryStore,
+  type MemoryRecordKind
+} from "./SqliteMemoryStore.js";
+import {
   DEFAULT_MEMORY_DIR,
   MEMORY_SCHEMA_VERSION,
   type CommandInventory,
@@ -23,14 +28,18 @@ import {
 
 const MEMORY_README = `# Agent Memory
 
-This directory stores durable local project memory for Hivo.
+This directory stores durable local project memory and auditable artifacts for Hivo.
 
 Committed files:
 
 - \`README.md\`: schema and operating notes for humans and future agents.
 - \`schema_version.json\`: current local memory schema marker.
 
-Generated local files:
+SQLite source of truth:
+
+- \`factory_metadata.sqlite\`: repository memory, durable knowledge, structured run state, ordered events, search indexes, and orchestration metadata.
+
+Legacy import/backup files:
 
 - \`repo_index.json\`: repository layout, language, entrypoint, and high-signal file metadata.
 - \`file_manifest.json\`: deterministic file manifest with hashes/mtimes for indexed text files.
@@ -51,14 +60,18 @@ Generated local files:
 - \`swarm_failure_patterns.jsonl\`: swarm trial failure patterns and avoidance notes.
 - \`swarm_success_patterns.jsonl\`: swarm trial success patterns.
 - \`swarm_specialist_selection_history.jsonl\`: specialist selection precision notes.
-- \`factory_metadata.sqlite\`: generated SQLite metadata index for orchestration artifacts; artifact contents remain in their JSON/JSONL/log files.
+- JSON and JSONL files at the memory root are legacy migration inputs or backup exports, not normal runtime read sources.
+- \`backups/\`: checkpointed SQLite backup exports and manifests.
 - \`runs/\`: volatile run-specific artifacts.
 - \`swarm_runs/\`: internal Swarm Autopilot run artifacts, staffing plans, scheduler traces, metrics, and reports.
 - \`campaigns/\`: long-running campaign artifacts.
 - \`evals/\`: local eval and benchmark artifacts.
 
 Do not store secrets here. Large generated artifacts and volatile run files should stay local.
+
+Run \`npm run memory:migrate-sqlite -- --dry-run\` before migration. Only verified migrations switch \`storage_mode\` to \`db_first\`. Backup restoration verifies the exported manifest hash before replacing the database.
 `;
+const initializedMemoryLayouts = new Set<string>();
 
 export function resolveMemoryPaths(
   workspacePath: string,
@@ -88,6 +101,8 @@ export function resolveMemoryPaths(
     swarmFailurePatterns: path.join(rootDir, "swarm_failure_patterns.jsonl"),
     swarmSuccessPatterns: path.join(rootDir, "swarm_success_patterns.jsonl"),
     swarmSpecialistSelectionHistory: path.join(rootDir, "swarm_specialist_selection_history.jsonl"),
+    database: path.join(rootDir, MEMORY_DATABASE_FILENAME),
+    backupsDir: path.join(rootDir, "backups"),
     runsDir: path.join(rootDir, "runs"),
     campaignsDir: path.join(rootDir, "campaigns"),
     evalsDir: path.join(rootDir, "evals")
@@ -100,6 +115,7 @@ export async function ensureMemoryLayout(workspacePath: string, memoryDir?: stri
   await mkdir(paths.runsDir, { recursive: true });
   await mkdir(paths.campaignsDir, { recursive: true });
   await mkdir(paths.evalsDir, { recursive: true });
+  await mkdir(paths.backupsDir, { recursive: true });
   if (!existsSync(paths.readme)) {
     await writeFile(paths.readme, MEMORY_README, "utf8");
   }
@@ -107,26 +123,25 @@ export async function ensureMemoryLayout(workspacePath: string, memoryDir?: stri
     await writeJson(paths.schemaVersion, {
       schemaVersion: MEMORY_SCHEMA_VERSION,
       updatedAt: new Date().toISOString(),
-      notes: "Phase 1 file-backed project memory schema."
+      notes: "SQLite-first project memory schema; root JSON/JSONL files are legacy migration inputs or backups."
     });
   }
-  await touchJsonl(paths.decisions);
-  await touchJsonl(paths.taskHistory);
-  await touchJsonl(paths.lessonsLearned);
-  await touchJsonl(paths.failedAttempts);
-  await touchJsonl(paths.successfulPatterns);
-  await touchJsonl(paths.architectureNotes);
-  await touchJsonl(paths.swarmStaffingLessons);
-  await touchJsonl(paths.swarmTuningHistory);
-  await touchJsonl(paths.swarmFailurePatterns);
-  await touchJsonl(paths.swarmSuccessPatterns);
-  await touchJsonl(paths.swarmSpecialistSelectionHistory);
-  if (!existsSync(paths.projectGlossary)) {
-    await writeJson(paths.projectGlossary, {
-      schemaVersion: MEMORY_SCHEMA_VERSION,
-      updatedAt: new Date().toISOString(),
-      terms: []
-    } satisfies ProjectGlossary);
+  if (!initializedMemoryLayouts.has(paths.rootDir)) {
+    const store = await SqliteMemoryStore.open({ workspacePath, memoryDir });
+    try {
+      if (!store.snapshot<ProjectGlossary>("project_glossary")) {
+        store.saveRepositoryMemory({
+          projectGlossary: {
+            schemaVersion: MEMORY_SCHEMA_VERSION,
+            updatedAt: new Date().toISOString(),
+            terms: []
+          }
+        });
+      }
+      initializedMemoryLayouts.add(paths.rootDir);
+    } finally {
+      store.close();
+    }
   }
   return paths;
 }
@@ -142,15 +157,18 @@ export async function saveMemory(workspacePath: string, input: {
   symbolIndex?: SymbolIndex;
   fileSummaries?: FileSummaryRecord[];
   commandInventory?: CommandInventory;
+  projectIntelligence?: import("./types.js").ProjectIntelligence;
+  semanticProjectModel?: import("./types.js").SemanticProjectModel;
+  indexState?: import("./types.js").IndexState | Record<string, unknown>;
+  projectGlossary?: ProjectGlossary;
 }, memoryDir?: string) {
   const paths = await ensureMemoryLayout(workspacePath, memoryDir);
-  if (input.repoIndex) await writeJson(paths.repoIndex, input.repoIndex);
-  if (input.fileManifest) await writeJson(paths.fileManifest, input.fileManifest);
-  if (input.symbolIndex) await writeJson(paths.symbolIndex, input.symbolIndex);
-  if (input.fileSummaries) {
-    await writeFile(paths.fileSummaries, input.fileSummaries.map((summary) => JSON.stringify(summary)).join("\n") + "\n", "utf8");
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir });
+  try {
+    store.saveRepositoryMemory(input);
+  } finally {
+    store.close();
   }
-  if (input.commandInventory) await writeJson(paths.commandInventory, input.commandInventory);
   return inspectMemoryStatus(paths);
 }
 
@@ -158,123 +176,120 @@ export async function inspectMemoryStatus(paths: MemoryPaths): Promise<MemorySta
   const runs = existsSync(paths.runsDir) ? await readdir(paths.runsDir) : [];
   const campaigns = existsSync(paths.campaignsDir) ? await readdir(paths.campaignsDir) : [];
   const evals = existsSync(paths.evalsDir) ? await readdir(paths.evalsDir) : [];
-  return {
+  const store = await SqliteMemoryStore.open({ workspacePath: path.dirname(paths.rootDir), memoryDir: paths.rootDir });
+  try {
+    const status = store.status();
+    return {
     schemaVersion: MEMORY_SCHEMA_VERSION,
     memoryRoot: paths.rootDir,
-    hasRepoIndex: existsSync(paths.repoIndex),
-    hasFileManifest: existsSync(paths.fileManifest),
-    hasSymbolIndex: existsSync(paths.symbolIndex),
-    hasFileSummaries: existsSync(paths.fileSummaries),
-    hasCommandInventory: existsSync(paths.commandInventory),
-    hasDecisions: existsSync(paths.decisions),
-    hasTaskHistory: existsSync(paths.taskHistory),
-    hasLessonsLearned: existsSync(paths.lessonsLearned),
-    hasFailedAttempts: existsSync(paths.failedAttempts),
-    hasSuccessfulPatterns: existsSync(paths.successfulPatterns),
-    hasProjectGlossary: existsSync(paths.projectGlossary),
-    hasArchitectureNotes: existsSync(paths.architectureNotes),
-    hasIndexState: existsSync(paths.indexState),
-    hasProjectIntelligence: existsSync(paths.projectIntelligence),
+    hasRepoIndex: Boolean(store.snapshot("repo_index")),
+    hasFileManifest: Boolean(store.snapshot("file_manifest")),
+    hasSymbolIndex: Boolean(store.snapshot("symbol_index")),
+    hasFileSummaries: Boolean(store.snapshot("file_summaries")),
+    hasCommandInventory: Boolean(store.snapshot("command_inventory")),
+    hasDecisions: store.records("decision").length > 0,
+    hasTaskHistory: store.records("task_history").length > 0,
+    hasLessonsLearned: store.records("lesson").length > 0,
+    hasFailedAttempts: store.records("failed_attempt").length > 0,
+    hasSuccessfulPatterns: store.records("successful_pattern").length > 0,
+    hasProjectGlossary: Boolean(store.snapshot("project_glossary")),
+    hasArchitectureNotes: store.records("architecture_note").length > 0,
+    hasIndexState: Boolean(store.snapshot("index_state")),
+    hasProjectIntelligence: Boolean(store.snapshot("project_intelligence")),
+    databasePath: paths.database,
+    storageMode: status.storageMode,
     runArtifacts: runs.length,
     campaignArtifacts: campaigns.length,
     evalArtifacts: evals.length
   };
+  } finally {
+    store.close();
+  }
 }
 
 export async function inspectRepoIndex(workspacePath: string, memoryDir?: string) {
   const paths = resolveMemoryPaths(workspacePath, memoryDir);
   return {
     status: await inspectMemoryStatus(await ensureMemoryLayout(workspacePath, memoryDir)),
-    repoIndex: existsSync(paths.repoIndex) ? await readJson<RepoIndex>(paths.repoIndex) : undefined,
-    commandInventory: existsSync(paths.commandInventory) ? await readJson<CommandInventory>(paths.commandInventory) : undefined
+    repoIndex: await readMemorySnapshot<RepoIndex>(workspacePath, "repo_index", memoryDir),
+    commandInventory: await readMemorySnapshot<CommandInventory>(workspacePath, "command_inventory", memoryDir)
   };
 }
 
 export async function getCommandInventory(workspacePath: string, memoryDir?: string): Promise<CommandInventory | undefined> {
-  const paths = resolveMemoryPaths(workspacePath, memoryDir);
-  if (!existsSync(paths.commandInventory)) return undefined;
-  return readJson<CommandInventory>(paths.commandInventory);
+  return readMemorySnapshot<CommandInventory>(workspacePath, "command_inventory", memoryDir);
 }
 
 export async function appendDecision(workspacePath: string, input: Omit<DecisionRecord, "id" | "createdAt">, memoryDir?: string): Promise<DecisionRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: DecisionRecord = {
     id: `decision_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.decisions, record);
+  await appendMemoryRecord(workspacePath, "decision", record, memoryDir);
   return record;
 }
 
 export async function appendRunHistory(workspacePath: string, input: Omit<TaskHistoryRecord, "id" | "createdAt">, memoryDir?: string): Promise<TaskHistoryRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: TaskHistoryRecord = {
     id: `task_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.taskHistory, record);
+  await appendMemoryRecord(workspacePath, "task_history", record, memoryDir);
   return record;
 }
 
 export async function appendLessonLearned(workspacePath: string, input: Omit<LessonLearnedRecord, "id" | "createdAt">, memoryDir?: string): Promise<LessonLearnedRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: LessonLearnedRecord = {
     id: `lesson_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.lessonsLearned, record);
+  await appendMemoryRecord(workspacePath, "lesson", record, memoryDir);
   return record;
 }
 
 export async function appendFailedAttempt(workspacePath: string, input: Omit<FailedAttemptRecord, "id" | "createdAt">, memoryDir?: string): Promise<FailedAttemptRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: FailedAttemptRecord = {
     id: `failed_attempt_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.failedAttempts, record);
+  await appendMemoryRecord(workspacePath, "failed_attempt", record, memoryDir);
   return record;
 }
 
 export async function appendSuccessfulPattern(workspacePath: string, input: Omit<SuccessfulPatternRecord, "id" | "createdAt">, memoryDir?: string): Promise<SuccessfulPatternRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: SuccessfulPatternRecord = {
     id: `successful_pattern_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.successfulPatterns, record);
+  await appendMemoryRecord(workspacePath, "successful_pattern", record, memoryDir);
   return record;
 }
 
 export async function appendArchitectureNote(workspacePath: string, input: Omit<ArchitectureNoteRecord, "id" | "createdAt">, memoryDir?: string): Promise<ArchitectureNoteRecord> {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record: ArchitectureNoteRecord = {
     id: `architecture_note_${randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...input
   };
-  await appendJsonl(paths.architectureNotes, record);
+  await appendMemoryRecord(workspacePath, "architecture_note", record, memoryDir);
   return record;
 }
 
 export async function getMemoryLessons(workspacePath: string, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
-  return readJsonl<LessonLearnedRecord>(paths.lessonsLearned);
+  return readMemoryRecords<LessonLearnedRecord>(workspacePath, "lesson", memoryDir);
 }
 
 export async function getFailedAttempts(workspacePath: string, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
-  return readJsonl<FailedAttemptRecord>(paths.failedAttempts);
+  return readMemoryRecords<FailedAttemptRecord>(workspacePath, "failed_attempt", memoryDir);
 }
 
 export async function getDecisions(workspacePath: string, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
-  return readJsonl<DecisionRecord>(paths.decisions);
+  return readMemoryRecords<DecisionRecord>(workspacePath, "decision", memoryDir);
 }
 
 export async function compactMemory(workspacePath: string, memoryDir?: string) {
@@ -335,10 +350,9 @@ export async function compactMemory(workspacePath: string, memoryDir?: string) {
 }
 
 export async function explainTaskMemory(workspacePath: string, taskId: string, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
-  const history = await readJsonl<TaskHistoryRecord>(paths.taskHistory);
-  const failures = await readJsonl<FailedAttemptRecord>(paths.failedAttempts);
-  const lessons = await readJsonl<LessonLearnedRecord>(paths.lessonsLearned);
+  const history = await readMemoryRecords<TaskHistoryRecord>(workspacePath, "task_history", memoryDir);
+  const failures = await readMemoryRecords<FailedAttemptRecord>(workspacePath, "failed_attempt", memoryDir);
+  const lessons = await readMemoryRecords<LessonLearnedRecord>(workspacePath, "lesson", memoryDir);
   return {
     taskId,
     taskHistory: history.filter((record) => record.id === taskId || record.task.includes(taskId)),
@@ -348,16 +362,57 @@ export async function explainTaskMemory(workspacePath: string, taskId: string, m
 }
 
 export async function getRelevantFiles(workspacePath: string, query: string, options: { memoryDir?: string; limit?: number } = {}) {
-  const paths = resolveMemoryPaths(workspacePath, options.memoryDir);
-  if (!existsSync(paths.fileSummaries)) return [];
-  const terms = query.toLowerCase().split(/[^a-z0-9_./-]+/i).filter((term) => term.length >= 2);
-  const summaries = await readJsonl<FileSummaryRecord>(paths.fileSummaries);
-  return summaries
-    .map((summary) => ({ summary, score: scoreFileSummary(summary, terms) }))
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => right.score - left.score || left.summary.path.localeCompare(right.summary.path))
-    .slice(0, options.limit ?? 12)
-    .map((entry) => entry.summary);
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir: options.memoryDir, readOnly: true });
+  try {
+    return store.relevantFiles(query, options.limit ?? 12);
+  } finally {
+    store.close();
+  }
+}
+
+export async function readMemorySnapshot<T>(workspacePath: string, kind: string, memoryDir?: string): Promise<T | undefined> {
+  await ensureMemoryLayout(workspacePath, memoryDir);
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir, readOnly: true });
+  try {
+    return await store.cachedSnapshot<T>(kind);
+  } finally {
+    store.close();
+  }
+}
+
+export async function readMemoryRecords<T>(workspacePath: string, kind: MemoryRecordKind, memoryDir?: string): Promise<T[]> {
+  await ensureMemoryLayout(workspacePath, memoryDir);
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir, readOnly: true });
+  try {
+    return store.records<T>(kind);
+  } finally {
+    store.close();
+  }
+}
+
+export async function appendMemoryRecord(
+  workspacePath: string,
+  kind: MemoryRecordKind,
+  record: { id: string; createdAt?: string; created_at?: string; summary?: string; [key: string]: unknown },
+  memoryDir?: string
+) {
+  await ensureMemoryLayout(workspacePath, memoryDir);
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir });
+  try {
+    store.appendRecord(kind, record);
+  } finally {
+    store.close();
+  }
+}
+
+export async function searchMemory(workspacePath: string, query: string, options: { memoryDir?: string; limit?: number; kinds?: string[] } = {}) {
+  await ensureMemoryLayout(workspacePath, options.memoryDir);
+  const store = await SqliteMemoryStore.open({ workspacePath, memoryDir: options.memoryDir, readOnly: true });
+  try {
+    return store.search(query, options);
+  } finally {
+    store.close();
+  }
 }
 
 export async function cleanRunArtifacts(workspacePath: string, options: { memoryDir?: string; olderThanDays?: number } = {}) {
@@ -403,28 +458,4 @@ export async function readJsonl<T>(filePath: string): Promise<T[]> {
 export async function appendJsonl(filePath: string, value: unknown) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await appendFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
-}
-
-async function touchJsonl(filePath: string) {
-  if (!existsSync(filePath)) await writeFile(filePath, "", "utf8");
-}
-
-function scoreFileSummary(summary: FileSummaryRecord, terms: string[]) {
-  const haystack = [
-    summary.path,
-    summary.language ?? "",
-    summary.roleGuess,
-    summary.purposeGuess,
-    summary.roles.join(" "),
-    summary.imports.join(" "),
-    summary.exports.join(" "),
-    summary.symbols.map((symbol) => symbol.name).join(" ")
-  ].join("\n").toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    if (summary.path.toLowerCase().includes(term)) score += 6;
-    if (haystack.includes(term)) score += 2;
-  }
-  if (summary.roles.includes("entrypoint")) score += 1;
-  return score;
 }

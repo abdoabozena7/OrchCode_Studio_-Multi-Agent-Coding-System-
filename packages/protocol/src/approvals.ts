@@ -1,4 +1,4 @@
-export type ApprovalDecision = "approved" | "rejected";
+export type ApprovalDecision = "approved" | "rejected" | "changes_requested";
 
 export type AccessProfile =
   | "default_permissions"
@@ -223,7 +223,7 @@ export function resolvedAccessPolicyForProfile(profile: AccessProfileInput): Res
 export type ApprovalRecord = {
   id: string;
   sessionId: string;
-  targetType: "patch" | "command";
+  targetType: "patch" | "command" | "product_spec" | "technical_plan";
   targetId: string;
   decision: ApprovalDecision;
   reason?: string;

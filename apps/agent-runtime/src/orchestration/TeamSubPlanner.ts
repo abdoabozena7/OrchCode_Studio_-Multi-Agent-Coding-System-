@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { AgentTeamManager } from "./AgentTeamManager.js";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
 import { ContextPackBuilder } from "./ContextPackBuilder.js";
@@ -309,7 +310,7 @@ export class TeamSubPlanner {
       }
       return this.blockedProviderPlan(input, "provider_read_only_team_sub_planning_unavailable");
     }
-    const generated = await this.provider.generateStructured<Partial<TeamSubPlan>>({
+    const generated = await invokeReasoningProviderStructured<Partial<TeamSubPlan>>(this.provider, {
       systemPrompt: "You are a read-only team sub-planner. Produce metadata only. Do not propose patches, sub-runs, executor tasks, or source edits outside team scope.",
       userPrompt: `Create a read-only sub-plan for team ${input.team_id} (${input.team.team_type}/${input.team.domain}).`,
       context: {

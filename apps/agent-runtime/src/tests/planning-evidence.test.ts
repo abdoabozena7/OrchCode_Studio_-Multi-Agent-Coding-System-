@@ -215,7 +215,7 @@ function fakeRun(id: string, workspace: string, config: Partial<Run["config"]> =
       max_context_files: 4,
       max_context_chars: 4000,
       max_task_attempts: 1,
-      provider_mode: "mock",
+      provider_mode: "real_provider",
       execution_mode: "deep",
       enable_multi_plan_factory: true,
       use_planning_evidence: true,

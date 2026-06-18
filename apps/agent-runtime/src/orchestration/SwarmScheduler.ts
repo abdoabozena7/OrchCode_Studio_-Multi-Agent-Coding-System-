@@ -52,7 +52,7 @@ export class SwarmScheduler {
     private readonly workspacePath: string,
     private readonly artifactStore: SwarmArtifactStore,
     private readonly lockManager: SchedulerLockManager,
-    private readonly worker: SwarmWorker = defaultMockWorker
+    private readonly worker: SwarmWorker = providerRequiredWorker
   ) {
     this.currentExecutorLimit = 1;
   }
@@ -512,29 +512,18 @@ export function createAgentInstancesForPlan(input: {
   return instances.slice(0, input.staffingPlan.recommended_total_logical_agents);
 }
 
-export async function defaultMockWorker(input: {
-  workItem: WorkItem;
-  agent: AgentInstance;
-  template: AgentTemplate;
-  run: SwarmRun;
-  staffingPlan: StaffingPlan;
-}): Promise<WorkItemResult> {
-  const invalid = input.workItem.expected_output_schema === "InvalidOutput";
-  const validationFailure = input.workItem.type === "test" && input.workItem.read_files.some((command) => /exit\(3\)|fail/i.test(command));
+async function providerRequiredWorker(input: Parameters<SwarmWorker>[0]): Promise<WorkItemResult> {
   return {
     schema_version: SWARM_SCHEMA_VERSION,
     work_item_id: input.workItem.id,
-    status: invalid || validationFailure ? "failed" : "succeeded",
-    summary: `${input.agent.role} completed ${input.workItem.type} work for ${input.run.user_goal}.`,
+    status: "failed",
+    summary: "A real provider-backed swarm worker is required.",
     relevant_files: input.workItem.read_files.filter((file) => !looksLikeCommand(file)),
-    findings: [
-      `${input.workItem.type} work item used schema ${input.workItem.expected_output_schema}.`
-    ],
-    risks: input.workItem.risk_level === "low" ? [] : [`${input.workItem.risk_level} risk work requires review evidence.`],
+    findings: [],
+    risks: ["provider_required"],
     unknowns: [],
-    validation_passed: input.workItem.type === "test" ? !validationFailure : undefined,
-    structured_output_valid: !invalid,
-    confidence: input.workItem.risk_level === "critical" ? 0.62 : input.workItem.risk_level === "high" ? 0.72 : 0.86
+    structured_output_valid: false,
+    confidence: 0
   };
 }
 

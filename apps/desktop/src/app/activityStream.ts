@@ -210,6 +210,18 @@ export function describeCurrentStep(
     };
   }
 
+  if (session.status === "running" && !session.progressEvents.length) {
+    const model = session.providerConfig?.selectedModel ?? session.providerConfig?.routerModel ?? "the selected model";
+    return {
+      id: "current-waiting-provider",
+      title: isArabicSession(session) ? "بانتظار رد الموديل" : "Waiting for provider",
+      summary: isArabicSession(session)
+        ? `الموديل ${model} بيجهز أول خطوة.`
+        : `${model} is preparing the first step.`,
+      status: "running"
+    };
+  }
+
   const latest = buildPrimaryActivityItems(session, activeCommand).at(-1);
   return {
     id: "current-working",

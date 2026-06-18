@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appendDecision, ensureMemoryLayout, writeJson } from "../memory/ProjectMemory.js";
+import { SqliteMemoryStore } from "../memory/SqliteMemoryStore.js";
 import { assessIndexFreshness } from "../memory/IndexFreshness.js";
 import { CoreOrchestrator } from "./Orchestrator.js";
 import { ORCHESTRATION_SCHEMA_VERSION, type Campaign, type CampaignMetrics, type CampaignMilestone } from "./OrchestrationModels.js";
@@ -143,14 +144,26 @@ export class CampaignManager {
   }
 
   async load(campaignId: string): Promise<Campaign> {
-    const filePath = path.join(await this.campaignDir(campaignId), "campaign.json");
-    return JSON.parse(await readFile(filePath, "utf8")) as Campaign;
+    const store = await SqliteMemoryStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+    try {
+      const campaign = store.state<Campaign>("campaign", campaignId);
+      if (!campaign) throw new Error(`SQLite campaign state not found: ${campaignId}`);
+      return campaign;
+    } finally {
+      store.close();
+    }
   }
 
   private async save(campaign: Campaign) {
     const dir = await this.campaignDir(campaign.id);
     await mkdir(dir, { recursive: true });
     const artifactRef = path.join(dir, "campaign.json");
+    const store = await SqliteMemoryStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir });
+    try {
+      store.saveState({ kind: "campaign", id: campaign.id, status: campaign.status, updatedAt: campaign.updated_at, state: campaign, artifactRef });
+    } finally {
+      store.close();
+    }
     await writeJson(artifactRef, campaign);
     await this.metadata.recordCampaignSaved(campaign, artifactRef);
   }
@@ -225,6 +238,12 @@ export class CampaignManager {
       payload
     };
     const eventsPath = path.join(dir, "events.jsonl");
+    const store = await SqliteMemoryStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir });
+    try {
+      store.appendEvent({ kind: "campaign", streamId: campaignId, id: event.id, type, createdAt: event.created_at, payload: event, artifactRef: eventsPath });
+    } finally {
+      store.close();
+    }
     await writeFile(eventsPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: existsSync(eventsPath) ? "a" : "w" });
     await this.metadata.recordArtifactSaved({
       campaignId,

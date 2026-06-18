@@ -8,9 +8,11 @@ import {
 } from "./IntentDecisionEngine.js";
 import { routeConversation, type ConversationRouteDecision } from "./ConversationRouter.js";
 import type { LlmProvider } from "../llm/LlmProvider.js";
+import type { TurnUnderstanding } from "@hivo/protocol";
 import { conversationIntentDecisionSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { inferWorkspaceIntent, type WorkspaceActionMode, type WorkspaceIntentUnderstanding } from "./WorkspaceReasoningPipeline.js";
+import { invokeReasoningProviderStructured } from "./ReasoningKernel.js";
 
 export type ConversationUnderstanding = {
   originalMessage: string;
@@ -19,7 +21,37 @@ export type ConversationUnderstanding = {
   intentDecision: IntentDecision;
   routeDecision: ConversationRouteDecision;
   workspaceIntent?: WorkspaceIntentUnderstanding;
+  turnUnderstanding?: TurnUnderstanding;
 };
+
+export function conversationUnderstandingFromTurnUnderstanding(value: TurnUnderstanding): ConversationUnderstanding {
+  const workspaceMessage = value.needsWorkspace ? value.cleanedRequest : "";
+  return {
+    originalMessage: value.originalRequest,
+    preparedPrompt: {
+      originalMessage: value.originalRequest,
+      workspaceMessage: workspaceMessage || value.originalRequest,
+      droppedPreamble: value.cleanedRequest !== value.originalRequest ? value.originalRequest : ""
+    },
+    workspaceMessage,
+    intentDecision: {
+      kind: value.intentKind,
+      language: value.language,
+      needsWorkspace: value.needsWorkspace,
+      confidence: value.confidence,
+      rationale: value.rationale
+    },
+    routeDecision: {
+      route: value.route,
+      confidence: value.confidence,
+      language: value.language,
+      normalizedPrompt: value.originalRequest,
+      workspacePrompt: workspaceMessage || value.originalRequest,
+      rationale: value.rationale
+    },
+    turnUnderstanding: value
+  };
+}
 
 export function createConversationUnderstanding(message: string): ConversationUnderstanding {
   const routeDecision = routeConversation(message);
@@ -39,7 +71,8 @@ export function createConversationUnderstanding(message: string): ConversationUn
 }
 
 export async function createProviderConversationUnderstanding(provider: LlmProvider, message: string): Promise<ConversationUnderstanding> {
-  const generated = await provider.generateStructured<ProviderIntentDecisionModel>({
+  const generated = await invokeReasoningProviderStructured<ProviderIntentDecisionModel>(provider, {
+    purpose: "route",
     systemPrompt: [
       "You are the first intent gate for a local coding assistant.",
       "Classify the user's message before any workspace files are read.",
@@ -79,11 +112,26 @@ export async function createProviderConversationUnderstanding(provider: LlmProvi
     preparedPrompt: normalized.preparedPrompt,
     workspaceMessage: normalized.workspaceMessage,
     intentDecision: normalized.decision,
-    routeDecision: routeConversation(normalized.workspaceMessage || message),
+    routeDecision: alignRouteWithProviderDecision(routeConversation(normalized.workspaceMessage || message), normalized.decision),
     workspaceIntent: normalized.decision.kind === "direct_conversation"
       ? undefined
       : alignWorkspaceIntentWithDecision(inferWorkspaceIntent(normalized.workspaceMessage), normalized.decision)
   };
+}
+
+function alignRouteWithProviderDecision(route: ConversationRouteDecision, decision: IntentDecision): ConversationRouteDecision {
+  if (decision.kind === "direct_conversation") return { ...route, route: "chat", confidence: decision.confidence, rationale: decision.rationale };
+  if (decision.kind === "workspace_question") {
+    return route.route === "swarm_readonly"
+      ? { ...route, confidence: decision.confidence, rationale: decision.rationale }
+      : { ...route, route: "inspect_explain", confidence: decision.confidence, rationale: decision.rationale };
+  }
+  if (decision.kind === "workspace_action") {
+    return route.route === "recursive_factory"
+      ? { ...route, confidence: decision.confidence, rationale: decision.rationale }
+      : { ...route, route: "simple_run", confidence: decision.confidence, rationale: decision.rationale };
+  }
+  return { ...route, route: "simple_run", confidence: decision.confidence, rationale: decision.rationale };
 }
 
 function alignWorkspaceIntentWithDecision(intent: WorkspaceIntentUnderstanding, decision: IntentDecision): WorkspaceIntentUnderstanding {

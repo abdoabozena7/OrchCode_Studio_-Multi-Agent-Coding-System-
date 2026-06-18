@@ -189,7 +189,7 @@ function fakeRun(workspace: string): Run {
       max_context_files: 2,
       max_context_chars: 1200,
       max_task_attempts: 1,
-      provider_mode: "mock"
+      provider_mode: "real_provider"
     },
     artifacts_path: path.join(workspace, ".agent_memory", "runs", "run_phase4_test")
   };

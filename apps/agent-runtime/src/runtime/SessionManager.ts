@@ -20,6 +20,7 @@ import type {
   ToolIntent,
   ToolCall
 } from "@hivo/protocol";
+import type { AppEvent } from "@hivo/protocol";
 import { accessProfileDefaults } from "@hivo/protocol";
 import type { AccessProfile, AccessProfileInput, DeclaredAccessPolicy, ResolvedAccessPolicy } from "@hivo/protocol";
 import type { DurableRuntimeEvent } from "@hivo/protocol";
@@ -121,13 +122,14 @@ export class SessionManager {
 
   async createSession(input: {
     workspacePath: string;
-    mode: AgentRuntimeMode;
-    requireRealProvider?: boolean;
+    mode: AgentRuntimeMode | "demo_mock";
     executionMode?: AgentRuntimeSession["executionMode"];
     accessProfile?: AccessProfileInput;
     trustProfile?: import("@hivo/protocol").RunTrustProfile;
     providerConfig?: import("@hivo/protocol").SanitizedProviderConfig;
     activeProviderSource?: import("@hivo/protocol").ActiveProviderSource;
+    responseLanguage?: "ar" | "en";
+    debugMode?: boolean;
     sessionToken?: string;
     sessionTokenExpiresAt?: string;
     thinkFirst?: boolean;
@@ -146,8 +148,9 @@ export class SessionManager {
     const session: AgentRuntimeSession = {
       id: randomId("session"),
       workspacePath: input.workspacePath,
-      mode: input.mode,
-      requireRealProvider: input.requireRealProvider,
+      mode: "real_provider",
+      responseLanguage: input.responseLanguage,
+      debugMode: input.debugMode,
       trustProfile,
       providerConfig: input.providerConfig,
       activeProviderSource: input.activeProviderSource,
@@ -187,7 +190,7 @@ export class SessionManager {
       progressEvents: [],
       agentWorkStatuses: [],
       orchestration:
-        executionMode === "orchestrated_mode"
+        executionMode === "orchestrated_mode" || executionMode === "recursive_factory"
           ? {
               agentRuns: [],
               workerOutputs: [],
@@ -245,6 +248,46 @@ export class SessionManager {
     return [...this.sessions.values()];
   }
 
+  publishFactoryEvent(event: Extract<AppEvent, {
+    type:
+      | "runtime.product_spec.proposed"
+      | "runtime.product_spec.approved"
+      | "runtime.technical_plan.proposed"
+      | "runtime.technical_plan.approved"
+      | "runtime.recursive_graph.proposed"
+      | "runtime.recursive_graph.ready"
+      | "runtime.recursive_graph.blocked"
+      | "runtime.branch_orchestrator.planned"
+      | "runtime.branch_scope.conflict_detected"
+      | "runtime.branch_execution.ready"
+      | "runtime.branch_execution.started"
+      | "runtime.branch_execution.patch_proposed"
+      | "runtime.branch_execution.reviewing"
+      | "runtime.branch_execution.validation_pending"
+      | "runtime.branch_execution.completed"
+      | "runtime.branch_execution.blocked"
+      | "runtime.branch_execution.failed"
+      | "runtime.branch_result.recorded"
+      | "runtime.recursive_fan_in.updated"
+      | "runtime.recursive_final_report.created"
+  }>) {
+    this.eventBus.publish(event);
+  }
+
+  publishKnowledgeEvent(event: Extract<AppEvent, {
+    type:
+      | "runtime.knowledge_tree.created"
+      | "runtime.knowledge_tree.refreshed"
+      | "runtime.knowledge_node.created"
+      | "runtime.edit_route.proposed"
+      | "runtime.edit_route.ready"
+      | "runtime.edit_route.blocked"
+      | "runtime.knowledge_branch_targets.created"
+      | "runtime.knowledge_branch_execution.planned"
+  }>) {
+    this.eventBus.publish(event);
+  }
+
   async updateSession(
     sessionId: string,
     updater: (session: AgentRuntimeSession) => void
@@ -257,6 +300,9 @@ export class SessionManager {
   }
 
   async addMessage(sessionId: string, message: Omit<RuntimeMessage, "id" | "createdAt">) {
+    if (message.role === "assistant" && !message.providerRequestRefs?.length) {
+      throw new Error("assistant_message.provider_provenance_required");
+    }
     await this.updateSession(sessionId, (session) => {
       session.messages.push({
         id: randomId("msg"),
@@ -362,38 +408,21 @@ export class SessionManager {
       }
       const request = session.commandRequests.find((candidate) => candidate.id === commandExecution.requestId);
       if (request) {
-        request.status =
-          commandExecution.status === "executing"
-            || commandExecution.status === "running"
-            ? "executing"
-            : commandExecution.status === "executed"
-              || commandExecution.status === "completed"
-              ? "executed"
-              : commandExecution.status === "blocked"
-                ? "blocked"
-                : commandExecution.status === "orphaned"
-                  ? "orphaned"
-                  : commandExecution.status === "terminated"
-                    ? "terminated"
-                    : commandExecution.status === "failed"
-                      ? "failed"
-                      : commandExecution.status === "approval_required"
-                        ? "approved"
-                        : request.status;
+        request.status = commandRequestStatusFromExecution(commandExecution, request.status);
       }
       const taskState = asManagedTaskState(session.taskState);
       if (commandExecution.requestId) {
-        if (commandExecution.status !== "executing" && commandExecution.status !== "running" && commandExecution.status !== "approval_required") {
+        if (isCommandExecutionTerminalForPendingRequest(commandExecution)) {
           taskState.pendingCommandIds = taskState.pendingCommandIds.filter((id) => id !== commandExecution.requestId);
         }
-        if (commandExecution.status === "executed" || commandExecution.status === "completed") {
+        if (isSuccessfulCommandExecution(commandExecution)) {
           if (!taskState.completedCommandIds.includes(commandExecution.requestId)) {
             taskState.completedCommandIds.push(commandExecution.requestId);
           }
           if (!taskState.commandState.completedIds.includes(commandExecution.requestId)) {
             taskState.commandState.completedIds.push(commandExecution.requestId);
           }
-        } else if (commandExecution.status === "failed" || commandExecution.status === "blocked" || commandExecution.status === "orphaned" || commandExecution.status === "terminated") {
+        } else if (isFailedCommandExecution(commandExecution)) {
           if (!taskState.failedCommandIds.includes(commandExecution.requestId)) {
             taskState.failedCommandIds.push(commandExecution.requestId);
           }
@@ -420,33 +449,18 @@ export class SessionManager {
       taskState.reconciledAt = taskState.reconciliationStatus === "reconciled" ? commandExecution.createdAt : taskState.reconciledAt;
       if (
         !hadExecutionForRequest
-        && commandExecution.status !== "executing"
-        && commandExecution.status !== "running"
-        && commandExecution.status !== "approval_required"
+        && isCommandExecutionTerminalForPendingRequest(commandExecution)
       ) {
         pushTaskTransition(taskState, "command.started", `Command started: ${commandExecution.command}`);
       }
       pushTaskTransition(
         taskState,
-        commandExecution.status === "executing" || commandExecution.status === "running"
-          ? "command.started"
-          : commandExecution.status === "failed" || commandExecution.status === "blocked" || commandExecution.status === "orphaned" || commandExecution.status === "terminated"
-            ? "command.failed"
-            : "command.completed",
+        taskTransitionTypeFromCommandExecution(commandExecution),
         `Command ${commandExecution.status}: ${commandExecution.command}`
       );
     });
     this.eventBus.publish({
-      type:
-        commandExecution.status === "executing" || commandExecution.status === "running"
-          ? "runtime.command.started"
-          : commandExecution.status === "failed"
-          || commandExecution.status === "orphaned"
-          || commandExecution.status === "terminated"
-          ? "runtime.command.failed"
-          : commandExecution.status === "blocked"
-            ? "runtime.command.blocked"
-            : "runtime.command.completed",
+      type: runtimeEventTypeFromCommandExecution(commandExecution),
       sessionId,
       execution: commandExecution
     });
@@ -482,6 +496,13 @@ export class SessionManager {
         taskState.reconciliationStatus = "pending";
         taskState.reconciliationReason = "Waiting for Rust patch apply authority to report a result.";
         pushTaskTransition(taskState, "patch.approved", `Patch approved: ${proposal.title}`);
+      } else if (status === "apply_started") {
+        taskState.pendingPatchId = undefined;
+        taskState.phase = "awaiting_patch_apply";
+        taskState.patchState.authority = "rust";
+        taskState.reconciliationStatus = "pending";
+        taskState.reconciliationReason = "Rust patch apply has started and no terminal result is available yet.";
+        pushTaskTransition(taskState, "patch.apply_started", `Patch apply started: ${proposal.title}`);
       } else if (status === "rejected") {
         taskState.pendingPatchId = undefined;
         taskState.reconciliationStatus = "reconciled";
@@ -513,14 +534,7 @@ export class SessionManager {
     const proposal = session.patchProposals.find((candidate) => candidate.id === patchId);
     if (proposal) {
       this.eventBus.publish({
-        type:
-          status === "approved"
-            ? "runtime.patch.approved"
-            : status === "rejected"
-              ? "runtime.patch.rejected"
-              : status === "applied"
-                ? "runtime.patch.applied"
-                : "runtime.patch.apply_failed",
+        type: runtimeEventTypeFromPatchStatus(status),
         sessionId,
         proposal
       });
@@ -847,6 +861,68 @@ function pushTaskTransition(
   });
 }
 
+function commandRequestStatusFromExecution(
+  execution: CommandExecutionRecord,
+  fallback: CommandRequest["status"]
+): CommandRequest["status"] {
+  if (isRunningCommandExecution(execution)) return "executing";
+  if (isSuccessfulCommandExecution(execution)) return "executed";
+  if (execution.status === "blocked") return "blocked";
+  if (execution.status === "orphaned") return "orphaned";
+  if (execution.status === "terminated") return "terminated";
+  if (execution.status === "failed") return "failed";
+  if (execution.status === "approval_required") return "requested";
+  return fallback;
+}
+
+function isRunningCommandExecution(execution: CommandExecutionRecord) {
+  return execution.status === "executing" || execution.status === "running";
+}
+
+function isSuccessfulCommandExecution(execution: CommandExecutionRecord) {
+  return execution.status === "executed" || execution.status === "completed";
+}
+
+function isFailedCommandExecution(execution: CommandExecutionRecord) {
+  return execution.status === "failed"
+    || execution.status === "blocked"
+    || execution.status === "orphaned"
+    || execution.status === "terminated";
+}
+
+function isCommandExecutionTerminalForPendingRequest(execution: CommandExecutionRecord) {
+  return !isRunningCommandExecution(execution) && execution.status !== "approval_required";
+}
+
+function taskTransitionTypeFromCommandExecution(
+  execution: CommandExecutionRecord
+): import("@hivo/protocol").RuntimeTaskTransitionType {
+  if (isRunningCommandExecution(execution)) return "command.started";
+  if (isFailedCommandExecution(execution) || execution.status === "approval_required") return "command.failed";
+  return "command.completed";
+}
+
+function runtimeEventTypeFromCommandExecution(
+  execution: CommandExecutionRecord
+): Extract<AppEvent, { execution: CommandExecutionRecord }>["type"] {
+  if (isRunningCommandExecution(execution)) return "runtime.command.started";
+  if (execution.status === "failed" || execution.status === "orphaned" || execution.status === "terminated") {
+    return "runtime.command.failed";
+  }
+  if (execution.status === "blocked" || execution.status === "approval_required") return "runtime.command.blocked";
+  return "runtime.command.completed";
+}
+
+function runtimeEventTypeFromPatchStatus(
+  status: PatchProposal["status"]
+): Extract<AppEvent, { proposal: PatchProposal }>["type"] {
+  if (status === "approved") return "runtime.patch.approved";
+  if (status === "apply_started") return "runtime.patch.apply_started";
+  if (status === "rejected") return "runtime.patch.rejected";
+  if (status === "applied") return "runtime.patch.applied";
+  return "runtime.patch.apply_failed";
+}
+
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -878,6 +954,19 @@ function hydrateSession(
     lastEventSequence?: number;
   }
 ) {
+  const legacyDemoSession = (session as { mode?: string }).mode === "demo_mock";
+  if (legacyDemoSession) {
+    session.status = "failed_provider";
+    session.lifecycleStage = "FAILED";
+    session.taskState ??= createInitialTaskState(new Date().toISOString());
+    session.taskState.restoreState = {
+      source: "snapshot_restored",
+      disposition: "non_restorable",
+      warnings: ["Legacy demo_mock sessions cannot be resumed after the provider-required migration."],
+      reason: "legacy_demo_mock_session_non_restorable",
+      restoredAt: new Date().toISOString()
+    };
+  }
   session.progressEvents ??= [];
   session.agentWorkStatuses ??= [];
   session.toolIntents ??= [];
@@ -909,6 +998,18 @@ function hydrateSession(
     eventCount: options?.eventCount,
     lastEventSequence: options?.lastEventSequence
   };
+  if (legacyDemoSession) {
+    taskState.restoreState = {
+      source: "snapshot_restored",
+      disposition: "non_restorable",
+      warnings: ["Legacy demo_mock sessions cannot be resumed after the provider-required migration."],
+      reason: "legacy_demo_mock_session_non_restorable",
+      restoredAt: taskState.restoredAt,
+      eventCount: options?.eventCount,
+      lastEventSequence: options?.lastEventSequence
+    };
+    return session;
+  }
   if (session.status === "created") {
     session.status = "restored";
   }

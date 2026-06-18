@@ -65,7 +65,7 @@ The overall goal is **a reliable, recursive software factory** that learns from 
 | **Orchestrator Core** | `apps/agent-runtime/src/orchestration/Orchestrator.ts` (TypeScript) | Manages run creation, deterministic task graphs, context‑pack construction, and artefact persistence. |
 | **Task Graph & Scheduler** | `TaskGraphManager.ts` & `SwarmScheduler.ts` | Handles state transitions, dependencies, and executor caps. |
 | **Swarm Staffing Planner** | `SwarmStaffingPlanner.ts` | Heuristics based on repo index size, risk scores, and available commands. |
-| **Memory / Index** | `RepoIndexer.ts`, `ProjectMemory.ts`, `memory/` folder | Incremental file indexing, schema‑versioned storage, compacting utilities. |
+| **Memory / Index** | `RepoIndexer.ts`, `ProjectMemory.ts`, `SqliteMemoryStore.ts` | SQLite-first repository memory, FTS5 search, migrations, backups, and compacting utilities. |
 | **Verification Primitives** | `ReviewLoop.ts`, `ValidationRunner.ts`, `RepairLoop.ts`, `PatchSafety.ts`, `ApprovalGates.ts` | Enforce read‑only fan‑out, deterministic patches, multi‑stage approval. |
 | **File Locks** | `FileLockManager.ts` | Logical lock objects persisted alongside the artefact store. |
 | **Desktop UI (optional)** | Rust Tauri (`apps/desktop/src-tauri/`) | SQLite DB for long‑term run metadata; Rust‑owned patch authority (`patch.rs`). |
@@ -176,6 +176,9 @@ All **persistent artefacts** live under the hidden directory `.agent_memory/`.
 | `npm run memory:index-refresh [--changed-only]` | Incremental refresh; `--changed-only` reports files that actually changed. |
 | `npm run memory:compact` | Remove stale artefacts, compress JSON, and deduplicate decisions. |
 | `npm run memory:inspect` | Browse stored decisions, run artefacts, and the memory schema. |
+| `npm run eval:project-understanding -- --corpus <file>` | Run the 120-question, five-repository deep-understanding release gate. |
+| `npm run test:reasoning-v2` | Run the adaptive-kernel, provenance, approval, and architecture guards. |
+| `npm run eval:adaptive-reasoning -- --corpus <holdout-file>` | Run the sealed, eight-repository router/author/verifier/embedding profile certification gate. |
 | `npm run memory:show-commands` | List all registered CLI commands a worker can invoke. |
 | `npm run memory:status` | High‑level health: index freshness, size, last‑compact timestamp. |
 
@@ -212,7 +215,7 @@ The swarm layer **self‑staffs** agents based on five signals:
 # Evaluate staffing heuristics across scenario sizes
 agent trial staffing-eval
 
-# Stress‑test the scheduler with 300 mock agents (read‑only only)
+# Stress-test the scheduler with 300 scripted test workers (read-only only)
 agent trial scheduler-scale
 
 # Compare three orchestration strategies on a sample goal

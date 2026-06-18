@@ -1,12 +1,11 @@
 import type { ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection } from "@hivo/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
-import { projectExplainSchema } from "../schemas/sessionSchemas.js";
+import { evidenceCurationSchema, projectExplainSchema } from "../schemas/sessionSchemas.js";
+import { validateStructuredOutput } from "../schemas/validators.js";
 import {
   analyzeProjectQuestionGrounding,
   answerSatisfiesRequestedStyle,
   createConceptEvidenceGroupCoverage,
-  createDeterministicGroundedFallbackAnswer,
-  createDeterministicNotFoundAnswer,
   createGroundingPackText,
   createStyleInstruction,
   evidenceItemSupportsConcept,
@@ -25,6 +24,7 @@ import {
   evidenceItemsForWorkspaceReasoning,
   responseLooksOffIntent
 } from "./WorkspaceReasoningPipeline.js";
+import { invokeReasoningProviderStructured, invokeReasoningProviderText } from "./ReasoningKernel.js";
 
 export type ProjectExplainLlmResponse = {
   answerMarkdown: string;
@@ -54,6 +54,12 @@ type EvidenceItem = GroundingEvidenceItem & {
 
 type RepairEvidenceGroup = NonNullable<ProjectQuestionGrounding["concept"]["evidenceGroups"]>[number];
 
+type EvidenceCurationResponse = {
+  selectedEvidenceRefs: string[];
+  missingFacts: string[];
+  rationale: string;
+};
+
 const MAX_EVIDENCE_ITEMS = 120;
 const MAX_NATURAL_TEXT_EVIDENCE_ITEMS = 45;
 const MAX_REPAIR_TEXT_EVIDENCE_ITEMS = 75;
@@ -63,176 +69,65 @@ export async function explainProjectWithLlm(input: {
   provider: LlmProvider;
   userPrompt: string;
   report: ProjectExplainReport;
-  requireProviderForConceptNotFound?: boolean;
-  providerFailureBehavior?: "deterministic_synthesis" | "notice_only";
   providerAnswerMode?: ProjectExplainProviderAnswerMode;
 }): Promise<ProjectExplainResult> {
-  const providerFailureBehavior = input.providerFailureBehavior ?? "notice_only";
   const providerAnswerMode = input.providerAnswerMode ?? "structured_json";
-  const requireProviderForConceptNotFound = input.requireProviderForConceptNotFound ?? true;
   const evidenceItems = createEvidenceItems(input.report);
   const grounding = analyzeProjectQuestionGrounding(input.userPrompt, input.report, evidenceItems);
-  const providerEvidenceItems = providerAnswerMode === "natural_text"
+  let providerEvidenceItems = providerAnswerMode === "natural_text"
     ? selectProviderEvidenceItems(evidenceItems, grounding)
     : evidenceItems;
-  if (grounding.concept.specific && !grounding.conceptFound && !requireProviderForConceptNotFound) {
-    return {
-      answerMarkdown: createDeterministicNotFoundAnswer(grounding),
-      usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, evidenceItems),
-      unsupportedOrUnclearParts: [`Requested concept not found in current workspace evidence: ${grounding.concept.label}`],
-      revisionCount: 0,
-      validationWarnings: grounding.unknowns,
-      grounding,
-      fallbackUsed: true,
-      fallbackReason: "concept_not_found_without_provider_answer"
-    };
+  if (providerAnswerMode === "natural_text" && evidenceItems.length > MAX_NATURAL_TEXT_EVIDENCE_ITEMS) {
+    providerEvidenceItems = await curateProviderEvidenceItems(input.provider, input.userPrompt, evidenceItems, providerEvidenceItems, grounding);
   }
-
   const firstRequest = createExplainRequest(input.userPrompt, input.report, providerEvidenceItems, grounding);
   let first: ProjectExplainLlmResponse;
   try {
     first = providerAnswerMode === "natural_text"
-      ? naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextExplainRequest(input.userPrompt, input.report, providerEvidenceItems, grounding)))
-      : await input.provider.generateStructured<ProjectExplainLlmResponse>(firstRequest, projectExplainSchema);
+      ? naturalTextToProjectExplainResponse(await invokeReasoningProviderText(input.provider, createNaturalTextExplainRequest(input.userPrompt, input.report, providerEvidenceItems, grounding)))
+      : await invokeReasoningProviderStructured<ProjectExplainLlmResponse>(input.provider, firstRequest, projectExplainSchema);
   } catch (error) {
-    if (providerFailureBehavior === "notice_only") {
-      return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 0);
-    }
-    return createProviderFailureFallback(grounding, providerEvidenceItems, error, 0);
+    throw new Error(`project_explain_provider_failed: ${formatProviderError(error)}`);
   }
   const firstValidation = validateProjectExplainResponse(first, input.userPrompt, providerEvidenceItems, grounding);
   if (firstValidation.valid) {
-    return normalizeProjectExplainResponse(first, 0, firstValidation.warnings, grounding);
+    const result = normalizeProjectExplainResponse(first, 0, firstValidation.warnings, grounding);
+    return result;
   }
 
+  const revisionEvidenceItems = providerAnswerMode === "natural_text"
+    ? selectRepairEvidenceItems(evidenceItems, providerEvidenceItems, grounding, firstValidation.errors)
+    : providerEvidenceItems;
   let revision: ProjectExplainLlmResponse;
   try {
     revision = providerAnswerMode === "natural_text"
-      ? naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextRevisionRequest(input.userPrompt, input.report, providerEvidenceItems, grounding, first, firstValidation.errors)))
-      : await input.provider.generateStructured<ProjectExplainLlmResponse>(
-          createRevisionRequest(input.userPrompt, input.report, providerEvidenceItems, grounding, first, firstValidation.errors),
+      ? naturalTextToProjectExplainResponse(await invokeReasoningProviderText(input.provider, createNaturalTextRevisionRequest(input.userPrompt, input.report, revisionEvidenceItems, grounding, first, firstValidation.errors)))
+      : await invokeReasoningProviderStructured<ProjectExplainLlmResponse>(
+          input.provider,
+          createRevisionRequest(input.userPrompt, input.report, revisionEvidenceItems, grounding, first, firstValidation.errors),
           projectExplainSchema
         );
   } catch (error) {
-    if (providerFailureBehavior === "notice_only") {
-      return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 1, firstValidation.errors);
-    }
-    return createProviderFailureFallback(grounding, providerEvidenceItems, error, 1, firstValidation.errors);
+    throw new Error(`project_explain_provider_repair_failed: ${formatProviderError(error)}`);
   }
-  const revisionValidation = validateProjectExplainResponse(revision, input.userPrompt, providerEvidenceItems, grounding);
+  const revisionValidation = validateProjectExplainResponse(revision, input.userPrompt, revisionEvidenceItems, grounding);
   if (revisionValidation.valid) {
-    return normalizeProjectExplainResponse(revision, 1, revisionValidation.warnings, grounding);
-  }
-
-  const repairEvidenceItems = providerAnswerMode === "natural_text"
-    ? selectRepairEvidenceItems(evidenceItems, providerEvidenceItems, grounding, [...firstValidation.errors, ...revisionValidation.errors])
-    : providerEvidenceItems;
-  if (providerAnswerMode === "natural_text" && repairEvidenceItems.length > providerEvidenceItems.length) {
-    let repairRevision: ProjectExplainLlmResponse;
-    try {
-      repairRevision = naturalTextToProjectExplainResponse(await input.provider.generateText(createNaturalTextRevisionRequest(
-        input.userPrompt,
-        input.report,
-        repairEvidenceItems,
-        grounding,
-        revision,
-        [
-          ...firstValidation.errors,
-          ...revisionValidation.errors,
-          "Additional evidence refs were added for this repair attempt. Use them when they support the missing claim, concept, or relationship."
-        ]
-      )));
-    } catch (error) {
-      if (providerFailureBehavior === "notice_only") {
-        return createProviderFailureNotice(input.userPrompt, input.report, grounding, error, 2, [...firstValidation.errors, ...revisionValidation.errors]);
-      }
-      return createProviderFailureFallback(grounding, repairEvidenceItems, error, 2, [...firstValidation.errors, ...revisionValidation.errors]);
-    }
-    const repairValidation = validateProjectExplainResponse(repairRevision, input.userPrompt, repairEvidenceItems, grounding);
-    if (repairValidation.valid) {
-      return normalizeProjectExplainResponse(repairRevision, 2, repairValidation.warnings, grounding);
-    }
-    revision = repairRevision;
-    revisionValidation.errors = [...revisionValidation.errors, ...repairValidation.errors];
-    revisionValidation.warnings = [...revisionValidation.warnings, ...repairValidation.warnings];
+    const result = normalizeProjectExplainResponse(revision, 1, revisionValidation.warnings, grounding);
+    return result;
   }
 
   const validationErrors = [
     ...firstValidation.errors,
     ...revisionValidation.errors
-  ];
-  if (providerFailureBehavior === "notice_only") {
-    return {
-      answerMarkdown: createUnableToSafelyExplainMessage(input.userPrompt, input.report, "provider_validation_failed"),
-      usedEvidenceRefs: [],
-      unsupportedOrUnclearParts: validationErrors,
-      revisionCount: 1,
-      validationWarnings: revisionValidation.warnings,
-      grounding,
-      fallbackUsed: true,
-      fallbackReason: providerValidationFailureReason(validationErrors)
-    };
-  }
-  return {
-    answerMarkdown: createDeterministicGroundedFallbackAnswer(grounding, validationErrors),
-    usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, providerEvidenceItems),
-    unsupportedOrUnclearParts: validationErrors,
-    revisionCount: 1,
-    validationWarnings: revisionValidation.warnings,
-    grounding,
-    fallbackUsed: true,
-    fallbackReason: providerValidationFailureReason(validationErrors)
-  };
+  ].filter((error, index, all) => all.indexOf(error) === index);
+  throw new Error(providerValidationFailureReason(validationErrors));
 }
 
 function providerValidationFailureReason(errors: string[]) {
-  const details = errors.slice(0, 3).filter(Boolean).join("; ");
+  const details = uniqueStrings(errors).slice(0, 3).join("; ");
   return details
     ? `provider_answer_failed_local_validation: ${details}`
     : "provider_answer_failed_local_validation";
-}
-
-function createProviderFailureNotice(
-  userPrompt: string,
-  report: ProjectExplainReport,
-  grounding: ProjectQuestionGrounding,
-  error: unknown,
-  revisionCount: number,
-  priorValidationErrors: string[] = []
-): ProjectExplainResult {
-  const providerError = `Provider failed during project explanation: ${formatProviderError(error)}`;
-  const validationErrors = [...priorValidationErrors, providerError];
-  return {
-    answerMarkdown: createUnableToSafelyExplainMessage(userPrompt, report, "provider_failed"),
-    usedEvidenceRefs: [],
-    unsupportedOrUnclearParts: validationErrors,
-    revisionCount,
-    validationWarnings: [...grounding.unknowns, providerError],
-    grounding,
-    fallbackUsed: true,
-    fallbackReason: providerError
-  };
-}
-
-function createProviderFailureFallback(
-  grounding: ProjectQuestionGrounding,
-  evidenceItems: EvidenceItem[],
-  error: unknown,
-  revisionCount: number,
-  priorValidationErrors: string[] = []
-): ProjectExplainResult {
-  const providerError = `Provider failed during project explanation: ${formatProviderError(error)}`;
-  const validationErrors = [...priorValidationErrors, providerError];
-  return {
-    answerMarkdown: createDeterministicGroundedFallbackAnswer(grounding, validationErrors),
-    usedEvidenceRefs: selectGroundingEvidenceRefs(grounding, evidenceItems),
-    unsupportedOrUnclearParts: validationErrors,
-    revisionCount,
-    validationWarnings: [...grounding.unknowns, providerError],
-    grounding,
-    fallbackUsed: true,
-    fallbackReason: providerError
-  };
 }
 
 function createExplainRequest(
@@ -242,6 +137,7 @@ function createExplainRequest(
   grounding: ProjectQuestionGrounding
 ) {
   return {
+    purpose: "compose" as const,
     systemPrompt: createSystemPrompt(grounding),
     userPrompt: [
       "User prompt:",
@@ -272,6 +168,7 @@ function createNaturalTextExplainRequest(
   grounding: ProjectQuestionGrounding
 ) {
   return {
+    purpose: "compose" as const,
     systemPrompt: [
       createSystemPrompt(grounding).replace("Return strict JSON only. Do not wrap it in markdown.", "Return Markdown only. Do not return JSON."),
       "Your answer must cite the provided hivo-file links inline for every concrete code-behavior claim.",
@@ -305,6 +202,7 @@ function createRevisionRequest(
   errors: string[]
 ) {
   return {
+    purpose: "compose" as const,
     systemPrompt: createSystemPrompt(grounding),
     userPrompt: [
       "Revise the previous project explanation. It failed local validation.",
@@ -343,6 +241,7 @@ function createNaturalTextRevisionRequest(
   errors: string[]
 ) {
   return {
+    purpose: "compose" as const,
     systemPrompt: [
       createSystemPrompt(grounding).replace("Return strict JSON only. Do not wrap it in markdown.", "Return Markdown only. Do not return JSON."),
       "Your revised answer must fix the validation errors and cite only provided hivo-file links."
@@ -647,6 +546,53 @@ function selectRepairEvidenceItems(
   return selected.slice(0, MAX_REPAIR_TEXT_EVIDENCE_ITEMS);
 }
 
+async function curateProviderEvidenceItems(
+  provider: LlmProvider,
+  question: string,
+  allEvidence: EvidenceItem[],
+  deterministicSelection: EvidenceItem[],
+  grounding: ProjectQuestionGrounding
+) {
+  try {
+    const generated = await invokeReasoningProviderStructured<EvidenceCurationResponse>(provider, {
+      purpose: "curate",
+      systemPrompt: [
+        "You curate an allow-listed evidence pack for a project question.",
+        "Select only refs supplied below. Do not create or rewrite refs.",
+        "Prefer evidence that directly answers the question and preserves required structural manifests/configs.",
+        `Select at most ${MAX_NATURAL_TEXT_EVIDENCE_ITEMS} refs. Return strict JSON only.`
+      ].join("\n"),
+      userPrompt: [
+        "Question:",
+        question,
+        "",
+        `Required facets: ${grounding.workspaceReasoning.intent.requiredFacets.join(", ") || "none"}`,
+        "",
+        "Evidence allow-list:",
+        ...allEvidence.map((item) => `- ${item.ref} | ${item.title} | ${item.reason}`).slice(0, MAX_EVIDENCE_ITEMS),
+        "",
+        "Return { selectedEvidenceRefs, missingFacts, rationale }."
+      ].join("\n")
+    }, evidenceCurationSchema);
+    const validation = validateStructuredOutput(generated, evidenceCurationSchema);
+    if (!validation.valid) return deterministicSelection;
+    const byRef = new Map(allEvidence.map((item) => [normalizeRefString(item.ref), item]));
+    const selected = generated.selectedEvidenceRefs
+      .map((ref) => byRef.get(normalizeRefString(ref)))
+      .filter((item): item is EvidenceItem => Boolean(item));
+    if (isDependencyOrConfigurationGrounding(grounding)) {
+      for (const item of allEvidence.filter((candidate) => isDependencyOrConfigurationEvidencePath(candidate.path))) {
+        if (!selected.some((candidate) => candidate.ref === item.ref)) selected.push(item);
+      }
+    }
+    return selected.length
+      ? selected.slice(0, MAX_NATURAL_TEXT_EVIDENCE_ITEMS)
+      : deterministicSelection;
+  } catch {
+    return deterministicSelection;
+  }
+}
+
 function itemSupportsEvidenceGroup(item: EvidenceItem, group: RepairEvidenceGroup) {
   const normalizedText = normalizeRepairEvidenceText(evidenceItemText(item));
   return [...group.aliases, ...group.coreTerms].some((term) => {
@@ -669,7 +615,7 @@ function isDependencyOrConfigurationGrounding(grounding: ProjectQuestionGroundin
     ...grounding.workspaceReasoning.intent.topicTerms,
     grounding.concept.label
   ].join(" ");
-  return /\b(dependenc(?:y|ies)|configuration|config|runtime|package manager|package\.json|requirements?\.txt|manifest|scripts?|pyproject|Cargo\.toml|README\.md)\b/i.test(text);
+  return /\b((?:tech|technology)\s+stack|dependenc(?:y|ies)|configuration|config|runtime|package manager|package\.json|requirements?\.txt|manifest|scripts?|pyproject|Cargo\.toml|README\.md)\b/i.test(text);
 }
 
 function isDependencyOrConfigurationEvidencePath(filePath: string) {
@@ -868,58 +814,6 @@ function normalizeProjectExplainResponse(
     grounding,
     fallbackUsed: false
   };
-}
-
-function createUnableToSafelyExplainMessage(
-  userPrompt: string,
-  report: ProjectExplainReport,
-  reason: "provider_failed" | "provider_validation_failed" = "provider_validation_failed"
-) {
-  const arabic = /[\u0600-\u06ff]/.test(userPrompt);
-  const evidence = report.evidence
-    .filter((entry) => entry.type !== "directory")
-    .slice(0, 5)
-    .map((entry) => `- ${formatFileLineLink(entry.path, entry.lineStart ?? 1)}: ${entry.reason}`);
-  const englishReason = reason === "provider_failed"
-    ? "the provider failed before returning a trustworthy answer"
-    : "the provider response failed local evidence validation";
-  const arabicReasonLine = reason === "provider_failed"
-    ? "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0627\u0644\u0645\u0632\u0648\u062f \u0641\u0634\u0644 \u0642\u0628\u0644 \u0645\u0627 \u064a\u0637\u0644\u0639 \u0631\u062f \u0645\u0648\u062b\u0648\u0642."
-    : "\u0645\u0634 \u0647\u0637\u0644\u0639 \u0634\u0631\u062d \u062a\u062e\u0645\u064a\u0646\u064a \u0644\u0644\u0645\u0634\u0631\u0648\u0639 \u0644\u0623\u0646 \u0631\u062f \u0627\u0644\u0645\u0632\u0648\u062f \u0645\u0627\u0639\u062f\u0627\u0634 \u062a\u062d\u0642\u0642 \u0627\u0644\u0623\u062f\u0644\u0629 \u0627\u0644\u0645\u062d\u0644\u064a\u0629.";
-  if (arabic) {
-    return [
-      arabicReasonLine,
-      "",
-      "\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u062a\u062e\u0632\u0646 \u0648\u0641\u064a\u0647 \u0627\u0644\u0623\u062f\u0644\u0629 \u062f\u064a \u0643\u0628\u062f\u0627\u064a\u0629:",
-      ...(evidence.length ? evidence : ["- \u0645\u0641\u064a\u0634 \u0623\u062f\u0644\u0629 \u0643\u0641\u0627\u064a\u0629 \u0645\u062d\u0641\u0648\u0638\u0629 \u0641\u064a \u0627\u0644\u062a\u0642\u0631\u064a\u0631."]),
-      "",
-      "\u062c\u0631\u0628 \u062a\u0633\u0623\u0644 \u0639\u0646 \u0645\u0644\u0641 \u0645\u062d\u062f\u062f \u0623\u0648 \u0634\u063a\u0644 \u0645\u0632\u0648\u062f \u0623\u0642\u0648\u0649 \u0644\u0648 \u0645\u062d\u062a\u0627\u062c \u062a\u0641\u0635\u064a\u0644 \u0623\u0643\u0628\u0631."
-    ].join("\n");
-    return [
-      "مش هطلع شرح تخميني للمشروع لأن رد المزود ماعداش تحقق الأدلة المحلية.",
-      "",
-      "تقرير القراءة اتخزن وفيه الأدلة دي كبداية:",
-      ...(evidence.length ? evidence : ["- مفيش أدلة كفاية محفوظة في التقرير."]),
-      "",
-      "جرب تسأل عن ملف محدد أو شغل مزود أقوى لو محتاج تفصيل أكبر."
-    ].join("\n");
-    return [
-      "مش هطلع شرح تخميني للمشروع لأن رد الـ LLM ماعدّاش تحقق الأدلة المحلي.",
-      "",
-      "تقرير القراءة اتخزن وفيه الأدلة دي كبداية:",
-      ...(evidence.length ? evidence : ["- مفيش أدلة كافية محفوظة في التقرير."]),
-      "",
-      "جرّب تشغيل نفس السؤال بمزوّد LLM أقوى أو اسأل عن ملف محدد."
-    ].join("\n");
-  }
-  return [
-    `I could not safely produce a grounded project explanation because ${englishReason}.`,
-    "",
-    "The read-only evidence report was stored. Starting evidence:",
-    ...(evidence.length ? evidence : ["- No enough evidence refs were stored in the report."]),
-    "",
-    "Try again with a stronger configured provider or ask about a specific file."
-  ].join("\n");
 }
 
 function appearsToAnswerPrompt(answer: string, userPrompt: string) {

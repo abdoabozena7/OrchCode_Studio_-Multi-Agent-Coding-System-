@@ -36,6 +36,9 @@ import type {
   ModelProviderConfig,
   ProjectContextPack,
   ProjectExplainReport,
+  ProjectKnowledgeTree,
+  KnowledgeRoutedEdit,
+  KnowledgeBranchTarget,
   ProjectIntake,
   ProjectRunIntent,
   ModuleExecutionPlan,
@@ -44,7 +47,7 @@ import type {
   RunToGreenState
 } from "./models.js";
 
-export type AgentRuntimeMode = "demo_mock" | "real_provider";
+export type AgentRuntimeMode = "real_provider";
 
 export type ActiveProviderSource =
   | "runtime_default"
@@ -55,9 +58,22 @@ export type ActiveProviderSource =
   | "env_openai_compatible"
   | "unknown";
 
+export type ProviderPipelineStage =
+  | "route"
+  | "reason"
+  | "retrieve"
+  | "curate"
+  | "compose"
+  | "repair"
+  | "verify"
+  | "decide"
+  | "escalate";
+
 export type ProviderPromptLatency = {
   requestId: string;
   requestType: "structured" | "text";
+  purpose?: ProviderPipelineStage;
+  reasoningStage?: import("./project-understanding.js").ReasoningStage;
   providerName: string;
   modelName?: string;
   latencyMs: number;
@@ -68,6 +84,7 @@ export type ProviderPromptLatency = {
   contextChars?: number;
   promptChars?: number;
   responseChars?: number;
+  maxOutputTokens?: number;
 };
 
 export type ProviderTruthTelemetry = {
@@ -76,7 +93,6 @@ export type ProviderTruthTelemetry = {
   modelName?: string;
   providerBaseUrl?: string;
   providerRequestCount: number;
-  mockProviderRequestCount: number;
   realProviderRequestCount: number;
   providerResponseCount: number;
   providerFailureCount: number;
@@ -86,12 +102,23 @@ export type ProviderTruthTelemetry = {
   totalProviderResponseChars: number;
   totalProviderContextChars: number;
   perPromptProviderLatencyMs: ProviderPromptLatency[];
-  fallbackUsed: boolean;
-  fallbackReason?: string;
   lastError?: string;
-  deterministicOnly: boolean;
-  mockProviderUsed: boolean;
-  realProviderUsed: boolean;
+  reasoningAttempts: number;
+  repairAttempts: number;
+  providerRequestRefs: string[];
+  finalResponseSource: "provider" | "none";
+  terminalFailure?: string;
+  modelCertification: {
+    status: "certified" | "uncertified";
+    routerModel?: string;
+    authorModel?: string;
+    verifierModel?: string;
+    corpusHash?: string;
+    reportPath?: string;
+    certifiedAt?: string;
+    certifiedGates?: Array<"read_reasoning" | "action_reasoning">;
+    reason?: string;
+  };
   activeProviderSource: ActiveProviderSource;
   updatedAt: string;
 };
@@ -176,6 +203,76 @@ export type EvidenceTruthReport = {
   generatedEvidenceIncludedCount: number;
   generatedEvidenceIncluded: boolean;
   allowGeneratedEvidence: boolean;
+  updatedAt: string;
+};
+
+export type DecisionAction = "ANSWER" | "FOLLOW_UP" | "REFUSE" | "ESCALATE";
+
+export type QueryUnderstanding = {
+  originalRequest: string;
+  cleanedRequest: string;
+  intentKind: "direct_conversation" | "workspace_question" | "workspace_action" | "run_request";
+  route: "chat" | "inspect_explain" | "simple_run" | "orchestrated_run" | "recursive_factory" | "swarm_readonly";
+  archetype: string;
+  requiredFacets: string[];
+  missingFacts: string[];
+  risk: "low" | "medium" | "high";
+  confidence: "high" | "medium" | "low";
+  rationale: string;
+  source: "provider" | "local_guard";
+};
+
+export type AnswerVerificationReport = {
+  status: "verified" | "rejected" | "unavailable";
+  providerVerdict?: "pass" | "fail" | "needs_more_evidence";
+  supportedClaims: string[];
+  unsupportedClaims: string[];
+  missingFacts: string[];
+  hardErrors: string[];
+  repairableErrors: string[];
+  evidenceRefs: string[];
+  verifierSource: "provider_and_deterministic" | "deterministic_only";
+  createdAt: string;
+};
+
+export type DecisionOutcome = {
+  action: DecisionAction;
+  reason: string;
+  confidence: "high" | "medium" | "low";
+  escalationTarget?: "provider_readonly_swarm" | "approval_gate";
+  createdAt: string;
+};
+
+export type DecisionPipelineStageRecord = {
+  stage: ProviderPipelineStage;
+  status: "pending" | "running" | "completed" | "fallback" | "blocked" | "skipped";
+  source: "provider" | "deterministic" | "hybrid";
+  detail: string;
+  updatedAt: string;
+};
+
+export type DecisionPipelineState = {
+  id: string;
+  version: 1 | 2;
+  query: QueryUnderstanding;
+  stages: DecisionPipelineStageRecord[];
+  callBudget: {
+    maxProviderCalls: number;
+    maxRepairAttempts: number;
+    maxEscalationHops: number;
+  };
+  verification?: AnswerVerificationReport;
+  outcome?: DecisionOutcome;
+  turnUnderstanding?: import("./project-understanding.js").TurnUnderstanding;
+  reasoningDirective?: import("./project-understanding.js").ReasoningDirective;
+  reasoningInitialStep?: import("./project-understanding.js").ReasoningStep;
+  reasoningTrace?: import("./project-understanding.js").ReasoningTurnTrace;
+  reasoningAttempts: number;
+  repairAttempts: number;
+  providerRequestRefs: string[];
+  finalResponseSource: "provider" | "none";
+  terminalFailure?: string;
+  createdAt: string;
   updatedAt: string;
 };
 
@@ -272,6 +369,7 @@ export type RuntimeMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  providerRequestRefs?: string[];
   createdAt: string;
 };
 
@@ -291,14 +389,18 @@ export type AgentRuntimeSession = {
   id: string;
   workspacePath: string;
   mode: AgentRuntimeMode;
-  requireRealProvider?: boolean;
+  responseLanguage?: "ar" | "en";
+  debugMode?: boolean;
   trustProfile: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
   activeProviderSource?: ActiveProviderSource;
   providerTelemetry?: ProviderTruthTelemetry;
+  latestDecisionPipeline?: DecisionPipelineState;
+  decisionPipelineHistory?: DecisionPipelineState[];
   evidenceReport?: EvidenceTruthReport;
   executionMode: RuntimeExecutionMode;
   resolvedExecutionMode?: Exclude<RuntimeExecutionMode, "auto_mode">;
+  recursiveFactory?: import("./orchestration.js").RecursiveFactoryState;
   accessProfile: AccessProfile;
   declaredAccess: DeclaredAccessPolicy;
   resolvedAccess?: ResolvedAccessPolicy;
@@ -308,6 +410,9 @@ export type AgentRuntimeSession = {
   projectIntake?: ProjectIntake;
   contextPack?: ProjectContextPack;
   explainReport?: ProjectExplainReport;
+  projectKnowledgeTree?: ProjectKnowledgeTree;
+  latestKnowledgeRoute?: KnowledgeRoutedEdit;
+  latestKnowledgeBranchTargets?: KnowledgeBranchTarget[];
   runIntent?: ProjectRunIntent;
   runToGreen?: RunToGreenState;
   moduleExecutionPlan?: ModuleExecutionPlan;
@@ -350,8 +455,9 @@ export type RunSession = AgentRuntimeSession;
 
 export type CreateRuntimeSessionRequest = {
   workspacePath: string;
-  mode: AgentRuntimeMode;
-  requireRealProvider?: boolean;
+  responseLanguage?: "ar" | "en";
+  debugMode?: boolean;
+  debug_mode?: boolean;
   trustProfile?: RunTrustProfile;
   providerConfig?: SanitizedProviderConfig;
   activeProviderSource?: ActiveProviderSource;
@@ -378,8 +484,24 @@ export type RuntimeTurnResponse = {
   status: RuntimeSessionStatus;
 };
 
+export type RecursiveBranchExecutionStartRequest = {
+  approved: true;
+  targetFile?: string;
+  replacementText?: string;
+  branchTargets?: Array<{
+    branchId?: string;
+    targetFile: string;
+    replacementText: string;
+    nestedSubtasks?: Array<{
+      targetFile: string;
+      replacementText: string;
+      objective?: string;
+    }>;
+  }>;
+};
+
 export type ReportPatchApplyResultRequest = {
-  status: "applied" | "failed";
+  status: "apply_started" | "applied" | "failed";
   message: string;
   reconciliationSnapshot?: {
     before?: import("./models.js").WorkspaceDiffSnapshot;
@@ -402,9 +524,14 @@ export type ReportCommandResultRequest = {
   backgroundJob?: import("./models.js").BackgroundJobRecord;
 };
 
+export type FactoryApprovalDecisionRequest = {
+  decision: "approved" | "rejected" | "changes_requested";
+  feedback?: string;
+};
+
 export type SanitizedProviderConfig = Pick<
   ModelProviderConfig,
-  "providerType" | "providerName" | "baseUrl" | "selectedModel" | "isValid"
+  "providerType" | "providerName" | "baseUrl" | "selectedModel" | "routerModel" | "verifierModel" | "embeddingModel" | "isValid"
 > & {
   apiKeyEnv?: string;
   apiKeyConfigured?: boolean;

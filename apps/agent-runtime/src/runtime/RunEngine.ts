@@ -26,13 +26,14 @@ import type {
 } from "@hivo/protocol";
 import { accessProfileDefaults } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
-import type { LlmProvider } from "../llm/LlmProvider.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import type { ProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { runPatchIntentSchema, runPlanSchema, runVerificationSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { randomId, SessionManager } from "./SessionManager.js";
+import { invokeReasoningProviderStructured } from "./ReasoningKernel.js";
 import { inferProjectLaunch } from "./ProjectLaunchInference.js";
 import {
   appendAgentJournalEntry,
@@ -58,13 +59,8 @@ import {
 } from "./LargeProjectContextBuilder.js";
 import { inferWorkspaceIntent } from "./WorkspaceReasoningPipeline.js";
 import { answerUniversalProjectQuestion } from "./UniversalProjectQuestionEngine.js";
-import {
-  createDirectConversationReply,
-  directConversationProgressSummary,
-  directConversationProgressTitle,
-  type IntentDecision
-} from "./IntentDecisionEngine.js";
 import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
+import { applyProjectUnderstandingDecisionPipeline, beginDecisionPipeline, finalizeAnswerDecisionPipeline } from "./DecisionPipeline.js";
 
 type RunPlanTask = {
   id?: string;
@@ -85,6 +81,7 @@ type RunPlanModel = {
   risks: string[];
   suggestedCommands?: Array<{ command: string; reason: string }>;
   fallbackWarning?: string;
+  planSource?: "provider" | "operator_supplied" | "deterministic_fallback";
 };
 
 type RunVerificationModel = {
@@ -92,20 +89,13 @@ type RunVerificationModel = {
   checks: Array<{ name: string; status: "passed" | "failed" | "pending"; detail: string }>;
 };
 
-function addWorkspaceIdentityBanner(answerMarkdown: string, workspacePath: string, fallbackUsed?: boolean, fallbackReason?: string): string {
+function addWorkspaceIdentityBanner(answerMarkdown: string, workspacePath: string): string {
   const trimmedAnswer = answerMarkdown.trim();
   const normalizedWorkspace = workspacePath.replaceAll("\\", "/").replace(/\/$/, "");
   const normalizedAnswer = trimmedAnswer.replaceAll("\\", "/");
   const lines: string[] = [];
   if (!normalizedWorkspace || !normalizedAnswer.includes(normalizedWorkspace)) {
     lines.push(`> Workspace used for this answer: \`${workspacePath}\``);
-  }
-  if (fallbackUsed) {
-    const reason = fallbackReason ? ` Reason: ${fallbackReason.slice(0, 220)}` : "";
-    const noticeOnly = /^provider_(?:failed|validation)_notice\b/i.test(fallbackReason ?? "");
-    lines.push(noticeOnly
-      ? `> Answer source: provider output was unavailable or failed validation; local synthesis was not used.${reason}`
-      : `> Answer source: local evidence graph synthesis after provider output was unavailable or failed validation.${reason}`);
   }
   return lines.length ? [...lines, "", trimmedAnswer].join("\n") : trimmedAnswer;
 }
@@ -167,7 +157,7 @@ export class RunEngine {
     const conversationUnderstanding = options.conversationUnderstanding ?? createConversationUnderstanding(message);
     const intentDecision = conversationUnderstanding.intentDecision;
     if (intentDecision.kind === "direct_conversation") {
-      return this.completeDirectConversationTurn(sessionId, options.resolvedMode, intentDecision);
+      throw new Error("reasoning_kernel.direct_conversation_must_be_provider_composed");
     }
     const executionMessage = conversationUnderstanding.workspaceMessage || message;
 
@@ -314,7 +304,7 @@ export class RunEngine {
     }
 
     if (snapshot.runIntent === "run_to_green") {
-      const runToGreenPlan = createDeterministicFallbackPlan(executionMessage, snapshot, "run_to_green");
+      const runToGreenPlan = await this.createPlan(session, executionMessage, snapshot, options.resolvedMode);
       const modulePlan = shouldTreatProjectAsExisting(intake.projectKind)
         ? buildModuleExecutionPlan({
             sessionId,
@@ -493,7 +483,7 @@ export class RunEngine {
         createdAt: new Date().toISOString()
       } as RunSummary);
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
         content: commandRequests.length
           ? `I selected a run-to-green command and prepared it for approval.\n\nCommand: \`${commandRequests[0]?.command}\`\n\nReasoning summary: ${runToGreen.selectedCommands[0]?.reason ?? "Selected from grounded workspace signals."}`
           : createNoGroundedRunCommandMessage(message, recommendation?.preview?.target, runToGreen.blockerReason)
@@ -512,9 +502,6 @@ export class RunEngine {
     }
 
     const plan = await this.createPlan(session, executionMessage, snapshot, options.resolvedMode);
-    if (shouldRejectPlannerFallback(session, requestedRunIntent, plan)) {
-      return this.failProviderPlanningFallback(sessionId, plan);
-    }
     const modulePlan =
       shouldTreatProjectAsExisting(intake.projectKind)
         ? buildModuleExecutionPlan({
@@ -533,6 +520,23 @@ export class RunEngine {
       plan,
       preset: options.resolvedMode
     });
+    if (plan.planSource === "operator_supplied") {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.reasoningSummaries.push("Plan source: operator_supplied");
+      });
+      await this.addDecisionRecord(sessionId, {
+        category: "decision",
+        finding: "The user supplied an explicit structured implementation plan.",
+        decision: "Use the operator-supplied plan for planning and keep provider/schema gates for patch generation.",
+        rationaleSummary: plan.reasoningSummary,
+        evidenceRefs: [],
+        linkedFiles: plan.tasks.flatMap((task) => task.targetFiles ?? []).slice(0, 8),
+        uncertainty: plan.risks[0],
+        createdByAgent: "Local Run",
+        createdByAgentId: "agent_local_codex",
+        linkedAgentIds: ["agent_local_codex"]
+      });
+    }
     if (plan.fallbackWarning) {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.reasoningSummaries.push(plan.fallbackWarning!);
@@ -656,7 +660,7 @@ export class RunEngine {
         linkedAgentIds: ["agent_local_codex", ...plan.tasks.map((_task, index) => `agent_task_${index + 1}`)]
       });
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
         content: [
           "Plan review required before implementation.",
           "",
@@ -684,6 +688,10 @@ export class RunEngine {
       return this.requireSession(sessionId);
     }
 
+    if (plan.mode === "inspect_only") {
+      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake, conversationUnderstanding);
+    }
+
     if (options.thinkFirst) {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = "needs_approval";
@@ -691,15 +699,11 @@ export class RunEngine {
         draft.nextAction = { kind: "confirm_plan", message: "Plan is ready. Want me to proceed with implementation?" };
       });
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
           content: formatPlanModeMessage(plan, executionMessage)
       });
       await this.updateRunPhase(sessionId, "review_final_diff", "active", "Plan is waiting for operator confirmation before implementation.");
       return this.requireSession(sessionId);
-    }
-
-    if (plan.mode === "inspect_only") {
-      return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake, conversationUnderstanding);
     }
 
     await this.updateStage(sessionId, "EXECUTION_DRAFT", "working", "running", "Draft changes", "Preparing reviewable patch and command intents.");
@@ -711,13 +715,14 @@ export class RunEngine {
       }
     });
     const patchIntentModel = await this.createPatchIntent(session, executionMessage, snapshot, plan);
+    await this.syncProviderTelemetry(sessionId);
     if (!patchIntentModel.intents.length) {
       const summary = patchIntentModel.summary || "I could not generate a safe file change from the provider output.";
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.reasoningSummaries.push(patchIntentModel.fallbackWarning ?? summary);
       });
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
         content: [
           "I could not produce a file change for that request.",
           "",
@@ -736,7 +741,10 @@ export class RunEngine {
         appliedPatchIds: [],
         proposedPatchIds: [],
         commandResults: [],
-        gates: verification.checks.map((check) => ({ name: check.name, status: "failed", notes: [check.detail] })),
+        gates: [
+          ...planningProviderGatesForPlan(plan),
+          ...verification.checks.map((check) => ({ name: check.name, status: "failed" as const, notes: [check.detail] }))
+        ],
         nextAction: "Retry with a smaller request or name the exact file and content to write.",
         createdAt: new Date().toISOString()
       });
@@ -871,6 +879,8 @@ export class RunEngine {
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "needs_approval";
       draft.lifecycleStage = "APPROVAL";
+      const providerTelemetry = this.options.providerTelemetry?.snapshot();
+      if (providerTelemetry) draft.providerTelemetry = providerTelemetry;
       draft.reasoningSummaries.push(plan.reasoningSummary);
       draft.orchestration ??= createEmptyOrchestration(draft);
       draft.orchestration.validationGateResult = {
@@ -923,7 +933,7 @@ export class RunEngine {
       draft.reviewGate = createPendingReviewGate(draft, verification, patch, commandRequests, scopeValidation);
     });
 
-    const summary = createRunSummary(this.requireSession(sessionId), verification);
+    const summary = withPlanningProviderGates(createRunSummary(this.requireSession(sessionId), verification), plan);
     await this.updateRunPhase(
       sessionId,
       "review_final_diff",
@@ -956,10 +966,6 @@ export class RunEngine {
         moduleSummary
       });
     }
-    await this.sessionManager.addMessage(sessionId, {
-      role: "assistant",
-      content: formatAssistantSummary(plan, patch, commandRequests, scopeValidation)
-    });
     await this.updateStage(sessionId, "APPROVAL", "reviewing", "completed", "Approval", "Review changes, then apply through Rust.");
     return this.requireSession(sessionId);
   }
@@ -1004,11 +1010,13 @@ export class RunEngine {
 
     const questionResult = await answerUniversalProjectQuestion({
       provider: this.provider,
-      userPrompt: message,
+      userPrompt: understanding.workspaceMessage || message,
       tools,
       explainReport,
       intent,
-      providerFailureSynthesis: session.mode === "real_provider" ? "notice_only" : "allow_local_synthesis"
+      embeddingModel: session.providerConfig?.embeddingModel
+        ?? process.env.HIVO_EMBEDDING_MODEL
+        ?? (session.providerConfig?.providerType === "ollama" ? process.env.OLLAMA_EMBEDDING_MODEL : process.env.OPENAI_EMBEDDING_MODEL)
     });
     await this.updateStage(
       sessionId,
@@ -1021,24 +1029,39 @@ export class RunEngine {
         : `Why this step: opened ${questionResult.openedFiles.length} file(s) and checked ${questionResult.candidateFiles.length} candidate(s) related to the question.`,
       questionResult.openedFiles.slice(0, 8)
     );
-    const answerMarkdown = addWorkspaceIdentityBanner(questionResult.answerMarkdown, session.workspacePath, questionResult.fallbackUsed, questionResult.fallbackReason);
+    const initialDecisionPipeline = session.latestDecisionPipeline;
+    if (!initialDecisionPipeline) {
+      throw new Error("reasoning_kernel.initial_decision_pipeline_required");
+    }
+    let decisionPipeline = await finalizeAnswerDecisionPipeline({
+      state: initialDecisionPipeline,
+      provider: this.provider,
+      answerMarkdown: questionResult.answerMarkdown,
+      evidenceRefs: questionResult.evidenceRefs,
+      validationErrors: questionResult.validationErrors,
+      finalAnswerSource: "provider",
+      confidence: questionResult.confidence
+    });
+    if (questionResult.projectUnderstanding) {
+      decisionPipeline = applyProjectUnderstandingDecisionPipeline(decisionPipeline, questionResult.projectUnderstanding);
+    }
+    if (questionResult.fallbackUsed) {
+      throw new Error(`provider_only_answer_required: ${questionResult.fallbackReason ?? "local answer synthesis attempted"}`);
+    }
+    const answerMarkdown = addWorkspaceIdentityBanner(questionResult.answerMarkdown, session.workspacePath);
     const validationErrors = questionResult.validationErrors;
     const evidenceRefs = questionResult.evidenceRefs;
-    const fallbackUsed = questionResult.fallbackUsed;
-    if (fallbackUsed) {
-      this.options.providerTelemetry?.markFallback(questionResult.fallbackReason ?? "inspect_explain_deterministic_fallback");
-    }
     const providerTelemetry = this.options.providerTelemetry?.snapshot();
     const evidenceReport = questionResult.evidenceReport;
     const answerContract = {
       answerStrategy: questionResult.answerStrategy,
-      realProviderAnswered: Boolean(providerTelemetry?.realProviderUsed && providerTelemetry.providerResponseCount > 0 && !providerTelemetry.fallbackUsed),
-      deterministicFallbackAnswered: Boolean(providerTelemetry?.deterministicOnly || providerTelemetry?.fallbackUsed || fallbackUsed),
+      finalResponseSource: "provider",
+      providerRequestRefs: providerTelemetry?.providerRequestRefs ?? [],
+      reasoningAttempts: providerTelemetry?.reasoningAttempts ?? 0,
+      repairAttempts: providerTelemetry?.repairAttempts ?? 0,
       providerTimeoutInvolved: Boolean(providerTelemetry?.providerTimeoutCount),
       providerRequestCount: providerTelemetry?.providerRequestCount ?? 0,
       providerResponseCount: providerTelemetry?.providerResponseCount ?? 0,
-      fallbackUsed: providerTelemetry?.fallbackUsed ?? fallbackUsed,
-      fallbackReason: providerTelemetry?.fallbackReason ?? questionResult.fallbackReason,
       finalEvidenceFilesActuallyUsed: evidenceReport.finalEvidenceFilesActuallyUsed,
       generatedArtifactsExcluded: evidenceReport.generatedEvidenceExcludedCount > 0
     };
@@ -1060,8 +1083,8 @@ export class RunEngine {
       "completed",
       progressCopy.answerDraft.title,
       progressCopy.arabic
-        ? (fallbackUsed ? "ليه الخطوة دي: جهزت رد مبني على الأدلة بعد ما خرج المزود أو التحقق عن المسار الآمن." : "ليه الخطوة دي: جهزت رد مفهوم بعد ما عدى تحقق الأدلة.")
-        : (fallbackUsed ? "Why this step: drafted an evidence-grounded answer after provider output needed fallback or validation repair." : "Why this step: drafted the answer after it passed evidence validation."),
+        ? "جهزت رد المزوّد بعد ما عدى تحقق الأدلة."
+        : "Drafted the provider-authored answer after it passed evidence validation.",
       evidenceRefs.slice(0, 8).map((ref) => ref.replace(/:\d+$/, ""))
     );
     await this.updateStage(sessionId, "DONE", "completed", "running", progressCopy.finalReport.title, progressCopy.finalReport.summary, evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8));
@@ -1070,9 +1093,11 @@ export class RunEngine {
       draft.explainReport = createSessionExplainReportSummary(questionResult.augmentedReport);
       draft.providerTelemetry = providerTelemetry;
       draft.evidenceReport = createSessionEvidenceTruthReportSummary(evidenceReport);
-      if (providerTelemetry?.fallbackUsed && !draft.reasoningSummaries.some((entry) => entry.includes("Provider truth: fallback was used"))) {
-        draft.reasoningSummaries.push(`Provider truth: fallback was used (${providerTelemetry.fallbackReason ?? "reason unavailable"}).`);
-      }
+      draft.latestDecisionPipeline = decisionPipeline;
+      draft.decisionPipelineHistory ??= [];
+      const pipelineIndex = draft.decisionPipelineHistory.findIndex((entry) => entry.id === decisionPipeline.id);
+      if (pipelineIndex >= 0) draft.decisionPipelineHistory[pipelineIndex] = decisionPipeline;
+      else draft.decisionPipelineHistory.push(decisionPipeline);
     });
 
     await this.addArtifact(sessionId, "project_explain_report", "Project explain report", questionResult.augmentedReport.overview, {
@@ -1131,7 +1156,7 @@ export class RunEngine {
       wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
-      fallbackUsed,
+      finalResponseSource: "provider",
       answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       concept_resolution: questionResult.conceptResolution,
@@ -1170,6 +1195,18 @@ export class RunEngine {
       evidenceReport
     });
 
+    if (questionResult.projectUnderstanding) {
+      await this.addArtifact(sessionId, "question_decomposition", "Question decomposition", `${questionResult.projectUnderstanding.decomposition.concepts.length} concept(s) and ${questionResult.projectUnderstanding.decomposition.requiredRelationships.length} required relationship(s).`, {
+        decomposition: questionResult.projectUnderstanding.decomposition
+      });
+      await this.addArtifact(sessionId, "claim_ledger", "Claim ledger", `${questionResult.projectUnderstanding.claimLedger.supportedMaterialClaims} supported and ${questionResult.projectUnderstanding.claimLedger.unsupportedMaterialClaims} unsupported material claim(s).`, {
+        claimLedger: questionResult.projectUnderstanding.claimLedger
+      });
+      await this.addArtifact(sessionId, "project_understanding", "Project understanding", `${questionResult.projectUnderstanding.mode}/${questionResult.projectUnderstanding.decision}; ${questionResult.projectUnderstanding.repairIterations} repair iteration(s).`, {
+        projectUnderstanding: questionResult.projectUnderstanding
+      });
+    }
+
     if (providerTelemetry) {
       await this.addArtifact(sessionId, "provider_truth", "Provider truth", describeProviderTruth(providerTelemetry), {
         providerTelemetry,
@@ -1181,6 +1218,16 @@ export class RunEngine {
       evidenceReport
     });
 
+    await this.addArtifact(sessionId, "answer_verification", "Answer verification", `${decisionPipeline.verification?.status ?? "unavailable"}; final action ${decisionPipeline.outcome?.action ?? "REFUSE"}.`, {
+      verification: decisionPipeline.verification,
+      decisionPipelineId: decisionPipeline.id
+    });
+
+    await this.addArtifact(sessionId, "final_decision", "Final decision", `${decisionPipeline.outcome?.action ?? "REFUSE"}: ${decisionPipeline.outcome?.reason ?? "No decision reason recorded."}`, {
+      outcome: decisionPipeline.outcome,
+      decisionPipelineId: decisionPipeline.id
+    });
+
     const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
       { name: "Workspace inventory", status: "passed", detail: `Scanned ${questionResult.augmentedReport.contextPack.inventory.scannedFiles} file(s), ignored ${questionResult.augmentedReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).` },
       { name: "Inspect read lanes", status: "passed", detail: `Ran ${questionResult.readLaneArtifacts.length} read lane(s); synthesized graph is ${questionResult.laneSynthesizedGraph.status} with ${questionResult.laneSynthesizedGraph.provenLinks.length} proven link(s) and ${questionResult.laneSynthesizedGraph.missingLinks.length} missing link(s).` },
@@ -1188,7 +1235,7 @@ export class RunEngine {
       { name: "Evidence hygiene", status: "passed", detail: `Used ${evidenceReport.finalEvidenceFilesActuallyUsed.length} final evidence file(s); excluded ${evidenceReport.generatedEvidenceExcludedCount} generated/runtime candidate(s).` },
       { name: "Module map", status: "passed", detail: `Mapped ${questionResult.augmentedReport.moduleMap.length} module(s) with ${questionResult.augmentedReport.contextPack.readBudget.sampledFiles} sampled file(s).` },
       { name: "Provider truth", status: "passed", detail: providerTelemetry ? describeProviderTruth(providerTelemetry) : "Provider telemetry was not attached to this RunEngine invocation." },
-      { name: "Evidence-grounded answer", status: "passed", detail: fallbackUsed ? "Provider output was revised or replaced with a deterministic evidence-grounded answer." : "Generated by the configured provider from the evidence report." },
+      { name: "Evidence-grounded answer", status: "passed", detail: "Generated by the configured provider from the evidence report." },
       { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
     ]);
 
@@ -1248,7 +1295,7 @@ export class RunEngine {
       wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
-      fallbackUsed,
+      finalResponseSource: "provider",
       answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       usedEvidenceRefs: evidenceRefs,
@@ -1298,9 +1345,7 @@ export class RunEngine {
       finding: questionResult.grounding.concept.specific
         ? `Requested concept "${questionResult.grounding.concept.label}" was ${questionResult.positiveEvidence.length ? "found by universal local search" : questionResult.grounding.conceptFound ? "found" : "not found"} in current workspace evidence.`
         : "Project answer was grounded in the current workspace evidence report and universal local search.",
-      decision: fallbackUsed
-        ? "Use a deterministic evidence-grounded answer instead of accepting unsupported provider text."
-        : "Use the provider answer because it passed current-workspace evidence validation.",
+      decision: "Use the provider answer because it passed current-workspace evidence validation.",
       rationaleSummary: questionResult.positiveEvidence.length
         ? `Universal search collected ${questionResult.positiveEvidence.length} evidence item(s) across ${questionResult.candidateFiles.length} candidate file(s).`
         : questionResult.grounding.foundInstead,
@@ -1324,99 +1369,23 @@ export class RunEngine {
     await this.updateRunPhase(sessionId, "agents_running", "completed", `Read-only explanation completed from evidence report.`);
     await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
     
-    await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answerMarkdown });
-    return this.requireSession(sessionId);
-  }
-
-  private async completeDirectConversationTurn(
-    sessionId: string,
-    resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">,
-    decision: IntentDecision
-  ) {
-    await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.status = "running";
-      draft.lifecycleStage = "INTAKE";
-      draft.resolvedExecutionMode = resolvedMode;
-      draft.agentName = "Local Run";
-      draft.runPhases = [];
-      draft.nextAction = undefined;
-      draft.orchestration ??= createEmptyOrchestration(draft);
-    });
-    await this.updateStage(
-      sessionId,
-      "DONE",
-      "completed",
-      "completed",
-      directConversationProgressTitle(decision.language),
-      directConversationProgressSummary(decision)
-    );
-    const answer = createDirectConversationReply(decision);
-    await this.sessionManager.addMessage(sessionId, { role: "assistant", content: answer });
-    await this.finish(sessionId, "completed", "DONE", {
-      status: "completed",
-      summary: answer,
-      filesChanged: [],
-      appliedPatchIds: [],
-      proposedPatchIds: [],
-      commandResults: [],
-      gates: [
-        {
-          name: "Intent gate",
-          status: "passed",
-          notes: [decision.rationale]
+    this.options.providerTelemetry?.markProviderAuthoredResponse();
+    const finalTelemetry = this.options.providerTelemetry?.snapshot();
+    if (finalTelemetry) {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.providerTelemetry = finalTelemetry;
+        if (draft.latestDecisionPipeline) {
+          draft.latestDecisionPipeline.finalResponseSource = "provider";
+          draft.latestDecisionPipeline.providerRequestRefs = finalTelemetry.providerRequestRefs;
+          draft.latestDecisionPipeline.reasoningAttempts = finalTelemetry.reasoningAttempts;
+          draft.latestDecisionPipeline.repairAttempts = finalTelemetry.repairAttempts;
         }
-      ],
-      nextAction: "Send a concrete project question or coding task when ready.",
-      createdAt: new Date().toISOString()
-    });
-    return this.requireSession(sessionId);
-  }
-
-  private async failProviderPlanningFallback(sessionId: string, plan: RunPlanModel) {
-    const summary = "The provider did not return a valid implementation plan, so no deterministic implementation plan was invented.";
-    await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.reasoningSummaries.push(plan.fallbackWarning ?? summary);
-    });
-    await this.addArtifact(sessionId, "summary", "Planning fallback stopped", summary, {
-      fallbackWarning: plan.fallbackWarning,
-      planMode: plan.mode
-    });
-    await this.addDecisionRecord(sessionId, {
-      category: "risk",
-      finding: "Provider planning output was invalid for an implementation request.",
-      decision: "Stop before implementation instead of using a deterministic fallback plan.",
-      rationaleSummary: plan.fallbackWarning ?? summary,
-      evidenceRefs: [],
-      linkedFiles: [],
-      uncertainty: "A deterministic implementation plan would make the run look more confident than the provider evidence allows.",
-      createdByAgent: "Local Run",
-      createdByAgentId: "agent_local_codex",
-      linkedAgentIds: ["agent_local_codex"]
-    });
+      });
+    }
     await this.sessionManager.addMessage(sessionId, {
       role: "assistant",
-      content: [
-        "I could not produce a safe implementation plan for that request.",
-        "",
-        summary,
-        "",
-        "The provider planner failed or returned malformed structured output. I stopped here instead of creating a canned plan."
-      ].join("\n")
-    });
-    const verification = await this.createVerification(sessionId, summary, [
-      { name: "Implementation plan", status: "failed", detail: plan.fallbackWarning ?? summary }
-    ]);
-    await this.updateStage(sessionId, "PLAN", "planning", "failed", "Implementation plan", summary);
-    await this.finish(sessionId, "failed", "FAILED", {
-      status: "failed",
-      summary,
-      filesChanged: [],
-      appliedPatchIds: [],
-      proposedPatchIds: [],
-      commandResults: [],
-      gates: verification.checks.map((check) => ({ name: check.name, status: "failed", notes: [check.detail] })),
-      nextAction: "Retry with a working provider or ask an inspect-only question.",
-      createdAt: new Date().toISOString()
+      content: answerMarkdown,
+      providerRequestRefs: this.options.providerTelemetry?.snapshot().providerRequestRefs ?? []
     });
     return this.requireSession(sessionId);
   }
@@ -1433,19 +1402,16 @@ export class RunEngine {
       `Project intake: ${JSON.stringify(snapshot.intake)}`,
       `Context pack: ${JSON.stringify(snapshot.contextPack)}`
     ].join("\n");
-    try {
-      const generated = await this.provider.generateStructured<Partial<RunPlanModel>>(
-        { systemPrompt: "You are a local coding run planner for an Ollama-backed Codex-like desktop agent. Any title field you return must be at most four words.", userPrompt: prompt },
-        runPlanSchema
-      );
-      const validation = validateStructuredOutput(generated, runPlanSchema);
-      if (!validation.valid) {
-        return createDeterministicFallbackPlan(message, snapshot, inferFallbackPlanKind(snapshot), `Model returned malformed structured output; deterministic fallback plan was used.`);
-      }
-      return normalizePlan(generated, message, snapshot);
-    } catch {
-      return createDeterministicFallbackPlan(message, snapshot, inferFallbackPlanKind(snapshot), `Model returned malformed structured output; deterministic fallback plan was used.`);
-    }
+    const generated = await this.generateStructuredWithRepair<Partial<RunPlanModel>>(
+      {
+        purpose: "reason",
+        systemPrompt: "You are a local coding run planner. Return strict JSON only. Any title field you return must be at most four words.",
+        userPrompt: prompt
+      },
+      runPlanSchema,
+      "implementation plan"
+    );
+    return normalizePlan(generated, message, snapshot);
   }
 
   private async applyPlanState(sessionId: string, plan: RunPlanModel, modulePlan?: ReturnType<typeof buildModuleExecutionPlan>) {
@@ -1480,9 +1446,6 @@ export class RunEngine {
   }
 
   private async createPatchIntent(session: AgentRuntimeSession, message: string, snapshot: RepoSnapshot, plan: RunPlanModel): Promise<RunPatchIntentModel> {
-    if (session.mode === "demo_mock") {
-      return createDemoPatchIntent(message, snapshot, plan);
-    }
     const relevantFiles = collectRelevantFilesForPatch(snapshot, plan);
     const prompt = [
       "Create a reviewable patch intent as JSON for a local coding agent.",
@@ -1499,19 +1462,56 @@ export class RunEngine {
       `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`,
       `Relevant file excerpts: ${JSON.stringify(relevantFiles)}`
     ].join("\n");
-    try {
-      const generated = await this.provider.generateStructured<Partial<RunPatchIntentModel>>(
-        { systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only. Any title field you return must be at most four words.", userPrompt: prompt },
-        runPatchIntentSchema
-      );
-      const validation = validateStructuredOutput(generated, runPatchIntentSchema);
-      if (!validation.valid) {
-        return createPatchIntentFallback(message, plan);
+    const generated = await this.generateStructuredWithRepair<Partial<RunPatchIntentModel>>(
+      {
+        purpose: "reason",
+        systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only. Any title field you return must be at most four words.",
+        userPrompt: prompt
+      },
+      runPatchIntentSchema,
+      "patch intent"
+    );
+    return normalizePatchIntent(generated, message);
+  }
+
+  private async generateStructuredWithRepair<T>(request: LlmRequest, schema: unknown, label: string): Promise<T> {
+    let currentRequest = request;
+    let errors: string[] = [];
+    let lastProviderError: unknown;
+    for (let attempt = 0; attempt <= 3; attempt += 1) {
+      let generated: T;
+      try {
+        generated = await invokeReasoningProviderStructured<T>(this.provider, currentRequest, schema);
+      } catch (error) {
+        lastProviderError = error;
+        if (attempt === 3) break;
+        currentRequest = {
+          purpose: "repair",
+          systemPrompt: `Retry the failed ${label} request. Return strict JSON matching the requested schema.`,
+          userPrompt: request.userPrompt,
+          context: { originalContext: request.context, priorOperationalError: formatProviderError(error) }
+        };
+        continue;
       }
-      return normalizePatchIntent(generated, message);
-    } catch {
-      return createPatchIntentFallback(message, plan);
+      const validation = validateStructuredOutput(generated, schema);
+      if (validation.valid) return generated;
+      errors = validation.errors;
+      if (attempt === 3) break;
+      currentRequest = {
+        purpose: "repair",
+        systemPrompt: `Repair the malformed ${label}. Return strict JSON matching the requested schema. Do not replace it with prose.`,
+        userPrompt: `Repair the ${label} using the validation errors.`,
+        context: {
+          originalRequest: request,
+          invalidResult: generated,
+          validationErrors: validation.errors
+        }
+      };
     }
+    if (lastProviderError && !errors.length) {
+      throw new Error(`provider_${label.replaceAll(" ", "_")}_failed_after_retries: ${formatProviderError(lastProviderError)}`);
+    }
+    throw new Error(`provider_${label.replaceAll(" ", "_")}_invalid_after_repairs: ${errors.join("; ")}`);
   }
 
   private async createVerification(sessionId: string, summary: string, checks: VerificationResult["checks"]) {
@@ -1531,6 +1531,7 @@ export class RunEngine {
       id: randomId("verification"),
       sessionId,
       status,
+      truthStatus: "unverified",
       summary,
       checks,
       createdAt: new Date().toISOString()
@@ -1538,6 +1539,14 @@ export class RunEngine {
     await this.sessionManager.setVerificationResult(sessionId, verification);
     await this.addArtifact(sessionId, "verification", "Verification", summary, { verification });
     return verification;
+  }
+
+  private async syncProviderTelemetry(sessionId: string) {
+    const providerTelemetry = this.options.providerTelemetry?.snapshot();
+    if (!providerTelemetry) return;
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.providerTelemetry = providerTelemetry;
+    });
   }
 
   private async addIntent(
@@ -1784,57 +1793,153 @@ function createSnapshot(
 }
 
 function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: RepoSnapshot): RunPlanModel {
-  const inferredMode = inferRunMode(message, snapshot);
-  const mode =
-    shouldForceInferredInspectOnly(message, snapshot)
-      ? "inspect_only"
-      : input.mode === "create_project" && snapshot.intake?.projectKind && snapshot.intake.projectKind !== "empty_project"
-        ? inferredMode
-        : input.mode ?? inferredMode;
-  const targetFiles = inferTargetFiles(message, snapshot, mode);
-  const defaultRisks = [
-    ...(snapshot.intake?.warnings ?? []),
-    ...(snapshot.intake?.unknowns ?? [])
-  ].slice(0, 3);
-  const tasks = input.tasks?.length
-    ? input.tasks
-    : [
-        {
-          title: mode === "create_project" ? "Create initial project files" : mode === "inspect_only" ? "Inspect workspace" : "Prepare focused edit",
-          objective: message,
-          roleTitle: mode === "create_project" ? "Project Scaffolder" : "Implementation Worker",
-          targetFiles,
-          expectedArtifact: mode === "inspect_only" ? "Workspace explanation" : "Reviewable diff",
-          verification: snapshot.testCommands[0] ?? "git diff --check"
-        }
-      ];
+  void message;
+  void snapshot;
   return {
-    summary:
-      input.summary ||
-      (mode === "create_project"
-        ? "Create a new local project as reviewable files."
-        : snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
-          ? `Prepare a narrow reviewable change inside the existing project. Recommended next action: ${snapshot.intake.nextActionRecommendation ?? "inspect the nearest relevant module first."}`
-          : "Prepare a reviewable local code change."),
-    reasoningSummary:
-      input.reasoningSummary ||
-      (snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
-        ? "I treated this as existing work: read wide first, build a compact context pack, and keep edits narrow before Rust-mediated approval."
-        : "I will keep the run gated: inspect first, propose artifacts, then wait for Rust-mediated approval."),
-    mode,
-    tasks: tasks.map((task, index) => ({
+    summary: input.summary!,
+    reasoningSummary: input.reasoningSummary!,
+    mode: input.mode!,
+    tasks: input.tasks!.map((task, index) => ({
       ...task,
-      id: task.id ?? `task_${index + 1}`,
-      targetFiles: task.targetFiles?.length ? task.targetFiles : targetFiles
+      id: task.id ?? `task_${index + 1}`
     })),
-    acceptanceCriteria:
-      input.acceptanceCriteria?.length
-        ? input.acceptanceCriteria
-        : snapshot.contextPack?.acceptanceCriteriaDraft?.length
-          ? snapshot.contextPack.acceptanceCriteriaDraft
-          : ["Changes are reviewable before apply.", "Post-verify is explicit."],
-    risks: input.risks?.length ? input.risks : defaultRisks,
-    suggestedCommands: input.suggestedCommands
+    acceptanceCriteria: input.acceptanceCriteria!,
+    risks: input.risks!,
+    suggestedCommands: input.suggestedCommands,
+    planSource: "provider"
+  };
+}
+
+function createOperatorSuppliedPlanIfPresent(
+  message: string,
+  snapshot: RepoSnapshot
+): RunPlanModel | undefined {
+  if (!isExplicitOperatorSuppliedImplementationPlan(message)) return undefined;
+  const mode = inferRunMode(message, snapshot) === "create_project" ? "create_project" : "edit_project";
+  const targetFiles = inferTargetFiles(message, snapshot, mode);
+  const sections = extractOperatorPlanSections(message);
+  const acceptanceCriteria =
+    sectionLines(sections.get("acceptance") ?? sections.get("test plan"))
+      .concat(sectionLines(sections.get("success criteria")))
+      .slice(0, 8);
+  const risks = sectionLines(sections.get("assumptions"))
+    .concat(sectionLines(sections.get("risks")))
+    .slice(0, 6);
+  const keyChanges = sectionLines(sections.get("key changes"))
+    .concat(sectionLines(sections.get("implementation changes")))
+    .slice(0, 8);
+  const summary = firstSectionSentence(sections.get("summary"))
+    ?? "Use the operator-supplied implementation plan.";
+  const verification = snapshot.testCommands[0] ?? "npm run typecheck";
+  return {
+    summary,
+    reasoningSummary: "Plan source: operator_supplied. The user supplied a structured implementation plan, so provider run-plan generation was skipped while patch generation remains provider/schema gated.",
+    mode,
+    tasks: [
+      {
+        id: "task_1",
+        title: "Implement user plan",
+        objective: keyChanges.length ? keyChanges.join(" ") : "Implement the explicit operator-supplied plan.",
+        roleTitle: "Implementation Worker",
+        targetFiles,
+        expectedArtifact: "Reviewable diff",
+        verification
+      },
+      {
+        id: "task_2",
+        title: "Preserve strict gates",
+        objective: "Keep provider/schema validation, patch review, and Rust authority gates active before any file apply.",
+        roleTitle: "Scope Guard",
+        targetFiles,
+        expectedArtifact: "Validated patch intent",
+        verification
+      },
+      {
+        id: "task_3",
+        title: "Verify behavior",
+        objective: acceptanceCriteria.length ? acceptanceCriteria.join(" ") : "Run focused tests and report any unverified status explicitly.",
+        roleTitle: "Verification Runner",
+        targetFiles,
+        expectedArtifact: "Verification summary",
+        verification
+      }
+    ],
+    acceptanceCriteria: acceptanceCriteria.length
+      ? acceptanceCriteria
+      : ["The operator-supplied plan is used for planning only.", "Provider/schema gates still control patch generation and edits."],
+    risks: risks.length
+      ? risks
+      : ["Operator-supplied planning skips provider run-plan generation; keep later execution gates strict."],
+    suggestedCommands: snapshot.testCommands.slice(0, 2).map((command) => ({ command, reason: "Verify the operator-supplied implementation plan." })),
+    planSource: "operator_supplied"
+  };
+}
+
+export function isExplicitOperatorSuppliedImplementationPlan(message: string) {
+  const normalized = message.toLowerCase();
+  const hasExplicitDirective = /\b(?:please\s+)?implement\s+this\s+plan\b/.test(normalized)
+    || /\bimplement\s+the\s+following\s+plan\b/.test(normalized)
+    || /نفذ\s+الخطة|طبّق\s+الخطة|طبق\s+الخطة/.test(message);
+  if (!hasExplicitDirective) return false;
+  const sectionHits = [
+    /^#{1,3}\s*operator-supplied implementation plan\b/im,
+    /^#{1,3}\s*summary\b/im,
+    /^#{1,3}\s*(key changes|implementation changes)\b/im,
+    /^#{1,3}\s*test plan\b/im,
+    /^#{1,3}\s*assumptions\b/im
+  ].filter((pattern) => pattern.test(message)).length;
+  const bulletCount = (message.match(/^\s*[-*]\s+\S/gm) ?? []).length;
+  return sectionHits >= 2 || (sectionHits >= 1 && bulletCount >= 3);
+}
+
+function extractOperatorPlanSections(message: string) {
+  const sections = new Map<string, string>();
+  const matches = [...message.matchAll(/^#{1,3}\s+(.+?)\s*$/gim)];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+    const title = normalizeSectionTitle(match[1] ?? "");
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? message.length;
+    if (title) sections.set(title, message.slice(start, end).trim());
+  }
+  return sections;
+}
+
+function normalizeSectionTitle(title: string) {
+  return title.toLowerCase().replace(/[`*_]/g, "").replace(/[:：].*$/, "").trim();
+}
+
+function sectionLines(section: string | undefined) {
+  if (!section) return [];
+  return section
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*[-*]\s+/, "").replace(/^\s*\d+[.)]\s+/, "").trim())
+    .filter((line) => line.length > 0 && !/^#{1,3}\s+/.test(line))
+    .slice(0, 10);
+}
+
+function firstSectionSentence(section: string | undefined) {
+  const line = sectionLines(section)[0];
+  if (!line) return undefined;
+  return line.length > 180 ? `${line.slice(0, 177)}...` : line;
+}
+
+function planningProviderGatesForPlan(plan: RunPlanModel): RunSummary["gates"] {
+  if (plan.planSource !== "operator_supplied") return [];
+  return [{
+    name: "Planning provider request",
+    status: "passed",
+    notes: ["Skipped: operator-supplied implementation plan used; provider/schema gates remain active for patch generation."]
+  }];
+}
+
+function withPlanningProviderGates(summary: RunSummary, plan: RunPlanModel): RunSummary {
+  const gates = planningProviderGatesForPlan(plan);
+  if (!gates.length) return summary;
+  const existing = new Set(summary.gates.map((gate) => gate.name));
+  return {
+    ...summary,
+    gates: [...gates.filter((gate) => !existing.has(gate.name)), ...summary.gates]
   };
 }
 
@@ -1845,106 +1950,17 @@ function shouldForceInferredInspectOnly(message: string, snapshot: RepoSnapshot)
   );
 }
 
-function shouldRejectPlannerFallback(
-  session: AgentRuntimeSession,
-  requestedRunIntent: ReturnType<typeof classifyRunIntent>,
-  plan: RunPlanModel
-) {
-  if (session.mode === "demo_mock" || !plan.fallbackWarning) return false;
-  return requestedRunIntent !== "run_to_green";
-}
-
 function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: string): RunPatchIntentModel {
+  void message;
   if (input.intents?.length) {
     return {
-      title: input.title || "Ollama patch intent proposal",
-      summary: input.summary || `Prepared changes for: ${message}`,
+      title: input.title!,
+      summary: input.summary!,
       intents: input.intents,
-      suggestedCommands: input.suggestedCommands,
-      fallbackWarning: input.fallbackWarning,
-      fallbackKind: input.fallbackKind
+      suggestedCommands: input.suggestedCommands
     };
   }
-  const simpleFile = inferSimpleFileWriteRequest(message);
-  if (simpleFile) {
-    return createExplicitFileWritePatchIntent(simpleFile);
-  }
-  return createPatchIntentUnavailable(
-    "The provider returned a valid patch intent envelope, but it did not contain any file edits."
-  );
-}
-
-function createPatchIntentFallback(message: string, plan: RunPlanModel): RunPatchIntentModel {
-  const simpleFile = inferSimpleFileWriteRequest(message);
-  if (simpleFile) {
-    return createExplicitFileWritePatchIntent(simpleFile);
-  }
-  return createPatchIntentUnavailable(
-    plan.mode === "create_project"
-      ? "The provider did not return a valid patch intent for the new project, so no starter scaffold was invented."
-      : "The provider did not return a valid patch intent, and the request was too broad for an exact user-provided file write."
-  );
-}
-
-function createExplicitFileWritePatchIntent(simpleFile: { path: string; content: string }): RunPatchIntentModel {
-  return {
-    title: `Create ${simpleFile.path}`,
-    summary: `Writes the exact requested content to ${simpleFile.path}.`,
-    intents: [
-      {
-        path: simpleFile.path,
-        operation: "overwrite_file",
-        replacementText: simpleFile.content,
-        reason: "User provided a concrete file path and exact content.",
-        risk: "low"
-      }
-    ],
-    fallbackWarning: "Provider patch output was invalid; using only the explicit file path and content from the user request.",
-    fallbackKind: "simple_file_request"
-  };
-}
-
-function createPatchIntentUnavailable(summary: string): RunPatchIntentModel {
-  return {
-    title: "Provider patch generation failed",
-    summary,
-    intents: [],
-    suggestedCommands: [],
-    fallbackWarning: "Provider patch output was invalid; no deterministic implementation was invented.",
-    fallbackKind: "generic"
-  };
-}
-
-function createDemoPatchIntent(message: string, snapshot: RepoSnapshot, plan: RunPlanModel): RunPatchIntentModel {
-  if (plan.mode === "create_project") {
-    const base = inferProjectBaseName(message);
-    return {
-      title: "Create local project scaffold",
-      summary: "Creates a small starter project with README, package metadata, and source entry.",
-      intents: [
-        { path: `${base}/README.md`, operation: "create_file", replacementText: `# ${base}\n\nGenerated starter project for: ${message}\n\n## Run\n\nnpm install\nnpm run dev\n`, reason: "Project instructions.", risk: "low" },
-        { path: `${base}/package.json`, operation: "create_file", replacementText: JSON.stringify({ scripts: { dev: "vite --host 127.0.0.1", test: "echo \"No tests yet\"" }, dependencies: {}, devDependencies: { vite: "^6.0.0", typescript: "^5.8.3" } }, null, 2) + "\n", reason: "Local npm scripts.", risk: "medium" },
-        { path: `${base}/index.html`, operation: "create_file", replacementText: "<!doctype html>\n<html><head><title>Local App</title></head><body><main id=\"app\"></main><script type=\"module\" src=\"./src/main.js\"></script></body></html>\n", reason: "Browser entry.", risk: "low" },
-        { path: `${base}/src/main.js`, operation: "create_file", replacementText: `document.querySelector("#app").innerHTML = "<h1>${escapeHtml(message)}</h1><p>Local Ollama scaffold ready.</p>";\n`, reason: "Application entry.", risk: "low" }
-      ],
-      suggestedCommands: [{ command: `cd ${base} && npm install`, reason: "Install starter project dependencies after approval." }]
-    };
-  }
-  const target = plan.tasks.flatMap((task) => task.targetFiles ?? [])[0] ?? snapshot.candidateFiles[0] ?? "AGENT_PROPOSAL.md";
-  return {
-    title: "Reviewable implementation note",
-    summary: "Creates a concrete note artifact for the requested edit. Use real_provider for code-specific edits.",
-    intents: [
-      {
-        path: target === "AGENT_PROPOSAL.md" ? target : "AGENT_PROPOSAL.md",
-        operation: "create_file",
-        replacementText: `# Agent Proposal\n\nRequest: ${message}\n\nPlan: ${plan.summary}\n\nWorkspace: ${snapshot.summary}\n\nNext: approve this artifact or rerun with a validated Ollama model for code-specific generation.\n`,
-        reason: "Records the requested change as a gated artifact.",
-        risk: "low"
-      }
-    ],
-    suggestedCommands: [{ command: snapshot.testCommands[0] ?? "git diff --check", reason: "Validate the approved patch." }]
-  };
+  throw new Error("provider_patch_intent_empty_after_repairs");
 }
 
 function inferExplicitAgentCount(message: string): number | null {
@@ -2103,26 +2119,31 @@ function createFileDiff(filePath: string, content: string) {
 function createReplaceRangeDiff(filePath: string, before: string, after: string, start: number, end: number) {
   const beforeLines = splitLinesForDiff(before);
   const afterLines = splitLinesForDiff(after);
-  const oldStartLineIndex = lineIndexAt(before, start);
-  const oldEndLineIndex = lineIndexAt(before, Math.max(start, end - 1));
-  const replacementLength = after.length - before.length + (end - start);
-  const newEndExclusive = start + replacementLength;
-  const newStartLineIndex = lineIndexAt(after, Math.min(start, after.length));
-  const newEndLineIndex = lineIndexAt(after, Math.max(start, Math.min(newEndExclusive - 1, Math.max(after.length - 1, 0))));
-  const contextBeforeCount = Math.min(2, oldStartLineIndex);
-  const contextAfterCount = Math.min(2, beforeLines.length - oldEndLineIndex - 1);
-  const oldSliceStart = oldStartLineIndex - contextBeforeCount;
-  const oldSliceEnd = oldEndLineIndex + contextAfterCount;
-  const newSliceStart = Math.max(0, newStartLineIndex - contextBeforeCount);
-  const newSliceEnd = Math.min(afterLines.length - 1, newEndLineIndex + contextAfterCount);
-  const oldChangedCount = oldEndLineIndex - oldStartLineIndex + 1;
-  const newChangedCount = newEndLineIndex - newStartLineIndex + 1;
+  void start;
+  void end;
+  let prefix = 0;
+  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < beforeLines.length - prefix
+    && suffix < afterLines.length - prefix
+    && beforeLines[beforeLines.length - suffix - 1] === afterLines[afterLines.length - suffix - 1]
+  ) suffix += 1;
+  const contextBeforeCount = Math.min(2, prefix);
+  const contextAfterCount = Math.min(2, suffix);
+  const oldSliceStart = prefix - contextBeforeCount;
+  const newSliceStart = prefix - contextBeforeCount;
+  const oldChanged = beforeLines.slice(prefix, beforeLines.length - suffix);
+  const newChanged = afterLines.slice(prefix, afterLines.length - suffix);
+  const trailingContext = beforeLines.slice(beforeLines.length - suffix, beforeLines.length - suffix + contextAfterCount);
+  const oldCount = contextBeforeCount + oldChanged.length + contextAfterCount;
+  const newCount = contextBeforeCount + newChanged.length + contextAfterCount;
 
   const hunkLines = [
-    ...beforeLines.slice(oldSliceStart, oldStartLineIndex).map((line) => ` ${line}`),
-    ...beforeLines.slice(oldStartLineIndex, oldStartLineIndex + oldChangedCount).map((line) => `-${line}`),
-    ...afterLines.slice(newStartLineIndex, newStartLineIndex + newChangedCount).map((line) => `+${line}`),
-    ...afterLines.slice(newEndLineIndex + 1, newSliceEnd + 1).map((line) => ` ${line}`)
+    ...beforeLines.slice(oldSliceStart, prefix).map((line) => ` ${line}`),
+    ...oldChanged.map((line) => `-${line}`),
+    ...newChanged.map((line) => `+${line}`),
+    ...trailingContext.map((line) => ` ${line}`)
   ];
 
   return [
@@ -2130,7 +2151,7 @@ function createReplaceRangeDiff(filePath: string, before: string, after: string,
     "index 1111111..2222222 100644",
     `--- a/${filePath}`,
     `+++ b/${filePath}`,
-    `@@ -${oldSliceStart + 1},${oldSliceEnd - oldSliceStart + 1} +${newSliceStart + 1},${newSliceEnd - newSliceStart + 1} @@`,
+    `@@ -${oldSliceStart + 1},${oldCount} +${newSliceStart + 1},${newCount} @@`,
     ...hunkLines
   ].join("\n");
 }
@@ -2263,13 +2284,7 @@ function toAgentPlan(plan: RunPlanModel): AgentPlan {
 }
 
 function describeProviderTruth(telemetry: NonNullable<AgentRuntimeSession["providerTelemetry"]>) {
-  const providerKind = telemetry.mockProviderUsed
-    ? "mock"
-    : telemetry.realProviderUsed
-      ? "real"
-      : "unknown";
-  const fallback = telemetry.fallbackUsed ? `fallback yes${telemetry.fallbackReason ? ` (${telemetry.fallbackReason})` : ""}` : "fallback no";
-  return `Provider ${providerKind}: ${telemetry.providerName}${telemetry.modelName ? `/${telemetry.modelName}` : ""}; calls ${telemetry.providerRequestCount}/${telemetry.providerResponseCount}/${telemetry.providerFailureCount}/${telemetry.providerTimeoutCount} request/response/error/timeout; prompt chars ${telemetry.totalProviderPromptChars ?? 0}; response chars ${telemetry.totalProviderResponseChars ?? 0}; ${fallback}.`;
+  return `Provider: ${telemetry.providerName}${telemetry.modelName ? `/${telemetry.modelName}` : ""}; calls ${telemetry.providerRequestCount}/${telemetry.providerResponseCount}/${telemetry.providerFailureCount}/${telemetry.providerTimeoutCount} request/response/error/timeout; reasoning ${telemetry.reasoningAttempts}; repairs ${telemetry.repairAttempts}; final source ${telemetry.finalResponseSource}; prompt chars ${telemetry.totalProviderPromptChars ?? 0}; response chars ${telemetry.totalProviderResponseChars ?? 0}.`;
 }
 
 function createRunSummary(session: AgentRuntimeSession, verification: VerificationResult): RunSummary {
@@ -2375,98 +2390,6 @@ function createNoGroundedRunCommandMessage(message: string, previewTarget?: stri
   return previewTarget
     ? `I inspected the workspace, but I could not infer a grounded run command.\n\nPreview is available at ${previewTarget}.`
     : `I inspected the workspace, but I could not infer a grounded run command.\n\n${blockerReason ?? "No grounded command was available."}`;
-}
-
-function inferFallbackPlanKind(snapshot: RepoSnapshot) {
-  return snapshot.runIntent === "run_to_green"
-    ? "run_to_green"
-    : snapshot.intake && shouldTreatProjectAsExisting(snapshot.intake.projectKind)
-      ? "existing_project_continuation"
-      : "generic";
-}
-
-function createDeterministicFallbackPlan(
-  message: string,
-  snapshot: RepoSnapshot,
-  kind: "run_to_green" | "existing_project_continuation" | "generic",
-  warning?: string
-): RunPlanModel {
-  if (kind === "run_to_green") {
-    return {
-      summary: "Use a deterministic run-to-green startup plan.",
-      reasoningSummary: "Skip brittle provider planning and move directly from intake to grounded command selection for the bounded repair loop.",
-      mode: "inspect_only",
-      tasks: [
-        {
-          title: "Inspect runnable workspace",
-          objective: "Verify visible project files and identify runnable commands.",
-          roleTitle: "Workspace Inspector",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        },
-        {
-          title: "Select grounded run command",
-          objective: "Choose a run/build/test command from project metadata or block if none is available.",
-          roleTitle: "Run Planner",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        },
-        {
-          title: "Execute bounded run-to-green",
-          objective: "Run the selected command and attempt only small scoped repairs.",
-          roleTitle: "Verification Runner",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        }
-      ],
-      acceptanceCriteria: ["A grounded command is selected or the run blocks safely.", "The bounded repair loop stays scoped and reviewable."],
-      risks: uniqueStrings([warning ?? "", ...(snapshot.intake?.warnings ?? []), ...(snapshot.intake?.unknowns ?? [])]).filter(Boolean),
-      fallbackWarning: warning
-    };
-  }
-  if (kind === "existing_project_continuation") {
-    return {
-      summary: "Use a deterministic continuation plan for the existing project.",
-      reasoningSummary: "Structured planner output was unavailable, so continuation falls back to a compact scoped workflow.",
-      mode: "inspect_only",
-      tasks: [
-        {
-          title: "Build context pack",
-          objective: "Summarize the existing project and relevant files for scoped implementation.",
-          roleTitle: "Project Mapper",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        },
-        {
-          title: "Create scoped module plan",
-          objective: "Define allowed paths, forbidden paths, acceptance criteria, and verification commands.",
-          roleTitle: "Module Planner",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        },
-        {
-          title: "Validate changes before apply",
-          objective: "Ensure proposed changes stay within the module plan before review.",
-          roleTitle: "Scope Guard",
-          targetFiles: snapshot.importantFiles.slice(0, 4)
-        }
-      ],
-      acceptanceCriteria: snapshot.contextPack?.acceptanceCriteriaDraft?.length ? snapshot.contextPack.acceptanceCriteriaDraft : ["Keep changes scoped to the existing project.", "Validate changes before apply."],
-      risks: uniqueStrings([warning ?? "", ...(snapshot.intake?.warnings ?? []), ...(snapshot.intake?.unknowns ?? [])]).filter(Boolean),
-      fallbackWarning: warning
-    };
-  }
-  return {
-    summary: "Use a deterministic fallback plan.",
-    reasoningSummary: "Structured planner output was unavailable, so the run fell back to a minimal deterministic plan.",
-    mode: inferRunMode(message, snapshot),
-    tasks: [
-      {
-        title: "Inspect workspace",
-        objective: "Inspect visible files and identify the safest next step.",
-        roleTitle: "Workspace Inspector",
-        targetFiles: snapshot.importantFiles.slice(0, 4)
-      }
-    ],
-    acceptanceCriteria: ["The next step is grounded in visible workspace evidence."],
-    risks: warning ? [warning] : [],
-    fallbackWarning: warning
-  };
 }
 
 function createSnapshotEvidenceRefs(snapshot: RepoSnapshot): EvidenceRef[] {
@@ -2874,27 +2797,6 @@ function createDecisionSummaryByAgent(session: AgentRuntimeSession) {
   }));
 }
 
-function formatAssistantSummary(
-  plan: RunPlanModel,
-  patch: PatchProposal,
-  commands: CommandRequest[],
-  scopeValidation?: AgentRuntimeSession["latestScopeValidation"]
-) {
-  const lines = [
-    plan.summary,
-    "",
-    "Prepared artifacts:",
-    `- Patch: ${patch.title} (${patch.filesChanged.length} file(s))`,
-    ...commands.map((command) => `- Command: ${command.command} (${command.risk})`),
-    ...(scopeValidation ? [`- Scope verdict: ${scopeValidation.verdict}`, ...scopeValidation.reasons.slice(0, 3).map((reason) => `- Scope note: ${reason}`)] : []),
-    "",
-    scopeValidation?.verdict === "blocked"
-      ? "Patch scope is blocked. Bring the change back inside the module plan before apply."
-      : "Review the diff before applying. Rust owns the actual file write and command execution."
-  ];
-  return lines.join("\n");
-}
-
 function inferRunMode(message: string, snapshot: RepoSnapshot): RunPlanModel["mode"] {
   const normalized = message.toLowerCase();
   const workspaceIntent = snapshot.intentUnderstanding ?? inferWorkspaceIntent(message);
@@ -2985,6 +2887,10 @@ function inferSimpleFileWriteRequest(message: string): { path: string; content: 
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char] ?? char);
+}
+
+function formatProviderError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createEmptyOrchestration(session: AgentRuntimeSession): NonNullable<AgentRuntimeSession["orchestration"]> {

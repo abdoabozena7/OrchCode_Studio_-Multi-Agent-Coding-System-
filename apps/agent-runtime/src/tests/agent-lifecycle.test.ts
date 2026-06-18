@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,26 +10,26 @@ test("agent lifecycle creates plan, tool calls, command request, and patch propo
   const workspace = path.join(os.tmpdir(), `hivo-agent-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-agent-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
-  await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
-  await writeFile(path.join(workspace, "README.md"), "test fixture\n", "utf8");
-
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: "add a README note"
-  });
-  const turn = await runtime.runTurn(created.sessionId, "add a README note");
-  const session = runtime.getSession(created.sessionId);
+  try {
+    const prompt = "create a new README note";
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "demo_mock",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
 
-  assert.equal(turn.status, "needs_approval");
-  assert.ok(session?.plan);
-  assert.ok((session?.toolIntents.length ?? 0) >= 4);
-  assert.ok((session?.artifacts.length ?? 0) >= 3);
-  assert.equal(session?.patchProposals.length, 1);
-  assert.equal(session?.commandRequests.length, 1);
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "needs_approval");
+    assert.ok(session?.plan);
+    assert.ok((session?.toolIntents.length ?? 0) >= 4);
+    assert.ok((session?.artifacts.length ?? 0) >= 3);
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.commandRequests.length, 1);
+  } finally {
+    await app.close();
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });

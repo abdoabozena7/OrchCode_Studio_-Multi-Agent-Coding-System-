@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "id": "swarm_experiment_6bcab78c-3df9-4faa-aee0-fcd957d53ff2",
+  "title": "Automatic Staffing Evaluation",
+  "description": "Evaluates whether the Swarm Staffing Planner chooses appropriate internal logical agent shapes without user-provided agent counts.",
+  "scenario_type": "automatic_staffing",
+  "tasks_to_test": [
+    {
+      "id": "tiny_html_text_change",
+      "title": "Tiny HTML/Text Change",
+      "input_goal": "Change the label text in one HTML/component file.",
+      "expected": {
+        "expected_complexity": "tiny",
+        "expected_agent_range": [
+          3,
+          8
+        ],
+        "expected_executor_limit": 1,
+        "forbidden_specialists": [
+          "AuthSecurityReviewerAgent",
+          "MigrationSafetyReviewerAgent"
+        ],
+        "validation_level": [
+          "basic",
+          "none"
+        ]
+      }
+    },
+    {
+      "id": "small_bug_fix",
+      "title": "Small Bug Fix",
+      "input_goal": "Fix a small bug in one function.",
+      "expected": {
+        "expected_complexity": "small",
+        "expected_agent_range": [
+          4,
+          10
+        ],
+        "expected_executor_limit": 1,
+        "forbidden_specialists": [
+          "AuthSecurityReviewerAgent",
+          "MigrationSafetyReviewerAgent",
+          "AccessibilityReviewerAgent"
+        ]
+      }
+    },
+    {
+      "id": "medium_feature",
+      "title": "Medium Feature",
+      "input_goal": "Add a feature touching one module and its tests.",
+      "expected": {
+        "expected_complexity": "medium",
+        "expected_agent_range": [
+          10,
+          30
+        ],
+        "expected_executor_limit": 3
+      }
+    },
+    {
+      "id": "large_refactor",
+      "title": "Large Multi-Module Refactor",
+      "input_goal": "Refactor a cross-module service while preserving public API behavior.",
+      "expected": {
+        "expected_complexity": "large",
+        "expected_agent_range": [
+          35,
+          130
+        ],
+        "expected_executor_limit": 6,
+        "expected_specialists": [
+          "APICompatibilityReviewerAgent"
+        ],
+        "validation_level": [
+          "strict",
+          "exhaustive"
+        ]
+      }
+    },
+    {
+      "id": "huge_readonly_scan",
+      "title": "Huge Read-Only Architecture Scan",
+      "input_goal": "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.",
+      "expected": {
+        "expected_complexity": "huge",
+        "expected_agent_range": [
+          80,
+          300
+        ],
+        "expected_executor_limit": 0,
+        "min_read_only_ratio": 0.95
+      }
+    },
+    {
+      "id": "security_auth_change",
+      "title": "Risky Security/Auth Change",
+      "input_goal": "Modify the authentication/session/permission behavior.",
+      "expected": {
+        "expected_complexity": "small",
+        "expected_risk_level": "critical",
+        "expected_agent_range": [
+          5,
+          30
+        ],
+        "expected_executor_limit": 1,
+        "expected_specialists": [
+          "AuthSecurityReviewerAgent"
+        ],
+        "validation_level": [
+          "strict",
+          "exhaustive"
+        ],
+        "requires_human_approval": true
+      }
+    },
+    {
+      "id": "database_migration",
+      "title": "Database Migration Task",
+      "input_goal": "Add or change database migration behavior.",
+      "expected": {
+        "expected_complexity": "large",
+        "expected_risk_level": "high",
+        "expected_agent_range": [
+          30,
+          140
+        ],
+        "expected_executor_limit": 2,
+        "expected_specialists": [
+          "MigrationSafetyReviewerAgent"
+        ],
+        "validation_level": [
+          "strict",
+          "exhaustive"
+        ],
+        "requires_human_approval": true
+      }
+    },
+    {
+      "id": "frontend_accessibility",
+      "title": "Frontend Accessibility/UI Task",
+      "input_goal": "Update a shared UI component with accessibility-safe behavior.",
+      "expected": {
+        "expected_complexity": "medium",
+        "expected_agent_range": [
+          8,
+          40
+        ],
+        "expected_executor_limit": 3,
+        "expected_specialists": [
+          "AccessibilityReviewerAgent"
+        ]
+      }
+    },
+    {
+      "id": "ambiguous_large_goal",
+      "title": "Ambiguous Large Goal",
+      "input_goal": "Make the app better and cleaner. Do not edit files until the plan is decomposed.",
+      "expected": {
+        "expected_complexity": "small",
+        "expected_agent_range": [
+          3,
+          20
+        ],
+        "expected_executor_limit": 0,
+        "min_read_only_ratio": 0.8
+      }
+    },
+    {
+      "id": "huge_campaign",
+      "title": "Huge Campaign",
+      "input_goal": "Upgrade a major framework version across the project as a staged campaign.",
+      "expected": {
+        "expected_complexity": "huge",
+        "expected_agent_range": [
+          80,
+          300
+        ],
+        "expected_executor_limit": 3,
+        "validation_level": [
+          "strict",
+          "exhaustive"
+        ]
+      }
+    }
+  ],
+  "modes_to_compare": [
+    "autopilot-deep"
+  ],
+  "expected_staffing_behavior": [
+    {
+      "expected_complexity": "tiny",
+      "expected_agent_range": [
+        3,
+        8
+      ],
+      "expected_executor_limit": 1,
+      "forbidden_specialists": [
+        "AuthSecurityReviewerAgent",
+        "MigrationSafetyReviewerAgent"
+      ],
+      "validation_level": [
+        "basic",
+        "none"
+      ]
+    },
+    {
+      "expected_complexity": "small",
+      "expected_agent_range": [
+        4,
+        10
+      ],
+      "expected_executor_limit": 1,
+      "forbidden_specialists": [
+        "AuthSecurityReviewerAgent",
+        "MigrationSafetyReviewerAgent",
+        "AccessibilityReviewerAgent"
+      ]
+    },
+    {
+      "expected_complexity": "medium",
+      "expected_agent_range": [
+        10,
+        30
+      ],
+      "expected_executor_limit": 3
+    },
+    {
+      "expected_complexity": "large",
+      "expected_agent_range": [
+        35,
+        130
+      ],
+      "expected_executor_limit": 6,
+      "expected_specialists": [
+        "APICompatibilityReviewerAgent"
+      ],
+      "validation_level": [
+        "strict",
+        "exhaustive"
+      ]
+    },
+    {
+      "expected_complexity": "huge",
+      "expected_agent_range": [
+        80,
+        300
+      ],
+      "expected_executor_limit": 0,
+      "min_read_only_ratio": 0.95
+    },
+    {
+      "expected_complexity": "small",
+      "expected_risk_level": "critical",
+      "expected_agent_range": [
+        5,
+        30
+      ],
+      "expected_executor_limit": 1,
+      "expected_specialists": [
+        "AuthSecurityReviewerAgent"
+      ],
+      "validation_level": [
+        "strict",
+        "exhaustive"
+      ],
+      "requires_human_approval": true
+    },
+    {
+      "expected_complexity": "large",
+      "expected_risk_level": "high",
+      "expected_agent_range": [
+        30,
+        140
+      ],
+      "expected_executor_limit": 2,
+      "expected_specialists": [
+        "MigrationSafetyReviewerAgent"
+      ],
+      "validation_level": [
+        "strict",
+        "exhaustive"
+      ],
+      "requires_human_approval": true
+    },
+    {
+      "expected_complexity": "medium",
+      "expected_agent_range": [
+        8,
+        40
+      ],
+      "expected_executor_limit": 3,
+      "expected_specialists": [
+        "AccessibilityReviewerAgent"
+      ]
+    },
+    {
+      "expected_complexity": "small",
+      "expected_agent_range": [
+        3,
+        20
+      ],
+      "expected_executor_limit": 0,
+      "min_read_only_ratio": 0.8
+    },
+    {
+      "expected_complexity": "huge",
+      "expected_agent_range": [
+        80,
+        300
+      ],
+      "expected_executor_limit": 3,
+      "validation_level": [
+        "strict",
+        "exhaustive"
+      ]
+    }
+  ],
+  "created_at": "2026-06-06T15:21:45.939Z",
+  "status": "succeeded",
+  "config": {
+    "uses_real_repo": true,
+    "uses_mock_agents": true
+  },
+  "results_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_6bcab78c-3df9-4faa-aee0-fcd957d53ff2\\runs.json",
+  "report_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_trials\\swarm_experiment_6bcab78c-3df9-4faa-aee0-fcd957d53ff2\\trial_report.md"
+}

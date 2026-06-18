@@ -1,304 +1,412 @@
-# Hivo Studio / OrchCode Studio - شرح معماري عميق للمشروع
+# Hivo Studio / OrchCode Studio - Complete Project Deep Dive
 
-> هذا الملف مكتوب كدليل عملي طويل لفهم المشروع من الداخل.
-> الهدف أن تستطيع تتبع الرحلة من واجهة المستخدم، إلى Tauri/Rust، إلى Runtime TypeScript، إلى الذاكرة، إلى السرب الداخلي، إلى تطبيق الباتش.
-> تاريخ المراجعة: 2026-06-03.
-> حالة فهرس الذاكرة وقت الكتابة: `fresh`.
-> عدد الملفات المفهرسة وقت الكتابة: 378 ملف.
-> لغات المشروع الأساسية: TypeScript، Rust، React، CSS، Markdown، JSON، TOML.
+> This document is a practical English deep dive into the repository.
+> It is intentionally long, line-oriented, and searchable.
+> It explains the project from the desktop UI down to the runtime, memory system, swarm autopilot, Rust command authority, and patch application path.
+> Review date: 2026-06-06.
+> Original request: create a detailed Markdown explanation with at least 700 lines.
+> This English version keeps that depth while replacing the earlier Arabic text.
 
-## 1. الملخص التنفيذي
+## 1. Executive Summary
 
-01. المشروع اسمه في `package.json` هو `hivo-studio`.
-02. الريبو Monorepo مبني على npm workspaces.
-03. المساحات الأساسية هي `apps/agent-runtime` و `apps/desktop` و `packages/protocol`.
-04. `apps/agent-runtime` هو Runtime TypeScript المسؤول عن الجلسات، التخطيط، أدوات القراءة، orchestration، والـ swarm autopilot.
-05. `apps/desktop` هو تطبيق سطح مكتب Tauri 2 بواجهة React + TypeScript وخلفية Rust.
-06. `packages/protocol` هو الحزمة المشتركة التي تعرف أنواع البيانات والعقود بين الواجهة والـ runtime وRust.
-07. المشروع يريد بناء نظام Coding Agent متعدد الوكلاء.
-08. الفكرة ليست جعل نموذج صغير يتصرف كنموذج عملاق.
-09. الفكرة هي إحاطة النماذج الصغيرة بذاكرة، تقسيم مهام، سياقات ضيقة، مراجعة، تحقق، وسلطة باتش محدودة.
-10. النظام يفرق بوضوح بين من يقرأ، من يقترح، ومن يكتب على القرص.
-11. Node runtime يقرأ المشروع ويقترح patches وcommands.
-12. Rust backend يملك حدود workspace، terminal authority، patch authority، SQLite persistence.
-13. الواجهة تعرض الحالة وتدير تجربة المشغل.
-14. `.agent_memory/` هي الذاكرة المحلية الدائمة.
-15. `npm run memory:index-status` يجب تشغيله قبل الاعتماد على الذاكرة في أعمال حساسة للسياق.
-16. وقت كتابة هذا الملف، الفهرس كان `fresh`.
-17. النظام يدعم simple mode و orchestrated mode و swarm autopilot CLI.
-18. simple mode يدير جلسة وكيل واحد أو مسار RunEngine.
-19. orchestrated mode يدير Product وBusiness وEngineering orchestrators ثم workers.
-20. swarm autopilot يدير عدد logical agents داخليا بناء على التعقيد والمخاطر ونطاق الريبو.
-21. الحد الأقصى النظري في swarm هو 300 logical agents.
-22. 300 ليس default UX.
-23. 300 يستخدم فقط في تجارب read-only واسعة أو audits كبيرة.
-24. executors الكتابية لها cap منفصل وصغير.
-25. approval gates لا تعتبر زينة.
-26. approval gates جزء من مصدر الحقيقة في أي run.
-27. validation لا تعتبر ناجحة لو كانت الأوامر blocked فقط.
-28. كل artifact مهم يجب أن يبقى قابلا للتدقيق.
-29. الوثائق الموجودة مثل `docs/architecture.md` و`docs/orchestration-flow.md` تؤكد نفس الاتجاه.
-30. هذا الملف يوسع الشرح ويجمع الخريطة في وثيقة واحدة.
+001. The root package name is `hivo-studio`.
+002. The repository is an npm workspace monorepo.
+003. The three primary workspaces are `apps/agent-runtime`, `apps/desktop`, and `packages/protocol`.
+004. `apps/agent-runtime` is the TypeScript runtime service.
+005. `apps/desktop` is the Tauri desktop application.
+006. `packages/protocol` is the shared type and contract package.
+007. The project is a multi-agent coding system.
+008. The system is designed around orchestration rather than a single all-knowing model.
+009. Small models are treated as narrow workers.
+010. Reliability comes from memory, task decomposition, structured outputs, verification, review, and authority boundaries.
+011. The Node runtime reads the workspace and proposes patches.
+012. The Node runtime does not directly write user files.
+013. The Rust backend owns workspace boundaries.
+014. The Rust backend owns terminal command execution.
+015. The Rust backend owns patch application.
+016. The Rust backend owns SQLite persistence for the desktop app.
+017. The React frontend displays and controls the operator experience.
+018. The shared protocol package keeps the TypeScript frontend, TypeScript runtime, and Rust bridge aligned.
+019. `.agent_memory/` stores durable repository memory and run artifacts.
+020. The memory index should be checked before context-sensitive work.
+021. The documented memory command for that is `npm run memory:index-status`.
+022. The system supports simple runtime sessions.
+023. The system supports orchestrated multi-agent sessions.
+024. The system supports CLI-driven internal swarm autopilot runs.
+025. The system supports campaign workflows for larger goals.
+026. The internal swarm has a maximum supported logical capacity of 300 agents.
+027. The 300-agent number is a maximum, not a normal default.
+028. Write-capable executors are capped separately from read-only agents.
+029. Read-only fan-out is preferred for exploration, scouting, review, and validation.
+030. Approval-required states are real safety stops.
+031. A run is not verified if validation only produced blocked commands.
+032. Patch fingerprints, file locks, validation logs, review artifacts, and durable events are sources of truth.
+033. The safest debugging strategy is to follow boundaries one by one.
+034. Start with the UI if the operator display is wrong.
+035. Move to runtime HTTP/SSE if live state is wrong.
+036. Move to session state if the runtime lifecycle is wrong.
+037. Move to protocol types if payload shapes are wrong.
+038. Move to Rust commands if workspace, terminal, or patch authority is wrong.
+039. Move to SQLite events if restore or authoritative patch evidence is wrong.
+040. Move to `.agent_memory` if swarm, orchestration, memory, or artifact state is wrong.
 
-## 2. خريطة الملفات العليا
+## 2. Top-Level Repository Map
 
-31. جذر المشروع يحتوي `package.json` الخاص بالـ workspace.
-32. جذر المشروع يحتوي `AGENTS.md` لتعليمات العاملين على الكود.
-33. جذر المشروع يحتوي `README.md` كمدخل تسويقي/تشغيلي عام.
-34. جذر المشروع يحتوي `AUDIT_RECURSIVE_AGENTIC_FACTORY_ALIGNMENT.md` كتقرير audit كبير.
-35. `docs/` يحتوي وثائق architecture وsecurity وusage وstatus.
-36. `.agent_memory/` يحتوي ذاكرة مفهرسة ومخرجات runs وتجارب.
-37. `apps/agent-runtime/` يحتوي خدمة TypeScript منفصلة.
-38. `apps/desktop/` يحتوي الواجهة وتطبيق Tauri.
-39. `packages/protocol/` يحتوي أنواع shared protocol.
-40. `scripts/launch-desktop.mjs` هو launcher لتشغيل desktop.
-41. `node_modules/` موجود لكنه ليس جزءا من الفهم المعماري.
-42. `tmp/` يحتوي artifacts وتجارب audit ولا يجب الاعتماد عليه كمصدر production.
-43. `test-results/` output لا يشرح architecture مباشرة.
-44. `.orchcode-*.log` ملفات logs ضخمة ومولدات تشغيل.
-45. ملفات الصور والأيقونات داخل desktop binary assets.
-46. أهم entrypoints حسب الذاكرة تشمل `apps/agent-runtime/src/index.ts`.
-47. entrypoint آخر هو `apps/agent-runtime/src/server.ts`.
-48. entrypoint الواجهة هو `apps/desktop/src/main.tsx`.
-49. entrypoint Rust هو `apps/desktop/src-tauri/src/lib.rs`.
-50. entrypoint protocol هو `packages/protocol/src/index.ts`.
+041. The root `package.json` defines npm workspaces.
+042. The root `AGENTS.md` contains persistent operating instructions for coding agents.
+043. The root `README.md` gives a high-level product and usage overview.
+044. `AUDIT_RECURSIVE_AGENTIC_FACTORY_ALIGNMENT.md` is a large architecture audit artifact.
+045. `docs/` contains architecture, usage, security, and status documentation.
+046. `.agent_memory/` contains generated memory and durable local project state.
+047. `apps/agent-runtime/` contains the TypeScript runtime service and orchestration logic.
+048. `apps/desktop/` contains the desktop UI and Tauri backend.
+049. `packages/protocol/` contains shared TypeScript contracts.
+050. `scripts/launch-desktop.mjs` launches the desktop workflow.
+051. `node_modules/` is dependency output and not source architecture.
+052. `tmp/` contains audit and experiment artifacts.
+053. `test-results/` contains generated test output.
+054. `.orchcode-*.log` files are runtime logs.
+055. Desktop icons and image assets live under the Tauri app folder.
+056. Important runtime entrypoints include `apps/agent-runtime/src/index.ts`.
+057. Another runtime entrypoint is `apps/agent-runtime/src/server.ts`.
+058. The desktop frontend entrypoint is `apps/desktop/src/main.tsx`.
+059. The Tauri backend entrypoint is `apps/desktop/src-tauri/src/lib.rs`.
+060. The shared protocol entrypoint is `packages/protocol/src/index.ts`.
+061. TypeScript is the dominant language in the repository.
+062. Rust is used for the desktop backend and authority layer.
+063. React is used for the operator console frontend.
+064. Fastify is used by the TypeScript runtime HTTP service.
+065. SQLite is used by the Rust desktop persistence layer.
+066. Tauri 2 provides the desktop shell and command bridge.
+067. npm scripts are the main command surface.
+068. Cargo commands apply inside `apps/desktop/src-tauri`.
+069. The memory index ignores generated folders such as `dist`, `target`, `node_modules`, and `tmp`.
+070. The repository is intentionally split so UI, runtime, protocol, and authority code remain separable.
 
-## 3. أوامر التشغيل والبناء
+## 3. Root Package Scripts
 
-51. `npm run build` يبني protocol ثم agent-runtime ثم desktop.
-52. `npm run typecheck` يبني ويفحص TypeScript عبر workspaces.
-53. `npm run test` يشغل اختبارات agent-runtime.
-54. `npm run memory:index` يعيد بناء فهرس الذاكرة.
-55. `npm run memory:index-status` يفحص freshness.
-56. `npm run memory:index-refresh` يحدث الذاكرة.
-57. `npm run memory:inspect` يعرض محتوى الذاكرة.
-58. `npm run memory:compact` يدمج الدروس والقرارات بعد runs مهمة.
-59. `npm run agent:run` يشغل swarm autopilot من الجذر.
-60. `npm run agent:plan` ينتج خطة swarm بدون التنفيذ الكامل.
-61. `npm run agent:inspect-run` يفحص run محفوظ.
-62. `npm run agent:report` يقرأ التقرير النهائي.
-63. `npm run agent:resume` يستأنف run محفوظ.
-64. `npm run agent:trial:staffing-eval` يختبر heuristics staffing.
-65. `npm run agent:trial:scheduler-scale` يختبر scheduler scale حتى 300 mock read-only agents.
-66. `npm run campaign:create` ينشئ campaign.
-67. `npm run campaign:plan` يخطط campaign.
-68. `npm run campaign:run-next` ينفذ الخطوة الآمنة التالية.
-69. `npm run campaign:status` يعرض حالة campaign.
-70. `npm run campaign:report` ينتج تقرير campaign.
-71. `npm run agent:dev` يشغل runtime service في watch mode.
-72. `npm run web:dev` يشغل Vite frontend.
-73. `npm run desktop:dev` يشغل Tauri desktop.
-74. `npm run dev` يستخدم launcher العام.
-75. `apps/desktop` لديه `npm run dev` على `127.0.0.1:1420`.
-76. `apps/desktop` لديه `npm run tauri:dev` لتشغيل app كامل.
-77. `apps/agent-runtime` لديه `npm run dev` لتشغيل `src/index.ts`.
-78. `packages/protocol` يبنى بـ `tsc -p tsconfig.json`.
-79. Rust backend يمكن فحصه بـ `cargo check` داخل `apps/desktop/src-tauri`.
-80. Rust backend يمكن اختباره بـ `cargo test` داخل `apps/desktop/src-tauri`.
+071. `npm run build` builds `@hivo/protocol`, then `@hivo/agent-runtime`, then `@hivo/desktop`.
+072. `npm run typecheck` builds protocol and typechecks all TypeScript workspaces.
+073. `npm run test` runs the agent-runtime test suite.
+074. `npm run smoke:desktop-run-project` runs the desktop run-project smoke flow.
+075. `npm run smoke:terminal-authority` runs a terminal authority smoke flow.
+076. `npm run smoke:run-to-green` exercises the run-to-green runtime path.
+077. `npm run smoke:inspect-provider-truth` checks provider-truth evidence.
+078. `npm run smoke:python-pygame-fallback` checks a Python fallback scenario.
+079. `npm run memory:index` rebuilds repository memory.
+080. `npm run memory:index-status` checks whether the index is fresh.
+081. `npm run memory:index-refresh` refreshes the memory index.
+082. `npm run memory:index-explain` explains index state.
+083. `npm run memory:inspect` inspects memory.
+084. `npm run memory:status` reports memory health.
+085. `npm run memory:show-commands` shows detected commands.
+086. `npm run memory:clean-runs` cleans local run artifacts.
+087. `npm run memory:compact` compacts memory lessons and evidence.
+088. `npm run memory:lessons` prints learned lessons.
+089. `npm run memory:decisions` prints decision records.
+090. `npm run memory:failed-attempts` prints failed strategies.
+091. `npm run memory:explain-task` explains task context.
+092. `npm run agent:run` runs the internal swarm autopilot.
+093. `npm run agent:plan` creates a swarm plan without full execution.
+094. `npm run agent:inspect-run` inspects a swarm run.
+095. `npm run agent:report` shows a swarm report.
+096. `npm run agent:resume` resumes a swarm run.
+097. `npm run agent:trial:architecture-scan` runs an architecture scan trial.
+098. `npm run agent:trial:test-discovery` runs a test discovery trial.
+099. `npm run agent:trial:staffing-eval` evaluates staffing heuristics.
+100. `npm run agent:trial:scheduler-scale` tests scheduler scaling.
+101. `npm run agent:trial:compare` compares execution strategies.
+102. `npm run agent:trial:small-safe-fix` tests a small safe fix scenario.
+103. `npm run agent:trial:huge-readonly-scan` tests a large read-only scan.
+104. `npm run agentic:run` runs the older agentic task CLI path.
+105. `npm run agentic:plan` creates an older agentic plan.
+106. `npm run agentic:resume-run` resumes an older agentic run.
+107. `npm run campaign:create` creates a campaign.
+108. `npm run campaign:plan` plans a campaign.
+109. `npm run campaign:run-next` runs the next campaign step.
+110. `npm run campaign:status` reports campaign status.
+111. `npm run campaign:pause` pauses a campaign.
+112. `npm run campaign:resume` resumes a campaign.
+113. `npm run campaign:report` writes a campaign report.
+114. `npm run campaign:metrics` reports campaign metrics.
+115. `npm run eval:phase4` runs Phase 4 evals.
+116. `npm run agent:dev` starts the agent runtime in watch mode.
+117. `npm run web:dev` starts the desktop web frontend dev server.
+118. `npm run desktop:dev` starts the full Tauri desktop dev app.
+119. `npm run dev` runs the desktop launcher script.
+120. Root scripts are wrappers around workspace scripts and TypeScript CLI entrypoints.
 
-## 4. فلسفة النظام
+## 4. Architecture Principles
 
-81. المشروع مصمم كمنصة orchestration-first.
-82. أي ذكاء حقيقي يجب أن يظهر في المعمارية لا في prompt واحد ضخم.
-83. الذاكرة repository memory تمنع إعادة اكتشاف نفس الحقائق كل مرة.
-84. context packs تضيق السياق المعطى للعامل.
-85. structured outputs تمنع prose عشوائي من قيادة التعديلات.
-86. review gates تفصل الإنتاج عن الاعتماد.
-87. validation gates تمنع "أنا أعتقد أنه يعمل" من أن تصبح حقيقة.
-88. patch authority تمنع العمال من الكتابة المباشرة.
-89. file locks تمنع تعارض كتابات في نفس الملفات.
-90. durable events تسمح بإعادة بناء الحالة لاحقا.
-91. campaign flow يسمح بتقسيم الأهداف الكبيرة إلى خطوات.
-92. swarm autopilot يقرر عدد العاملين بدلا من سؤال المستخدم.
-93. dynamic specialists تظهر من evidence لا من الخيال.
-94. executor cap يحمي من مئات writers.
-95. read-only fan-out آمن نسبيا مقارنة بالكتابة.
-96. command policy يحمي من أوامر خطرة أو خارج workspace.
-97. security boundaries موجودة في Rust وNode معا.
-98. لكن Rust هو السلطة الأعلى لتطبيق patch وتشغيل terminal.
-99. هذا الفصل متعمد لتسهيل audit.
-100. عند debugging، اسأل دائما: هل المشكلة في UI، runtime، protocol، Rust، أو memory artifacts؟
+121. The project avoids big-bang rewrites.
+122. The project prefers small verifiable steps.
+123. Existing behavior should be preserved unless a task explicitly changes it.
+124. Architecture changes should be reflected in docs.
+125. Memory format changes should be reflected in docs.
+126. Orchestration contract changes should be reflected in docs.
+127. Operator workflow changes should be reflected in docs.
+128. LLMs are narrow workers in this architecture.
+129. The system avoids treating a model as a magical global brain.
+130. Intelligence is placed in architecture.
+131. Intelligence is placed in memory.
+132. Intelligence is placed in task decomposition.
+133. Intelligence is placed in verification.
+134. Intelligence is placed in review.
+135. Intelligence is placed in orchestration.
+136. Repository memory is the default durable context.
+137. Context packs keep worker context narrow.
+138. Structured outputs keep worker results machine-readable.
+139. Review loops catch scope and correctness issues.
+140. Validation loops check actual commands where possible.
+141. Patch authority prevents direct filesystem writes by LLM workers.
+142. Command authority prevents untrusted command execution.
+143. File locks prevent conflicting write scopes.
+144. Approval gates stop unsafe actions.
+145. Durable artifacts make runs auditable.
+146. Persistent learning helps future runs avoid repeated failures.
+147. Dynamic specialists are created from evidence.
+148. High logical-agent counts are reserved for justified broad work.
+149. Executor counts stay small even when read-only counts are large.
+150. The user should not need to manually choose agent counts by default.
 
-## 5. تدفق عالي المستوى من المستخدم إلى القرص
+## 5. End-to-End Runtime Flow
 
-101. المستخدم يفتح workspace من desktop UI.
-102. React يستدعي `openWorkspace` من `apps/desktop/src/lib/tauri.ts`.
-103. `openWorkspace` يستخدم Tauri `invoke("open_workspace")`.
-104. Rust command `open_workspace` يمر عبر workspace service.
-105. `WorkspaceService` يتحقق أن المسار directory ومتاح.
-106. Rust يحفظ المشروع في SQLite عبر `DatabaseService`.
-107. الواجهة تعرض file tree وgit state وpanels.
-108. المستخدم يكتب prompt في الواجهة.
-109. الواجهة تنشئ runtime run/session.
-110. Rust قد ينشئ session token عبر `create_runtime_run`.
-111. الواجهة تستدعي agent runtime HTTP endpoint `/sessions`.
-112. `server.ts` ينشئ session داخل `AgentRuntime`.
-113. `SessionManager` يحفظ snapshot في `sessions.json`.
-114. `SessionManager` ينشر events عبر `EventBus`.
-115. الواجهة تشترك في `/sessions/:id/events` SSE.
-116. المستخدم يرسل turn عبر `/sessions/:id/turn`.
-117. `AgentRuntime.runTurn` يحدد نمط التنفيذ.
-118. إن كان Direct Conversation يرد مباشرة.
-119. إن كان simple mode يستخدم `RunEngine`.
-120. إن كان orchestrated mode يستخدم `OrchestratedRuntime`.
-121. إن كان CLI swarm، يستخدم `SwarmAutopilotRuntime`.
-122. runtime يقرأ ملفات workspace من `ToolRegistry`.
-123. `WorkspaceTools` يمنع قراءة secrets.
-124. runtime ينتج patch proposal لا يطبقه.
-125. proposal ينتقل إلى الواجهة كـ event.
-126. المستخدم يوافق أو يرفض.
-127. الواجهة عند approve تستدعي Rust `apply_runtime_patch`.
-128. Rust يقرأ proposal من SQLite `session_events`.
-129. Rust يستخرج `unifiedDiff`.
-130. Rust يراجع مسارات الباتش داخل workspace.
-131. Rust يلتقط git snapshot قبل التطبيق.
-132. Rust يطبق diff بواسطة `git apply`.
-133. Rust يلتقط git snapshot بعد التطبيق.
-134. Rust يسجل events authoritative في SQLite.
-135. الواجهة تبلغ runtime بنتيجة التطبيق.
-136. runtime ينتقل إلى post-verify أو failed.
-137. debugging الناجح يتتبع هذا المسار بالترتيب.
-138. لو لم يظهر patch في Rust، افحص `session_events`.
-139. لو ظهر patch ولم يتطبق، افحص `PatchService.apply_patch`.
-140. لو اتطبق ولم يظهر في UI، افحص SSE/session update path.
+151. The operator opens a workspace from the desktop UI.
+152. React calls `openWorkspace` in `apps/desktop/src/lib/tauri.ts`.
+153. `openWorkspace` invokes the Tauri command `open_workspace`.
+154. Rust receives the command in the desktop backend.
+155. `WorkspaceService` canonicalizes the path.
+156. `WorkspaceService` verifies that the path is a directory.
+157. Rust stores or updates project state in SQLite.
+158. The UI renders workspace state, files, git status, and session controls.
+159. The operator enters a prompt.
+160. The UI creates a runtime run or session.
+161. The runtime session can include a session token.
+162. The UI calls the agent runtime HTTP service.
+163. `server.ts` receives `POST /sessions`.
+164. `AgentRuntime.createSession` delegates to `SessionManager`.
+165. `SessionManager` creates an `AgentRuntimeSession`.
+166. `SessionManager` stores the session in memory.
+167. `SessionManager` persists session state.
+168. `SessionManager` publishes runtime events.
+169. The frontend subscribes to session events through SSE.
+170. The operator sends a turn.
+171. The UI calls `POST /sessions/:id/turn`.
+172. `AgentRuntime.runTurn` processes the message.
+173. `runTurn` checks pending actions.
+174. `runTurn` updates lifecycle state.
+175. `runTurn` builds a project map from workspace tools.
+176. `runTurn` resolves the execution mode.
+177. Simple execution uses `RunEngine`.
+178. Orchestrated execution uses orchestrated runtime paths.
+179. CLI swarm execution uses `SwarmAutopilotRuntime`.
+180. Runtime tools read files and inspect git state.
+181. Runtime tools can request commands.
+182. Runtime tools can propose patches.
+183. Runtime tools cannot apply patches directly.
+184. Patch proposals are sent to the UI as events.
+185. The operator can approve or reject a patch.
+186. Runtime approval is not the same as filesystem application.
+187. The UI invokes Rust `apply_runtime_patch` for actual application.
+188. Rust loads the patch payload from SQLite.
+189. Rust validates patch paths.
+190. Rust captures a before Git snapshot.
+191. Rust applies the patch with `git apply`.
+192. Rust captures an after Git snapshot.
+193. Rust writes authoritative runtime events.
+194. The UI reports the patch apply result back to the runtime.
+195. The runtime moves to post-verify, completed, blocked, or failed.
+196. Command requests follow a similar authority split.
+197. Runtime asks for command execution.
+198. UI and Rust evaluate whether approval is required.
+199. Rust executes approved commands.
+200. Runtime receives command results.
 
-## 6. Root package.json
+## 6. Shared Protocol Package
 
-141. root package يعلن workspaces.
-142. workspaces الثلاثة هي agent runtime، desktop، protocol.
-143. root scripts تجمع أوامر subpackages.
-144. root `build` يفرض بناء protocol قبل runtime والdesktop.
-145. هذا صحيح لأن runtime وdesktop يستوردان `@hivo/protocol`.
-146. root `typecheck` يبني protocol ثم يفحص protocol/runtime/desktop.
-147. root `test` يمرر الاختبارات إلى `@hivo/agent-runtime`.
-148. root memory scripts تمرر `--workspace .`.
-149. root agent scripts تمرر إلى `apps/agent-runtime/src/orchestration/cli.ts`.
-150. root campaign scripts تمرر إلى `campaign-cli.ts`.
-151. root smoke scripts تغطي run-to-green وprovider truth وdesktop run project.
-152. `dev` يستخدم `scripts/launch-desktop.mjs`.
-153. npm هو package manager الرئيسي.
-154. Cargo مستخدم داخل Tauri backend.
-155. package-lock موجود في الجذر.
-156. أي تعديل في protocol غالبا يحتاج build قبل runtime.
-157. أي تعديل في desktop frontend يحتاج typecheck workspace `apps/desktop`.
-158. أي تعديل في Rust يحتاج `cargo check` أو `cargo test`.
-159. أي تعديل في memory/indexing يحتاج tests الخاصة بالذاكرة.
-160. أي تعديل في orchestration يحتاج tests orchestration والvalidation المناسبة.
+201. The protocol package lives in `packages/protocol`.
+202. It is a TypeScript package.
+203. It defines the data contracts used across the system.
+204. `packages/protocol/src/index.ts` re-exports protocol modules.
+205. `packages/protocol/src/events.ts` defines `AppEvent`.
+206. `packages/protocol/src/agent-runtime.ts` defines runtime session contracts.
+207. `packages/protocol/src/approvals.ts` defines access and safety contracts.
+208. `packages/protocol/src/models.ts` defines shared model records.
+209. `packages/protocol/src/orchestration.ts` defines orchestration-facing types.
+210. `packages/protocol/src/patch.ts` defines patch proposal contracts.
+211. `packages/protocol/src/task-graph.ts` defines task graph contracts.
+212. `packages/protocol/src/tools.ts` defines worker tool grants.
+213. Protocol changes affect both frontend and runtime.
+214. Protocol changes can also affect Rust payload expectations.
+215. Build order keeps protocol first for this reason.
+216. `AppEvent` is the live event union consumed by the UI.
+217. `DurableRuntimeEvent` is the canonical event type for durable replay.
+218. Durable events have actors.
+219. Durable events have authorities.
+220. Durable events have sequence numbers.
+221. Durable events have correlation IDs when needed.
+222. Durable events have payloads.
+223. Runtime event authority may be `runtime`.
+224. Rust event authority may be `rust`.
+225. Bridge event authority may be `runtime_bridge`.
+226. The distinction matters during restore and reconciliation.
+227. `AgentRuntimeSession` is the central user-facing session object.
+228. Session status can be `created`.
+229. Session status can be `restored`.
+230. Session status can be `running`.
+231. Session status can be `completed`.
+232. Session status can be `needs_approval`.
+233. Session status can be `blocked`.
+234. Session status can be `failed`.
+235. Session status can be `expired`.
+236. Lifecycle stages include `INTAKE`.
+237. Lifecycle stages include `THINK`.
+238. Lifecycle stages include `PLAN`.
+239. Lifecycle stages include `CONTEXT_GATHER`.
+240. Lifecycle stages include `EXECUTION_DRAFT`.
+241. Lifecycle stages include `SELF_REVIEW`.
+242. Lifecycle stages include `CROSS_REVIEW`.
+243. Lifecycle stages include `VALIDATION`.
+244. Lifecycle stages include `APPROVAL`.
+245. Lifecycle stages include `APPLY`.
+246. Lifecycle stages include `POST_VERIFY`.
+247. Lifecycle stages include `DONE`.
+248. Lifecycle stages include `BLOCKED`.
+249. Lifecycle stages include `FAILED`.
+250. This protocol-level vocabulary keeps UI and runtime lifecycle rendering aligned.
 
-## 7. `packages/protocol` كعقد مشترك
-
-161. protocol هو القلب النوعي للنظام.
-162. كل طبقة تتفق من خلال types.
-163. `packages/protocol/src/events.ts` يعرف `AppEvent`.
-164. `packages/protocol/src/agent-runtime.ts` يعرف `AgentRuntimeSession`.
-165. `packages/protocol/src/approvals.ts` يعرف access profiles وsafety settings.
-166. `packages/protocol/src/models.ts` يعرف models عامة مثل commands وpatches وtasks.
-167. `packages/protocol/src/orchestration.ts` يعرف حالة orchestration.
-168. `packages/protocol/src/patch.ts` يعرف patch contracts.
-169. `packages/protocol/src/task-graph.ts` يعرف task graph contracts.
-170. `packages/protocol/src/tools.ts` يعرف tool grants.
-171. `packages/protocol/src/index.ts` يعيد تصدير كل ذلك.
-172. أي mismatch بين الواجهة والruntime يظهر غالبا كخطأ TypeScript هنا.
-173. `DURABLE_RUNTIME_EVENT_TYPES` يحدد الأحداث القانونية للتاريخ الدائم.
-174. `DurableRuntimeEventActor` يفرق بين runtime وuser وrust وsystem وdesktop_bridge.
-175. `DurableRuntimeEventAuthority` يفرق بين runtime وrust وruntime_bridge وsystem.
-176. `AppEvent` هو stream حي للواجهة.
-177. بعض `AppEvent` خاص بالworkspace/git/commands.
-178. بعض `AppEvent` خاص بالruntime session.
-179. بعض `AppEvent` خاص بالpatch.
-180. بعض `AppEvent` خاص بالverification.
-181. بعض `AppEvent` خاص بالorchestration event.
-182. `AgentLifecycleStage` يحدد مراحل session مثل INTAKE وPLAN وVALIDATION وAPPROVAL وDONE.
-183. `RuntimeSessionStatus` يحدد created/running/completed/needs_approval/blocked/failed/expired.
-184. `RuntimeTaskPhase` يحدد مراحل task الدقيقة.
-185. restore source قد يكون fresh أو snapshot_restored أو event_replayed.
-186. `EvidenceTruthReport` جزء من آليات الإجابة grounded على أسئلة المشروع.
-187. `ProviderTruthTelemetry` يوضح إن كان real provider أو mock مستخدم.
-188. هذا مهم جدا عند debugging "النموذج الحقيقي لم يشتغل".
-189. لو الحقل `mockProviderUsed` true في real run، افحص provider config/fallback.
-190. إذا أضفت حدثا جديدا، عدل protocol أولا ثم runtime ثم desktop.
-
-## 8. snippet من protocol events
+## 7. Protocol Event Snippet
 
 ```ts
 export const DURABLE_RUNTIME_EVENT_TYPES = [
   "session.created",
+  "session.snapshot_persisted",
   "patch.proposed",
+  "patch.approved",
   "patch.apply_started",
   "patch.applied",
+  "patch.apply_failed",
+  "patch.reconciled",
   "command.requested",
   "command.completed",
   "review_gate.updated"
 ] as const;
 ```
 
-191. هذا snippet يوضح أن الأحداث الدائمة ليست strings حرة.
-192. وجود قائمة ثابتة يحمي replay وrestore من drift.
-193. runtime يجب أن يكتب events متوافقة.
-194. Rust يكتب canonical runtime events عند patch apply.
-195. desktop bridge يضيف session events مرتبطة بالواجهة.
-196. عند إضافة lifecycle جديد، لا تكفي إضافة UI text.
-197. يجب تحديث type contracts.
-198. يجب تحديث persistence أو replay لو الحدث durable.
-199. يجب تحديث tests التي تتحقق من semantics.
-200. العقود المشتركة هي أقوى خط دفاع ضد تضارب الطبقات.
+251. The list is intentionally finite.
+252. Durable event types are not arbitrary strings.
+253. A finite event list protects replay logic.
+254. A finite event list protects UI projections.
+255. A finite event list protects test expectations.
+256. Adding an event should begin at the protocol boundary.
+257. Runtime code should then emit the new event.
+258. Rust code should then persist or bridge the event if needed.
+259. Frontend code should then render or consume the event if needed.
+260. Tests should cover the new event semantics.
 
-## 9. Agent Runtime entrypoint
+## 8. Agent Runtime Service
 
-201. entrypoint الرئيسي هو `apps/agent-runtime/src/index.ts`.
-202. الملف صغير جدا ومقصود.
-203. يحمل config.
-204. يبني Fastify server.
-205. يستمع على host/port من config.
-206. يطبع رسالة تشغيل runtime.
-207. صغر الملف يجعل debugging التشغيل سهل.
-208. لو runtime لا يبدأ، افحص `config.ts` ثم `server.ts`.
-209. لو server يبنى ولا يستمع، افحص port/host.
-210. لو endpoint لا يرد، افحص Fastify routes في `server.ts`.
+261. The agent runtime lives in `apps/agent-runtime`.
+262. It is an ESM TypeScript package.
+263. The runtime package name is `@hivo/agent-runtime`.
+264. It depends on `@hivo/protocol`.
+265. It depends on Fastify.
+266. It uses `tsx` for development execution.
+267. It uses TypeScript for builds.
+268. The runtime entrypoint is `src/index.ts`.
+269. `src/index.ts` loads runtime config.
+270. `src/index.ts` builds the Fastify server.
+271. `src/index.ts` starts listening on configured host and port.
+272. The runtime HTTP server is built in `src/server.ts`.
+273. Runtime state is managed by `SessionManager`.
+274. Runtime orchestration is mediated by `AgentRuntime`.
+275. Runtime events are published through `EventBus`.
+276. Simple turn execution uses runtime modules under `src/runtime`.
+277. Multi-agent orchestration uses modules under `src/orchestration`.
+278. Worker implementations live under `src/agents`.
+279. LLM providers live under `src/llm`.
+280. Prompt templates live under `src/prompts`.
+281. Tool wrappers live under `src/tools`.
+282. Memory indexing lives under `src/memory`.
+283. Runtime tests live under `src/tests`.
+284. Runtime smoke scripts live under `scripts`.
+285. Runtime CLI entrypoints live under `src/orchestration/cli.ts` and `campaign-cli.ts`.
+286. The service is currently separate from the Tauri process.
+287. The architecture allows it to become a bundled sidecar later.
+288. The frontend default runtime URL is `http://127.0.0.1:4317`.
+289. That URL can be overridden by `VITE_AGENT_RUNTIME_URL`.
+290. Runtime availability can be checked with `GET /health`.
+
+## 9. Agent Runtime Entrypoint Snippet
 
 ```ts
+import { loadConfig } from "./config.js";
+import { buildServer } from "./server.js";
+
 const config = loadConfig();
 const { app } = await buildServer(config);
+
 await app.listen({ host: config.host, port: config.port });
 ```
 
-211. `loadConfig` يحدد defaults.
-212. `buildServer` يعيد app/runtime/sessionManager.
-213. top-level await مستخدم لأن package type module.
-214. dependency `tsx` تستخدم للتشغيل أثناء dev.
-215. build ينتج dist عبر TypeScript compiler.
-216. server ليس Tauri sidecar مدمجا بالكامل بعد.
-217. docs تصفه كخدمة TypeScript منفصلة يمكن أن تصبح sidecar لاحقا.
-218. الواجهة تتصل به عبر `VITE_AGENT_RUNTIME_URL`.
-219. default URL في frontend هو `http://127.0.0.1:4317`.
-220. عدم تشغيل runtime يؤدي لفشل fetch في `agentRuntime.ts`.
+291. The entrypoint is deliberately small.
+292. Small entrypoints make startup failures easier to isolate.
+293. Config loading happens before server creation.
+294. Server creation constructs the runtime dependencies.
+295. Listening happens only after dependencies are ready.
+296. If startup fails before listening, inspect `config.ts` and `server.ts`.
+297. If listening fails, inspect port conflicts and host settings.
+298. If HTTP works but sessions fail, inspect `AgentRuntime` and `SessionManager`.
+299. If events fail, inspect `EventBus` and the SSE route.
+300. If provider execution fails, inspect runtime provider configuration.
 
-## 10. `server.ts`
+## 10. Fastify Runtime Server
 
-221. `server.ts` يبني Fastify app.
-222. ينشئ `EventBus`.
-223. ينشئ `SessionManager`.
-224. يستدعي `sessionManager.load()`.
-225. ينشئ `AgentRuntime`.
-226. يضيف CORS headers.
-227. يعرف `GET /health`.
-228. يعرف `POST /sessions`.
-229. يعرف `POST /sessions/:id/turn`.
-230. يعرف `GET /sessions/:id`.
-231. يعرف `GET /sessions/:id/events` كـ SSE.
-232. يعرف approve/reject patch endpoints.
-233. يعرف patch result endpoint.
-234. يعرف command result endpoint.
-235. كل routes الحساسة تتحقق من session token.
-236. token يمكن أن يأتي من header `x-hivo-session-token`.
-237. token يمكن أن يأتي أيضا من query `?token=`.
-238. SSE يستخدم query token لأن EventSource لا يدعم headers بسهولة.
-239. auth يسمح لو session ليس لها token record.
-240. لو token موجود وانتهى، `SessionManager` يضع session expired.
+301. `server.ts` creates a Fastify instance.
+302. It creates an `EventBus`.
+303. It creates a `SessionManager`.
+304. It loads persisted session state.
+305. It creates an `AgentRuntime`.
+306. It adds permissive CORS headers for local desktop usage.
+307. It responds to `OPTIONS` preflight requests.
+308. `GET /health` returns runtime health.
+309. `POST /sessions` creates a session.
+310. `POST /sessions/:id/turn` runs a user turn.
+311. `GET /sessions/:id` returns a session.
+312. `GET /sessions/:id/events` opens an SSE stream.
+313. `POST /sessions/:id/patches/:patchId/approve` approves a patch proposal.
+314. `POST /sessions/:id/patches/:patchId/reject` rejects a patch proposal.
+315. `POST /sessions/:id/patches/:patchId/result` accepts Rust patch apply results.
+316. `POST /sessions/:id/commands/:requestId/result` accepts command execution results.
+317. Protected endpoints check session tokens.
+318. Session tokens can arrive as `x-hivo-session-token`.
+319. Session tokens can arrive as `x-orchcode-session-token`.
+320. SSE tokens can arrive as `?token=...`.
+321. Missing token records are treated as no-token sessions.
+322. Invalid token records reject the request.
+323. Expired tokens can mark sessions expired.
+324. SSE filters session events.
+325. SSE writes `event: <type>`.
+326. SSE writes `data: <json>`.
+327. The frontend subscribes to specific event types.
+328. HTTP routes perform basic body validation.
+329. Runtime routes return `400` for missing required fields.
+330. Runtime routes return `401` for invalid session tokens.
+331. Runtime routes return `404` for missing sessions or patch IDs.
+332. The server does not apply patches to disk.
+333. The server only records runtime approval and accepts Rust results.
+334. The server does not run shell commands directly.
+335. Command execution is reported back from Rust authority.
+
+## 11. SSE Server Snippet
 
 ```ts
 app.get("/sessions/:id/events", async (request, reply) => {
-  reply.raw.writeHead(200, { "content-type": "text/event-stream" });
+  reply.raw.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
   const unsubscribe = eventBus.subscribe((event) => {
     reply.raw.write(`event: ${event.type}\n`);
     reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -307,176 +415,183 @@ app.get("/sessions/:id/events", async (request, reply) => {
 });
 ```
 
-241. SSE stream يفلتر events حسب session.
-242. `runtime.session.updated` له شكل خاص ولذلك يتم فحص `event.session.id`.
-243. بقية events تفحص `sessionId` إذا موجود.
-244. لو UI لا يتحدث live، افحص هذا route.
-245. لو route يعمل لكن UI لا يسمع، افحص `subscribeRuntimeEvents`.
-246. لو unauthorized، افحص session token storage في UI.
-247. endpoints ترجع 400 عند request body ناقص.
-248. endpoints ترجع 404 عند session/patch/request غير موجود.
-249. server لا يطبق patch.
-250. server فقط يوافق أو يرفض runtime-level proposal وينتظر Rust apply result.
+336. This is the live bridge from runtime to UI.
+337. If the UI does not update, check this endpoint.
+338. If the endpoint is unauthorized, check the session token.
+339. If the endpoint connects but events are missing, check `EventBus.publish`.
+340. If events arrive but do not render, check frontend event handlers.
 
-## 11. `SessionManager`
+## 12. Session Manager
 
-251. `SessionManager` يحفظ كل الجلسات في memory map.
-252. يحفظ snapshot إلى `sessions.json`.
-253. يمسك session tokens كـ hash وليس plaintext.
-254. يستخدم `createHash`.
-255. يستخدم `randomUUID` IDs.
-256. عند load يحاول قراءة persisted state.
-257. لكل session محفوظة يستدعي `restorePersistedSession`.
-258. ينشر `runtime.session.restored`.
-259. لو لا يوجد ملف state ينشئ directory ويpersist.
-260. `createSession` يجهز status `created`.
-261. `createSession` يجهز lifecycleStage `INTAKE`.
-262. `createSession` يضيف أول user message.
-263. `createSession` يبني `declaredAccess`.
-264. `createSession` يبني `resolvedAccess`.
-265. `accessProfileDefaults` تدمج safety settings.
-266. لو execution mode orchestrated، ينشئ `orchestration` state فارغ.
-267. mandatory gates تشمل Product وBusiness وEngineering وSecurity وReviewer.
-268. `updateSession` يمرر draft ويحدث updatedAt.
-269. كل update يعمل saveAndPublish.
-270. saveAndPublish ينشر `runtime.session.updated`.
-271. addMessage يضيف رسالة مع id وcreatedAt.
-272. addToolCall ينشر `runtime.tool_call.updated`.
-273. addToolIntent ينشر `runtime.tool_intent.updated`.
-274. session restore يعتمد جزئيا على durable runtime events.
-275. snapshot restore ما زال fallback عندما replay غير كاف.
-276. هذا مذكور صراحة في docs architecture.
-277. عند مشاكل resume، افحص `sessions.json` وSQLite `runtime_events`.
-278. عند مشاكل expired، افحص token expiry.
-279. عند مشاكل state مفقودة، افحص event replay coverage.
-280. `SessionManager` هو الذاكرة الحية لجلسات runtime service.
+341. `SessionManager` lives in `apps/agent-runtime/src/runtime/SessionManager.ts`.
+342. It stores sessions in a `Map`.
+343. It stores session token records in a `Map`.
+344. It persists session snapshots to `sessions.json`.
+345. It can restore sessions from persisted state.
+346. It can attempt replay from durable runtime events.
+347. It falls back to snapshot restore when replay is insufficient.
+348. It publishes `runtime.session.restored` on restore.
+349. It publishes `runtime.session.created` on create.
+350. It publishes `runtime.session.updated` on updates.
+351. It creates session IDs with a helper based on UUIDs.
+352. It hashes session tokens.
+353. It stores token expiry timestamps.
+354. It validates tokens during HTTP requests.
+355. It marks sessions expired when token expiry is reached.
+356. It initializes `taskState`.
+357. It initializes `messages`.
+358. It initializes `tasks`.
+359. It initializes `toolCalls`.
+360. It initializes `toolIntents`.
+361. It initializes `artifacts`.
+362. It initializes `patchProposals`.
+363. It initializes `commandRequests`.
+364. It initializes `commandExecutions`.
+365. It initializes `backgroundJobs`.
+366. It initializes `reasoningSummaries`.
+367. It initializes `progressEvents`.
+368. It initializes `agentWorkStatuses`.
+369. It initializes orchestration state for orchestrated sessions.
+370. It merges safety settings from the selected access profile.
+371. It records declared access policy.
+372. It records resolved access policy.
+373. It records trust profile.
+374. It records provider config.
+375. It records active provider source.
+376. It records execution mode.
+377. It records whether `thinkFirst` is active.
+378. It adds the initial user prompt as the first message.
+379. It updates `updatedAt` on every session mutation.
+380. It writes and publishes after updates.
+
+## 13. Session Creation Snippet
 
 ```ts
 const session: AgentRuntimeSession = {
   id: randomId("session"),
   workspacePath: input.workspacePath,
+  mode: input.mode,
   status: "created",
   lifecycleStage: "INTAKE",
-  messages: [{ role: "user", content: input.userPrompt, createdAt: now }],
+  messages: [{
+    id: randomId("msg"),
+    role: "user",
+    content: input.userPrompt,
+    createdAt: now
+  }],
   patchProposals: [],
   commandRequests: [],
   commandExecutions: []
 };
 ```
 
-281. snippet مختصر عن الشكل وليس نسخة كاملة.
-282. session model الحقيقي أكبر بكثير.
-283. وجود arrays للpatches والcommands يجعل UI يعرض history.
-284. lifecycleStage يساعد operator يعرف أين توقف العمل.
-285. taskState يعطي restore/reconciliation تفاصيل أعمق.
-286. runPhases وdecisionLedger يضيفان trace للتفكير والتنفيذ.
-287. providerConfig محفوظ في session.
-288. activeProviderSource محفوظ أيضا.
-289. safetySettings محفوظة داخل orchestration عند الحاجة.
-290. session هي وحدة تشغيل user-facing.
+381. The real object contains more fields than the shortened snippet.
+382. The snippet shows the most important runtime shape.
+383. Session state is the UI-facing source of truth.
+384. Durable runtime events are the replay-oriented source of truth.
+385. SQLite session events are the Rust bridge source of truth.
+386. These sources overlap but are not identical.
+387. Debugging restore requires checking all relevant stores.
+388. Debugging patch apply requires checking SQLite events.
+389. Debugging live UI requires checking session updates and SSE.
+390. Debugging stale lifecycle state requires checking session mutation paths.
 
-## 12. `AgentRuntime`
+## 14. AgentRuntime Facade
 
-291. `AgentRuntime` هو façade الخاص بالجلسات والturns والapproval.
-292. `createSession` يفوض إلى `SessionManager`.
-293. `runTurn` هو أهم method.
-294. `runTurn` يبدأ بفحص pending action.
-295. pending action قد يكون confirm plan أو clarify plan.
-296. ثم يحول session إلى running.
-297. lifecycleStage يبدأ بـ INTAKE.
-298. لو السؤال عن explain evidence يستخدم answer سريع من session.
-299. runtime يسجل user message عند الحاجة.
-300. ثم ينشئ provider telemetry.
-301. `createConversationUnderstanding` يحاول فهم intent.
-302. direct conversation يتم الرد عليها بدون أدوات heavy.
-303. `ToolRegistry` ينشأ على workspacePath.
-304. `workspace.getProjectSummary()` يعطي stack/package managers/test commands.
-305. `resolveExecutionMode` يحدد simple أو orchestrated.
-306. لو real provider مع orchestrated mode، يوجد مسار deterministic stop.
-307. هذا يمنع خلط غير آمن بين real provider وorchestration deterministic.
-308. `thinkFirst` قد يطلب clarification قبل التنفيذ.
-309. simple mode يستخدم `RunEngine`.
-310. orchestrated mode يستخدم `runOrchestratedTurn`.
-311. في الأخطاء، session تصبح failed.
-312. runtime يضيف runSummary فاشل.
-313. runtime يضيف assistant message يشرح الفشل.
-314. runtime يفرق بين commands والpatch results.
-315. runtime يعرف provider من Mock/Ollama/OpenAI-compatible.
-316. telemetry يثبت إذا كان mock أو real provider.
-317. `classifyCommandRisk` من tools يساهم في command requests.
-318. `looksLikeBackgroundCommand` يحذر من dev servers.
-319. `looksLikeNetworkCommand` يحذر من npm install/curl وما شابه.
-320. `AgentRuntime` لا يملك Tauri internals مباشرة.
+391. `AgentRuntime` lives in `apps/agent-runtime/src/runtime/AgentRuntime.ts`.
+392. It is the public runtime facade.
+393. It creates sessions.
+394. It runs turns.
+395. It handles pending actions.
+396. It handles direct conversation replies.
+397. It resolves execution mode.
+398. It creates provider telemetry.
+399. It creates tool registries.
+400. It builds a project map.
+401. It routes simple mode to `RunEngine`.
+402. It routes orchestrated mode to orchestrated runtime logic.
+403. It stops unsafe deterministic orchestration combinations when needed.
+404. It handles `thinkFirst` planning clarification.
+405. It handles patch approval.
+406. It handles patch rejection.
+407. It handles patch apply results.
+408. It handles command execution results.
+409. It builds run summaries after failure.
+410. It records provider telemetry.
+411. It can use `MockLlmProvider`.
+412. It can use `OllamaProvider`.
+413. It can use `OpenAIProvider`.
+414. It wraps providers with `TelemetryLlmProvider`.
+415. It uses `ConversationUnderstanding`.
+416. It uses `IntentDecisionEngine`.
+417. It uses `ToolRegistry`.
+418. It uses `RunEngine`.
+419. It uses `OrchestratedRuntime`.
+420. It uses `CoreOrchestrator` for some agentic paths.
+421. It uses patch planning and reconciliation helpers.
+422. It uses command risk helpers.
+423. It uses module execution validation helpers.
+424. It catches runtime errors and marks sessions failed.
+425. A failed turn receives a human-readable assistant message.
+426. A failed turn receives a `runSummary`.
+427. Runtime failures should be visible to the operator.
+428. Runtime failures should not silently continue.
+429. Runtime approval state should be explicit.
+430. Runtime execution mode should be visible in session state.
+
+## 15. Execution Mode Snippet
 
 ```ts
 if (modeResolution.mode === "orchestrated_mode") {
-  updated = await this.runOrchestratedTurn(sessionId, promptForExecution, projectMap, thinkFirst, conversationUnderstanding);
-} else {
-  updated = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, promptForExecution, {
-    resolvedMode: modeResolution.mode,
+  updated = await this.runOrchestratedTurn(
+    sessionId,
+    promptForExecution,
     projectMap,
     thinkFirst,
     conversationUnderstanding
-  });
+  );
+} else {
+  updated = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(
+    sessionId,
+    promptForExecution,
+    { resolvedMode: modeResolution.mode, projectMap, thinkFirst, conversationUnderstanding }
+  );
 }
 ```
 
-321. هذا snippet هو مفترق الطرق بين simple وorchestrated.
-322. عند debugging سلوك "لماذا لم يستخدم multi-agent"، ابدأ من `resolveExecutionMode`.
-323. لو user طلب agents صراحة، افحص prompt directive parsing.
-324. لو mode auto، projectMap يؤثر على القرار.
-325. لو direct conversation، لن يصل إلى RunEngine.
-326. لو thinkFirst، قد يتوقف عند clarification.
-327. لو real provider path، telemetry مهمة.
-328. لو RunEngine فشل، error يذهب إلى runSummary.
-329. لو orchestrated فشل، افحص orchestration state في session.
-330. `AgentRuntime` هو مركز traffic لجلسات runtime.
+431. This is the main runtime fork.
+432. If a task did not use multi-agent mode, inspect `resolveExecutionMode`.
+433. If a task paused for clarification, inspect `thinkFirst`.
+434. If a task responded conversationally, inspect `IntentDecisionEngine`.
+435. If simple execution failed, inspect `RunEngine`.
+436. If orchestrated execution failed, inspect orchestration session state.
+437. If real provider behavior is unexpected, inspect provider telemetry.
+438. If commands are blocked, inspect safety settings and command policy.
+439. If patches are not applied, inspect Rust patch authority.
+440. If status is stale, inspect `SessionManager.updateSession`.
 
-## 13. `RunEngine` ومسارات الفهم
+## 16. ToolRegistry
 
-331. `RunEngine` ليس مفصلا بالكامل هنا لكنه مسؤول عن تنفيذ turn في simple mode.
-332. يستخدم provider للحصول على structured output أو text.
-333. يستخدم أدوات workspace/git/command/patch عبر ToolRegistry.
-334. يبني summaries وartifacts.
-335. يطلب command execution بدلا من تشغيلها مباشرة عندما يلزم.
-336. يقترح patch بدلا من الكتابة.
-337. يدعم run-to-green logic.
-338. يدعم inspect-only/project question paths.
-339. `UniversalProjectQuestionEngine` يجيب أسئلة المشروع.
-340. `InspectExplainReadLanes` يقسم القراءة إلى lanes.
-341. lanes تشمل frontend وAPI وservice وstorage وtests وconcept search.
-342. كل lane يرجع findings structured.
-343. `InspectExplainComposer` يجمع cross-lane chains.
-344. `EvidenceHygiene` يرفض evidence الضعيفة.
-345. CSS/title evidence لا يساوي proof على page structure.
-346. tests expectation-only لا تساوي implementation proof.
-347. generated artifacts تعامل بحذر.
-348. هذا مهم لو سألت "أين توجد feature X؟".
-349. الإجابة الجيدة يجب أن تشير للملفات الفعلية.
-350. مسار inspect/explain لا يستخدم patch-oriented OrchestratedRuntime.
-
-## 14. `ToolRegistry`
-
-351. `ToolRegistry` يجمع الأدوات المتاحة للعامل.
-352. يملك `workspace`.
-353. يملك `git`.
-354. يملك `command`.
-355. يملك `patch`.
-356. يأخذ workspacePath.
-357. يأخذ optional `WorkerCapabilityGrant`.
-358. grant يحدد ما يسمح به worker.
-359. `createToolCall` يبني record للواجهة والsession.
-360. tool call له id يبدأ بـ `tool_`.
-361. tool call له status.
-362. tool call له input/output summary.
-363. الأدوات ليست حرة.
-364. كل أداة قد تفحص grant.
-365. هذا يدعم narrow workers.
-366. worker قد يقرأ ملفات محددة فقط.
-367. worker قد يقترح patches فقط إذا grant يسمح.
-368. هذا جزء من الأمان الداخلي.
-369. debugging tool access يبدأ من grant.
-370. لو tool يقول capability grant لا يسمح، فالمشكلة ليست في fs.
+441. `ToolRegistry` lives in `apps/agent-runtime/src/tools/ToolRegistry.ts`.
+442. It creates the runtime tool surface.
+443. It owns `workspace`.
+444. It owns `git`.
+445. It owns `command`.
+446. It owns `patch`.
+447. It accepts a workspace path.
+448. It accepts an optional worker capability grant.
+449. Grants restrict worker tools.
+450. Grants restrict worker paths.
+451. Grants restrict patch proposal ability.
+452. `createToolCall` creates tool-call records.
+453. Tool-call IDs start with `tool_`.
+454. Tool calls have a status.
+455. Tool calls can include input summaries.
+456. Tool calls can include output summaries.
+457. Tool calls are attached to sessions.
+458. Tool calls are useful for UI tracing.
+459. Tool calls are useful for debugging worker actions.
+460. Tool calls are not the same as durable runtime events.
 
 ```ts
 export class ToolRegistry {
@@ -487,39 +602,51 @@ export class ToolRegistry {
 }
 ```
 
-371. `WorkspaceTools` تقرأ وتبحث.
-372. `GitTools` تفحص status/diff.
-373. `CommandTools` تنتج command requests.
-374. `PatchTools` تنتج patch proposals.
-375. separation يجعل كل مسؤولية واضحة.
-376. لا توجد أداة runtime للكتابة المباشرة.
-377. هذا intentional design.
-378. لو احتجت write path، ابحث في Rust patch command.
-379. لو احتجت read path، ابحث في WorkspaceTools.
-380. لو احتجت command policy، ابحث في CommandTools وRust TerminalService.
+461. `WorkspaceTools` reads and searches files.
+462. `GitTools` inspects git state.
+463. `CommandTools` creates command requests.
+464. `PatchTools` creates patch proposals.
+465. Runtime tools are intentionally constrained.
+466. Tool grants allow narrow worker behavior.
+467. Narrow workers reduce accidental broad edits.
+468. Narrow workers make review easier.
+469. Tool boundaries make audit easier.
+470. Tool boundaries support future safe delegation.
 
-## 15. `WorkspaceTools`
+## 17. WorkspaceTools
 
-381. `WorkspaceTools` هي Node-side scanner.
-382. `listFiles` يجمع ملفات workspace مع limit.
-383. `readFile` يقرأ حتى 80,000 حرف.
-384. `readWholeFile` يقرأ الملف كله.
-385. `fileExists` يتحقق من الوجود بأمان.
-386. `writeFile` معطل عمدا.
-387. `deleteFile` معطل عمدا.
-388. `searchCode` يبحث نصيا داخل الملفات.
-389. `getProjectSummary` يستنتج languages وimportant files وpackage managers وtest commands.
-390. `assertPathAllowed` يفحص allowed paths عند وجود grant.
-391. `resolveInsideWorkspace` يمنع path traversal.
-392. `isSecretCandidate` يمنع secrets.
-393. `shouldIgnore` يتجاهل node_modules وdist وما شابه.
-394. scanner مؤقت داخل Node لأنه لا يستطيع استدعاء Tauri internals مباشرة.
-395. Rust يبقى authority الأقوى.
-396. `isTextLike` يحدد امتدادات البحث.
-397. `languageForPath` يستنتج لغة من extension.
-398. important files تشمل package.json وCargo.toml وREADME وtsconfig.
-399. test commands inferred تشمل npm test وcargo test وpytest.
-400. لو search لا يجد ملفا، افحص limit وignored directories.
+471. `WorkspaceTools` lives in `apps/agent-runtime/src/tools/WorkspaceTools.ts`.
+472. It is the Node-side workspace reader.
+473. It lists files.
+474. It reads files.
+475. It reads whole files when allowed.
+476. It checks file existence.
+477. It searches code.
+478. It creates a project summary.
+479. It blocks secret-like files.
+480. It resolves paths inside the workspace.
+481. It honors worker capability grants.
+482. It ignores generated and vendor directories.
+483. It reads text-like files.
+484. It infers languages from extensions.
+485. It infers package managers from important files.
+486. It infers test commands from package managers and languages.
+487. It limits list results.
+488. It limits file read preview size.
+489. It does not write files.
+490. It does not delete files.
+491. The disabled write path is intentional.
+492. Runtime writes would bypass Rust authority.
+493. Runtime writes would weaken patch auditability.
+494. Runtime writes would weaken approval gates.
+495. Runtime writes would make reconciliation harder.
+496. If a worker needs to change code, it should propose a patch.
+497. If a worker needs to execute a command, it should request a command.
+498. If a worker needs to read a file outside its grant, the grant is wrong or the task is too broad.
+499. If a file is blocked as a secret, that is usually intended.
+500. If search misses a file, check ignore rules and limits.
+
+## 18. Disabled Runtime Write Snippet
 
 ```ts
 writeFile(relativePath: string, content: string) {
@@ -529,223 +656,307 @@ writeFile(relativePath: string, content: string) {
 }
 ```
 
-401. هذا السطر هو أحد أهم design decisions.
-402. runtime لا يكتب الملف.
-403. runtime يقترح intent/patch.
-404. Rust يطبق.
-405. ذلك يمنع LLM worker من bypass.
-406. لو رأيت code يحاول fs.writeFile من runtime، غالبا يخالف الاتجاه.
-407. الاستثناء هو كتابة artifacts داخل `.agent_memory`.
-408. artifacts memory ليست patch على user code.
-409. reading محدود لمنع secrets.
-410. grant يسمح بتقسيم workers إلى سياقات ضيقة.
+501. This is one of the clearest safety decisions in the codebase.
+502. Runtime workers can inspect.
+503. Runtime workers can reason.
+504. Runtime workers can propose.
+505. Runtime workers cannot directly mutate source files.
+506. Rust is the patch authority.
+507. The UI is the operator approval surface.
+508. SQLite is the authoritative patch event store.
+509. Git snapshots provide evidence.
+510. This split is central to the project.
 
-## 16. `PatchTools`
+## 19. PatchTools
 
-411. `PatchTools.propose` يبني `PatchProposal`.
-412. proposal يحصل على id يبدأ بـ `patch_`.
-413. proposal دائما `requiresApproval: true`.
-414. proposal status يبدأ `proposed`.
-415. `validate` يفحص paths والـ unified diff.
-416. `.env` يعتبر secret-like.
-417. warnings تظهر لو diff ليس `diff --git`.
-418. `applyProposal` يرجع applied false دائما.
-419. message يوضح أن Rust patch authority يجب أن تطبق.
-420. يوجد helper قديم `extractContentFromDiff` غير مستخدم ظاهريا في snippet.
-421. runtime patch apply disabled.
-422. approval في runtime لا تعني file changed.
-423. approval يعني proposal جاهز للواجهة/Rust.
-424. التطبيق الحقيقي عبر `apply_runtime_patch`.
-425. عند debugging patch لا يغير ملفات، افحص إن كانت الواجهة استدعت Rust.
-426. لو runtime approved لكن Rust لم يسجل applied، ابحث في `session_events`.
-427. لو diff malformed، Rust `git apply` سيرفض.
-428. لو paths خارج workspace، Rust سيرفض قبل git apply.
-429. كل proposal يجب أن يحمل unifiedDiff.
-430. كل proposal يجب أن يذكر filesChanged.
+511. `PatchTools` lives in `apps/agent-runtime/src/tools/PatchTools.ts`.
+512. It creates `PatchProposal` objects.
+513. It validates patch proposal metadata.
+514. It checks changed file paths.
+515. It warns when a diff does not look like a standard git unified diff.
+516. It marks proposals as requiring approval.
+517. It sets proposal status to `proposed`.
+518. It assigns patch IDs with the `patch_` prefix.
+519. It checks capability grants.
+520. It refuses proposals when grants disallow them.
+521. It does not apply proposals.
+522. `applyProposal` intentionally returns `applied: false`.
+523. The message says Rust patch authority must apply the patch.
+524. This prevents accidental runtime mutation.
+525. Patch proposals should include `filesChanged`.
+526. Patch proposals should include `unifiedDiff`.
+527. Patch proposals should include a summary.
+528. Patch proposals should include risk metadata.
+529. Patch proposals should be displayed in the desktop diff panel.
+530. Patch proposals require operator approval before application.
 
-## 17. Memory system
+```ts
+applyProposal(proposal: PatchProposal) {
+  return {
+    applied: false,
+    changedPaths: [],
+    message: `Runtime patch apply is disabled for ${proposal.id}; Rust patch authority must apply it.`
+  };
+}
+```
 
-431. `.agent_memory/README.md` يشرح ملفات الذاكرة.
-432. `repo_index.json` يحفظ layout وlanguages وentrypoints.
-433. `file_manifest.json` يحفظ hashes/mtimes للملفات النصية.
-434. `symbol_index.json` يحفظ symbols/imports/exports heuristics.
-435. `file_summaries.jsonl` يحفظ summaries لكل ملف.
-436. `command_inventory.json` يحفظ أوامر build/test/typecheck/smoke/run.
-437. `decisions.jsonl` append-only decisions.
-438. `task_history.jsonl` append-only task/run notes.
-439. `lessons_learned.jsonl` durable lessons.
-440. `failed_attempts.jsonl` failed strategies.
-441. `successful_patterns.jsonl` patterns ناجحة.
-442. `project_glossary.json` vocabulary.
-443. `architecture_notes.jsonl` facts معماري.
-444. `index_state.json` freshness metadata.
-445. `project_intelligence.json` dependency/test/command/module/risk maps.
-446. `runs/` volatile run artifacts.
-447. `campaigns/` volatile campaign artifacts.
-448. `evals/` eval summaries.
-449. لا تخزن secrets هنا.
-450. large artifacts لا يجب commit.
-451. committed فقط README وschema_version حسب التعليمات.
-452. memory index وقت الكتابة fresh.
-453. indexedFiles = 378.
-454. sourceFiles = 329.
-455. testFiles = 63.
-456. docFiles = 31.
-457. ignoredDirectories تشمل `.agent_memory`, `.git`, `dist`, `node_modules`, `target`, `tmp`.
-458. language distribution يظهر TypeScript كالأكبر.
-459. Rust files حوالي 24.
-460. docs حوالي 31 markdown.
+531. If a patch is approved but no files change, check whether Rust apply was invoked.
+532. If Rust cannot find the proposal, check SQLite `session_events`.
+533. If Rust rejects paths, check diff file headers.
+534. If `git apply` rejects the diff, check working tree and patch context.
+535. If UI does not show the proposal, check runtime patch events.
+536. If runtime does not receive the result, check `reportRuntimePatchApplyResult`.
+537. Patch debugging is easiest when you keep runtime approval and Rust application separate.
+538. Approval is a decision.
+539. Application is a filesystem operation.
+540. Reconciliation is evidence after application.
 
-## 18. `RepoIndexer`
+## 20. Memory System
 
-461. `RepoIndexer.ts` يبني snapshot الذاكرة.
-462. يستخدم `ensureMemoryLayout`.
-463. يجمع الملفات عبر `collectFiles`.
-464. يحسب manifest.
-465. يبني symbol index.
-466. يبني command inventory.
-467. يبني file summaries.
-468. يبني repo index document.
-469. يبني project intelligence.
-470. يكتب JSON/JSONL في `.agent_memory`.
-471. `DEFAULT_MAX_FILE_BYTES` يساوي 1,000,000.
-472. ignored directories كثيرة لتجنب vendor/build output.
-473. text extensions تحدد ما يقرأ.
-474. binary extensions تحدد ما يتخطى.
-475. source extensions تستخدم لحساب source files.
-476. config basenames تحدد config files.
-477. dependency basenames تحدد lockfiles.
-478. build basenames تحدد build files.
-479. indexer لا يقرأ binary icons.
-480. indexer لا يقرأ logs unreadable أو huge حسب السياسة.
+541. Project memory lives under `.agent_memory/`.
+542. `.agent_memory/README.md` documents the memory layout.
+543. `.agent_memory/schema_version.json` marks the schema version.
+544. `repo_index.json` stores repository structure.
+545. `file_manifest.json` stores deterministic file metadata.
+546. `symbol_index.json` stores heuristic symbols, imports, and exports.
+547. `file_summaries.jsonl` stores per-file summaries.
+548. `command_inventory.json` stores discovered commands.
+549. `decisions.jsonl` stores append-only architectural decisions.
+550. `task_history.jsonl` stores append-only task notes.
+551. `lessons_learned.jsonl` stores durable lessons.
+552. `failed_attempts.jsonl` stores failed strategies.
+553. `successful_patterns.jsonl` stores successful patterns.
+554. `project_glossary.json` stores project vocabulary.
+555. `architecture_notes.jsonl` stores durable architecture facts.
+556. `index_state.json` stores freshness metadata.
+557. `project_intelligence.json` stores dependency, test, command, module, and risk maps.
+558. `runs/` stores volatile run artifacts.
+559. `campaigns/` stores volatile campaign artifacts.
+560. `evals/` stores evaluation summaries.
+561. Large generated artifacts should usually remain local.
+562. Secrets should never be stored in memory.
+563. Memory indexing ignores vendor and build directories.
+564. Memory indexing skips binary files.
+565. Memory indexing records skipped files.
+566. Memory indexing records important files.
+567. Memory indexing records entrypoints.
+568. Memory indexing records test files.
+569. Memory indexing records config files.
+570. Memory indexing records docs.
+571. A stale index is a blocker for context-sensitive work.
+572. `memory:index-status` checks freshness.
+573. `memory:index-refresh` refreshes stale memory.
+574. `memory:compact` stores lessons after meaningful runs.
+575. Memory artifacts are part of auditability.
+576. Memory artifacts help future workers avoid repeated discovery.
+577. Memory artifacts help staffing decisions.
+578. Memory artifacts help command selection.
+579. Memory artifacts help context pack construction.
+580. Memory artifacts help run reporting.
+
+## 21. RepoIndexer
+
+581. `RepoIndexer.ts` lives in `apps/agent-runtime/src/memory/RepoIndexer.ts`.
+582. It is the main memory index builder.
+583. It resolves the workspace root.
+584. It ensures the memory layout exists.
+585. It collects files.
+586. It skips ignored directories.
+587. It skips binary files.
+588. It honors a max file size.
+589. It hashes files for the manifest.
+590. It builds the symbol index.
+591. It builds the command inventory.
+592. It builds file summaries.
+593. It builds the repo index document.
+594. It builds project intelligence.
+595. It writes `repo_index.json`.
+596. It writes `file_manifest.json`.
+597. It writes `symbol_index.json`.
+598. It writes `command_inventory.json`.
+599. It writes `project_intelligence.json`.
+600. It writes file summaries.
+601. Text extensions include `.ts`, `.tsx`, `.js`, `.rs`, `.md`, `.json`, `.toml`, and others.
+602. Binary extensions include images, archives, executables, and SQLite files.
+603. Ignored directories include `.git`.
+604. Ignored directories include `.agent_memory`.
+605. Ignored directories include `node_modules`.
+606. Ignored directories include `dist`.
+607. Ignored directories include `target`.
+608. Ignored directories include `tmp`.
+609. Config basenames include `package.json`.
+610. Config basenames include `tsconfig.json`.
+611. Config basenames include `Cargo.toml`.
+612. Config basenames include `tauri.conf.json`.
+613. Build basenames include `vite.config.ts`.
+614. Dependency basenames include `package-lock.json`.
+615. Dependency basenames include `Cargo.lock`.
+616. Source extensions determine source file counts.
+617. Docs are counted separately.
+618. Tests are mapped heuristically.
+619. Command inventory is built from package and Cargo metadata.
+620. Project intelligence combines these signals.
+
+## 22. RepoIndexer Pipeline Snippet
 
 ```ts
 const symbolIndex = buildSymbolIndex(fileManifest, fileText, generatedAt);
 const commandInventory = buildCommandInventory({ generatedAt, files: fileManifest, fileText });
 const fileSummaries = buildFileSummaries(fileManifest, symbolIndex.files);
-const repoIndex = buildRepoIndexDocument({ generatedAt, workspaceRoot, files: fileManifest, fileText, skippedFiles, ignoredDirectories });
+const repoIndex = buildRepoIndexDocument({
+  generatedAt,
+  workspaceRoot,
+  files: fileManifest,
+  fileText,
+  skippedFiles: collection.skippedFiles,
+  ignoredDirectories: collection.ignoredDirectories
+});
 ```
 
-481. هذا snippet يوضح pipeline داخل الفهرسة.
-482. symbol index يأتي قبل summaries.
-483. command inventory يقرأ package scripts وCargo.
-484. project intelligence يربط tests بالمصادر قدر الإمكان.
-485. stale index يجب أن يوقف context-sensitive work.
-486. `memory:index-status` هو gate تشغيلي.
-487. `memory:index-refresh -- --changed-only` يعرض changed files قبل refresh safe.
-488. `memory:compact` مفيد بعد runs مهمة.
-489. أي schema change يجب أن يحدث schema_version.
-490. memory artifacts جزء من قابلية audit.
+621. The symbol index powers lightweight code understanding.
+622. The command inventory powers validation and run planning.
+623. File summaries power context selection.
+624. Repo index powers staffing and architecture maps.
+625. Project intelligence ties these outputs together.
+626. The index should be deterministic enough to diff.
+627. Changed files should trigger freshness warnings.
+628. Freshness warnings should not be ignored in serious work.
+629. Index refresh is safer than relying on stale memory.
+630. Index compacting is useful after successful or failed runs.
 
-## 19. Orchestration core
+## 23. Core Orchestrator
 
-491. `CoreOrchestrator` في `apps/agent-runtime/src/orchestration/Orchestrator.ts`.
-492. هذا هو orchestration engine التقليدي قبل swarm CLI الحديث.
-493. يملك workspacePath.
-494. يملك memoryDir.
-495. يملك context limits.
-496. يملك safety config.
-497. يستخدم `OrchestrationArtifactStore`.
-498. يستخدم `FactoryTraceWriter`.
-499. يستخدم optional providerFactory.
-500. `planOnly` ينشئ run دون agent invocation.
-501. `runAgenticTask` ينفذ run كامل.
-502. lifecycle يبدأ بـ intake.
-503. ثم prompt_rewrite placeholder.
-504. ثم clarification_check.
-505. ثم repo_mapping.
-506. ثم complexity_estimation.
-507. ثم planning.
-508. ثم task_graph_ready.
-509. ثم executing.
-510. ثم reviewing/validating/integrating/reporting حسب المسار.
-511. يستخدم `loadOrRebuildIndex`.
-512. يستخدم `createMultiPlanIfNeeded`.
-513. يستخدم `createTaskGraph`.
-514. يستخدم `createAgentTeamsIfNeeded`.
-515. يستخدم `DurableLockManager` عند التنفيذ.
-516. يستخدم `TaskGraphManager` لتحديد ready tasks.
-517. يشتق lock scopes من tasks.
-518. يكتسب locks قبل تنفيذ task قد يكتب.
-519. ينتج parsed outputs.
-520. يدير fingerprint tracker لتجنب patch loops.
+631. `CoreOrchestrator` lives in `apps/agent-runtime/src/orchestration/Orchestrator.ts`.
+632. It is the older core orchestration engine.
+633. It can run plan-only mode.
+634. It can run agentic tasks.
+635. It creates runs.
+636. It writes checkpoints.
+637. It transitions run state.
+638. It loads or rebuilds repository memory.
+639. It creates multi-plans when needed.
+640. It creates task graphs.
+641. It creates agent teams when needed.
+642. It runs dependency-ready tasks.
+643. It acquires durable locks for write scopes.
+644. It derives module locks.
+645. It derives semantic locks.
+646. It invokes role-specific workers.
+647. It validates structured outputs.
+648. It repairs malformed outputs when possible.
+649. It tracks patch fingerprints.
+650. It runs review loops.
+651. It runs validation loops.
+652. It manages patch apply sandboxing.
+653. It manages integration gates.
+654. It writes final reports.
+655. It writes run metrics.
+656. It appends memory decisions.
+657. It appends failed attempts.
+658. It appends successful patterns.
+659. It is heavily tested by orchestration tests.
+660. It is a central place for task graph debugging.
+
+## 24. Durable Lock Snippet
 
 ```ts
-const lockResult = lockScopes.length ? await lockManager.acquireLocks({
+const lockResult = await lockManager.acquireLocks({
   request_id: `lock_request_${randomUUID()}`,
   run_id: run.id,
   task_id: task.id,
   owner_component: "CoreOrchestrator",
-  scopes: [...]
-}) : undefined;
+  scopes: lockScopes.map((scope) => lockManager.normalizeLockScope(scope, "write"))
+});
 ```
 
-521. lock acquisition يحمي الملفات والموديولات.
-522. task بدون write scopes قد لا يحتاج locks.
-523. semantic locks تضيف حماية أعلى من file path.
-524. lock ttl يأتي من config.
-525. لو run blocked بسبب locks، افحص durable lock artifacts.
-526. orchestrator يكتب checkpoints.
-527. checkpoints تجعل resume ممكنا.
-528. final report يجمع limitations.
-529. validation logs تحفظ في artifacts.
-530. patch history تحفظ في artifacts.
+661. Durable locks protect write scopes.
+662. Lock scopes can be file-level.
+663. Lock scopes can be module-level.
+664. Lock scopes can be semantic.
+665. Lock results should be recorded.
+666. Lock failures should block unsafe execution.
+667. Lock TTL comes from orchestration config.
+668. Lock artifacts are part of the source of truth.
+669. A blocked run may be blocked by locks rather than model failure.
+670. Lock debugging belongs in orchestration artifacts.
 
-## 20. CLI orchestration
+## 25. Orchestration CLI
 
-531. `apps/agent-runtime/src/orchestration/cli.ts` هو CLI موحد.
-532. parseArgs يدعم `--workspace`.
-533. parseArgs يدعم `--memory-dir`.
-534. parseArgs يدعم `--run`.
-535. parseArgs يدعم `--json`.
-536. parseArgs يدعم `--mode`.
-537. parseArgs يدعم `--agent-limit`.
-538. commands القديمة تشمل `run-agentic-task`.
-539. commands القديمة تشمل `plan-task`.
-540. commands inspection تشمل show-run/show-context-pack/show-validation-logs.
-541. `agent run` يستخدم `SwarmAutopilotRuntime`.
-542. `agent plan` يستخدم plan فقط في swarm.
-543. `agent inspect-run` يفحص run swarm.
-544. `agent report` يقرأ report swarm.
-545. `agent resume` يستأنف swarm run.
-546. `agent trial` يدخل SwarmTrialLab.
-547. `agent trial staffing-eval` يقيس staffing.
-548. `agent trial scheduler-scale` يقيس scheduler scale.
-549. `agent trial compare` يقارن modes.
-550. CLI هو interface مهم للعمليات.
-551. root npm scripts تلف حول هذا الملف.
-552. لو أمر npm agent فشل، شغل command underlying مباشرة للمزيد من الوضوح.
-553. `--json` مفيد للautomation.
-554. `--workspace` يجب أن يشير لجذر الريبو الهدف.
-555. memoryDir يسمح بتجارب isolated.
-556. `agentLimit` override محدود ولا يتجاوز max supported.
-557. errors تطبع إلى stderr وتضبط process.exitCode = 1.
-558. help يظهر عند unknown command.
-559. CLI لا يعتمد على desktop UI.
-560. هذا يسهل تشغيل trials في CI أو terminal.
+671. The orchestration CLI lives in `apps/agent-runtime/src/orchestration/cli.ts`.
+672. It parses command-line arguments.
+673. It supports `--workspace`.
+674. It supports `--memory-dir`.
+675. It supports `--run`.
+676. It supports `--json`.
+677. It supports `--mode`.
+678. It supports `--agent-limit`.
+679. It supports `--artifact`.
+680. It dispatches `agent` commands.
+681. It dispatches `swarm` commands.
+682. It dispatches older `run-agentic-task` commands.
+683. It dispatches older `plan-task` commands.
+684. It dispatches artifact inspection commands.
+685. `agent run` uses `SwarmAutopilotRuntime`.
+686. `agent plan` uses `SwarmAutopilotRuntime.plan`.
+687. `agent inspect-run` uses swarm inspection helpers.
+688. `agent report` loads swarm reports.
+689. `agent resume` resumes swarm runs.
+690. `agent trial` uses `SwarmTrialLab`.
+691. `show-run` loads core orchestration run details.
+692. `show-context-pack` loads task context packs.
+693. `show-validation-logs` loads validation logs.
+694. `show-patch-history` loads patch history.
+695. `show-artifacts` lists run artifacts.
+696. `show-artifact` reads one artifact.
+697. CLI output can be JSON.
+698. CLI errors are written to stderr.
+699. CLI failures set `process.exitCode = 1`.
+700. CLI commands are the primary non-UI automation surface.
 
-## 21. Swarm Autopilot
+## 26. Swarm Autopilot Runtime
 
-561. `SwarmAutopilotRuntime` هو Phase 5/6 internal swarm.
-562. المستخدم يرى أمر واحد مثل `agent run "<goal>"`.
-563. runtime داخليا ينشئ run.
-564. ينشئ staffing plan.
-565. ينشئ agent templates.
-566. ينشئ agent instances.
-567. ينشئ work items.
-568. يشغل dependency-aware scheduler.
-569. ينشئ consensus group.
-570. يحفظ metrics.
-571. يحفظ final report.
-572. يضيف decisions/successful patterns إلى memory.
-573. artifacts تحفظ تحت `.agent_memory/swarm_runs/<run_id>/`.
-574. run يبدأ بـ `createRun`.
-575. `plan` ينتقل خلال مراحل intake وrepo_mapping وplanning.
-576. `run` يستدعي `plan` أولا ثم scheduler.
-577. `loadOrRebuildIndex` يستخدم freshness assessment.
-578. previous failures تؤثر على staffing.
-579. worker mode قد يكون mock أو provider_read_only.
-580. providerFactory يسمح بعمال provider-backed read-only.
+701. `SwarmAutopilotRuntime` lives in `apps/agent-runtime/src/orchestration/SwarmRuntime.ts`.
+702. It is the internal swarm autopilot engine.
+703. It hides internal staffing from the normal user experience.
+704. It creates a run for a user goal.
+705. It transitions through intake.
+706. It transitions through prompt rewrite.
+707. It transitions through clarification check.
+708. It transitions through repository mapping.
+709. It loads or rebuilds memory.
+710. It reads previous failed attempts.
+711. It creates a staffing plan.
+712. It saves the staffing plan.
+713. It records effective logical agent count.
+714. It builds scheduler config.
+715. It emits staffing events.
+716. It creates agent templates.
+717. It creates agent instances.
+718. It creates work items.
+719. It saves work items.
+720. It saves initial leases.
+721. It emits queued work-item events.
+722. `run` calls `plan` first.
+723. `run` creates a scheduler.
+724. The scheduler uses `DurableLockManager`.
+725. The scheduler uses a configured worker.
+726. The worker may be mock.
+727. The worker may be provider-backed and read-only.
+728. The scheduler returns work items and metrics.
+729. The runtime creates a consensus group.
+730. The runtime writes metrics.
+731. The runtime writes a final report.
+732. The runtime appends durable memory decisions.
+733. Successful runs append successful patterns.
+734. Failed or blocked runs preserve evidence.
+735. Swarm artifacts live under `.agent_memory/swarm_runs/<run_id>/`.
+736. Trial artifacts live under `.agent_memory/swarm_trials/<experiment_id>/`.
+737. The maximum supported logical agent count is 300.
+738. The selected count is usually much smaller.
+739. Executor limits are separate from total agent counts.
+740. Validation level is selected from task risk and available commands.
+
+## 27. Swarm Staffing Snippet
 
 ```ts
 const staffingPlan = new SwarmStaffingPlanner().createPlan({
@@ -759,148 +970,193 @@ const staffingPlan = new SwarmStaffingPlanner().createPlan({
 });
 ```
 
-581. staffing plan هو قرار central.
-582. يعتمد على userGoal.
-583. يعتمد على repoIndex.
-584. يعتمد على commandInventory.
-585. يعتمد على previousFailures.
-586. explicitAgentLimit مجرد cap وليس UX أساسي.
-587. run.effective_total_logical_agents يأخذ recommended total.
-588. scheduler_config يشتق من staffing plan.
-589. max_parallel_agents منفصل عن total.
-590. executor_limit منفصل عن read-only agents.
-591. risk level يؤثر على backpressure.
-592. specialists تظهر إذا specialist_agents length > 0.
-593. work_items تحفظ قبل execution.
-594. leases تحفظ وتبدأ فارغة.
-595. كل work item queued event.
-596. scheduler يأخذ DurableLockManager.
-597. scheduler ينتج metrics.
-598. consensus يقرر integration readiness.
-599. final status يكون succeeded أو blocked أو failed.
-600. final report يعرض staffing والmetrics والrisks.
+741. Staffing depends on the goal.
+742. Staffing depends on repository memory.
+743. Staffing depends on command inventory.
+744. Staffing depends on previous failures.
+745. Staffing can be capped by an explicit limit.
+746. The explicit limit is not meant to become the normal UX.
+747. The planner records reasoning.
+748. The planner records risk level.
+749. The planner records repository scope.
+750. The planner records validation level.
 
-## 22. `SwarmStaffingPlanner`
+## 28. SwarmStaffingPlanner
 
-601. `SwarmStaffingPlanner` يقرر حجم الفريق الداخلي.
-602. يستخدم `SpecialistAgentFactory`.
-603. يستنتج relevant files من goal والrepo index.
-604. يستنتج task complexity.
-605. يستنتج repo scope.
-606. يستنتج risk level.
-607. ينشئ specialists من evidence.
-608. يحدد إذا goal read-only.
-609. يحدد هل validation commands متاحة.
-610. يبني base role counts.
-611. يضيف specialists إلى role counts.
-612. يحسب executor cap.
-613. يقلل ExecutorAgent إلى cap.
-614. يحسب recommended total.
-615. explicitAgentLimit يمكن أن يقلل المجموع.
-616. MAX_SUPPORTED_LOGICAL_AGENTS يحمي من أكثر من 300.
-617. writeAgentLimit يجمع executor وintegrator ضمن حدود.
-618. readOnlyRatio يحسب نسبة read-only.
-619. validationLevel يعتمد على complexity/risk/read-only.
-620. requiresHumanApproval true للمخاطر العالية أو files sensitive.
-621. reasoning يحفظ لماذا اختار العدد.
-622. downgrade_conditions تحفظ متى نقلل.
-623. escalation_conditions تحفظ متى نزيد.
-624. confidence يعطي ثقة planner.
-625. `tiny` task يحصل غالبا على scout قليل وexecutor واحد.
-626. `small` task يحصل على planner واحد ومراجعة.
-627. `medium` يضيف context builder وarchitect وربما risk analyzer.
-628. `large` يرفع scouts/reviewers/testers.
-629. `huge` قد يقترب من 300 في read-only whole repo.
-630. critical risk يقلل executors ويرفع reviewers.
+751. `SwarmStaffingPlanner` lives in `apps/agent-runtime/src/orchestration/SwarmStaffingPlanner.ts`.
+752. It creates `StaffingPlan` objects.
+753. It uses `SpecialistAgentFactory`.
+754. It infers relevant files.
+755. It infers task complexity.
+756. It infers repository scope.
+757. It infers risk level.
+758. It detects read-only goals.
+759. It checks whether validation commands exist.
+760. It creates dynamic specialists from evidence.
+761. It creates base role counts.
+762. It adds specialist role counts.
+763. It calculates executor caps.
+764. It caps executor count.
+765. It calculates recommended total logical agents.
+766. It shrinks read-only roles if an explicit limit is provided.
+767. It enforces `MAX_SUPPORTED_LOGICAL_AGENTS`.
+768. It calculates write-agent limits.
+769. It calculates read-only ratio.
+770. It calculates max parallel agents.
+771. It calculates validation level.
+772. It decides whether human approval is required.
+773. It records reasoning strings.
+774. It records downgrade conditions.
+775. It records escalation conditions.
+776. It records confidence.
+777. Tiny tasks usually get very few agents.
+778. Small tasks usually get a scout, planner, executor, reviewer, and reporter.
+779. Medium tasks add context, architecture, risk, testing, and integration roles.
+780. Large tasks scale scout and review counts.
+781. Huge read-only tasks may use very high read-only counts.
+782. Critical risk reduces executors and increases review.
+783. Sensitive files require human approval.
+784. Package files and lockfiles increase risk.
+785. Auth, secrets, payment, and production language can make risk critical.
+786. Runtime, scheduler, and orchestrator changes tend to be medium risk.
+787. The planner should avoid overstaffing tiny changes.
+788. The planner should avoid understaffing whole-repo audits.
+789. Staffing decisions are written to artifacts.
+790. Staffing decisions are reported back to the operator.
+
+## 29. Staffing Tiny Task Snippet
 
 ```ts
 if (taskComplexity === "tiny") {
   counts.ScoutAgent = 1;
+  counts.PlannerAgent = 0;
   counts.ExecutorAgent = isReadOnly ? 0 : 1;
   counts.ReviewerAgent = 1;
   counts.ReporterAgent = 1;
 }
 ```
 
-631. هذا يوضح أن tiny task لا يحصل على مئات agents.
-632. read-only يعني executor صفر.
-633. reporter موجود حتى في tiny.
-634. tester يظهر عند validation وwrite.
-635. high risk يقلل الكتابة.
-636. specialist agents لا يجب أن تكون write-capable افتراضيا.
-637. risk inference ينظر إلى auth/security/payment/production.
-638. package.json وCargo.lock وtsconfig تعتبر high risk.
-639. orchestrator/runtime/scheduler refactor يعتبر medium risk.
-640. staffing decision يجب أن يظهر في artifacts/reports.
+791. Tiny tasks do not get hundreds of agents.
+792. Read-only tiny tasks get no executor.
+793. Write tiny tasks can get one executor.
+794. Review remains present even for tiny tasks.
+795. Reporting remains present even for tiny tasks.
+796. Tester count depends on validation availability and write behavior.
+797. Executor fan-out is intentionally conservative.
+798. This supports the AGENTS.md instruction to avoid asking the user how many agents to use.
+799. The system staffs itself from evidence.
+800. The staffing report explains the decision.
 
-## 23. Scheduler وwork items
+## 30. Swarm Scheduler and Work Items
 
-641. `SwarmScheduler` ينفذ work items حسب dependencies.
-642. `createInitialSwarmWorkItems` يعيش في `SwarmFanInOut.ts`.
-643. work item types تشمل scout/planning/execution/review/validation/integration/report.
-644. scout work يقرأ clusters من الملفات.
-645. planner work يعتمد على scouts.
-646. architect work يعتمد على planning.
-647. executor work يعتمد على planning/architect.
-648. review يعتمد على executor.
-649. validation يعتمد على executor وربما review.
-650. final integration يعتمد على review/validation.
-651. `aggregateScoutResults` يدمج findings.
-652. `createConsensusGroup` ينتج decision.
-653. scheduler يستخدم leases.
-654. scheduler يكتب trace entries.
-655. scheduler يحترم max_parallel_agents.
-656. scheduler يحترم executor_limit.
-657. scheduler يستخدم DurableLockManager للwrite files.
-658. worker قد يكون mock.
-659. worker قد يكون provider-backed read-only.
-660. artifacts تجعل run auditable.
+801. `SwarmScheduler` runs dependency-aware work items.
+802. `SwarmFanInOut.ts` creates initial work items.
+803. Work items can be scout work.
+804. Work items can be planning work.
+805. Work items can be architecture work.
+806. Work items can be execution work.
+807. Work items can be review work.
+808. Work items can be validation work.
+809. Work items can be integration work.
+810. Work items can be reporting work.
+811. Scout work is read-only.
+812. Planning work is read-only.
+813. Review work is read-only.
+814. Validation work may request commands.
+815. Execution work may write through controlled paths.
+816. Integration work combines results.
+817. Work items have dependencies.
+818. Work items have required roles.
+819. Work items have read files.
+820. Work items have write files.
+821. Work items have status.
+822. Work items produce results.
+823. Leases prevent duplicate active work.
+824. Durable locks protect write scopes.
+825. Scheduler traces record execution order.
+826. Metrics record active agent counts.
+827. Metrics record validation information.
+828. Metrics record failures and blocks.
+829. Consensus groups summarize readiness.
+830. The final report combines work items, metrics, and staffing.
 
-## 24. Orchestrators التقليديون
+## 31. Traditional Multi-Agent Orchestration
 
-661. `ProductOrchestrator` ينتج ProductBrief.
-662. `BusinessOrchestrator` ينتج BusinessBrief.
-663. `EngineeringOrchestrator` ينتج TechnicalPlan وTaskGraph.
-664. هذه موجودة في `apps/agent-runtime/src/orchestrators`.
-665. prompt files موجودة في `apps/agent-runtime/src/prompts`.
-666. worker prompts موجودة تحت `prompts/workers`.
-667. worker agents موجودة تحت `src/agents/workers`.
-668. `CodebaseMapperAgent` يركز على خريطة الكود.
-669. `ArchitectAgent` يركز على التصميم.
-670. `RustBackendAgent` يركز على Rust/Tauri.
-671. `FrontendAgent` يركز على React/UI.
-672. `ToolingTerminalAgent` يركز على أوامر tooling.
-673. `TestAgent` يركز على tests.
-674. `SecurityAgent` يركز على المخاطر.
-675. `ReviewerAgent` يراجع readiness.
-676. `GenericWorkerAgent` يستخدم specs عامة.
-677. `BaseWorker` يوفر execution skeleton.
-678. outputs يجب أن تكون structured.
-679. review agents يركزون على correctness/safety/scope/test gaps.
-680. orchestrated mode في UI يعرض briefs وtask graph وworker outputs.
+831. The traditional orchestrated mode has product, business, and engineering layers.
+832. `ProductOrchestrator` creates a `ProductBrief`.
+833. `BusinessOrchestrator` creates a `BusinessBrief`.
+834. `EngineeringOrchestrator` creates a `TechnicalPlan`.
+835. `EngineeringOrchestrator` creates a deterministic `TaskGraph`.
+836. Worker agents include a codebase mapper.
+837. Worker agents include an architect.
+838. Worker agents include a Rust backend worker.
+839. Worker agents include a frontend worker.
+840. Worker agents include a tooling terminal worker.
+841. Worker agents include a test worker.
+842. Worker agents include a security worker.
+843. Worker agents include a reviewer.
+844. `BaseWorker` provides common worker execution behavior.
+845. `GenericWorkerAgent` supports dynamically specified work.
+846. Worker prompts live under `apps/agent-runtime/src/prompts/workers`.
+847. Structured worker outputs should include evidence.
+848. Structured worker outputs should include file paths.
+849. Structured worker outputs should include command requests.
+850. Structured worker outputs should include unresolved risks.
+851. Reviewers prioritize correctness.
+852. Reviewers prioritize safety.
+853. Reviewers prioritize scope.
+854. Reviewers prioritize test gaps.
+855. Security review is a mandatory gate in orchestrated mode.
+856. Reviewer summary is a mandatory gate in orchestrated mode.
+857. Patch proposals require approval.
+858. The desktop UI can render orchestration timelines.
+859. The desktop UI can render briefs and worker outputs.
+860. Orchestrated mode is the user-facing multi-agent path.
 
-## 25. Desktop frontend
+## 32. Desktop Frontend
 
-681. الواجهة في `apps/desktop/src`.
-682. entrypoint هو `main.tsx`.
-683. `main.tsx` يرندر `<App />` داخل React.StrictMode.
-684. `App.tsx` هو الملف الأكبر والأكثر مركزية في الواجهة.
-685. `App.tsx` يستورد أيقونات lucide-react.
-686. `App.tsx` يستورد types من protocol.
-687. `App.tsx` يستخدم hooks كثيرة من React.
-688. `App.tsx` يستورد runtime HTTP helpers من `lib/agentRuntime`.
-689. `App.tsx` يستورد Tauri invoke helpers من `lib/tauri`.
-690. `App.tsx` يستورد terminal orchestrator.
-691. الواجهة لديها recent workspaces.
-692. الواجهة لديها recent sessions.
-693. الواجهة لديها prompt history.
-694. الواجهة لديها session tokens في local storage.
-695. الواجهة لديها pinned/archived sessions.
-696. الواجهة لديها RTL text mode.
-697. الواجهة لديها sidebar width persistence.
-698. الواجهة لديها settings modal للprovider.
-699. الواجهة تعرض terminal/diff bottom panel.
-700. الواجهة تعرض agent statuses/tasks/session metadata/git status.
+861. The desktop frontend lives in `apps/desktop/src`.
+862. It uses Vite.
+863. It uses React.
+864. It uses TypeScript.
+865. The entrypoint is `apps/desktop/src/main.tsx`.
+866. The main component is `apps/desktop/src/app/App.tsx`.
+867. Styles live in `apps/desktop/src/app/styles.css`.
+868. Frontend runtime HTTP helpers live in `apps/desktop/src/lib/agentRuntime.ts`.
+869. Tauri invoke helpers live in `apps/desktop/src/lib/tauri.ts`.
+870. Terminal orchestration helpers live in `apps/desktop/src/lib/terminalOrchestrator.ts`.
+871. Activity stream helpers live in `apps/desktop/src/app/activityStream.ts`.
+872. The UI imports icons from `lucide-react`.
+873. The UI imports shared types from `@hivo/protocol`.
+874. The UI stores recent workspaces.
+875. The UI stores recent sessions.
+876. The UI stores prompt history.
+877. The UI stores composer scale.
+878. The UI stores sidebar width.
+879. The UI stores RTL text mode.
+880. The UI stores session tokens.
+881. The UI stores collapsed projects.
+882. The UI stores archived sessions.
+883. The UI stores pinned sessions.
+884. The UI stores provider settings.
+885. The UI shows a workspace sidebar.
+886. The UI shows a chat/task panel.
+887. The UI shows agent and task state.
+888. The UI shows git status.
+889. The UI shows terminal output.
+890. The UI shows diffs.
+891. The UI opens settings for model providers.
+892. The UI calls runtime HTTP endpoints.
+893. The UI calls Tauri commands.
+894. The UI subscribes to runtime SSE events.
+895. The UI reports patch apply results back to runtime.
+896. The UI reports command results back to runtime.
+897. The UI does not directly mutate the filesystem.
+898. The UI mediates operator approvals.
+899. The UI is the human control surface.
+900. The UI is not the authority layer.
+
+## 33. React Entrypoint Snippet
 
 ```tsx
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
@@ -910,364 +1166,472 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 );
 ```
 
-701. `agentRuntime.ts` يتصل بـ runtime server عبر fetch.
-702. default runtime base URL هو `http://127.0.0.1:4317`.
-703. `createRuntimeSession` يستدعي `/sessions`.
-704. `runRuntimeTurn` يستدعي `/sessions/:id/turn`.
-705. `getRuntimeSession` يستدعي `/sessions/:id`.
-706. `approveRuntimePatch` يستدعي approve endpoint.
-707. `rejectRuntimePatch` يستدعي reject endpoint.
-708. `reportRuntimePatchApplyResult` يبلغ runtime بنتيجة Rust.
-709. `reportRuntimeCommandResult` يبلغ runtime بنتيجة terminal.
-710. `subscribeRuntimeEvents` يستخدم EventSource.
-711. EventSource يسجل listeners لأنواع AppEvent runtime.
-712. onSession يحدث state عند `runtime.session.updated`.
-713. errors تذهب إلى onError.
-714. `tauri.ts` يغلف كل Tauri invokes.
-715. `openWorkspace` يستدعي `open_workspace`.
-716. `listWorkspaceFiles` يستدعي `list_workspace_files`.
-717. `runWorkspaceCommand` يستدعي `run_workspace_command`.
-718. `applyRuntimePatch` يستدعي `apply_runtime_patch`.
-719. `validateModelProvider` يستدعي `validate_model_provider`.
-720. frontend لا يلمس filesystem مباشرة.
+901. The frontend entrypoint is straightforward.
+902. Most UI complexity is inside `App.tsx`.
+903. If the app does not mount, check `index.html` and `main.tsx`.
+904. If state renders incorrectly, check `App.tsx`.
+905. If runtime data does not arrive, check `agentRuntime.ts`.
+906. If Tauri commands fail, check `tauri.ts` and Rust command names.
+907. If terminal behavior is wrong, check `terminalOrchestrator.ts` and Rust terminal service.
+908. If CSS layout breaks, check `styles.css`.
+909. If protocol types break, rebuild `packages/protocol`.
+910. Frontend changes should usually run desktop typecheck.
 
-## 26. Rust/Tauri core
+## 34. Frontend Runtime HTTP Helpers
 
-721. Rust backend في `apps/desktop/src-tauri/src`.
-722. `lib.rs` يبني `AppState`.
-723. `AppState` يحتوي workspace service.
-724. `AppState` يحتوي database service.
-725. `AppState` يحتوي git service.
-726. `AppState` يحتوي terminal service.
-727. `AppState` يحتوي patch service.
-728. `AppState` يحتوي project index service.
-729. `AppState` يحتوي model provider service.
-730. `tauri::Builder` يضيف dialog plugin.
-731. `manage(state)` يجعل state متاحا للcommands.
-732. `invoke_handler` يسجل كل commands.
-733. commands مقسمة إلى workspace/git/terminal/sessions/patch/system/model_provider.
-734. Rust backend هو authority للworkspace boundaries.
-735. Rust backend هو authority للterminal execution.
-736. Rust backend هو authority للpatch apply.
-737. Rust backend هو authority لSQLite.
-738. `WorkspaceService` يحفظ workspace_path وproject_id.
-739. `WorkspaceService.open_workspace` يعمل canonicalize ويتحقق من directory.
-740. `ensure_inside_workspace` يمنع الخروج من workspace.
-741. `ensure_command_cwd` يمنع command cwd خارج workspace.
-742. `list_files` يستخدم ignore WalkBuilder.
-743. `read_file` يمنع secret-like files.
-744. `PatchService.apply_patch` يكتب diff مؤقت ثم يشغل `git apply`.
-745. `validate_patch_paths_inside_workspace` يفحص `+++ b/` و`--- a/`.
-746. يمنع parent dir وroot dir وprefix paths.
-747. يفحص canonical parent داخل workspace.
-748. `TerminalService.run_command` يفحص canonical workspace وcwd.
-749. `CommandPolicyService` يصنف command risk.
-750. dangerous commands blocked افتراضيا.
+911. `agentRuntime.ts` uses `fetch`.
+912. It sets `runtimeBaseUrl` from `VITE_AGENT_RUNTIME_URL`.
+913. It defaults to `http://127.0.0.1:4317`.
+914. `createRuntimeSession` calls `POST /sessions`.
+915. `runRuntimeTurn` calls `POST /sessions/:id/turn`.
+916. `getRuntimeSession` calls `GET /sessions/:id`.
+917. `approveRuntimePatch` calls the patch approve endpoint.
+918. `rejectRuntimePatch` calls the patch reject endpoint.
+919. `reportRuntimePatchApplyResult` calls the patch result endpoint.
+920. `reportRuntimeCommandResult` calls the command result endpoint.
+921. `subscribeRuntimeEvents` creates an `EventSource`.
+922. SSE tokens are passed in the URL query.
+923. Event listeners are registered for runtime session events.
+924. Event listeners are registered for patch events.
+925. Event listeners are registered for command events.
+926. Event listeners are registered for verification events.
+927. Event listeners are registered for orchestration events.
+928. `runtimeFetch` adds JSON content type.
+929. `runtimeFetch` adds session token headers when provided.
+930. `runtimeFetch` throws when HTTP status is not OK.
 
-## 27. Rust patch apply flow
+## 35. Tauri Frontend Helpers
 
-751. frontend يستدعي `applyRuntimePatch(sessionId, patchId)`.
-752. Tauri invoke ينادي Rust command `apply_runtime_patch`.
-753. Rust يأخذ workspace path من `WorkspaceService`.
-754. Rust يأخذ patch payload من SQLite عبر `patch_payload_for_session`.
-755. Rust يستخرج diff بـ `extract_patch_text`.
-756. Rust يتحقق أن payload id يطابق patch_id.
-757. Rust يتحقق أن unifiedDiff موجود.
-758. Rust ينادي `validate_patch_paths_inside_workspace`.
-759. Rust يلتقط before snapshot من GitService.
-760. Rust يسجل event `patch.apply_started`.
-761. Rust ينادي `PatchService.apply_patch`.
-762. لو git apply فشل، يسجل `runtime.patch.apply_failed`.
-763. لو نجح، يلتقط after snapshot.
-764. Rust يسجل `runtime.patch.applied`.
-765. Rust يضع provenance executionAuthority = rust_patch_service.
-766. لو after snapshot غير متاح، يسجل reconciliation unavailable.
-767. يرجع `PatchApplyResult`.
-768. result يحتوي patch_id.
-769. result يحتوي status.
-770. result يحتوي authority.
-771. result يحتوي reconciliation_source.
-772. result يحتوي before/after snapshots.
-773. result يحتوي durable_event_ids.
-774. reject path يسجل `runtime.patch.rejected`.
-775. reject path لا يغير ملفات.
-776. patch apply authority لا تعتمد على frontend-collected git state.
-777. هذا يقلل false evidence.
-778. لو Git repo غير متاح، snapshot available يكون false.
-779. التطبيق قد ينجح حتى لو snapshot unavailable حسب الحالة.
-780. reconciliation report يوضح ذلك لاحقا.
+931. `tauri.ts` wraps Tauri `invoke`.
+932. `openWorkspace` invokes `open_workspace`.
+933. `getWorkspaceInfo` invokes `get_workspace_info`.
+934. `listWorkspaceFiles` invokes `list_workspace_files`.
+935. `readWorkspaceFile` invokes `read_workspace_file`.
+936. `getGitStatus` invokes `get_git_status`.
+937. `getGitDiff` invokes `get_git_diff`.
+938. `runWorkspaceCommand` invokes `run_workspace_command`.
+939. `executeApprovedCommand` invokes `execute_approved_command`.
+940. `createRuntimeRun` invokes `create_runtime_run`.
+941. `appendSessionEvent` invokes `append_session_event`.
+942. `getSavedRuntimeSession` invokes `get_saved_runtime_session`.
+943. `upsertOrchestrationRun` invokes `upsert_orchestration_run`.
+944. `upsertAgentRun` invokes `upsert_agent_run`.
+945. `applyRuntimePatch` invokes `apply_runtime_patch`.
+946. `rejectRuntimePatchViaRust` invokes `reject_runtime_patch`.
+947. `validateModelProvider` invokes `validate_model_provider`.
+948. `listAvailableModels` invokes `list_available_models`.
+949. `saveModelProviderConfig` invokes `save_model_provider_config`.
+950. `restartWithLatestCode` invokes `restart_with_latest_code`.
+
+## 36. Rust/Tauri Backend
+
+951. Rust backend code lives in `apps/desktop/src-tauri/src`.
+952. `lib.rs` builds the Tauri application state.
+953. `main.rs` calls into `lib.rs`.
+954. `commands/` contains Tauri command handlers.
+955. `services/` contains backend services.
+956. `db/` contains SQLite persistence.
+957. `models/` contains Rust-side models.
+958. `security/` contains security helpers.
+959. `AppState` stores `WorkspaceService`.
+960. `AppState` stores `DatabaseService`.
+961. `AppState` stores `GitService`.
+962. `AppState` stores `TerminalService`.
+963. `AppState` stores `PatchService`.
+964. `AppState` stores `ProjectIndexService`.
+965. `AppState` stores `ModelProviderService`.
+966. Tauri manages `AppState`.
+967. Tauri registers workspace commands.
+968. Tauri registers git commands.
+969. Tauri registers terminal commands.
+970. Tauri registers session commands.
+971. Tauri registers patch commands.
+972. Tauri registers system commands.
+973. Tauri registers model provider commands.
+974. Rust owns workspace boundaries.
+975. Rust owns command execution.
+976. Rust owns patch application.
+977. Rust owns SQLite persistence.
+978. Rust records authoritative patch events.
+979. Rust validates paths before applying patches.
+980. Rust captures Git evidence when possible.
+
+## 37. Tauri State Snippet
 
 ```rust
-state.patch.validate_patch_paths_inside_workspace(&patch_text, &workspace_path)?;
+pub struct AppState {
+    pub workspace: Mutex<WorkspaceService>,
+    pub db: Mutex<DatabaseService>,
+    pub git: GitService,
+    pub terminal: TerminalService,
+    pub patch: PatchService,
+    pub index: ProjectIndexService,
+    pub model_provider: ModelProviderService,
+}
+```
+
+981. The state object shows the Rust ownership split.
+982. Workspace state is mutex-protected.
+983. Database access is mutex-protected.
+984. Git service is stateless enough to store directly.
+985. Terminal service is stored directly.
+986. Patch service is stored directly.
+987. Project index service is stored directly.
+988. Model provider service is stored directly.
+989. Commands access this state through Tauri.
+990. The frontend never owns these services directly.
+
+## 38. WorkspaceService
+
+991. `WorkspaceService` lives in `apps/desktop/src-tauri/src/services/workspace.rs`.
+992. It stores the active workspace path.
+993. It stores the active project ID.
+994. `open_workspace` canonicalizes the requested path.
+995. `open_workspace` rejects inaccessible paths.
+996. `open_workspace` rejects non-directory paths.
+997. `workspace_path` returns the active workspace path.
+998. `ensure_inside_workspace` validates file paths.
+999. `ensure_inside_workspace` accepts absolute or relative paths.
+1000. `ensure_inside_workspace` canonicalizes candidates.
+1001. `ensure_inside_workspace` rejects paths outside the workspace.
+1002. `ensure_command_cwd` validates command working directories.
+1003. `list_files` uses `ignore::WalkBuilder`.
+1004. `list_files` can respect `.gitignore`.
+1005. `list_files` has a max depth.
+1006. `list_files` skips generated folders.
+1007. `list_files` returns `FileEntry` objects.
+1008. `read_file` rejects directories.
+1009. `read_file` blocks secret-like files.
+1010. `read_file` reads text from disk.
+
+## 39. PatchService and Rust Patch Command
+
+1011. `PatchService` lives in `apps/desktop/src-tauri/src/services/patch.rs`.
+1012. `apply_runtime_patch` lives in `apps/desktop/src-tauri/src/commands/patch.rs`.
+1013. The command receives `session_id`.
+1014. The command receives `patch_id`.
+1015. The command reads the active workspace path.
+1016. The command loads the patch payload from SQLite.
+1017. The command extracts `unifiedDiff`.
+1018. The command validates that the payload patch ID matches.
+1019. The command validates patch paths.
+1020. The command captures a before Git snapshot.
+1021. The command appends `patch.apply_started`.
+1022. The command applies the patch.
+1023. The patch service writes a temporary diff file.
+1024. The patch service runs `git apply --whitespace=nowarn`.
+1025. The patch service removes the temporary diff file.
+1026. The command records `runtime.patch.apply_failed` on failure.
+1027. The command captures an after Git snapshot on success.
+1028. The command records `runtime.patch.applied` on success.
+1029. The command sets provenance to `rust_patch_service`.
+1030. The command returns `PatchApplyResult`.
+1031. `PatchApplyResult` includes patch ID.
+1032. `PatchApplyResult` includes status.
+1033. `PatchApplyResult` includes message.
+1034. `PatchApplyResult` includes authority.
+1035. `PatchApplyResult` includes reconciliation source.
+1036. `PatchApplyResult` includes snapshots.
+1037. `PatchApplyResult` includes durable event IDs.
+1038. Rejection records `runtime.patch.rejected`.
+1039. Rejection does not change files.
+1040. Patch authority is intentionally Rust-owned.
+
+## 40. Rust Patch Apply Snippet
+
+```rust
+state
+    .patch
+    .validate_patch_paths_inside_workspace(&patch_text, &workspace_path)?;
 let before_snapshot = state.git.snapshot(&workspace_path, "rust_git_snapshot");
 state.patch.apply_patch(&patch_text, &workspace_path)?;
 let after_snapshot = state.git.snapshot(&workspace_path, "rust_git_snapshot");
 ```
 
-781. هذا snippet هو جوهر سلطة الباتش.
-782. path validation يسبق git apply.
-783. snapshot قبل وبعد يحفظ evidence.
-784. git apply يحدث داخل canonical workspace.
-785. temporary patch file يزال بعد التنفيذ.
-786. لو patch references خارج workspace، يفشل قبل apply.
-787. لو diff لا ينطبق، git apply يعيد stderr.
-788. الواجهة يجب أن تعرض message للمستخدم.
-789. runtime يجب أن يتلقى result endpoint.
-790. post-verify يعتمد على نتيجة التطبيق والتحقق.
+1041. Path validation happens before `git apply`.
+1042. Git evidence is captured before applying.
+1043. Git evidence is captured after applying.
+1044. Snapshot availability is recorded.
+1045. Non-git workspaces can have unavailable snapshots.
+1046. Patch application can fail if context does not match.
+1047. Patch application can fail if paths are invalid.
+1048. Patch application can fail if the workspace is inaccessible.
+1049. Patch application can fail if Git is unavailable.
+1050. Rust returns a clear message for the UI and runtime.
 
-## 28. SQLite persistence
+## 41. SQLite Persistence
 
-791. `DatabaseService` يفتح database في app data path.
-792. `initialize` ينشئ الجداول إذا لم توجد.
-793. جدول `projects` يحفظ projects.
-794. جدول `sessions` يحفظ sessions قديمة/أساسية.
-795. جدول `tasks` يحفظ tasks.
-796. جدول `agent_runs` يحفظ agent runs.
-797. جدول `tool_calls` يحفظ tool calls.
-798. جدول `patches` يحفظ patches.
-799. جدول `project_memory` يحفظ key/value memory.
-800. جدول `model_provider_config` يحفظ provider config sanitized.
-801. جدول `orchestration_runs` يحفظ briefs/plans/status/token hash.
-802. جدول `session_events` يحفظ events bridge.
-803. جدول `command_requests` يحفظ طلبات الأوامر.
-804. جدول `command_results` يحفظ نتائج الأوامر.
-805. جدول `background_jobs` يحفظ jobs محدودة التتبع.
-806. جدول `artifacts` يحفظ artifacts runtime.
-807. جدول `runtime_events` يحفظ الأحداث canonical ordered.
-808. `runtime_events` له UNIQUE(session_id, sequence).
-809. `add_column_if_missing` يدعم migrations بسيطة.
-810. `backfill_event_metadata` يملأ metadata قديمة.
-811. event authorities تشمل runtime_bridge وrust.
-812. patch proposed/approved/applied/rejected events معروفة كثوابت.
-813. command requested/started/completed/failed/blocked events معروفة.
-814. artifacts created معروف أيضا.
-815. عند debugging persistence، افصل بين `session_events` و`runtime_events`.
-816. `session_events` bridge/compatibility.
-817. `runtime_events` canonical event model.
-818. replay يعتمد على runtime_events عندما يكفي.
-819. patch payload for session يأتي من session_events.
-820. هذا مهم: Rust apply يبحث proposal في SQLite وليس في memory map.
+1051. `DatabaseService` lives in `apps/desktop/src-tauri/src/db/mod.rs`.
+1052. It opens a SQLite connection.
+1053. It creates parent directories for the database path.
+1054. It initializes tables.
+1055. It enables foreign keys.
+1056. It creates a `projects` table.
+1057. It creates a `sessions` table.
+1058. It creates a `tasks` table.
+1059. It creates an `agent_runs` table.
+1060. It creates a `tool_calls` table.
+1061. It creates a `patches` table.
+1062. It creates a `project_memory` table.
+1063. It creates a `model_provider_config` table.
+1064. It creates an `orchestration_runs` table.
+1065. It creates a `session_events` table.
+1066. It creates a `command_requests` table.
+1067. It creates a `command_results` table.
+1068. It creates a `background_jobs` table.
+1069. It creates an `artifacts` table.
+1070. It creates a `runtime_events` table.
+1071. `runtime_events` has ordered sequences.
+1072. `runtime_events` has event type.
+1073. `runtime_events` has actor.
+1074. `runtime_events` has authority.
+1075. `runtime_events` has JSON payload.
+1076. `runtime_events` has version.
+1077. `runtime_events` has correlation ID.
+1078. `runtime_events` has causation ID.
+1079. `session_events` stores bridge events.
+1080. `runtime_events` stores canonical durable events.
+1081. Patch payload lookup uses SQLite session event state.
+1082. Runtime restore may use durable runtime events.
+1083. Snapshot restore is still a fallback.
+1084. `add_column_if_missing` supports schema evolution.
+1085. `backfill_event_metadata` repairs older event metadata.
+1086. Debugging patch proposal lookup often starts in `session_events`.
+1087. Debugging replay often starts in `runtime_events`.
+1088. Debugging provider config starts in `model_provider_config`.
+1089. Debugging command history starts in `command_requests` and `command_results`.
+1090. Debugging background commands starts in `background_jobs`.
 
-## 29. Terminal authority
+## 42. Terminal Authority
 
-821. `TerminalService` هو Rust authority للأوامر.
-822. يأخذ command وcwd وworkspace وsafety settings.
-823. يعمل canonicalize للworkspace.
-824. يعمل canonicalize للcwd.
-825. يرفض cwd خارج workspace.
-826. يستخدم `CommandPolicyService::analyze`.
-827. dangerous risk blocked إذا block_dangerous_commands true.
-828. full access قد يسمح dangerous heuristic إذا block false.
-829. network commands ترفض إذا allow_network_commands false.
-830. medium commands قد تحتاج approval.
-831. background commands قد تحتاج approval.
-832. network commands قد تحتاج approval.
-833. status `approval_required` ليس failure عادي.
-834. approval_required يجب أن يرجع للruntime/واجهة كموقف آمن.
-835. background command يبدأ بـ limited tracking.
-836. foreground command ينفذ عبر `cmd /C` على Windows.
-837. stdout/stderr قد يتم redaction حسب settings.
-838. provenance يشرح source والpolicy والapproval.
-839. command failure diagnosis يعطي next step.
-840. لا تعتبر command verified إذا policy منع التنفيذ.
-841. لو runtime يطلب command، Rust هو الذي ينفذه.
-842. frontend `executeApprovedCommand` يربط approval بتنفيذ Rust.
-843. terminal orchestrator في frontend يقرر auto-run commands safe.
-844. لكن Rust يعيد فحص السياسة.
-845. هذا defense in depth.
-846. لو أمر npm install blocked، افحص allowNetworkCommands وautoRunNetworkCommands.
-847. لو dev server approval_required، افحص autoRunBackgroundCommands.
-848. لو cwd blocked، افحص active workspace.
-849. لو dangerous blocked، راجع command policy.
-850. لا توسع policy بدون سبب واضح واختبارات.
+1091. `TerminalService` lives in `apps/desktop/src-tauri/src/services/terminal.rs`.
+1092. It runs workspace commands.
+1093. It validates the active workspace path.
+1094. It validates the command working directory.
+1095. It rejects working directories outside the workspace.
+1096. It calls `CommandPolicyService::analyze`.
+1097. It classifies command risk.
+1098. It blocks dangerous commands by default.
+1099. It can allow dangerous commands only under full-access style settings.
+1100. It detects network commands.
+1101. It detects background commands.
+1102. It can block network commands.
+1103. It can require approval for medium-risk commands.
+1104. It can require approval for background commands.
+1105. It can require approval for network commands.
+1106. It returns `approval_required` when policy needs operator approval.
+1107. It returns `blocked` when policy blocks execution.
+1108. It returns `running` for started background commands.
+1109. It returns `failed` for failed process starts or exits.
+1110. It records command provenance.
+1111. It records command failure diagnosis.
+1112. It records limited background-job metadata.
+1113. It uses `cmd /C` on Windows foreground command execution.
+1114. It uses shell execution on non-Windows paths.
+1115. It can redact secrets according to settings.
+1116. Runtime command requests are not execution.
+1117. Rust command execution is execution.
+1118. Approval-required is a safety stop.
+1119. Blocked commands do not verify the run.
+1120. Foreground verification commands are best for reliable feedback.
 
-## 30. Model provider layer
+## 43. Model Provider Layer
 
-851. frontend settings modal يدعم Ollama.
-852. frontend settings modal يدعم OpenAI-compatible custom API.
-853. frontend settings modal يدعم OpenRouter-compatible API.
-854. frontend settings modal يدعم local/private OpenAI-compatible server.
-855. provider config محفوظ sanitized في SQLite.
-856. Rust `ModelProviderService` يتحقق من الإعدادات عبر HTTP backend-owned checks.
-857. runtime `AgentRuntime` يختار Mock/Ollama/OpenAIProvider.
-858. `ProviderTelemetry` يسجل الحقيقة.
-859. `activeProviderSource` يوضح مصدر provider.
-860. source قد يكون runtime_default.
-861. source قد يكون desktop_saved_provider.
-862. source قد يكون session_override.
-863. source قد يكون explicit_cli.
-864. source قد يكون unknown.
-865. `TelemetryLlmProvider` يغلف provider.
-866. telemetry يحسب request counts.
-867. telemetry يحسب failures/timeouts.
-868. telemetry يوضح fallbackUsed.
-869. provider truth smoke test موجود.
-870. عند مشاكل "لم يستخدم OpenAI"، افحص provider telemetry أولا.
+1121. The desktop UI has provider settings.
+1122. It supports Ollama.
+1123. It supports OpenAI-compatible APIs.
+1124. It supports OpenRouter-style APIs.
+1125. It supports local/private OpenAI-compatible servers.
+1126. Rust validates provider settings.
+1127. Rust stores sanitized provider config.
+1128. Runtime reads provider config passed into sessions.
+1129. Runtime can use mock provider mode.
+1130. Runtime can use real provider mode.
+1131. `ProviderTelemetry` records provider request counts.
+1132. `ProviderTelemetry` records provider failures.
+1133. `ProviderTelemetry` records provider timeouts.
+1134. `ProviderTelemetry` records real provider usage.
+1135. `ProviderTelemetry` records mock provider usage.
+1136. `ProviderTelemetry` records fallback usage.
+1137. `ProviderTelemetry` records active provider source.
+1138. Provider source can be runtime default.
+1139. Provider source can be desktop saved provider.
+1140. Provider source can be session override.
+1141. Provider source can be explicit CLI.
+1142. Provider source can be unknown.
+1143. Provider truth tests protect against false claims.
+1144. If real provider was expected, inspect telemetry.
+1145. If fallback happened, inspect fallback reason.
+1146. If provider validation failed, inspect Rust provider checks.
+1147. If model listing failed, inspect base URL and API key.
+1148. If mock was used unexpectedly, inspect session mode.
+1149. If deterministic-only path ran, inspect execution mode.
+1150. Provider truth is part of evidence hygiene.
 
-## 31. Docs الموجودة
+## 44. Existing Documentation
 
-871. `docs/architecture.md` هو أفضل summary رسمي للبنية الحالية.
-872. يصف Windows-first Tauri 2 app.
-873. يصف React + TypeScript frontend.
-874. يصف Rust backend/core.
-875. يصف separate TypeScript agent runtime.
-876. يصف patch proposal flow.
-877. يصف inspect/explain read lanes.
-878. يصف security boundaries.
-879. `docs/orchestration-flow.md` يحتوي Mermaid flow.
-880. flow يبدأ من User prompt.
-881. ثم Product Orchestrator.
-882. ثم Business Orchestrator.
-883. ثم Engineering Orchestrator.
-884. ثم Deterministic TaskGraph.
-885. ثم FileLockManager.
-886. ثم TaskScheduler.
-887. ثم Specialized Workers.
-888. ثم MergeController.
-889. ثم SecurityAgent.
-890. ثم ReviewerAgent.
-891. ثم Patch proposals.
-892. ثم User approval.
-893. ثم Rust apply command.
-894. `docs/security-model.md` يجب مراجعته عند تغيير boundaries.
-895. `docs/usage/quickstart.md` مفيد للتشغيل.
-896. `docs/usage/campaigns.md` مفيد للحملات.
-897. `docs/architecture/internal-swarm-autopilot.md` يشرح Phase 5.
-898. `docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md` يشرح trials.
-899. `docs/architecture/memory-and-indexing.md` يشرح memory.
-900. `docs/extension/add-agent-role.md` يشرح إضافة role.
+1151. `docs/architecture.md` is the concise architecture overview.
+1152. `docs/orchestration-flow.md` contains a Mermaid orchestration flow.
+1153. `docs/security-model.md` documents safety boundaries.
+1154. `docs/usage/quickstart.md` documents setup and usage.
+1155. `docs/usage/campaigns.md` documents campaign workflows.
+1156. `docs/architecture/internal-swarm-autopilot.md` documents internal swarm direction.
+1157. `docs/architecture/memory-and-indexing.md` documents repository memory.
+1158. `docs/architecture/multi-plan-factory.md` documents multi-plan behavior.
+1159. `docs/architecture/durable-locks.md` documents lock foundations.
+1160. `docs/architecture/prompt-writer-agents.md` documents prompt writer direction.
+1161. `docs/architecture/provider-backed-read-only-swarm-workers.md` documents provider-backed readers.
+1162. `docs/architecture/planning-evidence-fan-in.md` documents evidence fan-in.
+1163. `docs/architecture/phase-1-memory-indexing-plan.md` documents Phase 1.
+1164. `docs/architecture/phase-2-orchestrator-taskgraph-plan.md` documents Phase 2.
+1165. `docs/architecture/phase-3-swarm-verification-safety-plan.md` documents Phase 3.
+1166. `docs/architecture/phase-4-scale-intelligence-hardening-plan.md` documents Phase 4.
+1167. `docs/architecture/phase-6-swarm-autopilot-trial-lab-plan.md` documents Phase 6.
+1168. `docs/extension/add-agent-role.md` documents extending worker roles.
+1169. `docs/operations/debugging.md` documents debugging operations.
+1170. Documentation should be updated when architecture changes.
 
-## 32. Tests
+## 45. Test Map
 
-901. اختبارات runtime موجودة في `apps/agent-runtime/src/tests`.
-902. هناك 63 test files حسب index.
-903. `memory-indexing.test.ts` يغطي indexing.
-904. `command-policy.test.ts` يغطي command policy.
-905. `orchestration.test.ts` يغطي orchestration core.
-906. `swarm-autopilot.test.ts` يغطي swarm.
-907. `swarm-trial-lab.test.ts` يغطي trial lab.
-908. `patch-validation.test.ts` يغطي patch validation.
-909. `patch-apply-sandbox.test.ts` يغطي sandbox apply.
-910. `durable-lock-manager.test.ts` يغطي durable locks.
-911. `replay-restore.test.ts` يغطي restore/replay.
-912. `runtime-event-semantics.test.ts` يغطي event semantics.
-913. `provider-truth-evidence-hygiene.test.ts` يغطي provider/evidence truth.
-914. `run-to-green.test.ts` يغطي run-to-green.
-915. `inspect-explain.test.ts` يغطي project explain.
-916. `inspect-explain-read-lanes.test.ts` يغطي lanes.
-917. `validation-semantics.test.ts` يغطي validation status aggregation.
-918. Rust tests موجودة داخل services مثل workspace/patch.
-919. desktop smoke test موجود في `apps/desktop/scripts/run-project-smoke.ts`.
-920. عند تعديل frontend فقط، استخدم `npm run typecheck -w @hivo/desktop` وربما smoke.
-921. عند تعديل protocol، شغل root typecheck.
-922. عند تعديل runtime orchestration، شغل agent-runtime tests.
-923. عند تعديل Rust authority، شغل cargo test/check.
-924. عند تعديل memory، شغل memory:index-status وربما memory tests.
-925. عند تعديل staffing heuristics، شغل `npm run agent:trial:staffing-eval`.
-926. عند تعديل scheduler scale، شغل `npm run agent:trial:scheduler-scale`.
-927. لا تعتبر validation ناجحة إذا الأوامر لم تنفذ فعليا.
-928. سجل unverified status بوضوح إذا تعذر تشغيل tests.
-929. tests جزء من architecture لأن النظام safety-first.
-930. إضافة feature بدون test في هذه المناطق risk واضح.
+1171. Runtime tests live in `apps/agent-runtime/src/tests`.
+1172. `memory-indexing.test.ts` covers memory indexing.
+1173. `command-policy.test.ts` covers command policy.
+1174. `orchestration.test.ts` covers orchestration behavior.
+1175. `swarm-autopilot.test.ts` covers swarm autopilot.
+1176. `swarm-trial-lab.test.ts` covers trial lab behavior.
+1177. `patch-validation.test.ts` covers patch validation.
+1178. `patch-apply-sandbox.test.ts` covers sandbox patch application.
+1179. `durable-lock-manager.test.ts` covers durable locks.
+1180. `replay-restore.test.ts` covers restore and replay.
+1181. `runtime-event-semantics.test.ts` covers runtime event semantics.
+1182. `provider-truth-evidence-hygiene.test.ts` covers provider evidence.
+1183. `run-to-green.test.ts` covers run-to-green behavior.
+1184. `inspect-explain.test.ts` covers project explanation behavior.
+1185. `inspect-explain-read-lanes.test.ts` covers read lanes.
+1186. `validation-semantics.test.ts` covers validation aggregation.
+1187. Rust service tests exist inside Rust modules.
+1188. Desktop smoke tests live under `apps/desktop/scripts`.
+1189. Frontend-only changes should run desktop typecheck.
+1190. Runtime changes should run agent-runtime tests.
+1191. Protocol changes should run root typecheck.
+1192. Rust authority changes should run Cargo check or tests.
+1193. Memory changes should run memory indexing tests.
+1194. Staffing heuristic changes should run staffing eval trials.
+1195. Scheduler scale changes should run scheduler-scale trials.
+1196. Command policy changes should run command policy tests.
+1197. Patch authority changes should run patch tests.
+1198. Restore changes should run replay restore tests.
+1199. Provider changes should run provider truth tests.
+1200. Unrun tests should be reported clearly.
 
-## 33. Debugging guide سريع
+## 46. Practical Debugging Checklist
 
-931. لو الواجهة لا تفتح workspace، افحص Rust `WorkspaceService.open_workspace`.
-932. لو file tree ناقص، افحص `list_files` max_depth وskip paths.
-933. لو secret file لا يقرأ، هذا غالبا intentional.
-934. لو runtime لا يستجيب، افحص `apps/agent-runtime/src/index.ts` والport 4317.
-935. لو CORS error، افحص `server.ts` onRequest hook.
-936. لو session unauthorized، افحص token header/query.
-937. لو SSE لا يعمل، افحص `/sessions/:id/events`.
-938. لو UI لا يتحدث، افحص EventSource listeners في `agentRuntime.ts`.
-939. لو prompt لا يستخدم multi-agent، افحص `resolveExecutionMode`.
-940. لو prompt توقف عند approval، افحص `nextAction`.
-941. لو command approval_required، افحص Rust TerminalService safety settings.
-942. لو command blocked، افحص risk classification.
-943. لو patch proposed ولا يظهر، افحص runtime events والfrontend state.
-944. لو patch approved ولا يطبق، افحص Rust `apply_runtime_patch`.
-945. لو Rust يقول proposal not found، افحص SQLite `session_events`.
-946. لو Rust يقول unifiedDiff missing، افحص PatchProposal payload.
-947. لو Rust يقول path outside workspace، افحص diff file headers.
-948. لو git apply failed، افحص stderr وworking tree.
-949. لو post-apply evidence unavailable، افحص GitService snapshot والrepo status.
-950. لو resume غريب، افحص `sessions.json` و`runtime_events`.
-951. لو swarm overstaffs، افحص `SwarmStaffingPlanner` reasoning.
-952. لو swarm understaffs، افحص relevant files/task complexity inference.
-953. لو specialist ظهر بلا سبب، افحص SpecialistAgentFactory triggers.
-954. لو artifacts ناقصة، افحص SwarmArtifactStore أو OrchestrationArtifactStore.
-955. لو memory stale، شغل `npm run memory:index-refresh`.
-956. لو tests لا تعثر على source mapping، افحص project_intelligence.
-957. لو provider fallback happened، افحص ProviderTruthTelemetry.
-958. لو mock استخدم بدل real، افحص activeProviderSource.
-959. لو model validation failed، افحص Rust ModelProviderService.
-960. debugging الجيد يبدأ من boundary الصحيح.
+1201. If the desktop app does not start, check Tauri startup and Vite dev server.
+1202. If the UI does not mount, check `main.tsx` and `App.tsx`.
+1203. If the workspace does not open, check `WorkspaceService.open_workspace`.
+1204. If file listing is incomplete, check `list_files` skip rules and max depth.
+1205. If a file cannot be read, check secret detection and workspace boundaries.
+1206. If runtime HTTP fails, check whether the agent runtime is listening.
+1207. If `/health` fails, check `src/index.ts` and config.
+1208. If session create fails, check `POST /sessions` request body.
+1209. If turns fail with unauthorized, check session token propagation.
+1210. If SSE does not connect, check `/sessions/:id/events`.
+1211. If SSE connects but UI is stale, check event handlers.
+1212. If a prompt does not use the expected mode, check execution mode resolution.
+1213. If a prompt pauses, check `nextAction`.
+1214. If a command is approval-required, check safety settings.
+1215. If a command is blocked, check command policy risk.
+1216. If a command runs but runtime does not update, check command result reporting.
+1217. If a patch proposal is missing, check runtime patch events.
+1218. If a patch approval does not apply files, check Rust `apply_runtime_patch`.
+1219. If Rust cannot find a patch, check SQLite `session_events`.
+1220. If Rust rejects a patch path, check diff headers.
+1221. If Git rejects a patch, check patch context and working tree state.
+1222. If post-apply evidence is missing, check Git snapshot availability.
+1223. If restore is wrong, check `sessions.json` and `runtime_events`.
+1224. If swarm overstaffs, check staffing planner reasoning.
+1225. If swarm understaffs, check relevant file inference.
+1226. If specialists appear unexpectedly, check specialist triggers.
+1227. If memory is stale, run `npm run memory:index-status`.
+1228. If memory is stale, run `npm run memory:index-refresh`.
+1229. If provider behavior is wrong, check provider telemetry.
+1230. If mock mode was used unexpectedly, check session mode and provider source.
 
-## 34. قواعد تعديل المشروع بأمان
+## 47. Safe Change Rules
 
-961. اقرأ surrounding code قبل التعديل.
-962. لا تعمل big-bang rewrite.
-963. غير أصغر slice منطقي.
-964. حافظ على behavior إلا إذا المهمة تغيره.
-965. استخدم existing patterns.
-966. لا تضف abstraction إلا إذا قللت تعقيدا فعليا.
-967. لا تتجاوز Rust-owned patch authority.
-968. لا تتجاوز command policy.
-969. لا تستخدم malformed JSON من agents كمصدر تغييرات.
-970. أصلح أو ارفض output يخالف schema.
-971. حافظ على TypeScript strict.
-972. حافظ على deterministic JSON قدر الإمكان.
-973. حدث docs عند تغيير architecture أو memory format أو orchestration contract.
-974. أضف tests لمناطق memory/indexing/commands/context/orchestration/verification.
-975. file locks وpatch fingerprints validation logs مصادر حقيقة.
-976. approval-required status توقف أمان حقيقي.
-977. لا توسع edit scope لتجاوز approval.
-978. dynamic specialists يجب أن تأتي من evidence.
-979. لا تجعل مئات agents write-capable.
-980. سجّل staffing decisions في artifacts/reports.
+1231. Read surrounding code before editing.
+1232. Prefer existing project patterns.
+1233. Keep edits scoped.
+1234. Avoid large speculative refactors.
+1235. Preserve behavior unless asked to change it.
+1236. Use structured APIs where available.
+1237. Keep TypeScript strict-mode clean.
+1238. Keep generated JSON deterministic.
+1239. Do not bypass Rust patch authority.
+1240. Do not bypass command authority.
+1241. Do not let malformed agent JSON drive code changes.
+1242. Repair or reject invalid worker outputs.
+1243. Treat file locks as real state.
+1244. Treat validation logs as real state.
+1245. Treat patch fingerprints as real state.
+1246. Treat review artifacts as real state.
+1247. Treat approval gates as real stops.
+1248. Treat stale memory warnings as blockers for context-sensitive work.
+1249. Report unverified status clearly.
+1250. Add tests for memory, commands, context, orchestration, and verification changes.
 
-## 35. خريطة ownership عملية
+## 48. Ownership Map
 
-981. مشاكل types المشتركة غالبا في `packages/protocol`.
-982. مشاكل session lifecycle غالبا في `apps/agent-runtime/src/runtime`.
-983. مشاكل HTTP/SSE غالبا في `apps/agent-runtime/src/server.ts`.
-984. مشاكل planning التقليدي غالبا في `apps/agent-runtime/src/orchestration/Orchestrator.ts`.
-985. مشاكل swarm staffing غالبا في `SwarmStaffingPlanner.ts`.
-986. مشاكل swarm execution غالبا في `SwarmScheduler.ts`.
-987. مشاكل artifacts غالبا في `ArtifactStore.ts` أو `SwarmArtifactStore.ts`.
-988. مشاكل memory index غالبا في `RepoIndexer.ts`.
-989. مشاكل command discovery غالبا في `CommandInventory.ts`.
-990. مشاكل project intelligence غالبا في `ProjectIntelligence.ts`.
-991. مشاكل workspace reads في Node غالبا في `WorkspaceTools.ts`.
-992. مشاكل patch proposal في `PatchTools.ts`.
-993. مشاكل Rust workspace في `services/workspace.rs`.
-994. مشاكل Rust patch apply في `commands/patch.rs` و`services/patch.rs`.
-995. مشاكل terminal في `services/terminal.rs`.
-996. مشاكل database في `db/mod.rs`.
-997. مشاكل frontend runtime calls في `src/lib/agentRuntime.ts`.
-998. مشاكل Tauri invoke في `src/lib/tauri.ts`.
-999. مشاكل UI state في `src/app/App.tsx`.
-1000. مشاكل styles في `src/app/styles.css`.
+1251. Shared type problems usually start in `packages/protocol`.
+1252. Runtime HTTP problems usually start in `apps/agent-runtime/src/server.ts`.
+1253. Session lifecycle problems usually start in `apps/agent-runtime/src/runtime/SessionManager.ts`.
+1254. Turn routing problems usually start in `apps/agent-runtime/src/runtime/AgentRuntime.ts`.
+1255. Simple execution problems usually start in `RunEngine`.
+1256. Project explanation problems usually start in inspect/explain runtime modules.
+1257. Core orchestration problems usually start in `Orchestrator.ts`.
+1258. Swarm planning problems usually start in `SwarmRuntime.ts`.
+1259. Staffing problems usually start in `SwarmStaffingPlanner.ts`.
+1260. Scheduler problems usually start in `SwarmScheduler.ts`.
+1261. Artifact problems usually start in `ArtifactStore.ts` or `SwarmArtifactStore.ts`.
+1262. Memory index problems usually start in `RepoIndexer.ts`.
+1263. Command inventory problems usually start in `CommandInventory.ts`.
+1264. Node workspace read problems usually start in `WorkspaceTools.ts`.
+1265. Patch proposal problems usually start in `PatchTools.ts`.
+1266. Desktop UI state problems usually start in `App.tsx`.
+1267. Frontend runtime API problems usually start in `agentRuntime.ts`.
+1268. Frontend Tauri command problems usually start in `tauri.ts`.
+1269. Rust workspace problems usually start in `services/workspace.rs`.
+1270. Rust patch problems usually start in `commands/patch.rs` and `services/patch.rs`.
+1271. Rust terminal problems usually start in `services/terminal.rs`.
+1272. SQLite problems usually start in `db/mod.rs`.
+1273. Model provider validation problems usually start in `services/model_provider.rs`.
+1274. Git evidence problems usually start in `services/git.rs`.
+1275. Desktop smoke problems usually start in `apps/desktop/scripts/run-project-smoke.ts`.
+1276. Runtime smoke problems usually start in `apps/agent-runtime/scripts`.
+1277. Test failures should be mapped to the touched module.
+1278. Documentation drift should be fixed near the changed contract.
+1279. Operator workflow changes should be reflected in usage docs.
+1280. Architecture changes should be reflected in architecture docs.
 
-## 36. خاتمة
+## 49. Closing Notes
 
-1001. المشروع كبير، لكنه منظم حول boundaries واضحة.
-1002. أهم boundary هو read/propose في Node مقابل apply/execute في Rust.
-1003. أهم artifact directory هو `.agent_memory`.
-1004. أهم shared contract هو `packages/protocol`.
-1005. أهم runtime user-facing object هو `AgentRuntimeSession`.
-1006. أهم CLI حديث هو `agent run` عبر `SwarmAutopilotRuntime`.
-1007. أهم safety idea هي أن approval والتحقق والlocks ليست اختيارية.
-1008. إذا فهمت flow المستخدم إلى patch apply، ستفهم معظم bugs العملية.
-1009. إذا فهمت memory freshness، ستفهم لماذا بعض الإجابات قد تكون stale.
-1010. إذا فهمت staffing planner، ستفهم لماذا السرب يكبر أو يصغر.
-1011. إذا فهمت protocol events، ستفهم لماذا UI لا يعرض حالة معينة.
-1012. إذا فهمت SQLite events، ستفهم restore والتطبيق authoritative.
-1013. إذا فهمت command policy، ستفهم لماذا أوامر معينة تتوقف.
-1014. إذا فهمت ToolRegistry grants، ستفهم narrow worker behavior.
-1015. هذا الملف يتعمد أن يكون طويلا ومباشرا.
-1016. استخدم عناوين الأقسام للبحث السريع.
-1017. استخدم أرقام السطور كمرجع أثناء debugging.
-1018. عند أي تعديل معماري جديد، حدّث هذا الملف أو أضف doc أدق بجانبه.
-1019. الهدف النهائي هو نظام coding factory يمكن الوثوق به.
-1020. الثقة هنا تأتي من architecture قابلة للتدقيق، لا من ثقة عمياء في نموذج واحد.
+1281. The project is large, but its key boundaries are clear.
+1282. The frontend is the operator console.
+1283. The TypeScript runtime is the reasoning and orchestration engine.
+1284. The protocol package is the contract layer.
+1285. The Rust backend is the local authority layer.
+1286. `.agent_memory` is the durable repository memory layer.
+1287. Patch proposals are not patch application.
+1288. Command requests are not command execution.
+1289. Approval is not verification.
+1290. Blocked commands are not validation success.
+1291. Stale memory is not reliable context.
+1292. High agent count is not inherently better.
+1293. Narrow evidence-backed workers are the intended pattern.
+1294. Durable artifacts make the system inspectable.
+1295. Review gates make the system safer.
+1296. Validation gates make the system more honest.
+1297. Rust authority makes file and command changes auditable.
+1298. Shared protocol types make the layers coherent.
+1299. The fastest debugging path is to identify the failing boundary.
+1300. The long-term goal is a trustworthy orchestration-first coding factory.

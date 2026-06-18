@@ -10,6 +10,7 @@ import { buildServer } from "../server.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+import { RunEngine } from "../runtime/RunEngine.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -35,7 +36,7 @@ test("run this project initializes run_to_green before provider task planning", 
 
     assert.equal(session?.runIntent, "run_to_green");
     assert.equal(session?.runMode, "run_to_green");
-    assert.equal(provider.structuredCalls, 0);
+    assert.equal(provider.structuredCalls, 1);
     assert.equal(session?.runToGreen?.status, "blocked");
     assert.equal(session?.status, "completed");
     assert.equal(session?.verificationResult?.status, "unavailable");
@@ -114,7 +115,7 @@ test("run_to_green completes safely when no known command can be selected", asyn
 });
 
 test("malformed provider task JSON stops implementation instead of inventing a deterministic plan", async () => {
-  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const fixture = await createEmptyFixture();
   const runtime = await createRuntimeWithProvider(fixture.storageDir, new InvalidPlanProvider());
   try {
     const created = await runtime.createSession({
@@ -129,8 +130,160 @@ test("malformed provider task JSON stops implementation instead of inventing a d
     assert.equal(turn.status, "failed");
     assert.equal(session?.status, "failed");
     assert.equal(session?.tasks.length, 0);
-    assert.ok(session?.reasoningSummaries.includes("Model returned malformed structured output; deterministic fallback plan was used."));
     assert.match(session?.messages.at(-1)?.content ?? "", /no deterministic implementation plan was invented|stopped here instead of creating a canned plan/i);
+    assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 0, true);
+    assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Planning provider request" && gate.status === "failed"));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("read-only planning questions bypass implementation planner fallback", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const provider = new ReadOnlyQuestionProvider();
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = "explain this project architecture and make a read-only plan for understanding it";
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "simple_mode",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+    const answer = session?.messages.at(-1)?.content ?? "";
+
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(provider.runPlanCalls, 0);
+    assert.doesNotMatch(answer, /no deterministic implementation plan was invented|safe implementation plan|canned plan/i);
+    assert.match(answer, /Workspace used for this answer|PROVIDER_READ_ONLY_EXPLAIN/i);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("planner gate reports not attempted instead of provider failure when no request is recorded", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const sessionManager = new SessionManager(fixture.storageDir, new EventBus());
+  await sessionManager.load();
+  try {
+    const session = await sessionManager.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: "add a small note"
+    });
+    const result = await new RunEngine(new InvalidPlanProvider(), sessionManager).runTurn(session.id, "add a small note", {
+      resolvedMode: "simple_mode",
+      projectMap: {
+        stack: ["TypeScript"],
+        packageManagers: ["npm"],
+        testCommands: ["npm test"],
+        entryPoints: ["src/main.ts"],
+        importantFiles: ["src/main.ts", "package.json"]
+      }
+    });
+    const answer = result.messages.at(-1)?.content ?? "";
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.providerTelemetry, undefined);
+    assert.match(answer, /No planning provider request was recorded/i);
+    assert.doesNotMatch(answer, /provider planner failed/i);
+    assert.ok(result.runSummary?.gates.some((gate) => gate.name === "Planning provider request" && gate.status === "blocked"));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("operator-supplied implementation plan skips provider run-plan and reaches review", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const provider = new OperatorPlanPatchProvider("valid");
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = operatorPlanPrompt();
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(provider.runPlanCalls, 0);
+    assert.equal(provider.patchIntentCalls, 1);
+    assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 0, true);
+    assert.equal(session?.plan?.summary, "Use the explicit operator plan to add a small exported marker.");
+    assert.ok(session?.reasoningSummaries.includes("Plan source: operator_supplied"));
+    assert.ok(session?.runSummary?.gates.some((gate) =>
+      gate.name === "Planning provider request" &&
+      gate.status === "passed" &&
+      /operator-supplied implementation plan/i.test(gate.notes.join(" "))
+    ));
+    assert.equal(session?.patchProposals.length, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("operator-supplied implementation plan accepts concise directive and plan title", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const provider = new OperatorPlanPatchProvider("valid");
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = conciseOperatorPlanPrompt();
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
+    });
+    await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(provider.runPlanCalls, 0);
+    assert.equal(provider.patchIntentCalls, 1);
+    assert.ok(session?.runSummary?.gates.some((gate) =>
+      gate.name === "Planning provider request" &&
+      /operator-supplied implementation plan/i.test(gate.notes.join(" "))
+    ));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("operator-supplied plan still blocks when provider patch intent is malformed", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
+  const provider = new OperatorPlanPatchProvider("invalid_patch");
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = operatorPlanPrompt();
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+    const answer = session?.messages.at(-1)?.content ?? "";
+
+    assert.equal(turn.status, "failed");
+    assert.equal(session?.status, "failed");
+    assert.equal(provider.runPlanCalls, 0);
+    assert.equal(provider.patchIntentCalls, 1);
+    assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 0, true);
+    assert.equal(session?.tasks.length, 3);
+    assert.doesNotMatch(answer, /safe implementation plan|no deterministic implementation plan was invented|canned implementation plan/i);
+    assert.match(answer, /could not produce a file change/i);
+    assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Planning provider request" && gate.status === "passed"));
+    assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Patch intent" && gate.status === "failed"));
   } finally {
     await fixture.close();
   }
@@ -623,6 +776,20 @@ async function createStaticFixture() {
   };
 }
 
+async function createEmptyFixture() {
+  const workspace = path.join(os.tmpdir(), `hivo-run2g-empty-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run2g-empty-storage-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(workspace, { recursive: true });
+  return {
+    workspace,
+    storageDir,
+    async close() {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(storageDir, { recursive: true, force: true });
+    }
+  };
+}
+
 async function createRuntimeWithProvider(storageDir: string, provider: LlmProvider) {
   const sessionManager = new SessionManager(storageDir, new EventBus());
   await sessionManager.load();
@@ -725,15 +892,120 @@ class InvalidPlanProvider implements LlmProvider {
   }
 }
 
+class ReadOnlyQuestionProvider implements LlmProvider {
+  runPlanCalls = 0;
+
+  async generateStructured<T>(_input: LlmRequest, schema: unknown): Promise<T> {
+    const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(_input.userPrompt) as T;
+    }
+    if (schemaName === "run-plan") {
+      this.runPlanCalls += 1;
+      throw new Error("run-plan should not be called for read-only questions");
+    }
+    if (schemaName === "project-explain") {
+      return {
+        answerMarkdown: "PROVIDER_READ_ONLY_EXPLAIN: src/main.ts is the source entry and package.json defines project scripts. [src/main.ts:1](hivo-file:src%2Fmain.ts:1) [package.json:1](hivo-file:package.json:1)",
+        usedEvidenceRefs: ["src/main.ts:1", "package.json:1"],
+        unsupportedOrUnclearParts: []
+      } as T;
+    }
+    throw new Error(`Unexpected schema ${schemaName}`);
+  }
+
+  async generateText(): Promise<string> {
+    return "PROVIDER_READ_ONLY_EXPLAIN: src/main.ts is the source entry and package.json defines project scripts.";
+  }
+}
+
+class OperatorPlanPatchProvider implements LlmProvider {
+  runPlanCalls = 0;
+  patchIntentCalls = 0;
+
+  constructor(private readonly mode: "valid" | "invalid_patch") {}
+
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "run-plan") {
+      this.runPlanCalls += 1;
+      throw new Error("run-plan should be skipped for explicit operator-supplied plans");
+    }
+    if (schemaName === "run-patch-intent") {
+      this.patchIntentCalls += 1;
+      if (this.mode === "invalid_patch") {
+        return {
+          title: "Broken patch",
+          summary: "Malformed patch intent.",
+          intents: [{ path: "src/main.ts", operation: "insert_after" }]
+        } as T;
+      }
+      return {
+        title: "Add marker",
+        summary: "Adds a small exported marker requested by the operator plan.",
+        intents: [{
+          path: "src/main.ts",
+          operation: "insert_after",
+          anchorText: "export const main = true;",
+          replacementText: "\nexport const operatorPlanApplied = true;",
+          reason: "Implement the explicit operator-supplied plan with a narrow source edit.",
+          risk: "low"
+        }],
+        suggestedCommands: [{ command: "npm test", reason: "Verify the operator plan change." }]
+      } as T;
+    }
+    throw new Error(`Unexpected schema ${schemaName}`);
+  }
+
+  async generateText(): Promise<string> {
+    return "";
+  }
+}
+
+function operatorPlanPrompt() {
+  return [
+    "PLEASE IMPLEMENT THIS PLAN:",
+    "# Operator-Supplied Implementation Plan",
+    "",
+    "## Summary",
+    "- Use the explicit operator plan to add a small exported marker.",
+    "",
+    "## Key Changes",
+    "- Update src/main.ts with one narrow exported marker.",
+    "- Keep provider/schema gates active for patch generation.",
+    "",
+    "## Test Plan",
+    "- Check the normal project test command.",
+    "",
+    "## Assumptions",
+    "- Do not invent broader edits beyond the operator plan."
+  ].join("\n");
+}
+
+function conciseOperatorPlanPrompt() {
+  return [
+    "IMPLEMENT THIS PLAN:",
+    "# Operator-Supplied Implementation Plan",
+    "- Update src/main.ts with one narrow exported marker.",
+    "- Keep provider/schema gates active for patch generation.",
+    "- Verify with the normal project test command."
+  ].join("\n");
+}
+
 function intentDecisionForPrompt(prompt: string) {
   const message = prompt.match(/Classify this single user message before retrieval:\n([\s\S]*?)\n\nReturn JSON/i)?.[1]?.trim() ?? prompt;
+  const operatorPlan = /\b(?:please\s+)?implement\s+this\s+plan\b/i.test(message);
   const run = /\b(run|start|launch|open|preview|test|build)\b/i.test(message);
+  const question = /\b(explain|understand|architecture|inspect|read-only|how|what|why|plan for understanding)\b/i.test(message);
   return {
-    kind: run ? "run_request" : "workspace_action",
+    kind: operatorPlan ? "workspace_action" : run ? "run_request" : question ? "workspace_question" : "workspace_action",
     language: /[\u0600-\u06ff]/.test(message) ? "arabic" : "english",
     needsWorkspace: true,
     confidence: "high",
-    rationale: run ? "The provider classified this as a run request." : "The provider classified this as a workspace action.",
+    rationale: operatorPlan ? "The provider classified this as an explicit operator implementation plan." : run ? "The provider classified this as a run request." : question ? "The provider classified this as a workspace question." : "The provider classified this as a workspace action.",
     workspaceMessage: message
   };
 }

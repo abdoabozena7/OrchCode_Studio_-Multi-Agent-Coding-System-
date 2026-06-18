@@ -1,6 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PatchProposal, PatchValidationResult, WorkerCapabilityGrant } from "@hivo/protocol";
+import { spawnSync } from "node:child_process";
+import type { PatchProposal, PatchValidationErrorCode, PatchValidationResult, WorkerCapabilityGrant } from "@hivo/protocol";
 import { assertGrantAllowsTool, resolveInsideWorkspace } from "./security.js";
 
 export class PatchTools {
@@ -22,22 +23,53 @@ export class PatchTools {
   }
 
   validate(proposal: Pick<PatchProposal, "filesChanged" | "unifiedDiff">): PatchValidationResult {
+    const codes: PatchValidationErrorCode[] = [];
     const errors: string[] = [];
     const warnings: string[] = [];
+    const addError = (code: PatchValidationErrorCode, message: string) => {
+      if (!codes.includes(code)) codes.push(code);
+      errors.push(`${code}: ${message}`);
+    };
+    const diff = proposal.unifiedDiff?.trim() ?? "";
+    if (!diff) {
+      addError("patch_invalid_missing_diff", "Patch proposal must include a non-empty unifiedDiff.");
+    }
+    if (!proposal.filesChanged.length) {
+      addError("patch_invalid_paths", "Patch proposal must include at least one filesChanged entry.");
+    }
     for (const file of proposal.filesChanged) {
       try {
         const resolved = resolveInsideWorkspace(this.workspacePath, file.path);
-        if (path.basename(resolved).toLowerCase() === ".env") {
-          errors.push(`${file.path} looks like a secret file`);
+        if (isSecretFile(file.path, resolved)) {
+          addError("patch_invalid_secret_file", `${file.path} looks like a secret file.`);
         }
       } catch (error) {
-        errors.push(`${file.path}: ${String(error)}`);
+        addError("patch_invalid_paths", `${file.path}: ${String(error)}`);
       }
     }
-    if (!proposal.unifiedDiff.includes("diff --git")) {
-      warnings.push("Patch proposal does not look like a standard git unified diff");
+    const diffPaths = diff ? extractDiffPaths(diff) : { paths: [], malformed: false };
+    if (diffPaths.malformed) {
+      addError("patch_invalid_paths", "Patch contains malformed or incomplete diff headers.");
     }
-    return { valid: errors.length === 0, errors, warnings };
+    const declaredPaths = [...new Set(proposal.filesChanged.map((file) => normalizePatchPath(file.path)))].sort();
+    const headerPaths = [...new Set(diffPaths.paths.map(normalizePatchPath))].sort();
+    if (diff && (!headerPaths.length || declaredPaths.join("\n") !== headerPaths.join("\n"))) {
+      addError("patch_invalid_paths", `filesChanged paths do not match diff headers (declared: ${declaredPaths.join(", ") || "none"}; diff: ${headerPaths.join(", ") || "none"}).`);
+    }
+    if (diff && !codes.includes("patch_invalid_paths") && !codes.includes("patch_invalid_secret_file")) {
+      const checked = spawnSync("git", ["apply", "--check", "-"], {
+        cwd: this.workspacePath,
+        input: `${proposal.unifiedDiff.trimEnd()}\n`,
+        encoding: "utf8",
+        windowsHide: true
+      });
+      if (checked.error && (checked.error as NodeJS.ErrnoException).code === "ENOENT") {
+        warnings.push("git apply --check was unavailable; Rust apply remains authoritative.");
+      } else if (checked.error || checked.status !== 0) {
+        addError("patch_invalid_apply_check_failed", checked.stderr?.trim() || checked.error?.message || "git apply --check failed.");
+      }
+    }
+    return { valid: errors.length === 0, codes, errors, warnings };
   }
 
   applyProposal(proposal: PatchProposal): { applied: boolean; changedPaths: string[]; message: string } {
@@ -47,6 +79,45 @@ export class PatchTools {
       message: `Runtime patch apply is disabled for ${proposal.id}; Rust patch authority must apply it.`
     };
   }
+}
+
+function normalizePatchPath(value: string) {
+  return value.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function isSecretFile(relativePath: string, resolvedPath: string) {
+  const normalized = normalizePatchPath(relativePath).toLowerCase();
+  const basename = path.basename(resolvedPath).toLowerCase();
+  return basename === ".env"
+    || basename.startsWith(".env.")
+    || /(^|\/)(secrets?|credentials?)(\.|\/|$)/i.test(normalized)
+    || /\.(pem|key|p12|pfx)$/i.test(basename);
+}
+
+function extractDiffPaths(diff: string) {
+  const paths: string[] = [];
+  let malformed = false;
+  const lines = diff.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (!line.startsWith("diff --git ")) continue;
+    const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+    const oldHeader = lines.slice(index + 1, index + 8).find((candidate) => candidate.startsWith("--- "));
+    const newHeader = lines.slice(index + 1, index + 8).find((candidate) => candidate.startsWith("+++ "));
+    if (!match || !oldHeader || !newHeader) {
+      malformed = true;
+      continue;
+    }
+    const oldPath = oldHeader === "--- /dev/null" ? undefined : oldHeader.match(/^--- a\/(.+)$/)?.[1];
+    const newPath = newHeader === "+++ /dev/null" ? undefined : newHeader.match(/^\+\+\+ b\/(.+)$/)?.[1];
+    if ((!oldPath && !newPath) || (oldPath && oldPath !== match[1]) || (newPath && newPath !== match[2])) {
+      malformed = true;
+      continue;
+    }
+    paths.push(newPath ?? oldPath!);
+  }
+  if (!lines.some((line) => line.startsWith("diff --git "))) malformed = true;
+  return { paths, malformed };
 }
 
 function extractContentFromDiff(unifiedDiff: string, targetPath: string) {

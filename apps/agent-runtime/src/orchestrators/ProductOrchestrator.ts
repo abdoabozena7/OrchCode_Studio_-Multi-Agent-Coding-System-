@@ -10,7 +10,7 @@ export class ProductOrchestrator {
       constraints: ["No direct workspace writes by agents", "Patch proposals require approval", "Use controlled tools only"],
       successCriteria,
       clarifyingQuestions: [],
-      assumptions: ["The request can proceed with the current workspace context", "Mock mode may produce representative patches"]
+      assumptions: ["The request can proceed with the current workspace context", "A configured provider is available for semantic planning"]
     };
   }
 }

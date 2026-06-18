@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { readJson, resolveMemoryPaths } from "../memory/ProjectMemory.js";
+import { readMemorySnapshot } from "../memory/ProjectMemory.js";
 import type { CommandInventory } from "../memory/types.js";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
 import { ContextPackBuilder } from "./ContextPackBuilder.js";
@@ -893,10 +893,8 @@ export class ExecutionPreparationPlanner {
   }
 
   private async loadCommandInventory(): Promise<CommandInventory | undefined> {
-    const paths = resolveMemoryPaths(this.workspacePath, this.memoryDir);
-    if (!existsSync(paths.commandInventory)) return undefined;
     try {
-      return await readJson<CommandInventory>(paths.commandInventory);
+      return await readMemorySnapshot<CommandInventory>(this.workspacePath, "command_inventory", this.memoryDir);
     } catch {
       return undefined;
     }

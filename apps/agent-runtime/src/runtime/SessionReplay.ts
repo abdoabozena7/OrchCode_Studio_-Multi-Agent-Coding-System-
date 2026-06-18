@@ -192,6 +192,206 @@ function applyEventToSession(session: AgentRuntimeSession, event: DurableRuntime
       session.lifecycleStage = "BLOCKED";
       session.taskState.phase = "expired";
       break;
+    case "product_spec.proposed":
+    case "product_spec.approved": {
+      const productSpec = payload.productSpec;
+      if (isObject(productSpec) && typeof productSpec.id === "string") {
+        session.recursiveFactory ??= { phase: "product_spec_approval", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.productSpec = productSpec as import("@hivo/protocol").ProductSpecification;
+        session.recursiveFactory.phase = event.type === "product_spec.approved" ? "technical_plan_approval" : "product_spec_approval";
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = "needs_approval";
+        session.lifecycleStage = "PLAN";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical Product Specification.`);
+      }
+      break;
+    }
+    case "technical_plan.proposed":
+    case "technical_plan.approved": {
+      const technicalPlan = payload.technicalPlan;
+      if (isObject(technicalPlan) && typeof technicalPlan.id === "string") {
+        session.recursiveFactory ??= { phase: "technical_plan_approval", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.technicalPlan = technicalPlan as import("@hivo/protocol").TechnicalPlan;
+        session.recursiveFactory.phase = event.type === "technical_plan.approved" ? "approved_to_execute" : "technical_plan_approval";
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = event.type === "technical_plan.approved" ? "completed" : "needs_approval";
+        session.lifecycleStage = event.type === "technical_plan.approved" ? "DONE" : "PLAN";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical Technical Plan.`);
+      }
+      break;
+    }
+    case "recursive_graph.proposed":
+    case "recursive_graph.ready":
+    case "recursive_graph.blocked": {
+      const graph = payload.graph;
+      if (isObject(graph) && typeof graph.id === "string") {
+        const typedGraph = graph as import("@hivo/protocol").HierarchicalRecursiveGraph;
+        session.recursiveFactory ??= { phase: "recursive_graph_ready", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.recursiveGraph = typedGraph;
+        session.recursiveFactory.branchOrchestrators = typedGraph.branches;
+        session.recursiveFactory.branchScopeConflicts = typedGraph.conflicts;
+        session.recursiveFactory.graphReadiness = typedGraph.readiness;
+        session.recursiveFactory.phase = typedGraph.status === "blocked" ? "recursive_graph_blocked" : "recursive_graph_ready";
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = typedGraph.status === "blocked" ? "blocked" : "completed";
+        session.lifecycleStage = typedGraph.status === "blocked" ? "BLOCKED" : "DONE";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical recursive graph.`);
+      }
+      break;
+    }
+    case "branch_orchestrator.planned": {
+      const branch = payload.branch;
+      if (isObject(branch) && typeof branch.branchId === "string") {
+        session.recursiveFactory ??= { phase: "recursive_graph_ready", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.branchOrchestrators ??= [];
+        upsertBranchById(session.recursiveFactory.branchOrchestrators, branch as import("@hivo/protocol").BranchOrchestratorRecord);
+      } else {
+        warnings.push(`branch_orchestrator.planned at sequence ${event.sequence} did not include a canonical branch.`);
+      }
+      break;
+    }
+    case "branch_scope.conflict_detected": {
+      const conflict = payload.conflict;
+      if (isObject(conflict) && typeof conflict.id === "string") {
+        session.recursiveFactory ??= { phase: "recursive_graph_blocked", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.branchScopeConflicts ??= [];
+        upsertById(session.recursiveFactory.branchScopeConflicts, conflict as import("@hivo/protocol").BranchScopeConflict);
+      } else {
+        warnings.push(`branch_scope.conflict_detected at sequence ${event.sequence} did not include a canonical conflict.`);
+      }
+      break;
+    }
+    case "branch_execution.ready":
+    case "branch_execution.started":
+    case "branch_execution.patch_proposed":
+    case "branch_execution.reviewing":
+    case "branch_execution.validation_pending":
+    case "branch_execution.completed":
+    case "branch_execution.blocked":
+    case "branch_execution.failed": {
+      const branchExecution = payload.branchExecution;
+      if (isObject(branchExecution) && typeof branchExecution.branchId === "string") {
+        const typedBranch = branchExecution as import("@hivo/protocol").RecursiveBranchExecutionRecord;
+        session.recursiveFactory ??= { phase: "branch_execution_running", executionStarted: true, updatedAt: event.createdAt };
+        session.recursiveFactory.branchExecutions ??= [];
+        upsertBranchExecutionById(session.recursiveFactory.branchExecutions, typedBranch);
+        session.recursiveFactory.executionStarted = true;
+        session.recursiveFactory.activeBranchId = typedBranch.active ? typedBranch.branchId : session.recursiveFactory.activeBranchId;
+        session.recursiveFactory.phase =
+          typedBranch.status === "completed"
+            ? "branch_execution_completed"
+            : typedBranch.status === "blocked" || typedBranch.status === "failed"
+              ? "branch_execution_blocked"
+              : "branch_execution_running";
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = typedBranch.status === "completed" ? "completed" : typedBranch.status === "failed" ? "failed" : typedBranch.status === "blocked" ? "blocked" : "needs_approval";
+        session.lifecycleStage = typedBranch.status === "completed" ? "DONE" : typedBranch.status === "failed" ? "FAILED" : typedBranch.status === "blocked" ? "BLOCKED" : "APPROVAL";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical branch execution.`);
+      }
+      break;
+    }
+    case "branch_result.recorded": {
+      const branchResult = payload.branchResult;
+      if (isObject(branchResult) && typeof branchResult.id === "string") {
+        session.recursiveFactory ??= { phase: "branch_execution_running", executionStarted: true, updatedAt: event.createdAt };
+        session.recursiveFactory.branchResults ??= [];
+        upsertById(session.recursiveFactory.branchResults, branchResult as import("@hivo/protocol").RecursiveBranchResultRecord);
+        session.recursiveFactory.updatedAt = event.createdAt;
+      } else {
+        warnings.push(`branch_result.recorded at sequence ${event.sequence} did not include a canonical branch result.`);
+      }
+      break;
+    }
+    case "recursive_fan_in.updated": {
+      const integrationSummary = payload.integrationSummary;
+      if (isObject(integrationSummary) && typeof integrationSummary.id === "string") {
+        session.recursiveFactory ??= { phase: "branch_execution_running", executionStarted: true, updatedAt: event.createdAt };
+        session.recursiveFactory.integrationSummary = integrationSummary as import("@hivo/protocol").RecursiveIntegrationSummary;
+        session.recursiveFactory.validationHierarchy ??= [];
+        upsertById(session.recursiveFactory.validationHierarchy, session.recursiveFactory.integrationSummary.validation);
+        session.recursiveFactory.updatedAt = event.createdAt;
+      } else {
+        warnings.push(`recursive_fan_in.updated at sequence ${event.sequence} did not include a canonical integration summary.`);
+      }
+      break;
+    }
+    case "recursive_final_report.created": {
+      const finalReport = payload.finalReport;
+      if (isObject(finalReport) && typeof finalReport.id === "string") {
+        session.recursiveFactory ??= { phase: "branch_execution_running", executionStarted: true, updatedAt: event.createdAt };
+        const typedReport = finalReport as import("@hivo/protocol").RecursiveFinalReport;
+        session.recursiveFactory.finalReport = typedReport;
+        session.recursiveFactory.branchResults = typedReport.branchOutcomes;
+        session.recursiveFactory.validationHierarchy = typedReport.validationHierarchy;
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = typedReport.finalStatus === "passed" ? "completed" : typedReport.finalStatus === "failed" ? "failed" : "needs_approval";
+        session.lifecycleStage = typedReport.finalStatus === "passed" ? "DONE" : typedReport.finalStatus === "failed" ? "FAILED" : "POST_VERIFY";
+      } else {
+        warnings.push(`recursive_final_report.created at sequence ${event.sequence} did not include a canonical final report.`);
+      }
+      break;
+    }
+    case "knowledge_tree.created":
+    case "knowledge_tree.refreshed": {
+      const tree = payload.tree;
+      if (isObject(tree) && typeof tree.id === "string") {
+        session.projectKnowledgeTree = tree as import("@hivo/protocol").ProjectKnowledgeTree;
+        session.status = "completed";
+        session.lifecycleStage = "PLAN";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical Project Knowledge Tree.`);
+      }
+      break;
+    }
+    case "edit_route.proposed":
+    case "edit_route.ready":
+    case "edit_route.blocked": {
+      const routedEdit = payload.routedEdit;
+      if (isObject(routedEdit) && typeof routedEdit.id === "string") {
+        session.latestKnowledgeRoute = routedEdit as import("@hivo/protocol").KnowledgeRoutedEdit;
+        session.latestKnowledgeBranchTargets = session.latestKnowledgeRoute.knowledgeBranchTargets;
+        session.status = event.type === "edit_route.blocked" ? "blocked" : "completed";
+        session.lifecycleStage = "PLAN";
+      } else {
+        warnings.push(`${event.type} at sequence ${event.sequence} did not include a canonical knowledge edit route.`);
+      }
+      break;
+    }
+    case "knowledge_branch_targets.created": {
+      const targets = payload.targets;
+      if (Array.isArray(targets)) {
+        session.latestKnowledgeBranchTargets = targets as import("@hivo/protocol").KnowledgeBranchTarget[];
+        if (session.latestKnowledgeRoute) {
+          session.latestKnowledgeRoute.knowledgeBranchTargets = session.latestKnowledgeBranchTargets;
+          session.latestKnowledgeRoute.plan.knowledgeBranchTargets = session.latestKnowledgeBranchTargets;
+          session.latestKnowledgeRoute.plan.suggestedBranchTargets = session.latestKnowledgeBranchTargets;
+        }
+        session.status = "completed";
+        session.lifecycleStage = "PLAN";
+      } else {
+        warnings.push(`knowledge_branch_targets.created at sequence ${event.sequence} did not include canonical branch targets.`);
+      }
+      break;
+    }
+    case "knowledge_branch_execution.planned": {
+      const branchExecution = payload.branchExecution;
+      if (isObject(branchExecution) && typeof branchExecution.branchId === "string") {
+        session.recursiveFactory ??= { phase: "recursive_graph_ready", executionStarted: false, updatedAt: event.createdAt };
+        session.recursiveFactory.branchExecutions ??= [];
+        upsertBranchExecutionById(session.recursiveFactory.branchExecutions, branchExecution as import("@hivo/protocol").RecursiveBranchExecutionRecord);
+        session.recursiveFactory.executionStarted = false;
+        session.recursiveFactory.updatedAt = event.createdAt;
+        session.status = "completed";
+        session.lifecycleStage = "PLAN";
+      } else {
+        warnings.push(`knowledge_branch_execution.planned at sequence ${event.sequence} did not include a canonical branch execution.`);
+      }
+      break;
+    }
     case "run.phase_changed": {
       const phase = payload.phase;
       if (isObject(phase) && typeof phase.id === "string") {
@@ -318,6 +518,7 @@ function applyPatchLifecycleEvent(session: AgentRuntimeSession, event: DurableRu
       session.taskState.activePatchId = patchId;
       break;
     case "patch.apply_started":
+      patch.status = "apply_started";
       session.taskState.activePatchId = patchId;
       break;
     case "patch.applied":
@@ -659,6 +860,24 @@ function createEmptyOrchestration(): NonNullable<AgentRuntimeSession["orchestrat
 
 function upsertById<T extends { id: string }>(collection: T[], value: T) {
   const index = collection.findIndex((candidate) => candidate.id === value.id);
+  if (index >= 0) {
+    collection[index] = value;
+    return;
+  }
+  collection.push(value);
+}
+
+function upsertBranchById(collection: import("@hivo/protocol").BranchOrchestratorRecord[], value: import("@hivo/protocol").BranchOrchestratorRecord) {
+  const index = collection.findIndex((candidate) => candidate.branchId === value.branchId);
+  if (index >= 0) {
+    collection[index] = value;
+    return;
+  }
+  collection.push(value);
+}
+
+function upsertBranchExecutionById(collection: import("@hivo/protocol").RecursiveBranchExecutionRecord[], value: import("@hivo/protocol").RecursiveBranchExecutionRecord) {
+  const index = collection.findIndex((candidate) => candidate.branchId === value.branchId);
   if (index >= 0) {
     collection[index] = value;
     return;

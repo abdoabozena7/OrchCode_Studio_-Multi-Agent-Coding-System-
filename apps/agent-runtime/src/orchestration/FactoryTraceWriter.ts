@@ -62,7 +62,7 @@ export class FactoryTraceWriter {
       causalParentEventId: parent?.eventId,
       causalChainId: parent?.chainId
     });
-    await this.metadata.recordFactoryTraceEvent(traceEvent);
+    await this.metadata.recordStructuredEventAndTrace(event, traceEvent, artifactRef);
     this.remember(traceEvent);
     return traceEvent;
   }
@@ -75,7 +75,7 @@ export class FactoryTraceWriter {
       causalParentEventId: parent?.eventId,
       causalChainId: parent?.chainId
     });
-    await this.metadata.recordFactoryTraceEvent(traceEvent);
+    await this.metadata.recordStructuredEventAndTrace(entry, traceEvent, artifactRef);
     this.remember(traceEvent);
     return traceEvent;
   }

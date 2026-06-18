@@ -2,7 +2,7 @@ import type { PromptWriterMode, PromptWriterProviderMode } from "./PromptWriterM
 
 export type ExecutionMode = "fast" | "deep" | "exhaustive";
 export type ValidationLevel = "basic" | "standard" | "strict";
-export type SwarmWorkerMode = "mock" | "provider_read_only" | "auto";
+export type SwarmWorkerMode = "provider_read_only";
 export type PlanningEvidenceMode = "off" | "available" | "require_for_provider_mode";
 export type TeamSubPlanningMode = "off" | "deterministic" | "provider_read_only" | "auto";
 export type TeamTaskAdoptionMode = "off" | "metadata_only" | "read_only_only" | "gated_future_ready";
@@ -177,7 +177,7 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   require_human_approval_for_risky_files: true,
   validation_timeout: 30_000,
   safe_commands_allowlist: ["git diff --check"],
-  swarm_worker_mode: "mock",
+  swarm_worker_mode: "provider_read_only",
   use_planning_evidence: true,
   planning_evidence_mode: "available",
   max_evidence_items: 20,
@@ -610,7 +610,7 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   if (!config.memory_path.trim()) throw new Error("Invalid orchestration config memory_path");
   if (!["fast", "deep", "exhaustive"].includes(config.execution_mode)) throw new Error("Invalid orchestration config execution_mode");
   if (!["basic", "standard", "strict"].includes(config.validation_level)) throw new Error("Invalid orchestration config validation_level");
-  if (!["mock", "provider_read_only", "auto"].includes(config.swarm_worker_mode)) throw new Error("Invalid orchestration config swarm_worker_mode");
+  if (config.swarm_worker_mode !== "provider_read_only") throw new Error("Only provider_read_only swarm workers are supported.");
   if (!["off", "available", "require_for_provider_mode"].includes(config.planning_evidence_mode)) throw new Error("Invalid orchestration config planning_evidence_mode");
   if (!["off", "shadow", "advisory", "gated_adopt"].includes(config.prompt_writer_mode)) throw new Error("Invalid orchestration config prompt_writer_mode");
   if (!["deterministic", "provider_read_only", "auto"].includes(config.prompt_writer_provider_mode)) throw new Error("Invalid orchestration config prompt_writer_provider_mode");
@@ -671,7 +671,7 @@ function envValidationLevel(name: string, fallback: ValidationLevel): Validation
 
 function envSwarmWorkerMode(name: string, fallback: SwarmWorkerMode): SwarmWorkerMode {
   const raw = envRaw(name);
-  if (raw === "mock" || raw === "provider_read_only" || raw === "auto") return raw;
+  if (raw === "provider_read_only") return raw;
   return fallback;
 }
 

@@ -14,6 +14,7 @@ import { seniorCodingAgentPrompt } from "../prompts/seniorCodingAgentPrompt.js";
 import { agentPlanSchema } from "../schemas/sessionSchemas.js";
 import { patchProposalSchema } from "../schemas/patchSchemas.js";
 import { inferProjectLaunch, type LaunchRecommendation } from "../runtime/ProjectLaunchInference.js";
+import { invokeReasoningProviderStructured, invokeReasoningProviderText } from "../runtime/ReasoningKernel.js";
 import { randomId, SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
@@ -187,7 +188,8 @@ export class SeniorCodingAgent {
   ) {
     await this.updateLifecycle(sessionId, "PLAN");
     await this.trace(sessionId, "planning", "Decision", `Create a plan for ${intentLabel(intent)} using the current workspace scan.`, "completed");
-    const plan = await this.llmProvider.generateStructured<AgentPlan>(
+    const plan = await invokeReasoningProviderStructured<AgentPlan>(
+      this.llmProvider,
       {
         systemPrompt: seniorCodingAgentPrompt,
         userPrompt: message,
@@ -298,7 +300,7 @@ export class SeniorCodingAgent {
               status: "failed",
               notes: [failure]
             }],
-            nextAction: "Retry with a working provider or switch explicitly to demo/mock mode.",
+            nextAction: "Retry with a working configured provider.",
             createdAt: new Date().toISOString()
           },
           undefined,
@@ -348,7 +350,7 @@ export class SeniorCodingAgent {
     localEvidenceSummary: string;
   }) {
     await this.trace(input.sessionId, "working", "Tool call", "provider.generate_text (final inspect answer)", "running");
-    const answer = await this.llmProvider.generateText({
+    const answer = await invokeReasoningProviderText(this.llmProvider, {
       systemPrompt: [
         "You are the final provider-backed inspector for a legacy coding agent path.",
         "Use only the supplied workspace scan, search/read evidence, and plan summary.",
@@ -657,7 +659,8 @@ export class SeniorCodingAgent {
 
     await this.updateLifecycle(sessionId, "EXECUTION_DRAFT");
     await this.trace(sessionId, "working", "Next decision", "Generate a reviewable patch proposal instead of writing files directly.", "completed");
-    const generatedPatch = await this.llmProvider.generateStructured<Omit<PatchProposal, "id" | "sessionId" | "createdAt">>(
+    const generatedPatch = await invokeReasoningProviderStructured<Omit<PatchProposal, "id" | "sessionId" | "createdAt">>(
+      this.llmProvider,
       {
         systemPrompt: seniorCodingAgentPrompt,
         userPrompt: message,
@@ -795,7 +798,7 @@ export class SeniorCodingAgent {
     await this.sessionManager.setRunSummary(sessionId, runSummary);
     if (assistantMessage) {
       await this.sessionManager.addMessage(sessionId, {
-        role: "assistant",
+        role: "system",
         content: assistantMessage
       });
     }

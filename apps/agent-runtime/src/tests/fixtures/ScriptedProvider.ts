@@ -1,8 +1,9 @@
 import type { AgentPlan, PatchProposal } from "@hivo/protocol";
-import type { LlmProvider, LlmRequest } from "./LlmProvider.js";
-import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../mock/threeJsSnake.js";
+import type { LlmProvider, LlmRequest } from "../../llm/LlmProvider.js";
+import { createHash } from "node:crypto";
+import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../../mock/threeJsSnake.js";
 
-export class MockLlmProvider implements LlmProvider {
+export class ScriptedProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     const schemaName = getSchemaName(schema);
     if (schemaName === "agent-plan") {
@@ -16,6 +17,9 @@ export class MockLlmProvider implements LlmProvider {
     }
     if (schemaName === "run-patch") {
       return this.createRunPatch(input.userPrompt) as T;
+    }
+    if (schemaName === "run-patch-intent") {
+      return this.createRunPatchIntent(input.userPrompt) as T;
     }
     if (schemaName === "run-verification") {
       return {
@@ -39,6 +43,13 @@ export class MockLlmProvider implements LlmProvider {
 
   async generateText(input: LlmRequest): Promise<string> {
     return `Mock analysis complete for: ${input.userPrompt}`;
+  }
+
+  async embed(input: { inputs: string[]; model?: string }) {
+    return {
+      model: input.model ?? "mock-embedding",
+      vectors: input.inputs.map((text) => deterministicVector(text))
+    };
   }
 
   private createPlan(userPrompt: string): AgentPlan {
@@ -171,6 +182,51 @@ export class MockLlmProvider implements LlmProvider {
       suggestedCommands: [{ command: "git diff --check", reason: "Validate the approved diff." }]
     };
   }
+
+  private createRunPatchIntent(userPrompt: string) {
+    if (!/recursive validation repair|recursive repair/i.test(userPrompt) || !userPrompt.includes("HIVO_REPAIR_VALUE = \\\"broken\\\"")) {
+      return {
+        title: "No repair",
+        summary: "Mock mode did not find a deterministic repair sentinel.",
+        intents: []
+      };
+    }
+    const allowedFiles = extractJsonArrayAfterLabel(userPrompt, "Allowed related files")
+      .filter((entry): entry is string => typeof entry === "string");
+    const targetFile = allowedFiles.find((entry) => entry.endsWith("/module.py") || entry.endsWith("/module.mjs"));
+    if (!targetFile) {
+      return {
+        title: "No repair",
+        summary: "Mock mode could not identify a single scoped module repair target.",
+        intents: []
+      };
+    }
+    const isPythonModule = targetFile.endsWith("/module.py");
+    return {
+      title: "Recursive repair",
+      summary: `Restore the deterministic high-attribution smoke module in ${targetFile}.`,
+      intents: [{
+        path: targetFile,
+        operation: "replace_range",
+        preimageText: isPythonModule
+          ? "HIVO_REPAIR_VALUE = \"broken\""
+          : "export const HIVO_REPAIR_VALUE = \"broken\";",
+        replacementText: isPythonModule
+          ? "HIVO_REPAIR_VALUE = \"fixed\""
+          : "export const HIVO_REPAIR_VALUE = \"fixed\";",
+        reason: "Fix only the sentinel value proven by the traceback to come from the applied recursive patch.",
+        risk: "low"
+      }],
+      suggestedCommands: []
+    };
+  }
+}
+
+function deterministicVector(text: string) {
+  const bytes = createHash("sha256").update(text).digest();
+  const vector = Array.from({ length: 16 }, (_, index) => (bytes[index] ?? 0) / 127.5 - 1);
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vector.map((value) => value / norm);
 }
 
 function extractUserRequest(prompt: string) {
@@ -195,4 +251,26 @@ function inferSummaryFile(context: unknown) {
     return (context as { summaryFile: string }).summaryFile;
   }
   return "AGENT_PROPOSAL.md";
+}
+
+function extractJsonArrayAfterLabel(text: string, label: string): unknown[] {
+  const index = text.indexOf(`${label}:`);
+  if (index < 0) return [];
+  const start = text.indexOf("[", index);
+  if (start < 0) return [];
+  let depth = 0;
+  for (let cursor = start; cursor < text.length; cursor += 1) {
+    const char = text[cursor];
+    if (char === "[") depth += 1;
+    if (char === "]") depth -= 1;
+    if (depth === 0) {
+      try {
+        const parsed = JSON.parse(text.slice(start, cursor + 1));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+  }
+  return [];
 }

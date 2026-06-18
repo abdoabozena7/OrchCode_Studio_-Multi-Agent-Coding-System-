@@ -109,6 +109,105 @@ test("real workspace smoke output includes session update reconciliation status"
     status: "not_run",
     prompts: []
   });
+  assert.deepEqual(report["recursive final validation"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    branchResultCount: null,
+    appliedPatches: [],
+    unverifiedValidations: [],
+    tempFile: null,
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive validated"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    selectedStrategy: null,
+    validationEvidence: [],
+    discoveredCommands: [],
+    commandResultStatus: null,
+    nestedSubtaskCount: null,
+    tempFiles: [],
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive repair loop"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    diagnosisSummary: null,
+    repairEligibility: null,
+    repairStatus: null,
+    repairPatchId: null,
+    repairPatchRustApplied: null,
+    validationAttempts: [],
+    revalidationCommandResultStatus: null,
+    tempFiles: [],
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive attribution"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    attributionConfidence: null,
+    attributionEvidence: [],
+    relatedPatchIds: [],
+    relatedBranchIds: [],
+    repairEligibility: null,
+    validationAttempts: [],
+    tempFiles: [],
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive high attribution repair"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    failingCommand: null,
+    attributionConfidence: null,
+    attributionEvidence: [],
+    relatedPatchIds: [],
+    relatedBranchIds: [],
+    repairEligibility: null,
+    repairPatchId: null,
+    repairPatchStatus: null,
+    repairAttemptCount: null,
+    firstValidationResult: null,
+    revalidationResult: null,
+    validationAttempts: [],
+    cleanupStatus: "not_run",
+    tempFiles: [],
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive multibranch"], {
+    status: "not_run",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    branchResultCount: null,
+    appliedPatches: [],
+    branchStatuses: [],
+    writeBranchesConcurrent: null,
+    tempFiles: [],
+    failureReason: null
+  });
+  assert.deepEqual(report["recursive nested branch"], {
+    status: "not_run",
+    sessionStatus: null,
+    parentBranchStatus: null,
+    nestedSubtaskCount: null,
+    nestedPatchStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    nestedRollupValidation: null,
+    appliedPatches: [],
+    tempFiles: [],
+    failureReason: null
+  });
 });
 
 test("real workspace smoke question discovery ignores memory and runtime artifacts", async () => {

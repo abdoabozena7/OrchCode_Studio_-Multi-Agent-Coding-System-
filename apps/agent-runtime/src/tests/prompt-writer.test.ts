@@ -367,7 +367,7 @@ function baseConfig(workspace: string) {
     require_human_approval_for_risky_files: true,
     validation_timeout: 30000,
     safe_commands_allowlist: ["git diff --check"],
-    swarm_worker_mode: "mock" as const,
+    swarm_worker_mode: "provider_read_only" as const,
     use_planning_evidence: true,
     planning_evidence_mode: "available" as const,
     max_evidence_items: 20,

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
-  "updatedAt": "2026-05-21T00:00:00.000Z",
-  "notes": "Phase 4 file-backed project memory schema with stale-index, learning, campaign, and eval artifacts."
+  "schemaVersion": 2,
+  "updatedAt": "2026-06-12T00:00:00.000Z",
+  "notes": "SQLite-first project memory schema; root JSON/JSONL files are legacy migration inputs or backups."
 }

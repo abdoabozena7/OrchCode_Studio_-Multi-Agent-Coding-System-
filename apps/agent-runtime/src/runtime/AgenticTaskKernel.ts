@@ -16,6 +16,7 @@ import { buildAgenticReadPlan } from "./AgenticReadPlanner.js";
 import { synthesizeAgenticOutput } from "./AgenticOutputSynthesizer.js";
 import { readWorkspaceForAgenticPlan } from "./AgenticWorkspaceReader.js";
 import { validateAgenticOutput } from "./AgenticClaimValidator.js";
+import { invokeReasoningProviderText } from "./ReasoningKernel.js";
 
 export async function runAgenticTaskKernel(request: AgenticTaskRequest): Promise<AgenticTaskResult> {
   const config = mergeAgenticTaskKernelConfig(request.config ?? envAgenticTaskConfig());
@@ -188,7 +189,7 @@ async function requestProviderDraft(
   if (!request.provider) return { fallbackReason: "none", providerCalls: [{ kind: "draft", status: "skipped", reason: "no_provider" }] };
   try {
     const text = await withTimeout(
-      request.provider.generateText({
+      invokeReasoningProviderText(request.provider, {
         systemPrompt: [
           "You are a bounded natural-language synthesizer for a universal agentic task kernel.",
           "Use only the evidence summary in context. Do not invent citations or paths.",

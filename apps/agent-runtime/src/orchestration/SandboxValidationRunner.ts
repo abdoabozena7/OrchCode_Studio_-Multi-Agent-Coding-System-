@@ -502,9 +502,10 @@ export class SandboxValidationRunner {
 
 function spawnWithTimeout(command: string, cwd: string, timeoutMs: number, maxOutputBytes: number) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
-    const child = spawn(command, {
+    const spawnPlan = directNodeEvalSpawnPlan(command);
+    const child = spawn(spawnPlan.command, spawnPlan.args, {
       cwd,
-      shell: true,
+      shell: spawnPlan.shell,
       windowsHide: true,
       env: sanitizedEnv(),
       detached: process.platform !== "win32",
@@ -515,10 +516,12 @@ function spawnWithTimeout(command: string, cwd: string, timeoutMs: number, maxOu
     let done = false;
     let timedOutRequested = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutFallback: ReturnType<typeof setTimeout> | undefined;
     const finish = (exitCode: number | null, timedOut: boolean) => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
+      if (timeoutFallback) clearTimeout(timeoutFallback);
       child.stdout?.removeAllListeners();
       child.stderr?.removeAllListeners();
       child.removeAllListeners();
@@ -527,15 +530,11 @@ function spawnWithTimeout(command: string, cwd: string, timeoutMs: number, maxOu
     const timeout = () => {
       if (done) return;
       timedOutRequested = true;
-      const fallback = setTimeout(() => finish(null, true), 1_500);
-      fallback.unref?.();
+      timeoutFallback = setTimeout(() => finish(null, true), 5_000);
+      timeoutFallback.unref?.();
       killProcessTree(child.pid)
         .catch((error: unknown) => {
           stderr = truncate(`${stderr}\nFailed to kill sandbox validation process tree: ${error instanceof Error ? error.message : String(error)}`, maxOutputBytes);
-        })
-        .finally(() => {
-          clearTimeout(fallback);
-          finish(null, true);
         });
     };
     timer = setTimeout(timeout, timeoutMs);
@@ -553,9 +552,22 @@ function spawnWithTimeout(command: string, cwd: string, timeoutMs: number, maxOu
   });
 }
 
+function directNodeEvalSpawnPlan(command: string): { command: string; args: string[]; shell: boolean } {
+  const match = command.trim().match(/^node\s+-e\s+(["'])([\s\S]*)\1$/);
+  if (!match) return { command, args: [], shell: true };
+  const quote = match[1];
+  const script = match[2].replaceAll(`\\${quote}`, quote);
+  return { command: process.execPath, args: ["-e", script], shell: false };
+}
+
 function killProcessTree(pid: number | undefined): Promise<void> {
   if (!pid) return Promise.resolve();
   if (process.platform === "win32") {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // taskkill below handles already-exited processes and descendants.
+    }
     return new Promise((resolve) => {
       let settled = false;
       let fallback: ReturnType<typeof setTimeout>;

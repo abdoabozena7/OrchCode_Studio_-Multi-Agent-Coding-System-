@@ -258,7 +258,15 @@ test("agent team metadata artifacts traces and assignments persist refs only", a
 test("CoreOrchestrator plan-only medium run creates team metadata without changing execution behavior", async () => {
   const workspace = await fixtureWorkspace("agent-team-core-plan");
   try {
-    const result = await new CoreOrchestrator({ workspacePath: workspace }).planOnly(
+    const result = await new CoreOrchestrator({
+      workspacePath: workspace,
+      config: {
+        enable_team_sub_planning: false,
+        enable_team_task_adoption: false,
+        enable_proposed_task_graph: false,
+        execution_readiness_gate_enabled: false
+      }
+    }).planOnly(
       "Plan a careful orchestration and runtime validation improvement across orchestration, runtime, memory, and tests without changing files yet."
     );
     assert.equal(result.run.status, "succeeded");
@@ -355,7 +363,7 @@ function fakeRun(workspace: string, id: string): Run {
       max_context_files: 4,
       max_context_chars: 4000,
       max_task_attempts: 1,
-      provider_mode: "mock"
+      provider_mode: "real_provider"
     }
   };
 }

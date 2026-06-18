@@ -29,9 +29,16 @@ export type RunPatchIntentModel = {
 
 export type PatchValidationResult = {
   valid: boolean;
+  codes: PatchValidationErrorCode[];
   errors: string[];
   warnings: string[];
 };
+
+export type PatchValidationErrorCode =
+  | "patch_invalid_missing_diff"
+  | "patch_invalid_paths"
+  | "patch_invalid_secret_file"
+  | "patch_invalid_apply_check_failed";
 
 export type PatchApprovalRequest = {
   sessionId: string;

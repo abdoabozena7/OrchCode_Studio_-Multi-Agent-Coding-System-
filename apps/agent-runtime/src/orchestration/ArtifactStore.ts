@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appendJsonl, ensureMemoryLayout, readJson, writeJson } from "../memory/ProjectMemory.js";
+import { SqliteMemoryStore } from "../memory/SqliteMemoryStore.js";
 import type {
   AgentTeam,
   AgentTeamHierarchy,
@@ -253,14 +254,16 @@ export class OrchestrationArtifactStore {
 
   async saveRun(run: Run) {
     const paths = await this.ensureRunLayout(run.id);
+    await this.saveStructuredState("orchestration_run", run.id, run, run.status, paths.run);
     await writeJson(paths.run, run);
     await this.metadata.recordRunSaved(run, paths.run);
     return paths.run;
   }
 
   async loadRun(runId: string): Promise<Run> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<Run>(paths.run);
+    const run = await this.loadStructuredState<Run>("orchestration_run", runId);
+    if (!run) throw new Error(`SQLite run state not found: ${runId}`);
+    return run;
   }
 
   async savePlanVariant(variant: PlanVariant): Promise<PlanVariant> {
@@ -460,20 +463,20 @@ export class OrchestrationArtifactStore {
 
   async saveTasks(runId: string, tasks: Task[]) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("orchestration_tasks", runId, tasks, undefined, paths.tasks, runId);
     await writeJson(paths.tasks, tasks);
     await this.metadata.recordTasksSaved(runId, tasks, paths.tasks);
     return paths.tasks;
   }
 
   async loadTasks(runId: string): Promise<Task[]> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<Task[]>(paths.tasks);
+    return await this.loadStructuredState<Task[]>("orchestration_tasks", runId) ?? [];
   }
 
   async appendEvent(event: OrchestratorEvent) {
     const paths = await this.ensureRunLayout(event.run_id);
-    await appendJsonl(paths.events, event);
     await this.traceWriter.recordArtifactEvent(event, paths.events);
+    await appendJsonl(paths.events, event);
     return paths.events;
   }
 
@@ -2575,10 +2578,7 @@ export class OrchestrationArtifactStore {
   }
 
   async listRunEvents(runId: string): Promise<unknown[]> {
-    const paths = await this.pathsForRun(runId);
-    if (!existsSync(paths.events)) return [];
-    const raw = await readFile(paths.events, "utf8");
-    return raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
+    return this.withStructuredStore((store) => store.events("orchestration", runId));
   }
 
   async listTaskArtifacts(runId: string, taskId: string) {
@@ -2618,21 +2618,24 @@ export class OrchestrationArtifactStore {
   }
 
   async listRuns() {
-    const memory = await ensureMemoryLayout(this.workspacePath, this.memoryDir);
-    if (!existsSync(memory.runsDir)) return [];
-    const entries = await readdir(memory.runsDir, { withFileTypes: true });
-    const runs: Run[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const runPath = path.join(memory.runsDir, entry.name, "run.json");
-      if (!existsSync(runPath)) continue;
-      try {
-        runs.push(JSON.parse(await readFile(runPath, "utf8")) as Run);
-      } catch {
-        // Ignore malformed run dirs during listing; show-run will fail loudly.
-      }
+    return this.withStructuredStore((store) => store.states<Run>("orchestration_run").sort((left, right) => right.created_at.localeCompare(left.created_at)));
+  }
+
+  private async saveStructuredState(kind: string, id: string, state: unknown, status?: string, artifactRef?: string, parentId?: string) {
+    await this.withStructuredStore((store) => store.saveState({ kind, id, parentId, status, state, artifactRef }));
+  }
+
+  private async loadStructuredState<T>(kind: string, id: string): Promise<T | undefined> {
+    return this.withStructuredStore((store) => store.state<T>(kind, id));
+  }
+
+  private async withStructuredStore<T>(operation: (store: SqliteMemoryStore) => T): Promise<T> {
+    const store = await SqliteMemoryStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir });
+    try {
+      return operation(store);
+    } finally {
+      store.close();
     }
-    return runs.sort((left, right) => right.created_at.localeCompare(left.created_at));
   }
 }
 

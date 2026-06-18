@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   cleanRunArtifacts,
@@ -9,9 +10,10 @@ import {
   getMemoryLessons,
   inspectRepoIndex,
   loadMemory,
-  readJson,
-  resolveMemoryPaths
+  readMemorySnapshot,
+  searchMemory
 } from "./ProjectMemory.js";
+import { migrateLegacyMemory, resolveMemoryDatabasePath, SqliteMemoryStore } from "./SqliteMemoryStore.js";
 import { assessIndexFreshness, refreshRepoIndex } from "./IndexFreshness.js";
 import { explainIndexedFile } from "./ProjectIntelligence.js";
 import { rebuildRepoIndex } from "./RepoIndexer.js";
@@ -24,6 +26,8 @@ type CliOptions = {
   limit: number;
   olderThanDays?: number;
   changedOnly: boolean;
+  dryRun: boolean;
+  verify: boolean;
 };
 
 const args = process.argv.slice(2);
@@ -61,8 +65,8 @@ try {
   } else if (command === "index explain") {
     const filePath = positional.at(-1);
     if (!filePath || filePath === "explain") throw new Error("index explain requires a file path");
-    const memoryPaths = resolveMemoryPaths(options.workspace, options.memoryDir);
-    const intelligence = await readJson<ProjectIntelligence>(memoryPaths.projectIntelligence);
+    const intelligence = await readMemorySnapshot<ProjectIntelligence>(options.workspace, "project_intelligence", options.memoryDir);
+    if (!intelligence) throw new Error("SQLite project intelligence snapshot is missing. Run memory:index first.");
     print(options, explainIndexedFile(filePath, intelligence));
   } else if (command === "memory inspect" || command === "inspect") {
     const inspection = await inspectRepoIndex(options.workspace, options.memoryDir);
@@ -86,7 +90,7 @@ try {
   } else if (command === "memory show-commands" || command === "show-commands" || command === "commands") {
     const inventory = await getCommandInventory(options.workspace, options.memoryDir);
     if (!inventory) {
-      print(options, { status: "missing", message: "No command_inventory.json found. Run memory:index first." });
+      print(options, { status: "missing", message: "No SQLite command inventory snapshot found. Run memory:index first." });
     } else {
       print(options, {
         generatedAt: inventory.generatedAt,
@@ -112,6 +116,36 @@ try {
     const taskId = positional.at(-1);
     if (!taskId || taskId === "explain-task") throw new Error("memory explain-task requires a task id");
     print(options, await explainTaskMemory(options.workspace, taskId, options.memoryDir));
+  } else if (command === "memory migrate-sqlite" || command === "migrate-sqlite") {
+    print(options, await migrateLegacyMemory({
+      workspacePath: options.workspace,
+      memoryDir: options.memoryDir,
+      dryRun: options.dryRun,
+      verify: options.verify
+    }));
+  } else if (command === "memory export-backup" || command === "export-backup") {
+    const store = await SqliteMemoryStore.open({ workspacePath: options.workspace, memoryDir: options.memoryDir });
+    try {
+      print(options, await store.exportBackup());
+    } finally {
+      store.close();
+    }
+  } else if (command === "memory search" || command === "search") {
+    const query = positional.slice(positional[0] === "memory" ? 2 : 1).join(" ").trim();
+    if (!query) throw new Error("memory search requires a query");
+    print(options, await searchMemory(options.workspace, query, { memoryDir: options.memoryDir, limit: options.limit }));
+  } else if (command === "memory db-status" || command === "db-status") {
+    const databasePath = resolveMemoryDatabasePath(options.workspace, options.memoryDir);
+    if (!existsSync(databasePath)) {
+      print(options, { status: "missing", databasePath });
+    } else {
+      const store = await SqliteMemoryStore.open({ workspacePath: options.workspace, memoryDir: options.memoryDir, readOnly: true });
+      try {
+        print(options, store.status());
+      } finally {
+        store.close();
+      }
+    }
   } else {
     printHelp();
     process.exitCode = 1;
@@ -127,7 +161,9 @@ function parseArgs(rawArgs: string[]): { command: string; positional: string[]; 
     workspace: process.cwd(),
     json: false,
     limit: 12,
-    changedOnly: false
+    changedOnly: false,
+    dryRun: false,
+    verify: false
   };
   for (let index = 0; index < rawArgs.length; index += 1) {
     const arg = rawArgs[index];
@@ -143,6 +179,10 @@ function parseArgs(rawArgs: string[]): { command: string; positional: string[]; 
       options.olderThanDays = Number(rawArgs[++index] ?? "0");
     } else if (arg === "--changed-only") {
       options.changedOnly = true;
+    } else if (arg === "--dry-run") {
+      options.dryRun = true;
+    } else if (arg === "--verify") {
+      options.verify = true;
     } else if (arg?.startsWith("--")) {
       throw new Error(`Unknown option: ${arg}`);
     } else if (arg) {
@@ -230,6 +270,10 @@ Commands:
   memory decisions           Show recent decisions
   memory failed-attempts     Show recent failed attempts
   memory explain-task <id>   Show memory related to a task id
+  memory migrate-sqlite      Import legacy JSON/JSONL into SQLite
+  memory export-backup       Export a checkpointed SQLite backup
+  memory search <query>      Search indexed memory using SQLite FTS5
+  memory db-status           Show SQLite memory status and counts
 
 Options:
   --workspace <path>         Workspace to scan (default: current directory)
@@ -238,5 +282,7 @@ Options:
   --limit <n>                Limit displayed arrays
   --older-than-days <n>      For clean-runs only
   --changed-only             For index refresh; reports changed files then performs full refresh
+  --dry-run                  Validate migration inputs without writing
+  --verify                   Run migration verification mode
 `);
 }

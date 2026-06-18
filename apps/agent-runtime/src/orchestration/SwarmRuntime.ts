@@ -40,6 +40,7 @@ export type SwarmRuntimeOptions = {
   providerFactory?: (role: string) => LlmProvider | undefined;
   providerName?: string;
   modelName?: string;
+  responseLanguage?: "ar" | "en";
 };
 
 export type SwarmPlanResult = {
@@ -62,6 +63,7 @@ export class SwarmAutopilotRuntime {
   private readonly providerFactory?: (role: string) => LlmProvider | undefined;
   private readonly providerName?: string;
   private readonly modelName?: string;
+  private readonly responseLanguage?: "ar" | "en";
 
   constructor(options: SwarmRuntimeOptions) {
     this.workspacePath = path.resolve(options.workspacePath);
@@ -75,6 +77,7 @@ export class SwarmAutopilotRuntime {
     this.providerFactory = options.providerFactory;
     this.providerName = options.providerName;
     this.modelName = options.modelName;
+    this.responseLanguage = options.responseLanguage;
   }
 
   async plan(userGoal: string): Promise<SwarmPlanResult> {
@@ -345,14 +348,14 @@ export class SwarmAutopilotRuntime {
   }
 
   private createConfiguredWorker(): SwarmWorker | undefined {
-    if (this.workerMode === "mock") return undefined;
     return new ProviderBackedSwarmWorker({
       workspacePath: this.workspacePath,
       memoryDir: this.memoryDir,
       mode: this.workerMode,
       providerFactory: this.providerFactory ?? defaultProviderFactory,
       providerName: this.providerName ?? (process.env.OPENAI_API_KEY ? "openai_compatible" : undefined),
-      modelName: this.modelName ?? process.env.OPENAI_MODEL
+      modelName: this.modelName ?? process.env.OPENAI_MODEL,
+      responseLanguage: this.responseLanguage
     }).asWorker();
   }
 
@@ -397,9 +400,8 @@ export class SwarmAutopilotRuntime {
   private async loadOrRebuildIndex(run: SwarmRun): Promise<{ repoIndex: RepoIndex; commandInventory: CommandInventory }> {
     const freshness = await assessIndexFreshness(this.workspacePath, this.memoryDir);
     const snapshot = await rebuildRepoIndex(this.workspacePath, { memoryDir: this.memoryDir });
-    const memoryPaths = resolveMemoryPaths(this.workspacePath, this.memoryDir);
     await this.event(run.id, "swarm.task.analyzed", `Repository index loaded for swarm staffing; prior freshness was ${freshness.status}.`, {
-      memory_snapshot_ref: path.relative(run.artifacts_path, memoryPaths.repoIndex).replaceAll("\\", "/"),
+      memory_snapshot_ref: "sqlite:factory_memory_snapshots/repo_index",
       freshness_status: freshness.status,
       indexed_files: snapshot.repoIndex.totals.indexedFiles,
       commands: snapshot.commandInventory.commands.length
@@ -577,9 +579,7 @@ function chooseValidationCommands(commandInventory: CommandInventory) {
 }
 
 function envSwarmWorkerMode(): SwarmProviderWorkerMode {
-  const raw = process.env.HIVO_SWARM_WORKER_MODE ?? process.env.ORCHCODE_SWARM_WORKER_MODE;
-  if (raw === "provider_read_only" || raw === "auto" || raw === "mock") return raw;
-  return "mock";
+  return "provider_read_only";
 }
 
 function defaultProviderFactory(): LlmProvider | undefined {
@@ -683,11 +683,7 @@ function buildFinalReport(input: {
     "",
     `## Risks And Limitations`,
     `- Logical agents are internal scheduling units and do not map one-to-one to OS processes.`,
-    input.workerMode === "provider_read_only"
-      ? `- Provider-backed read-only workers were used for eligible non-writing work items; write-capable work remains guarded by approval and validation gates.`
-      : input.workerMode === "auto"
-        ? `- Auto worker mode may fall back to deterministic workers only when provider-backed workers are unavailable; fallback status is recorded in artifacts.`
-        : `- Mock worker execution is used for scale and scheduler tests; real model calls are intentionally not used by stress tests.`,
+    `- Provider-backed read-only workers were used for eligible non-writing work items; write-capable work remains guarded by approval and validation gates.`,
     `- Any high-risk write path still requires approval and validation before integration.`
   ].join("\n");
 }

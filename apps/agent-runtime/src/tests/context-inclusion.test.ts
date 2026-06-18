@@ -387,7 +387,7 @@ function fakeRun(workspace: string, id: string) {
       max_context_files: 4,
       max_context_chars: 4000,
       max_task_attempts: 1,
-      provider_mode: "mock" as const
+      provider_mode: "real_provider" as const
     }
   };
 }

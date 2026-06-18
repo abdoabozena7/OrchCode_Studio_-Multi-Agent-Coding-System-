@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import { writeJson } from "../memory/ProjectMemory.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import type { ContextPack, Task } from "./OrchestrationModels.js";
@@ -125,7 +126,7 @@ export class PromptWriterService {
         })
       });
       try {
-        rawOutput = await provider.generateStructured<PromptWriterOutput>({
+        rawOutput = await invokeReasoningProviderStructured<PromptWriterOutput>(provider, {
           systemPrompt: [
             "You are PromptWriterAgent.",
             "Return strict JSON only.",

@@ -1,4 +1,4 @@
-export const MEMORY_SCHEMA_VERSION = 1;
+export const MEMORY_SCHEMA_VERSION = 2;
 export const DEFAULT_MEMORY_DIR = ".agent_memory";
 
 export type MemoryPaths = {
@@ -24,6 +24,8 @@ export type MemoryPaths = {
   swarmFailurePatterns: string;
   swarmSuccessPatterns: string;
   swarmSpecialistSelectionHistory: string;
+  database: string;
+  backupsDir: string;
   runsDir: string;
   campaignsDir: string;
   evalsDir: string;
@@ -188,6 +190,63 @@ export type RepoMemorySnapshot = {
   fileSummaries: FileSummaryRecord[];
   commandInventory: CommandInventory;
   projectIntelligence?: ProjectIntelligence;
+  semanticProjectModel?: SemanticProjectModel;
+};
+
+export type SemanticProjectNodeKind = "file" | "symbol" | "route" | "concept" | "data_field";
+
+export type SemanticProjectNode = {
+  id: string;
+  kind: SemanticProjectNodeKind;
+  name: string;
+  path?: string;
+  line?: number;
+  summary: string;
+  contentHash: string;
+  evidenceRefs: string[];
+  freshness: "current" | "stale";
+};
+
+export type SemanticProjectRelationshipKind =
+  | "contains"
+  | "import"
+  | "export"
+  | "call"
+  | "route"
+  | "ui_to_api"
+  | "storage"
+  | "produces"
+  | "consumes"
+  | "test_to_source"
+  | "concept_alias";
+
+export type SemanticProjectRelationship = {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: SemanticProjectRelationshipKind;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  evidenceRefs: string[];
+  contentHash: string;
+  freshness: "current" | "stale";
+};
+
+export type SemanticEmbeddingRecord = {
+  nodeId: string;
+  model: string;
+  dimensions: number;
+  vector: number[];
+  contentHash: string;
+  updatedAt: string;
+};
+
+export type SemanticProjectModel = {
+  schemaVersion: number;
+  generatedAt: string;
+  manifestHash: string;
+  nodes: SemanticProjectNode[];
+  relationships: SemanticProjectRelationship[];
 };
 
 export type MemoryStatus = {
@@ -207,6 +266,8 @@ export type MemoryStatus = {
   hasArchitectureNotes: boolean;
   hasIndexState: boolean;
   hasProjectIntelligence: boolean;
+  databasePath?: string;
+  storageMode?: string;
   runArtifacts: number;
   campaignArtifacts: number;
   evalArtifacts: number;

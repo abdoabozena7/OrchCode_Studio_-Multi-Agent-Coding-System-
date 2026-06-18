@@ -3,7 +3,9 @@ import type {
   AgentRuntimeSession,
   AppEvent,
   CreateRuntimeSessionResponse,
+  FactoryApprovalDecisionRequest,
   PatchApprovalResponse,
+  RecursiveBranchExecutionStartRequest,
   ReportCommandResultRequest,
   ReportPatchApplyResultRequest,
   RuntimeExecutionMode,
@@ -15,7 +17,8 @@ const runtimeBaseUrl = import.meta.env?.VITE_AGENT_RUNTIME_URL ?? "http://127.0.
 
 export type RuntimeHealth = {
   status: "ok";
-  mode: "demo_mock" | "real_provider";
+  mode: "real_provider";
+  startedAt: string;
 };
 
 export class RuntimeUnavailableError extends Error {
@@ -73,6 +76,9 @@ export async function checkRuntimeHealth(timeoutMs = 2500): Promise<RuntimeHealt
     if (health.status !== "ok") {
       throw new RuntimeUnavailableError("Agent runtime disconnected. /health did not report an ok runtime.");
     }
+    if (!health.startedAt || !Number.isFinite(Date.parse(health.startedAt))) {
+      throw new RuntimeUnavailableError("Agent runtime disconnected. /health did not report a valid start timestamp.");
+    }
     return health;
   } catch (error) {
     if (error instanceof RuntimeUnavailableError) throw error;
@@ -88,8 +94,6 @@ export async function assertRuntimeAvailable() {
 
 export async function createRuntimeSession(input: {
   workspacePath: string;
-  mode: "demo_mock" | "real_provider";
-  requireRealProvider?: boolean;
   trustProfile?: "strict_gated" | "trusted_internal";
   providerConfig?: AgentRuntimeSession["providerConfig"];
   activeProviderSource?: AgentRuntimeSession["activeProviderSource"];
@@ -119,6 +123,30 @@ export async function runRuntimeTurn(sessionId: string, message: string, session
 
 export async function getRuntimeSession(sessionId: string, sessionToken?: string) {
   return runtimeFetch<AgentRuntimeSession>(`/sessions/${sessionId}`, { sessionToken });
+}
+
+export async function decideRuntimeProductSpec(sessionId: string, decision: FactoryApprovalDecisionRequest, sessionToken?: string) {
+  return runtimeFetch<AgentRuntimeSession>(`/sessions/${sessionId}/factory/product-spec/decision`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+    sessionToken
+  });
+}
+
+export async function decideRuntimeTechnicalPlan(sessionId: string, decision: FactoryApprovalDecisionRequest, sessionToken?: string) {
+  return runtimeFetch<AgentRuntimeSession>(`/sessions/${sessionId}/factory/technical-plan/decision`, {
+    method: "POST",
+    body: JSON.stringify(decision),
+    sessionToken
+  });
+}
+
+export async function startRuntimeRecursiveBranchExecution(sessionId: string, request: RecursiveBranchExecutionStartRequest, sessionToken?: string) {
+  return runtimeFetch<AgentRuntimeSession>(`/sessions/${sessionId}/factory/branch-execution/start`, {
+    method: "POST",
+    body: JSON.stringify(request),
+    sessionToken
+  });
 }
 
 export async function approveRuntimePatch(sessionId: string, patchId: string, sessionToken?: string) {
@@ -230,8 +258,29 @@ export function subscribeRuntimeEvents(
     "runtime.patch.stats.updated",
     "runtime.run.completed",
     "runtime.orchestration.event",
+    "runtime.product_spec.proposed",
+    "runtime.product_spec.approved",
+    "runtime.technical_plan.proposed",
+    "runtime.technical_plan.approved",
+    "runtime.recursive_graph.proposed",
+    "runtime.recursive_graph.ready",
+    "runtime.recursive_graph.blocked",
+    "runtime.branch_orchestrator.planned",
+    "runtime.branch_execution.ready",
+    "runtime.branch_execution.started",
+    "runtime.branch_execution.patch_proposed",
+    "runtime.branch_execution.reviewing",
+    "runtime.branch_execution.validation_pending",
+    "runtime.branch_execution.completed",
+    "runtime.branch_execution.blocked",
+    "runtime.branch_execution.failed",
+    "runtime.branch_result.recorded",
+    "runtime.recursive_fan_in.updated",
+    "runtime.recursive_final_report.created",
+    "runtime.branch_scope.conflict_detected",
     "runtime.patch.proposed",
     "runtime.patch.approved",
+    "runtime.patch.apply_started",
     "runtime.patch.rejected",
     "runtime.patch.applied",
     "runtime.patch.apply_failed",

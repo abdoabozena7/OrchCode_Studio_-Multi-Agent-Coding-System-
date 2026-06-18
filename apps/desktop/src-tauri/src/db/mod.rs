@@ -10,7 +10,9 @@ const EVENT_AUTHORITY_RUNTIME_BRIDGE: &str = "runtime_bridge";
 const EVENT_AUTHORITY_RUST: &str = "rust";
 const EVENT_PATCH_PROPOSED: &str = "runtime.patch.proposed";
 const EVENT_PATCH_APPROVED: &str = "runtime.patch.approved";
+const EVENT_PATCH_APPLY_STARTED: &str = "runtime.patch.apply_started";
 const EVENT_PATCH_APPLIED: &str = "runtime.patch.applied";
+const EVENT_PATCH_APPLY_FAILED: &str = "runtime.patch.apply_failed";
 const EVENT_PATCH_REJECTED: &str = "runtime.patch.rejected";
 const EVENT_COMMAND_REQUESTED: &str = "runtime.command.requested";
 const EVENT_COMMAND_STARTED: &str = "runtime.command.started";
@@ -144,6 +146,9 @@ impl DatabaseService {
                 provider_name TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 selected_model TEXT NOT NULL,
+                router_model TEXT,
+                verifier_model TEXT,
+                embedding_model TEXT,
                 api_key_configured INTEGER NOT NULL DEFAULT 0,
                 is_valid INTEGER NOT NULL DEFAULT 0,
                 last_validated_at TEXT,
@@ -273,6 +278,9 @@ impl DatabaseService {
         add_column_if_missing(&self.conn, "background_jobs", "source_event_id", "TEXT")?;
         add_column_if_missing(&self.conn, "background_jobs", "source_event_type", "TEXT")?;
         add_column_if_missing(&self.conn, "background_jobs", "source_event_authority", "TEXT")?;
+        add_column_if_missing(&self.conn, "model_provider_config", "embedding_model", "TEXT")?;
+        add_column_if_missing(&self.conn, "model_provider_config", "router_model", "TEXT")?;
+        add_column_if_missing(&self.conn, "model_provider_config", "verifier_model", "TEXT")?;
         self.backfill_event_metadata()?;
         Ok(())
     }
@@ -452,13 +460,16 @@ impl DatabaseService {
     pub fn save_model_provider_config(&self, config: &ModelProviderConfig) -> rusqlite::Result<()> {
         self.conn.execute("DELETE FROM model_provider_config", [])?;
         self.conn.execute(
-            "INSERT INTO model_provider_config (id, provider_type, provider_name, base_url, selected_model, api_key_configured, is_valid, last_validated_at, last_validation_error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO model_provider_config (id, provider_type, provider_name, base_url, selected_model, router_model, verifier_model, embedding_model, api_key_configured, is_valid, last_validated_at, last_validation_error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 config.id,
                 provider_type_to_str(&config.provider_type),
                 &config.provider_name,
                 &config.base_url,
                 &config.selected_model,
+                &config.router_model,
+                &config.verifier_model,
+                &config.embedding_model,
                 i64::from(config.api_key_configured),
                 i64::from(config.is_valid),
                 &config.last_validated_at,
@@ -471,7 +482,7 @@ impl DatabaseService {
     pub fn get_model_provider_config(&self) -> rusqlite::Result<Option<ModelProviderConfig>> {
         self.conn
             .query_row(
-                "SELECT id, provider_type, provider_name, base_url, selected_model, api_key_configured, is_valid, last_validated_at, last_validation_error FROM model_provider_config LIMIT 1",
+                "SELECT id, provider_type, provider_name, base_url, selected_model, router_model, verifier_model, embedding_model, api_key_configured, is_valid, last_validated_at, last_validation_error FROM model_provider_config LIMIT 1",
                 [],
                 |row| {
                     let provider_type: String = row.get(1)?;
@@ -481,10 +492,13 @@ impl DatabaseService {
                         provider_name: row.get(2)?,
                         base_url: row.get(3)?,
                         selected_model: row.get(4)?,
-                        api_key_configured: row.get::<_, i64>(5)? == 1,
-                        is_valid: row.get::<_, i64>(6)? == 1,
-                        last_validated_at: row.get(7)?,
-                        last_validation_error: row.get(8)?,
+                        router_model: row.get(5)?,
+                        verifier_model: row.get(6)?,
+                        embedding_model: row.get(7)?,
+                        api_key_configured: row.get::<_, i64>(8)? == 1,
+                        is_valid: row.get::<_, i64>(9)? == 1,
+                        last_validated_at: row.get(10)?,
+                        last_validation_error: row.get(11)?,
                     })
                 },
             )
@@ -799,7 +813,9 @@ impl DatabaseService {
             }
         }
         if event_type == EVENT_PATCH_APPROVED
+            || event_type == EVENT_PATCH_APPLY_STARTED
             || event_type == EVENT_PATCH_APPLIED
+            || event_type == EVENT_PATCH_APPLY_FAILED
             || event_type == EVENT_PATCH_REJECTED
         {
             if let Some(patch_id) =
@@ -807,10 +823,12 @@ impl DatabaseService {
             {
                 let status = match event_type {
                     EVENT_PATCH_APPROVED => Some("approved"),
+                    EVENT_PATCH_APPLY_STARTED => Some("apply_started"),
                     EVENT_PATCH_APPLIED => value
                         .get("status")
                         .and_then(Value::as_str)
                         .or(Some("applied")),
+                    EVENT_PATCH_APPLY_FAILED => Some("apply_failed"),
                     EVENT_PATCH_REJECTED => Some("rejected"),
                     _ => None,
                 };
@@ -1065,13 +1083,27 @@ impl DatabaseService {
             |row| row.get::<_, String>(0),
         ).optional()
     }
+
+    pub fn patch_approval_exists_for_session(
+        &self,
+        session_id: &str,
+        patch_id: &str,
+    ) -> rusqlite::Result<bool> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_events WHERE session_id = ?1 AND COALESCE(canonical_event_type, event_type) = ?2 AND payload LIKE ?3)",
+            params![session_id, EVENT_PATCH_APPROVED, format!("%{}%", patch_id)],
+            |row| row.get(0),
+        )
+    }
 }
 
 fn canonical_event_type(event_type: &str) -> &str {
     match event_type {
         "patch.proposed" | EVENT_PATCH_PROPOSED => EVENT_PATCH_PROPOSED,
         "patch.approved" | EVENT_PATCH_APPROVED => EVENT_PATCH_APPROVED,
+        "patch.apply_started" | EVENT_PATCH_APPLY_STARTED => EVENT_PATCH_APPLY_STARTED,
         "apply.completed" | EVENT_PATCH_APPLIED => EVENT_PATCH_APPLIED,
+        "patch.apply_failed" | EVENT_PATCH_APPLY_FAILED => EVENT_PATCH_APPLY_FAILED,
         "patch.rejected" | EVENT_PATCH_REJECTED => EVENT_PATCH_REJECTED,
         "command.completed" | EVENT_COMMAND_COMPLETED => EVENT_COMMAND_COMPLETED,
         EVENT_COMMAND_REQUESTED => EVENT_COMMAND_REQUESTED,
@@ -1162,11 +1194,21 @@ fn durable_runtime_event_type<'a>(
         "runtime.session.created" => Some("session.created"),
         "runtime.session.restored" => Some("session.restored"),
         "runtime.session.expired" => Some("session.expired"),
+        "runtime.product_spec.proposed" => Some("product_spec.proposed"),
+        "runtime.product_spec.approved" => Some("product_spec.approved"),
+        "runtime.technical_plan.proposed" => Some("technical_plan.proposed"),
+        "runtime.technical_plan.approved" => Some("technical_plan.approved"),
+        "runtime.recursive_graph.proposed" => Some("recursive_graph.proposed"),
+        "runtime.recursive_graph.ready" => Some("recursive_graph.ready"),
+        "runtime.recursive_graph.blocked" => Some("recursive_graph.blocked"),
+        "runtime.branch_orchestrator.planned" => Some("branch_orchestrator.planned"),
+        "runtime.branch_scope.conflict_detected" => Some("branch_scope.conflict_detected"),
         "runtime.patch.proposed" | "patch.proposed" => Some("patch.proposed"),
         "runtime.patch.approved" | "patch.approved" => Some("patch.approved"),
+        "runtime.patch.apply_started" | "patch.apply_started" => Some("patch.apply_started"),
         "runtime.patch.rejected" | "patch.rejected" => Some("patch.rejected"),
         "runtime.patch.applied" | "apply.completed" => Some("patch.applied"),
-        "runtime.patch.apply_failed" => Some("patch.apply_failed"),
+        "runtime.patch.apply_failed" | "patch.apply_failed" => Some("patch.apply_failed"),
         "runtime.command.requested" => Some("command.requested"),
         "runtime.command.started" => Some("command.started"),
         "runtime.command.completed" | "command.completed" => Some("command.completed"),
@@ -1180,8 +1222,10 @@ fn durable_runtime_event_type<'a>(
         _ => match canonical_event_type {
             EVENT_PATCH_PROPOSED => Some("patch.proposed"),
             EVENT_PATCH_APPROVED => Some("patch.approved"),
+            EVENT_PATCH_APPLY_STARTED => Some("patch.apply_started"),
             EVENT_PATCH_REJECTED => Some("patch.rejected"),
             EVENT_PATCH_APPLIED => Some("patch.applied"),
+            EVENT_PATCH_APPLY_FAILED => Some("patch.apply_failed"),
             EVENT_COMMAND_REQUESTED => Some("command.requested"),
             EVENT_COMMAND_STARTED => Some("command.started"),
             EVENT_COMMAND_COMPLETED => Some("command.completed"),
@@ -1235,6 +1279,36 @@ fn durable_runtime_payload(
     value: &Value,
 ) -> Option<Value> {
     match event_type {
+        "product_spec.proposed" | "product_spec.approved" => value.get("productSpec").map(|product_spec| {
+            serde_json::json!({
+                "sessionId": session_id,
+                "productSpec": product_spec
+            })
+        }),
+        "technical_plan.proposed" | "technical_plan.approved" => value.get("technicalPlan").map(|technical_plan| {
+            serde_json::json!({
+                "sessionId": session_id,
+                "technicalPlan": technical_plan
+            })
+        }),
+        "recursive_graph.proposed" | "recursive_graph.ready" | "recursive_graph.blocked" => value.get("graph").map(|graph| {
+            serde_json::json!({
+                "sessionId": session_id,
+                "graph": graph
+            })
+        }),
+        "branch_orchestrator.planned" => value.get("branch").map(|branch| {
+            serde_json::json!({
+                "sessionId": session_id,
+                "branch": branch
+            })
+        }),
+        "branch_scope.conflict_detected" => value.get("conflict").map(|conflict| {
+            serde_json::json!({
+                "sessionId": session_id,
+                "conflict": conflict
+            })
+        }),
         "patch.proposed" => value.get("proposal").map(|proposal| {
             serde_json::json!({
                 "sessionId": session_id,
@@ -1311,7 +1385,10 @@ fn resolve_patch_event_id(value: &Value, event_type: &str, authority: &str) -> O
     // Runtime SSE mirror events can carry display-oriented proposal payloads.
     // We only project those fallback shapes for non-terminal review events.
     match (event_type, authority, proposal_id) {
-        (EVENT_PATCH_APPROVED, _, Some(id)) | (EVENT_PATCH_REJECTED, _, Some(id)) => {
+        (EVENT_PATCH_APPROVED, _, Some(id))
+        | (EVENT_PATCH_APPLY_STARTED, _, Some(id))
+        | (EVENT_PATCH_APPLY_FAILED, _, Some(id))
+        | (EVENT_PATCH_REJECTED, _, Some(id)) => {
             Some(id.to_string())
         }
         _ => None,
@@ -1610,6 +1687,59 @@ mod tests {
         assert_eq!(runtime_events[2].event_type, "patch.applied");
         assert_eq!(runtime_events[3].event_type, "command.requested");
         assert_eq!(runtime_events[4].event_type, "command.completed");
+    }
+
+    #[test]
+    fn patch_apply_lookup_uses_persisted_proposal_and_approval_events() {
+        let db = DatabaseService::new_in_memory().expect("db");
+        let session_id = "session_patch_lookup";
+        db.create_orchestration_run(
+            session_id,
+            "Patch lookup test",
+            "created",
+            "standard",
+            "token_hash",
+            "2099-01-01T00:00:00Z",
+        )
+        .expect("seed session");
+        db.append_session_event(
+            session_id,
+            EVENT_PATCH_PROPOSED,
+            &json!({
+                "proposal": {
+                    "id": "patch_lookup",
+                    "title": "Lookup patch",
+                    "filesChanged": [{ "path": "a.txt", "changeType": "create", "explanation": "test" }],
+                    "unifiedDiff": "diff --git a/a.txt b/a.txt\nnew file mode 100644\n--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1 @@\n+a\n",
+                    "status": "proposed"
+                }
+            })
+            .to_string(),
+        )
+        .expect("proposal");
+        assert!(db.patch_payload_for_session(session_id, "patch_lookup").expect("lookup").is_some());
+        assert!(!db.patch_approval_exists_for_session(session_id, "patch_lookup").expect("approval lookup"));
+
+        db.append_session_event(
+            session_id,
+            EVENT_PATCH_APPROVED,
+            &json!({ "patchId": "patch_lookup", "status": "approved" }).to_string(),
+        )
+        .expect("approval");
+        assert!(db.patch_approval_exists_for_session(session_id, "patch_lookup").expect("approval lookup"));
+
+        db.append_authoritative_session_event(
+            session_id,
+            EVENT_PATCH_APPLY_FAILED,
+            &json!({ "patchId": "patch_lookup", "status": "apply_failed", "message": "test failure" }).to_string(),
+        )
+        .expect("apply failed");
+        let status = db.conn.query_row(
+            "SELECT status FROM patches WHERE id = 'patch_lookup'",
+            [],
+            |row| row.get::<_, String>(0),
+        ).expect("patch status");
+        assert_eq!(status, "apply_failed");
     }
 
     #[test]

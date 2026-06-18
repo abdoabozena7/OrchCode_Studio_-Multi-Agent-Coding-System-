@@ -463,7 +463,7 @@ function fakeRun(workspace: string, id: string): Run {
       max_context_files: 6,
       max_context_chars: 12000,
       max_task_attempts: 1,
-      provider_mode: "mock"
+      provider_mode: "real_provider"
     },
     artifacts_path: path.join(workspace, ".agent_memory", "runs", id)
   };

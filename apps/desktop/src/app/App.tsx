@@ -59,7 +59,10 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type 
 import {
   approveRuntimePatch,
   assertRuntimeAvailable,
+  checkRuntimeHealth,
   createRuntimeSession,
+  decideRuntimeProductSpec,
+  decideRuntimeTechnicalPlan,
   getRuntimeSession,
   rejectRuntimePatch,
   reportRuntimePatchApplyResult,
@@ -67,6 +70,7 @@ import {
   type RuntimeEventSubscriptionState,
   RuntimeUnavailableError,
   runRuntimeTurn,
+  startRuntimeRecursiveBranchExecution,
   subscribeRuntimeEvents
 } from "../lib/agentRuntime";
 import {
@@ -74,6 +78,7 @@ import {
   appendSessionEvent,
   applyRuntimePatch,
   createRuntimeRun,
+  getCodeFreshnessStatus,
   getSavedRuntimeSession,
   getGitDiff,
   getGitStatus,
@@ -90,6 +95,7 @@ import {
   upsertOrchestrationRun,
   saveModelProviderConfig,
   validateModelProvider,
+  type CodeFreshnessStatus,
   type ModelProviderConfigInput
 } from "../lib/tauri";
 import { canAutoRunRuntimeCommand, executeRuntimeCommandRequest } from "../lib/terminalOrchestrator";
@@ -176,6 +182,7 @@ const ARCHIVED_SESSIONS_KEY = "hivo.archivedSessions";
 const PINNED_SESSIONS_KEY = "hivo.pinnedSessions";
 const SESSION_TITLE_MIGRATION_KEY = "hivo.sessionTitleMigration.v1";
 const PET_VISIBLE_KEY = "hivo.petVisible";
+const AUTO_RESTART_ATTEMPT_KEY = "hivo.latestCodeAutoRestartAttempt";
 const INITIAL_SSE_STATE: RuntimeEventSubscriptionState = {
   status: "disconnected",
   connected: false,
@@ -213,6 +220,8 @@ const DEFAULT_SIDEBAR_WIDTH = 320;
 const MIN_SIDEBAR_WIDTH = 248;
 const MAX_SIDEBAR_WIDTH = 520;
 const COLLAPSED_SIDEBAR_WIDTH = 72;
+const CODE_FRESHNESS_POLL_MS = 2_000;
+const AUTO_RESTART_DEBOUNCE_MS = 1_500;
 
 const providerPresets: ProviderPreset[] = [
   {
@@ -247,6 +256,9 @@ const defaultProviderForm: ModelProviderConfigInput = {
   providerName: "Ollama",
   baseUrl: "http://localhost:11434",
   selectedModel: "",
+  routerModel: "",
+  verifierModel: "",
+  embeddingModel: "",
   apiKey: ""
 };
 
@@ -295,6 +307,7 @@ export function App() {
   const [runtimeSession, setRuntimeSession] = useState<AgentRuntimeSession | null>(null);
   const [runtimeSessionToken, setRuntimeSessionToken] = useState("");
   const [restartingApp, setRestartingApp] = useState(false);
+  const [codeFreshness, setCodeFreshness] = useState<CodeFreshnessStatus | null>(null);
   const [thinkFirst, setThinkFirst] = useState(false);
   const [accessProfile, setAccessProfile] = useState<AccessProfile>("full_access");
   const [accessMenuOpen, setAccessMenuOpen] = useState(false);
@@ -338,6 +351,8 @@ export function App() {
   const [hivoPetVisible, setHivoPetVisible] = useState(true);
   const [bootstrapped, setBootstrapped] = useState(false);
   const progressRailCloseTimerRef = useRef<number | null>(null);
+  const autoRestartTimerRef = useRef<number | null>(null);
+  const autoRestartAttemptRef = useRef("");
   const titleMigrationStartedRef = useRef(false);
   const accessMenuShellRef = useRef<HTMLDivElement | null>(null);
 
@@ -390,15 +405,77 @@ export function App() {
       if (progressRailCloseTimerRef.current !== null) {
         window.clearTimeout(progressRailCloseTimerRef.current);
       }
+      if (autoRestartTimerRef.current !== null) {
+        window.clearTimeout(autoRestartTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshCodeFreshness = async () => {
+      try {
+        const health = await checkRuntimeHealth();
+        const freshness = await getCodeFreshnessStatus(health.startedAt);
+        if (!cancelled) setCodeFreshness(freshness);
+      } catch (error) {
+        if (!cancelled) {
+          const reason = String(error);
+          const legacyRuntimeSurface = isTauriDesktopRuntime()
+            && /valid start timestamp|get_code_freshness_status/i.test(reason);
+          setCodeFreshness({
+            status: legacyRuntimeSurface ? "stale" : "unknown",
+            desktopStartedAt: "",
+            latestSourceModifiedAt: legacyRuntimeSurface ? `legacy-contract:${reason}` : undefined,
+            staleFiles: legacyRuntimeSurface ? ["running development services use the previous freshness contract"] : [],
+            reason
+          });
+        }
+      }
+    };
+    void refreshCodeFreshness();
+    const interval = window.setInterval(() => void refreshCodeFreshness(), CODE_FRESHNESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (codeFreshness?.status !== "stale" || restartingApp) {
+      if (codeFreshness?.status === "fresh") {
+        autoRestartAttemptRef.current = "";
+        localStorage.removeItem(AUTO_RESTART_ATTEMPT_KEY);
+      }
+      if (autoRestartTimerRef.current !== null) {
+        window.clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+      }
+      return;
+    }
+    const signature = codeFreshness.latestSourceModifiedAt ?? codeFreshness.staleFiles.join("|");
+    const storedAttempt = localStorage.getItem(AUTO_RESTART_ATTEMPT_KEY) ?? "";
+    if (!signature || autoRestartAttemptRef.current === signature || storedAttempt === signature) return;
+    autoRestartTimerRef.current = window.setTimeout(() => {
+      autoRestartTimerRef.current = null;
+      autoRestartAttemptRef.current = signature;
+      localStorage.setItem(AUTO_RESTART_ATTEMPT_KEY, signature);
+      void handleRestartWithLatestCode();
+    }, AUTO_RESTART_DEBOUNCE_MS);
+    return () => {
+      if (autoRestartTimerRef.current !== null) {
+        window.clearTimeout(autoRestartTimerRef.current);
+        autoRestartTimerRef.current = null;
+      }
+    };
+  }, [codeFreshness, restartingApp]);
 
   useEffect(() => {
     const textarea = promptTextareaRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
-    const minHeight = Math.round((prompt.trim() ? 62 : 54) * composerScale);
-    const maxHeight = Math.round(230 * composerScale);
+    const minHeight = Math.round((prompt.trim() ? 46 : 40) * composerScale);
+    const maxHeight = Math.round(190 * composerScale);
     const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
@@ -611,6 +688,18 @@ export function App() {
         autoApplyingPatchIdsRef.current.add(candidate.id);
         try {
           setMessage(`Full Access applying ${candidate.title}...`);
+          if (candidate.status === "proposed") {
+            const approval = await approveRuntimePatch(runtimeSession.id, candidate.id, runtimeSessionToken || undefined);
+            await persistPatchApprovalForRust(runtimeSession.id, approval.proposal);
+          } else {
+            await persistPatchApprovalForRust(runtimeSession.id, candidate);
+          }
+          await reportRuntimePatchApplyResult(
+            runtimeSession.id,
+            candidate.id,
+            { status: "apply_started", message: "Rust patch apply requested." },
+            runtimeSessionToken || undefined
+          );
           const applied = await applyRuntimePatchWithRetry(runtimeSession.id, candidate.id);
           if (cancelled) return;
           const updated = await reportRuntimePatchApplyResult(
@@ -842,6 +931,32 @@ export function App() {
       setMessage(String(error));
     }
   }
+
+  const latestCodeButtonState = restartingApp
+    ? {
+        label: "Updating...",
+        className: "updating",
+        title: "Restarting the desktop, runtime, and dev server with the latest local code."
+      }
+    : codeFreshness?.status === "stale"
+      ? {
+          label: "Update Required",
+          className: "stale",
+          title: codeFreshness.staleFiles.length
+            ? `Restart required for: ${codeFreshness.staleFiles.join(", ")}`
+            : "Local runtime code changed after this app started."
+        }
+      : !codeFreshness || codeFreshness.status === "unknown"
+        ? {
+            label: "Latest Unknown",
+            className: "unknown",
+            title: codeFreshness?.reason ?? "Could not prove that every running component uses the latest code."
+          }
+        : {
+            label: "Restart Latest",
+            className: "fresh",
+            title: "All running components use the latest detected local code. Click to force a fresh restart."
+          };
 
   async function handleRunCommand() {
     try {
@@ -1093,29 +1208,29 @@ export function App() {
             sessionToken = rustRun.sessionToken;
             sessionTokenExpiresAt = rustRun.sessionTokenExpiresAt;
             setRuntimeSessionToken(rustRun.sessionToken);
-            const wantsDemoProvider = /\b(demo|mock)\b/i.test(input);
             const sanitizedProvider =
               providerConfig
                 ? {
                     providerType: providerConfig.providerType,
                     providerName: providerConfig.providerName,
-                    baseUrl: providerConfig.baseUrl,
-                    selectedModel: providerConfig.selectedModel,
+                     baseUrl: providerConfig.baseUrl,
+                     selectedModel: providerConfig.selectedModel,
+                     routerModel: providerConfig.routerModel,
+                     verifierModel: providerConfig.verifierModel,
+                     embeddingModel: providerConfig.embeddingModel,
                     isValid: providerConfig.isValid,
                     apiKeyConfigured: providerConfig.apiKeyConfigured
                   }
                 : undefined;
-            if (!wantsDemoProvider && !sanitizedProvider?.isValid) {
-              throw new Error("Configure a valid model provider before starting a real coding run, or include `demo` in the prompt for mock mode.");
+            if (!sanitizedProvider?.isValid) {
+              throw new Error("Configure a valid model provider before starting a coding run.");
             }
             return (
               await createRuntimeSession({
                 workspacePath: workspace.path,
-                mode: wantsDemoProvider ? "demo_mock" : "real_provider",
-                requireRealProvider: !wantsDemoProvider,
                 trustProfile,
                 providerConfig: sanitizedProvider,
-                activeProviderSource: wantsDemoProvider ? "runtime_default" : "desktop_saved_provider",
+                activeProviderSource: "desktop_saved_provider",
                 sessionToken: rustRun.sessionToken,
                 sessionTokenExpiresAt: rustRun.sessionTokenExpiresAt,
                 executionMode: "auto_mode",
@@ -1186,8 +1301,80 @@ export function App() {
     if (!runtimeSession) return;
     try {
       const result = await approveRuntimePatch(runtimeSession.id, patchId, runtimeSessionToken || undefined);
-      setMessage(result.message);
-      await refreshRuntimeSession();
+      await persistPatchApprovalForRust(runtimeSession.id, result.proposal);
+      const applying = await reportRuntimePatchApplyResult(
+        runtimeSession.id,
+        patchId,
+        { status: "apply_started", message: "Rust patch apply requested." },
+        runtimeSessionToken || undefined
+      );
+      applyCanonicalRuntimeSession(applying);
+      const applied = await applyRuntimePatchWithRetry(runtimeSession.id, patchId);
+      const updated = await reportRuntimePatchApplyResult(
+        runtimeSession.id,
+        patchId,
+        {
+          status: "applied",
+          message: applied.message,
+          reconciliationSnapshot:
+            applied.beforeSnapshot || applied.afterSnapshot
+              ? {
+                  before: applied.beforeSnapshot,
+                  after: applied.afterSnapshot
+                }
+              : undefined
+        },
+        runtimeSessionToken || undefined
+      );
+      applyCanonicalRuntimeSession(updated);
+      setMessage(applied.message);
+      await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_result");
+      await refreshWorkspaceState();
+    } catch (error) {
+      try {
+        const updated = await reportRuntimePatchApplyResult(
+          runtimeSession.id,
+          patchId,
+          { status: "failed", message: String(error) },
+          runtimeSessionToken || undefined
+        );
+        applyCanonicalRuntimeSession(updated);
+        await reconcileRuntimeSession(runtimeSession.id, runtimeSessionToken || undefined, "patch_apply_failed_result");
+      } catch {
+        // Keep the original approval/apply error visible.
+      }
+      setMessage(String(error));
+    }
+  }
+
+  async function handleFactoryDecision(
+    target: "product_spec" | "technical_plan",
+    decision: "approved" | "rejected" | "changes_requested"
+  ) {
+    if (!runtimeSession) return;
+    const feedback = decision === "approved"
+      ? undefined
+      : window.prompt(decision === "changes_requested" ? "Describe the requested changes." : "Why are you rejecting this artifact?")?.trim();
+    if (decision !== "approved" && !feedback) return;
+    try {
+      const activeToken = runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token;
+      const updated = target === "product_spec"
+        ? await decideRuntimeProductSpec(runtimeSession.id, { decision, feedback }, activeToken)
+        : await decideRuntimeTechnicalPlan(runtimeSession.id, { decision, feedback }, activeToken);
+      applyCanonicalRuntimeSession(updated);
+      setMessage(updated.nextAction?.message ?? "Recursive Factory planning approval updated.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function handleStartRecursiveBranchExecution() {
+    if (!runtimeSession) return;
+    try {
+      const activeToken = runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token;
+      const updated = await startRuntimeRecursiveBranchExecution(runtimeSession.id, { approved: true }, activeToken);
+      applyCanonicalRuntimeSession(updated);
+      setMessage(updated.nextAction?.message ?? "Recursive branch execution started with patch proposal authority only.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -1196,6 +1383,18 @@ export function App() {
   async function handleApplyPatch(patchId: string) {
     if (!runtimeSession) return;
     try {
+      const proposal = runtimeSession.patchProposals.find((candidate) => candidate.id === patchId);
+      if (!proposal || proposal.status !== "approved") {
+        throw new Error("Patch apply requires an approved proposal.");
+      }
+      await persistPatchApprovalForRust(runtimeSession.id, proposal);
+      const applying = await reportRuntimePatchApplyResult(
+        runtimeSession.id,
+        patchId,
+        { status: "apply_started", message: "Rust patch apply requested." },
+        runtimeSessionToken || undefined
+      );
+      applyCanonicalRuntimeSession(applying);
       const applied = await applyRuntimePatchWithRetry(runtimeSession.id, patchId);
       const updated = await reportRuntimePatchApplyResult(
         runtimeSession.id,
@@ -1620,9 +1819,14 @@ export function App() {
         </div>
 
         <div className="frame-bar-right">
-          <button className="toolbar-button" onClick={handleRestartWithLatestCode} disabled={restartingApp} title="Restart the app and dev servers with the latest local code">
+          <button
+            className={`toolbar-button latest-code-button ${latestCodeButtonState.className}`}
+            onClick={handleRestartWithLatestCode}
+            disabled={restartingApp}
+            title={latestCodeButtonState.title}
+          >
             <RefreshCw size={15} className={restartingApp ? "spin-icon" : undefined} />
-            <span>{restartingApp ? "Restarting..." : "Restart Latest"}</span>
+            <span>{latestCodeButtonState.label}</span>
           </button>
           <button className="toolbar-button" onClick={() => setSettingsOpen(true)}>
             <Settings size={15} />
@@ -1740,14 +1944,17 @@ export function App() {
                                   }
                                   title={
                                     isActiveSession
-                                      ? "Open current session"
+                                      ? `Open current session in ${entry.workspacePath}`
                                       : getPersistedSessionToken(sessionTokens, entry.id)
-                                        ? "Reopen chat"
-                                        : "Open saved chat history"
+                                        ? `Reopen chat in ${entry.workspacePath}`
+                                        : `Open saved chat history from ${entry.workspacePath}`
                                   }
                                   type="button"
                                 >
-                                  <span className="project-session-title">{entry.title}</span>
+                                  <span className="project-session-title-wrap">
+                                    <span className="project-session-title">{entry.title}</span>
+                                    <small className="project-session-workspace">{entry.workspaceName || pathBasename(entry.workspacePath)}</small>
+                                  </span>
                                 </button>
                                 <button
                                   className="project-session-pin"
@@ -1927,12 +2134,13 @@ export function App() {
                 onOpenPreview={() => void handleOpenPreview()}
                 onRunPendingCommands={() => void handleRunPendingCommands()}
                 onOpenFileReference={handleOpenFileReference}
+                activeWorkspacePath={workspace?.path}
                 rtlTextMode={rtlTextMode}
               />
             ) : null}
 
             <div className={`composer-shell ${rtlTextMode ? "rtl-text-mode" : ""}`} style={{ "--composer-scale": String(composerScale) } as CSSProperties}>
-              <div className="composer-input-frame">
+              <div className={`composer-input-frame ${agentBusy ? "is-thinking" : ""}`}>
                 <textarea
                   ref={promptTextareaRef}
                   value={prompt}
@@ -2078,7 +2286,6 @@ export function App() {
               </div>
             ) : null}
 
-            <p className="composer-status">{message}</p>
           </section>
 
           {bottomView !== "none" ? (
@@ -2213,12 +2420,44 @@ export function App() {
                   <dd>{sseConnectionState.tokenExpired ? "token_expired" : sseConnectionState.unauthorized ? "unauthorized" : "ok"}</dd>
                   <dt>Provider Source</dt>
                   <dd>{runtimeSession.providerTelemetry?.activeProviderSource ?? runtimeSession.activeProviderSource ?? "unknown"}</dd>
-                  <dt>Mock Used</dt>
-                  <dd>{runtimeSession.providerTelemetry?.mockProviderUsed ? "yes" : "no"}</dd>
-                  <dt>Fallback Used</dt>
-                  <dd>{runtimeSession.providerTelemetry?.fallbackUsed ? "yes" : "no"}</dd>
+                   <dt>Author Model</dt>
+                   <dd>{getProviderCertification(runtimeSession.providerTelemetry).authorModel}</dd>
+                   <dt>Router Model</dt>
+                   <dd>{getProviderCertification(runtimeSession.providerTelemetry).routerModel}</dd>
+                   <dt>Verifier Model</dt>
+                  <dd>{getProviderCertification(runtimeSession.providerTelemetry).verifierModel}</dd>
+                  <dt>Certification</dt>
+                  <dd title={getProviderCertification(runtimeSession.providerTelemetry).reason}>
+                    {getProviderCertification(runtimeSession.providerTelemetry).status}
+                  </dd>
+                  <dt>Certified Gates</dt>
+                  <dd>{getProviderCertification(runtimeSession.providerTelemetry).certifiedGates.join(", ") || "none"}</dd>
+                  <dt>Reasoning Attempts</dt>
+                  <dd>{runtimeSession.providerTelemetry?.reasoningAttempts ?? 0}</dd>
+                  <dt>Repair Attempts</dt>
+                  <dd>{runtimeSession.providerTelemetry?.repairAttempts ?? 0}</dd>
+                  <dt>Tool Rounds</dt>
+                  <dd>{runtimeSession.latestDecisionPipeline?.reasoningTrace?.toolRounds ?? 0}</dd>
+                   <dt>Evidence</dt>
+                   <dd>{getReasoningTraceSummary(runtimeSession).evidenceCount}</dd>
+                   <dt>Information Gain</dt>
+                   <dd>{getReasoningTraceSummary(runtimeSession).informationGain}</dd>
+                   <dt>Stagnant Rounds</dt>
+                   <dd>{getReasoningTraceSummary(runtimeSession).stagnantRounds}</dd>
+                   <dt>Index Readiness</dt>
+                   <dd>{getReasoningTraceSummary(runtimeSession).indexReadiness}</dd>
+                  <dt>Context Omissions</dt>
+                  <dd>{getReasoningTraceSummary(runtimeSession).contextOmissions}</dd>
+                  <dt>Verifier Verdict</dt>
+                  <dd>{getReasoningTraceSummary(runtimeSession).verifierVerdict}</dd>
+                  <dt>Reasoning Budget</dt>
+                  <dd>{getReasoningTraceSummary(runtimeSession).budgetLabel}</dd>
+                  <dt>Final Source</dt>
+                  <dd>{runtimeSession.providerTelemetry?.finalResponseSource ?? "none"}</dd>
                   <dt>Request Count</dt>
                   <dd>{runtimeSession.providerTelemetry?.providerRequestCount ?? 0}</dd>
+                  <dt>Planning Provider</dt>
+                  <dd>{describePlanningProviderRequest(runtimeSession)}</dd>
                   <dt>Prompt Chars</dt>
                   <dd>{formatCount(runtimeSession.providerTelemetry?.totalProviderPromptChars ?? 0)}</dd>
                   <dt>Context Chars</dt>
@@ -2227,6 +2466,8 @@ export function App() {
                   <dd>{formatCount(runtimeSession.providerTelemetry?.totalProviderResponseChars ?? 0)}</dd>
                   <dt>Last Error</dt>
                   <dd>{runtimeSession.providerTelemetry?.lastError ?? sseConnectionState.lastError ?? "none"}</dd>
+                  <dt>Terminal Failure</dt>
+                  <dd>{runtimeSession.latestDecisionPipeline?.terminalFailure ?? runtimeSession.providerTelemetry?.terminalFailure ?? "none"}</dd>
                   <dt>Restore</dt>
                   <dd>{runtimeSessionToken || (runtimeSession && getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token) ? "This app session can still attempt reconnects." : "This chat is open from saved local history."}</dd>
                 </dl>
@@ -2247,6 +2488,64 @@ export function App() {
                 <p className="muted">{runtimeSession.orchestration.technicalPlan.summary}</p>
               ) : (
                 <p className="muted">No plan yet.</p>
+              )}
+            </DrawerSection>
+
+            <DrawerSection title="Project Knowledge Tree">
+              {runtimeSession?.projectKnowledgeTree ? (
+                <ProjectKnowledgeTreePanel session={runtimeSession} />
+              ) : (
+                <p className="muted">No Project Knowledge Tree has been built for this session yet.</p>
+              )}
+            </DrawerSection>
+
+            <DrawerSection title="Recursive Factory approvals">
+              {runtimeSession?.recursiveFactory?.productSpec ? (
+                <FactoryApprovalCard
+                  title="Product Specification"
+                  status={runtimeSession.recursiveFactory.productSpec.status}
+                  revision={runtimeSession.recursiveFactory.productSpec.revision}
+                  summary={runtimeSession.recursiveFactory.productSpec.userGoal}
+                  onApprove={() => void handleFactoryDecision("product_spec", "approved")}
+                  onReject={() => void handleFactoryDecision("product_spec", "rejected")}
+                  onRequestChanges={() => void handleFactoryDecision("product_spec", "changes_requested")}
+                />
+              ) : (
+                <p className="muted">No Product Specification proposed.</p>
+              )}
+              {runtimeSession?.recursiveFactory?.technicalPlan ? (
+                <FactoryApprovalCard
+                  title="Technical Plan"
+                  status={runtimeSession.recursiveFactory.technicalPlan.status ?? "proposed"}
+                  revision={runtimeSession.recursiveFactory.technicalPlan.revision ?? 1}
+                  summary={runtimeSession.recursiveFactory.technicalPlan.summary}
+                  onApprove={() => void handleFactoryDecision("technical_plan", "approved")}
+                  onReject={() => void handleFactoryDecision("technical_plan", "rejected")}
+                  onRequestChanges={() => void handleFactoryDecision("technical_plan", "changes_requested")}
+                />
+              ) : (
+                <p className="muted">Technical planning remains blocked until Product Specification approval.</p>
+              )}
+              {runtimeSession?.recursiveFactory?.phase === "approved_to_execute" ? (
+                <p className="muted">Both planning gates approved. Execution has not started.</p>
+              ) : null}
+              {runtimeSession?.recursiveFactory?.phase === "recursive_graph_ready" && !runtimeSession.recursiveFactory.executionStarted ? (
+                <div className="proposal-actions">
+                  <button
+                    onClick={() => void handleStartRecursiveBranchExecution()}
+                    disabled={runtimeSession.recursiveFactory.graphReadiness?.status !== "ready"}
+                  >
+                    Approve start branch execution
+                  </button>
+                </div>
+              ) : null}
+            </DrawerSection>
+
+            <DrawerSection title="Recursive graph">
+              {runtimeSession?.recursiveFactory?.recursiveGraph ? (
+                <RecursiveGraphCard session={runtimeSession} />
+              ) : (
+                <p className="muted">No recursive graph yet. It appears only after Product Specification and Technical Plan approval.</p>
               )}
             </DrawerSection>
 
@@ -2421,6 +2720,192 @@ function DrawerSection({
   );
 }
 
+function FactoryApprovalCard({
+  title,
+  status,
+  revision,
+  summary,
+  onApprove,
+  onReject,
+  onRequestChanges
+}: {
+  title: string;
+  status: "proposed" | "approved" | "rejected" | "changes_requested";
+  revision: number;
+  summary: string;
+  onApprove: () => void;
+  onReject: () => void;
+  onRequestChanges: () => void;
+}) {
+  const pending = status !== "approved";
+  return (
+    <div className="proposal-card">
+      <strong>{title}</strong>
+      <span>revision {revision} | {status.replaceAll("_", " ")}</span>
+      <p>{summary}</p>
+      <div className="proposal-actions">
+        <button onClick={onApprove} disabled={!pending}>Approve</button>
+        <button onClick={onRequestChanges} disabled={!pending}>Request changes</button>
+        <button onClick={onReject} disabled={!pending}>Reject</button>
+      </div>
+    </div>
+  );
+}
+
+function RecursiveGraphCard({ session }: { session: AgentRuntimeSession }) {
+  const graph = session.recursiveFactory?.recursiveGraph;
+  const branchExecutions = session.recursiveFactory?.branchExecutions ?? [];
+  const finalReport = session.recursiveFactory?.finalReport;
+  const integrationSummary = session.recursiveFactory?.integrationSummary;
+  if (!graph) return null;
+  return (
+    <div className="proposal-card">
+      <strong>{graph.rootNode.title}</strong>
+      <span>{graph.status} | {graph.branches.length} branch(es) | {graph.conflicts.length} conflict(s)</span>
+      <p>{graph.rootGoal}</p>
+      <p className="muted">
+        {session.recursiveFactory?.executionStarted
+          ? "Branch execution has started. Runtime branches may only propose patches; Rust remains apply authority."
+          : "Execution has not started. This is a planned recursive graph."}
+      </p>
+      <dl className="session-details">
+        <dt>Readiness</dt>
+        <dd>{graph.readiness.summary}</dd>
+        <dt>Dependencies</dt>
+        <dd>{graph.dependencies.length ? graph.dependencies.map((edge) => `${edge.from} -> ${edge.to}`).join(", ") : "none"}</dd>
+        <dt>Active branch</dt>
+        <dd>{session.recursiveFactory?.activeBranchId ?? "none"}</dd>
+      </dl>
+      {branchExecutions.length ? (
+        <>
+          <strong>Branch execution tree</strong>
+          {branchExecutions.map((branch) => (
+            <div className="proposal-card nested-card" key={`execution-${branch.branchId}`}>
+              <strong>{branch.title}</strong>
+              <span>{branch.status} | review {branch.reviewStatus} | validation {branch.validationStatus}</span>
+              <p>{branch.executionContext.branchObjective}</p>
+              <p className="muted">Patch: {branch.proposedPatchId ?? "none"} | Applied by Rust: {branch.patchApplied ? "yes" : "no"}</p>
+              <p className="muted">Files: {branch.executionContext.fileScopes.join(", ") || "none"}</p>
+              <p className="muted">Locks: {branch.executionContext.lockScopes.join(", ") || "none"}</p>
+              {branch.blockedReason ? <p className="muted">Reason: {branch.blockedReason}</p> : null}
+              {branch.conflictReason ? <p className="muted">Conflict: {branch.conflictReason}</p> : null}
+              {branch.nestedSubtasks?.length ? (
+                <div className="nested-card">
+                  <strong>Nested subtasks (depth {branch.nestedDepth ?? 1}, max 1)</strong>
+                  {branch.nestedSubtasks.map((subtask) => (
+                    <div className="proposal-card nested-card" key={subtask.subtaskId}>
+                      <strong>{subtask.objective}</strong>
+                      <span>{subtask.status} | validation {subtask.validationStatus}</span>
+                      <p className="muted">Patch: {subtask.proposedPatchId ?? "none"} | Applied by Rust: {subtask.patchApplied ? "yes" : "no"}</p>
+                      <p className="muted">Files: {subtask.fileScopes.join(", ") || "none"} | Dependencies: {subtask.dependencies.join(", ") || "none"}</p>
+                      {subtask.blockedReason ? <p className="muted">Reason: {subtask.blockedReason}</p> : null}
+                    </div>
+                  ))}
+                  {branch.nestedRollup ? (
+                    <p className="muted">
+                      Parent rollup: completed {branch.nestedRollup.completedSubtasks.length}, failed {branch.nestedRollup.failedSubtasks.length}, blocked {branch.nestedRollup.blockedSubtasks.length}, validation {branch.nestedRollup.validationState}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </>
+      ) : null}
+      {finalReport ? (
+        <div className="proposal-card nested-card">
+          <strong>Final recursive execution status</strong>
+          <span>{finalReport.finalStatus} | final validation {finalReport.finalValidationState}</span>
+          <p>{finalReport.recommendedNextStep}</p>
+          <p className="muted">Applied patches: {finalReport.patchApplyTruth.filter((patch) => patch.status === "applied").map((patch) => patch.patchId).join(", ") || "none"}</p>
+          <p className="muted">
+            Unverified validation: {finalReport.validationHierarchy.filter((entry) => entry.status === "unverified").map((entry) => `${entry.level}${entry.branchId ? `:${entry.branchId}` : ""}=${entry.truthStatus}`).join(", ") || "none"}
+          </p>
+          {finalReport.validationDiscovery ? (
+            <>
+              <p className="muted">
+                Discovered validation: {finalReport.validationDiscovery.discoveredCommands.map((command) => `${command.classification}:${command.command}`).join(", ") || "none"}
+              </p>
+              <p className="muted">
+                Chosen strategy: {finalReport.validationDiscovery.chosenStrategy.kind} | {finalReport.validationDiscovery.chosenStrategy.classification} | {finalReport.validationDiscovery.chosenStrategy.reason}
+              </p>
+              <p className="muted">
+                Evidence: {finalReport.validationDiscovery.evidence.map((entry) => [
+                  entry.kind,
+                  entry.truthStatus,
+                  entry.policyResult ? `policy ${entry.policyResult}` : undefined,
+                  typeof entry.exitCode === "number" ? `exit ${entry.exitCode}` : undefined,
+                  entry.stdoutSummary ? `stdout ${entry.stdoutSummary}` : undefined,
+                  entry.stderrSummary ? `stderr ${entry.stderrSummary}` : undefined,
+                  entry.files?.length ? `files ${entry.files.join(", ")}` : undefined
+                ].filter(Boolean).join(" / ")).join("; ") || "none"}
+              </p>
+              <p className="muted">Validation reason: {finalReport.validationDiscovery.statusReason}</p>
+            </>
+          ) : null}
+          {finalReport.repair ? (
+            <>
+              <p className="muted">
+                First validation failure: {finalReport.repair.diagnosis.command} | exit {finalReport.repair.diagnosis.exitCode ?? "unknown"} | {finalReport.repair.diagnosis.summary}
+              </p>
+              <p className="muted">
+                Diagnosis: tests {finalReport.repair.diagnosis.failingTests.join("; ") || "none"} | errors {finalReport.repair.diagnosis.errors.slice(0, 3).join("; ") || "none"} | files {finalReport.repair.diagnosis.likelyFiles.join(", ") || "none"}
+              </p>
+              <p className="muted">
+                Attribution: {finalReport.repair.diagnosis.attribution.confidence} | patches {finalReport.repair.diagnosis.attribution.relatedPatchIds.join(", ") || "none"} | branches {finalReport.repair.diagnosis.attribution.relatedBranchIds.join(", ") || "none"} | {finalReport.repair.diagnosis.attribution.reason}
+              </p>
+              <p className="muted">
+                Attribution evidence: {finalReport.repair.diagnosis.attribution.evidence.join("; ") || "none"}
+              </p>
+              <p className="muted">
+                Repair eligibility: {finalReport.repair.eligibility.status} | attempts {finalReport.repair.eligibility.attemptCount}/{finalReport.repair.eligibility.maxAttempts} | {finalReport.repair.eligibility.reasons.join("; ")}
+              </p>
+              <p className="muted">
+                Repair patch: {finalReport.repair.repairPatchId ?? "none"} | status {finalReport.repair.repairPatchStatus ?? finalReport.repair.status}
+              </p>
+              <p className="muted">
+                Validation attempts: {finalReport.repair.validationAttempts.map((attempt) => [
+                  `#${attempt.attemptNumber}`,
+                  attempt.role,
+                  attempt.truthStatus,
+                  typeof attempt.exitCode === "number" ? `exit ${attempt.exitCode}` : undefined,
+                  attempt.stdoutSummary ? `stdout ${attempt.stdoutSummary}` : undefined,
+                  attempt.stderrSummary ? `stderr ${attempt.stderrSummary}` : undefined
+                ].filter(Boolean).join(" / ")).join("; ") || "none"}
+              </p>
+              <p className="muted">Repair outcome: {finalReport.repair.summary}</p>
+            </>
+          ) : null}
+          <p className="muted">Final report: {finalReport.productGoal}</p>
+          {finalReport.knownLimitations.length ? <p className="muted">Limitations: {finalReport.knownLimitations.join("; ")}</p> : null}
+        </div>
+      ) : integrationSummary ? (
+        <div className="proposal-card nested-card">
+          <strong>Recursive fan-in</strong>
+          <span>{integrationSummary.validation.status} | {integrationSummary.validation.truthStatus}</span>
+          <p>{integrationSummary.validation.summary}</p>
+        </div>
+      ) : null}
+      {graph.branches.map((branch) => (
+        <div className="proposal-card nested-card" key={branch.branchId}>
+          <strong>{branch.title}</strong>
+          <span>{branch.ownerRole} | {branch.status}</span>
+          <p>{branch.objective}</p>
+          <p className="muted">Files: {branch.fileScopes.join(", ") || "none"}</p>
+          <p className="muted">Locks: {branch.lockScopes.join(", ") || "none"}</p>
+        </div>
+      ))}
+      {graph.conflicts.length ? (
+        graph.conflicts.map((conflict) => (
+          <p className="muted" key={conflict.id}>{conflict.code}: {conflict.reason}</p>
+        ))
+      ) : (
+        <p className="muted">No branch scope conflicts detected.</p>
+      )}
+    </div>
+  );
+}
+
 function SessionTruthStrip({
   session,
   connectionState,
@@ -2433,6 +2918,8 @@ function SessionTruthStrip({
   canReconnect: boolean;
 }) {
   const provider = session.providerTelemetry;
+  const certification = getProviderCertification(provider);
+  const reasoning = getReasoningTraceSummary(session);
   const status = sessionStatusTruth(session);
   return (
     <section className={`thread-status-row ${status.kind}`}>
@@ -2447,12 +2934,24 @@ function SessionTruthStrip({
         <span>Runtime {connectionState === "connected" ? "connected" : "disconnected"}</span>
         <span>SSE {humanizeRuntimeStatus(sseState.status)}</span>
         <span>Last event {formatOptionalTimestamp(sseState.lastEventAt)}</span>
+        <span title={session.workspacePath}>Workspace {pathBasename(session.workspacePath)}</span>
         {sseState.tokenExpired ? <span>token_expired</span> : null}
         {sseState.unauthorized ? <span>unauthorized</span> : null}
         <span>Provider {provider?.activeProviderSource ?? session.activeProviderSource ?? "unknown"}</span>
+        <span>Model {certification.authorModel}</span>
+        <span>Router {certification.routerModel}</span>
+        <span>Certification {certification.status}</span>
+        <span>Gates {certification.certifiedGates.join(", ") || "none"}</span>
         <span>Requests {provider?.providerRequestCount ?? 0}</span>
-        <span>Mock {provider?.mockProviderUsed ? "yes" : "no"}</span>
-        <span>Fallback {provider?.fallbackUsed ? "yes" : "no"}</span>
+        <span>Reasoning {provider?.reasoningAttempts ?? 0}</span>
+        <span>Repairs {provider?.repairAttempts ?? 0}</span>
+        <span>Tools {reasoning.toolRounds}</span>
+        <span>Evidence {reasoning.evidenceCount}</span>
+        <span>Gain {reasoning.informationGain}</span>
+        <span>Stagnant {reasoning.stagnantRounds}</span>
+        <span>Omitted {reasoning.contextOmissions}</span>
+        <span>Verifier {reasoning.verifierVerdict}</span>
+        <span>Final {provider?.finalResponseSource ?? "none"}</span>
         {provider?.lastError ? <span>Error {truncateLabel(provider.lastError, 64)}</span> : null}
       </div>
     </section>
@@ -2472,6 +2971,7 @@ function ThreadFeed({
   onOpenPreview,
   onRunPendingCommands,
   onOpenFileReference,
+  activeWorkspacePath,
   rtlTextMode
 }: {
   session: AgentRuntimeSession;
@@ -2486,6 +2986,7 @@ function ThreadFeed({
   onOpenPreview: () => void;
   onRunPendingCommands: () => void;
   onOpenFileReference: (reference: FileReference) => void | Promise<void>;
+  activeWorkspacePath?: string;
   rtlTextMode: boolean;
 }) {
   const isExplainOnly = session.runMode === "inspect_only";
@@ -2495,7 +2996,12 @@ function ThreadFeed({
     lastAssistantMessageIndex >= 0 ? session.messages[lastAssistantMessageIndex]?.id ?? "" : "";
   const waitingForAssistant = agentBusy && lastUserMessageIndex > lastAssistantMessageIndex;
   const currentActivityStep = describeCurrentStep(session, connectionState, activeRuntimeCommand);
+  const workspaceMismatch = Boolean(
+    activeWorkspacePath
+      && normalizeWorkspacePath(activeWorkspacePath) !== normalizeWorkspacePath(session.workspacePath)
+  );
   const animatedAssistantMessageIdsRef = useRef<Set<string>>(new Set());
+  const threadFeedRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const currentIds = new Set(session.messages.map((message) => message.id));
@@ -2514,9 +3020,30 @@ function ThreadFeed({
     }
   }, [agentBusy, latestAssistantMessageId, session.id, session.messages]);
 
+  useEffect(() => {
+    const feed = threadFeedRef.current;
+    if (!feed) return;
+    const scrollToLatest = () => {
+      feed.scrollTop = feed.scrollHeight;
+    };
+    scrollToLatest();
+    const observer = new MutationObserver(scrollToLatest);
+    observer.observe(feed, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [session.id]);
+
   return (
-    <div className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
+    <div ref={threadFeedRef} className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
       <SessionTruthStrip session={session} connectionState={connectionState} sseState={sseState} canReconnect={canReconnect} />
+      {workspaceMismatch ? (
+        <section className="workspace-mismatch-banner">
+          <strong>Different workspace chat</strong>
+          <span>
+            This chat belongs to {pathBasename(session.workspacePath)}. Active workspace is {pathBasename(activeWorkspacePath ?? "")}.
+          </span>
+          <small title={session.workspacePath}>{session.workspacePath}</small>
+        </section>
+      ) : null}
       {session.messages.map((message) => {
         const isUserMessage = message.role === "user";
         const shouldAnimateAssistantMessage =
@@ -2530,7 +3057,6 @@ function ThreadFeed({
             {!isUserMessage ? (
               <div className="thread-entry-header">
                 <div className="thread-entry-label">{message.role === "assistant" ? session.agentName : "System"}</div>
-                <CopyMessageButton text={message.content} />
               </div>
             ) : null}
             {isUserMessage ? (
@@ -2548,12 +3074,10 @@ function ThreadFeed({
                 }}
               />
             )}
-            {isUserMessage ? (
-              <div className="thread-entry-footer">
-                <span>{formatMessageTime(message.createdAt)}</span>
-                <CopyMessageButton text={message.content} />
-              </div>
-            ) : null}
+            <div className="thread-entry-footer">
+              <span>{formatMessageTime(message.createdAt)}</span>
+              <CopyMessageButton text={message.content} />
+            </div>
           </div>
         );
       })}
@@ -2921,13 +3445,27 @@ function renderInlineMarkdown(
   onOpenFileReference: (reference: FileReference) => void | Promise<void>
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\[((?:[A-Za-z]:)?[^:[\]\n]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\]|\*\*([^*\n]+)\*\*)/g;
+  const pattern = /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\[((?:[A-Za-z]:)?[^:[\]\n]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?\]|\*\*([^*\n]+)\*\*|((?:(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+|[A-Za-z0-9_.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|css|scss|html|py|rs|go|java|cs|cpp|c|h|sql|yaml|yml|toml|sh|ps1)))(?::(\d+)(?:-(\d+))?)?)/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index === undefined) continue;
     if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
     if (match[4]) {
-      nodes.push(<code key={`code-${match.index}`}>{match[4]}</code>);
+      const inlineFileRef = parseWorkspaceFileHref(match[4], workspacePath);
+      nodes.push(
+        inlineFileRef
+          ? (
+            <code key={`code-file-ref-${match.index}`}>
+              <MarkdownLink
+                href={`hivo-file:${encodeURIComponent(inlineFileRef.path)}:${inlineFileRef.line}${inlineFileRef.lineEnd ? `-${inlineFileRef.lineEnd}` : ""}`}
+                label={match[4]}
+                workspacePath={workspacePath}
+                onOpenFileReference={onOpenFileReference}
+              />
+            </code>
+          )
+          : <code key={`code-${match.index}`}>{match[4]}</code>
+      );
     } else if (match[5] && match[6]) {
       const reference = {
         path: match[5].trim(),
@@ -2945,6 +3483,21 @@ function renderInlineMarkdown(
       );
     } else if (match[8]) {
       nodes.push(<strong key={`strong-${match.index}`}>{match[8]}</strong>);
+    } else if (match[9]) {
+      const reference = {
+        path: match[9].replaceAll("\\", "/"),
+        line: match[10] ? Number.parseInt(match[10], 10) : 1,
+        lineEnd: match[11] ? Number.parseInt(match[11], 10) : undefined
+      };
+      nodes.push(
+        <MarkdownLink
+          href={`hivo-file:${encodeURIComponent(reference.path)}:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}`}
+          label={`${reference.path}${match[10] ? `:${reference.line}${reference.lineEnd ? `-${reference.lineEnd}` : ""}` : ""}`}
+          workspacePath={workspacePath}
+          onOpenFileReference={onOpenFileReference}
+          key={`plain-file-ref-${match.index}`}
+        />
+      );
     } else {
       const label = match[2] ?? "";
       const href = match[3] ?? "";
@@ -2967,7 +3520,7 @@ function MarkdownLink({
   workspacePath: string;
   onOpenFileReference: (reference: FileReference) => void | Promise<void>;
 }) {
-  const fileRef = parseFileRef(href);
+  const fileRef = parseFileRef(href) ?? parseWorkspaceFileHref(href, workspacePath);
   async function handleClick(event: MouseEvent) {
     event.preventDefault();
     try {
@@ -3032,6 +3585,32 @@ function parseFileRef(href: string) {
   const lineEnd = lineEndValue ? Number.parseInt(lineEndValue, 10) : undefined;
   if (!Number.isFinite(line)) return null;
   return { path: decodeURIComponent(pathPart), line, lineEnd: Number.isFinite(lineEnd) ? lineEnd : undefined };
+}
+
+function parseWorkspaceFileHref(href: string, workspacePath: string): FileReference | null {
+  if (/^(?:https?|mailto|tel):/i.test(href)) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(href);
+  } catch {
+    decoded = href;
+  }
+  const match = decoded.trim().match(/^(.+?)(?::(\d+)(?:-(\d+))?|#L(\d+)(?:-L?(\d+))?)?$/);
+  if (!match) return null;
+  let path = (match[1] ?? "").replaceAll("\\", "/").replace(/^\.\//, "");
+  const normalizedWorkspace = normalizeWorkspacePath(workspacePath).replaceAll("\\", "/").replace(/\/+$/, "");
+  if (path.toLowerCase().startsWith(`${normalizedWorkspace.toLowerCase()}/`)) {
+    path = path.slice(normalizedWorkspace.length + 1);
+  }
+  if (!isSafeRelativeFilePath(path) || !looksLikeFilePath(path)) return null;
+  const line = Number.parseInt(match[2] ?? match[4] ?? "1", 10);
+  const lineEndValue = match[3] ?? match[5];
+  const lineEnd = lineEndValue ? Number.parseInt(lineEndValue, 10) : undefined;
+  return { path, line, lineEnd };
+}
+
+function looksLikeFilePath(targetPath: string) {
+  return /(?:^|\/)[A-Za-z0-9_.-]+\.[A-Za-z0-9]+$/.test(targetPath);
 }
 
 function FileReferencePanel({
@@ -3465,7 +4044,7 @@ function CompactPatchCallout({
   return (
     <section className="compact-review-bar">
       <div>
-        <strong>{proposal.filesChanged.length} file changed</strong>
+        <strong>{proposal.filesChanged.length} file {proposal.status === "applied" ? "changed" : "proposed"}</strong>
         <span>{formatPatchTotalsLabel(proposal.filesChanged.length)} | {humanizePatchStatus(proposal.status)}</span>
       </div>
       <button onClick={onOpenDiff}>Review changes</button>
@@ -4226,6 +4805,85 @@ function ArtifactCard({
   );
 }
 
+function ProjectKnowledgeTreePanel({ session }: { session: AgentRuntimeSession }) {
+  const tree = session.projectKnowledgeTree;
+  if (!tree) return null;
+  const route = session.latestKnowledgeRoute?.route;
+  const plan = session.latestKnowledgeRoute?.plan;
+  const nodeById = new Map(tree.nodes.map((node) => [node.nodeId, node]));
+  const primaryNode = route ? nodeById.get(route.primaryNode) : undefined;
+  const affectedNodes = route?.affectedNodeIds.map((nodeId) => nodeById.get(nodeId)?.scope ?? nodeId).slice(0, 8) ?? [];
+  const reviewerNodes = route?.reviewerNodes.map((nodeId) => nodeById.get(nodeId)?.scope ?? nodeId).slice(0, 8) ?? [];
+  const rootNode = tree.nodes.find((node) => node.nodeId === tree.rootNodeId);
+  const rootChildren = (rootNode?.children ?? []).map((nodeId) => nodeById.get(nodeId)?.scope ?? nodeId).slice(0, 8);
+  const targetOwnership = (route?.likelyFiles ?? [])
+    .map((file) => tree.ownershipMap?.[file] ?? tree.fileOwnership.find((owner) => owner.path === file))
+    .filter((owner): owner is NonNullable<typeof owner> => Boolean(owner))
+    .slice(0, 6);
+  const reviewChain = session.latestKnowledgeRoute?.reviewChain ?? plan?.requiredReviewChain;
+  const branchTargets = session.latestKnowledgeBranchTargets ?? session.latestKnowledgeRoute?.knowledgeBranchTargets ?? plan?.knowledgeBranchTargets ?? [];
+  return (
+    <div className="proposal-card">
+      <strong>{rootNode?.scope ?? "Project Knowledge Tree"}</strong>
+      <span>{tree.nodes.length} node(s) | {tree.fileOwnership.length} owned file(s) | memory {tree.memoryFreshness.status}</span>
+      <p>{rootNode?.summary}</p>
+      <div className="summary-list">
+        <div className="summary-line compact">Root children: {rootChildren.join(", ") || "none"}</div>
+        <div className="summary-line compact">Tree readiness: {tree.completeness?.status ?? "unknown"}</div>
+        <div className="summary-line compact">Orphaned files: {tree.orphanedFiles?.length ? tree.orphanedFiles.slice(0, 4).map((file) => file.path).join(", ") : "none reported"}</div>
+      </div>
+      {route ? (
+        <>
+          <div className="summary-list">
+            <div className="summary-line compact">Selected node: {primaryNode?.scope ?? route.primaryNode}</div>
+            <div className="summary-line compact">Affected nodes: {affectedNodes.join(", ") || "none"}</div>
+            <div className="summary-line compact">Reviewer nodes: {reviewerNodes.join(", ") || "root"}</div>
+            <div className="summary-line compact">Target files: {route.likelyFiles.slice(0, 8).join(", ") || "none selected"}</div>
+            <div className="summary-line compact">Files not to touch: {plan?.filesNotToTouch.slice(0, 8).join(", ") || "none selected"}</div>
+            <div className="summary-line compact">Confidence: {Math.round(route.confidence * 100)}% ({route.confidenceLevel ?? "unknown"})</div>
+            <div className="summary-line compact">Evidence used: {(session.latestKnowledgeRoute?.evidenceUsed ?? route.evidenceUsed ?? []).slice(0, 4).join("; ") || "none reported"}</div>
+            <div className="summary-line compact">State: {plan?.executionState ?? "Execution has not started."}</div>
+          </div>
+          {reviewChain ? (
+            <div className="summary-list">
+              <div className="summary-line compact">Leaf review: {reviewChain.leafReview.join(", ") || "none"}</div>
+              <div className="summary-line compact">Parent scope review: {reviewChain.parentScopeReview.join(", ") || "root"}</div>
+              <div className="summary-line compact">Sibling affected-node review: {reviewChain.siblingAffectedNodeReview.join(", ") || "none"}</div>
+              <div className="summary-line compact">Root integration review: {reviewChain.rootIntegrationReview.join(", ") || tree.rootNodeId}</div>
+            </div>
+          ) : null}
+          {route.risks.length ? <p className="muted">Risks: {route.risks.slice(0, 4).join("; ")}</p> : null}
+          {branchTargets.length ? (
+            <div className="summary-list">
+              <div className="summary-line compact">Generated branch targets: {branchTargets.length}</div>
+              <div className="summary-line compact">Execution has not started.</div>
+              {branchTargets.slice(0, 4).map((target) => (
+                <div className="summary-line compact" key={target.targetId}>
+                  {target.scope}: {target.status} | owner {nodeById.get(target.primaryOwnerNodeId)?.scope ?? target.primaryOwnerNodeId} | allowed {target.filesAllowed.slice(0, 3).join(", ") || "none"} | forbidden {target.filesForbidden.slice(0, 3).join(", ") || "none"} | reviewers {target.reviewerNodeIds.slice(0, 4).join(", ") || "none"} | blocked {target.blockedReasons.join(", ") || "none"} | confidence {Math.round(target.confidence * 100)}%
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="muted">No edit route selected yet.</p>
+      )}
+      <div className="artifact-grid">
+        {(targetOwnership.length ? targetOwnership : tree.fileOwnership.slice(0, 6)).map((owner) => (
+          <div className="artifact-tile" key={owner.path}>
+            <div className="artifact-title">
+              <FileText size={15} />
+              <strong>{owner.path}</strong>
+              <span>{nodeById.get(owner.primaryOwnerNodeId)?.scope ?? owner.primaryOwnerNodeId}</span>
+            </div>
+            <p>Reviewers: {owner.reviewerNodeIds.map((nodeId) => nodeById.get(nodeId)?.scope ?? nodeId).join(", ") || "root"}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RunResultCard({
   session,
   onOpenPreview
@@ -4944,6 +5602,47 @@ function clampSidebarWidth(value: number) {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
 }
 
+function isTauriDesktopRuntime() {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+function getProviderCertification(provider: AgentRuntimeSession["providerTelemetry"]) {
+  const fallbackModel = provider?.modelName ?? "unknown";
+  const certification = provider?.modelCertification;
+  const authorModel = certification?.authorModel ?? fallbackModel;
+  return {
+    authorModel,
+    routerModel: certification?.routerModel ?? authorModel,
+    verifierModel: certification?.verifierModel ?? fallbackModel,
+    status: certification?.status ?? "uncertified",
+    reason: certification?.reason,
+    certifiedGates: certification?.certifiedGates ?? []
+  };
+}
+
+function getReasoningTraceSummary(session: AgentRuntimeSession) {
+  const trace = session.latestDecisionPipeline?.reasoningTrace;
+  const progress = trace?.progress ?? [];
+  const contextOmissions = trace?.contextOmissions ?? [];
+  const verificationResults = trace?.verificationResults ?? [];
+  const indexReadiness = trace?.indexReadiness
+    ? `${trace.indexReadiness.before} -> ${trace.indexReadiness.after}`
+    : "not checked";
+  const budgetLabel = trace?.budget
+    ? `${trace.budget.profile}: ${trace.providerCalls}/${trace.budget.maxProviderCalls} calls`
+    : "none";
+  return {
+    toolRounds: trace?.toolRounds ?? 0,
+    evidenceCount: trace?.evidenceRefs?.length ?? 0,
+    informationGain: progress.reduce((total, entry) => total + (entry.informationGain ?? 0), 0),
+    stagnantRounds: progress.filter((entry) => entry.stagnant).length,
+    contextOmissions: contextOmissions.reduce((total, entry) => total + (entry.omittedEvidenceIds?.length ?? 0), 0),
+    verifierVerdict: verificationResults.at(-1)?.verdict ?? "none",
+    indexReadiness,
+    budgetLabel
+  };
+}
+
 function accessProfileLabel(profile: AccessProfile) {
   if (profile === "full_access") return "Full Access";
   if (profile === "bounded_autonomy" || profile === "auto_review") return "Bounded";
@@ -4962,18 +5661,18 @@ export function mergeRuntimeSessionState(
 ): AgentRuntimeSession {
   return {
     ...canonical,
-    messages: dedupeRuntimeRecords(canonical.messages),
-    tasks: dedupeRuntimeRecords(canonical.tasks),
-    toolCalls: dedupeRuntimeRecords(canonical.toolCalls),
-    toolIntents: dedupeRuntimeRecords(canonical.toolIntents),
-    artifacts: dedupeRuntimeRecords(canonical.artifacts),
-    patchProposals: dedupeRuntimeRecords(canonical.patchProposals),
-    commandRequests: dedupeRuntimeRecords(canonical.commandRequests),
-    commandExecutions: dedupeRuntimeRecords(canonical.commandExecutions),
-    backgroundJobs: dedupeRuntimeRecordsBy(canonical.backgroundJobs, (record) => record.jobId),
-    progressEvents: dedupeRuntimeRecords(canonical.progressEvents),
+    messages: dedupeRuntimeRecords(canonical.messages ?? []),
+    tasks: dedupeRuntimeRecords(canonical.tasks ?? []),
+    toolCalls: dedupeRuntimeRecords(canonical.toolCalls ?? []),
+    toolIntents: dedupeRuntimeRecords(canonical.toolIntents ?? []),
+    artifacts: dedupeRuntimeRecords(canonical.artifacts ?? []),
+    patchProposals: dedupeRuntimeRecords(canonical.patchProposals ?? []),
+    commandRequests: dedupeRuntimeRecords(canonical.commandRequests ?? []),
+    commandExecutions: dedupeRuntimeRecords(canonical.commandExecutions ?? []),
+    backgroundJobs: dedupeRuntimeRecordsBy(canonical.backgroundJobs ?? [], (record) => record.jobId),
+    progressEvents: dedupeRuntimeRecords(canonical.progressEvents ?? []),
     agentWorkStatuses: dedupeRuntimeRecordsBy(
-      canonical.agentWorkStatuses,
+      canonical.agentWorkStatuses ?? [],
       (record) => `${record.agentName}:${record.role}:${record.taskTitle}:${record.updatedAt}`
     )
   };
@@ -5031,7 +5730,7 @@ function humanSessionStatus(
       break;
   }
 
-  const restoreDisposition = session.taskState.restoreState?.disposition;
+  const restoreDisposition = session.taskState?.restoreState?.disposition;
   if (restoreDisposition === "corrupt") return "Restore history is corrupt";
   if (restoreDisposition === "non_restorable") return "Restore unavailable";
   if (restoreDisposition === "reconciliation_required") return "Manual inspection required";
@@ -5067,6 +5766,9 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
     return "A reviewed patch is waiting for explicit apply.";
   }
+  if (session.patchProposals.some((proposal) => proposal.status === "apply_started")) {
+    return "Rust patch apply has started; no applied claim is available yet.";
+  }
   if (session.patchProposals.some((proposal) => proposal.status === "proposed")) {
     return "Code changes are proposed but not written yet.";
   }
@@ -5083,7 +5785,7 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
 }
 
 function describeRestoreTruth(session: AgentRuntimeSession, canReconnect: boolean) {
-  const restoreState = session.taskState.restoreState;
+  const restoreState = session.taskState?.restoreState;
   if (restoreState?.source === "event_replayed") {
     if (restoreState.disposition === "reconciliation_required") {
       return "Restored from durable events, but manual inspection is still required before trusting the run.";
@@ -5107,6 +5809,9 @@ function describePatchState(session: AgentRuntimeSession) {
   }
   if (session.patchProposals.some((proposal) => proposal.status === "approved")) {
     return "Patch approved, but Rust apply has not happened yet.";
+  }
+  if (session.patchProposals.some((proposal) => proposal.status === "apply_started")) {
+    return "Rust patch apply is in progress; files are not reported as applied yet.";
   }
   if (session.patchProposals.some((proposal) => proposal.status === "apply_failed")) {
     return "A patch apply attempt failed; inspect the summary artifacts before retrying.";
@@ -5135,6 +5840,18 @@ function describeCommandState(session: AgentRuntimeSession) {
 
 function describeVerificationState(session: AgentRuntimeSession) {
   if (!session.verificationResult) return "No verification record yet.";
+  if (session.verificationResult.truthStatus && session.verificationResult.truthStatus !== "verified_passed") {
+    const labels = {
+      verified_failed: "Verification failed after an executed command.",
+      unverified: "Unverified: no completed validation command proves success.",
+      not_run_blocked_by_policy: "Unverified: validation was blocked by command policy.",
+      not_run_needs_approval: "Unverified: validation needs approval and did not run.",
+      not_run_runtime_error: "Unverified: validation did not run because of a runtime error.",
+      not_run_missing_command: "Unverified: no validation command was selected."
+    } as const;
+    return labels[session.verificationResult.truthStatus];
+  }
+  if (session.verificationResult.truthStatus === "verified_passed") return "Verification passed after an executed validation command.";
   if (session.runToGreen?.status === "blocked" && (session.verificationResult.status === "unavailable" || session.verificationResult.status === "skipped")) {
     return session.runToGreen.blockerReason
       ? `Verification was not started yet: ${session.runToGreen.blockerReason}`
@@ -5150,9 +5867,21 @@ function describeVerificationState(session: AgentRuntimeSession) {
 function describeProviderTruth(session: AgentRuntimeSession) {
   const truth = session.providerTelemetry;
   if (!truth) return "No provider telemetry recorded yet.";
-  const providerKind = truth.mockProviderUsed ? "mock" : truth.realProviderUsed ? "real" : "unknown";
-  const fallback = truth.fallbackUsed ? "yes" : "no";
-  return `${providerKind} | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | prompt ${formatCount(truth.totalProviderPromptChars ?? 0)} chars | response ${formatCount(truth.totalProviderResponseChars ?? 0)} chars | fallback ${fallback}`;
+  return `provider | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | reasoning ${truth.reasoningAttempts} | repairs ${truth.repairAttempts} | final ${truth.finalResponseSource} | prompt ${formatCount(truth.totalProviderPromptChars ?? 0)} chars | response ${formatCount(truth.totalProviderResponseChars ?? 0)} chars`;
+}
+
+function describePlanningProviderRequest(session: AgentRuntimeSession) {
+  const gate = session.runSummary?.gates.find((item) => item.name === "Planning provider request");
+  if (gate) {
+    const note = gate.notes[0] ? `: ${gate.notes[0]}` : "";
+    if (/operator-supplied implementation plan/i.test(gate.notes.join(" "))) return `skipped, operator-supplied plan used${note}`;
+    if (gate.status === "blocked") return `not attempted${note}`;
+    if (gate.status === "failed") return `attempted, ${gate.status}${note}`;
+    return `${gate.status}${note}`;
+  }
+  const requestCount = session.providerTelemetry?.providerRequestCount;
+  if (requestCount === undefined) return "not recorded yet";
+  return requestCount > 0 ? `attempted (${requestCount})` : "not attempted";
 }
 
 function describeSseState(state: RuntimeEventSubscriptionState, canReconnect: boolean) {
@@ -5318,11 +6047,24 @@ async function applyRuntimePatchWithRetry(sessionId: string, patchId: string) {
       return await applyRuntimePatch(sessionId, patchId);
     } catch (error) {
       lastError = error;
-      if (!String(error).includes("Patch proposal not found")) break;
+      if (!/proposal_not_found|Patch proposal not found/i.test(String(error))) break;
       await new Promise((resolve) => window.setTimeout(resolve, 150));
     }
   }
   throw lastError;
+}
+
+async function persistPatchApprovalForRust(sessionId: string, proposal: AgentRuntimeSession["patchProposals"][number]) {
+  await appendSessionEvent(sessionId, "runtime.patch.proposed", {
+    type: "runtime.patch.proposed",
+    sessionId,
+    proposal: { ...proposal, status: "proposed" }
+  });
+  await appendSessionEvent(sessionId, "runtime.patch.approved", {
+    type: "runtime.patch.approved",
+    sessionId,
+    proposal: { ...proposal, status: "approved" }
+  });
 }
 
 function normalizeTerminalText(text: string) {
@@ -5766,6 +6508,9 @@ function SettingsDialog({
           providerName: currentConfig.providerName,
           baseUrl: currentConfig.baseUrl,
           selectedModel: currentConfig.selectedModel,
+          routerModel: currentConfig.routerModel ?? "",
+          verifierModel: currentConfig.verifierModel ?? "",
+          embeddingModel: currentConfig.embeddingModel ?? "",
           apiKey: ""
         }
       : defaultProviderForm
@@ -5953,6 +6698,36 @@ function SettingsDialog({
                 placeholder={isOllama ? "qwen2.5-coder:7b or llama3:8b" : "OpenAI-compatible execution is not available yet"}
               />
             )}
+          </label>
+
+          <label>
+            Router model
+            <input
+              value={form.routerModel ?? ""}
+              onChange={(event) => setForm((current) => ({ ...current, routerModel: event.target.value }))}
+              placeholder="Defaults to selected model"
+            />
+            <small>Optional fast model for turn understanding and route decisions.</small>
+          </label>
+
+          <label>
+            Verifier model
+            <input
+              value={form.verifierModel ?? ""}
+              onChange={(event) => setForm((current) => ({ ...current, verifierModel: event.target.value }))}
+              placeholder="Defaults to selected model"
+            />
+            <small>Optional independent model for claim and evidence verification.</small>
+          </label>
+
+          <label>
+            Embedding model
+            <input
+              value={form.embeddingModel ?? ""}
+              onChange={(event) => setForm((current) => ({ ...current, embeddingModel: event.target.value }))}
+              placeholder={isOllama ? "nomic-embed-text" : "text-embedding-3-small"}
+            />
+            <small>Required only for deep project-understanding questions.</small>
           </label>
         </div>
 

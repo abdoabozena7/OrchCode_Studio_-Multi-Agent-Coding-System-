@@ -89,6 +89,32 @@ export class WorkspaceTools {
     return matches;
   }
 
+  searchCodeTerms(query: string, limit = 50) {
+    assertGrantAllowsTool(this.grant, "workspace.search_code");
+    const terms = significantSearchTerms(query);
+    if (!terms.length) return [];
+    const matches: Array<{ path: string; line: number; preview: string; score: number }> = [];
+    const files = this.collectFiles(500);
+    for (const file of files.filter((entry) => !entry.isDir && !entry.isSecretCandidate)) {
+      if (!isTextLike(file.path)) continue;
+      try {
+        const content = this.readFile(file.path);
+        const lines = content.split(/\r?\n/);
+        lines.forEach((line, index) => {
+          const haystack = `${file.path} ${line}`.toLowerCase();
+          const score = terms.filter((term) => haystack.includes(term)).length;
+          if (score > 0) matches.push({ path: file.path, line: index + 1, preview: line.trim().slice(0, 180), score });
+        });
+      } catch {
+        // Ignore unreadable files in the temporary Node-side scanner.
+      }
+    }
+    return matches
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path) || left.line - right.line)
+      .slice(0, limit)
+      .map(({ score: _score, ...match }) => match);
+  }
+
   getProjectSummary() {
     const files = this.listFiles(500);
     const languages: Record<string, number> = {};
@@ -152,6 +178,16 @@ export class WorkspaceTools {
 
 function isTextLike(filePath: string) {
   return /\.(ts|tsx|js|jsx|rs|py|go|java|cs|css|html|md|json|toml|yaml|yml)$/i.test(filePath);
+}
+
+function significantSearchTerms(query: string) {
+  const stopWords = new Set([
+    "about", "after", "before", "could", "does", "from", "have", "into", "that", "their", "this", "through", "what", "when", "where", "which", "with",
+    "across", "without", "system", "project", "implementation"
+  ]);
+  return [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}_-]+/u))]
+    .filter((term) => term.length >= 4 && !stopWords.has(term))
+    .slice(0, 16);
 }
 
 function isImportant(filePath: string) {

@@ -112,8 +112,8 @@ test("eligible dry-applied sandbox executes allowed command in sandbox and leave
     assert.ok(result.artifact_ref && existsSync(result.artifact_ref));
     assert.ok(result.logs_ref && existsSync(result.logs_ref));
   } finally {
-    await rm(workspace, { recursive: true, force: true });
-    await rm(sandbox, { recursive: true, force: true });
+    await removeTempDir(workspace);
+    await removeTempDir(sandbox);
   }
 });
 
@@ -158,8 +158,8 @@ test("dry apply failed, missing sandbox, rejected candidate, and blocked command
     assert.equal(blockedResult.status, "blocked");
     assert.equal(existsSync(path.join(sandbox, "node_modules")), false);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
-    await rm(sandbox, { recursive: true, force: true });
+    await removeTempDir(workspace);
+    await removeTempDir(sandbox);
   }
 });
 
@@ -239,8 +239,8 @@ test("timed out sandbox command kills long-lived child process and exits cleanly
     assert.equal(duration < 10_000, true);
     assert.equal(isProcessAlive(childPid), false);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
-    await rm(sandbox, { recursive: true, force: true });
+    await removeTempDir(workspace);
+    await removeTempDir(sandbox);
   }
 });
 
@@ -371,6 +371,23 @@ function isProcessAlive(pid: number) {
   } catch {
     return false;
   }
+}
+
+async function removeTempDir(target: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      await rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  if (lastError && typeof lastError === "object" && "code" in lastError && /^(EBUSY|EPERM)$/.test(String(lastError.code))) {
+    return;
+  }
+  throw lastError;
 }
 
 async function persistedSandboxFixture(workspace: string, sandbox: string, artifactStore: OrchestrationArtifactStore, options: {

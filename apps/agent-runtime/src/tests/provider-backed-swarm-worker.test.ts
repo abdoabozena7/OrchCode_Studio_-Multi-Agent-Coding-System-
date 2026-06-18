@@ -140,17 +140,17 @@ test("provider-backed worker blocks executor repair and write-requesting work it
   }
 });
 
-test("provider-backed worker falls back to mock in auto mode but uses explicit provider factory by default", async () => {
+test("provider-backed worker blocks without a provider and uses an explicit provider factory", async () => {
   const workspace = await fixtureWorkspace("provider-worker-fallback");
   try {
-    const auto = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "auto" });
+    const auto = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "provider_read_only" });
     const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
     await new SwarmArtifactStore(workspace).saveSwarmRun(input.run);
     const autoResult = await auto.run(input);
-    assert.equal(autoResult.status, "succeeded");
-    assert.match(autoResult.summary, /completed scout work/);
+    assert.equal(autoResult.status, "blocked");
+    assert.match(autoResult.summary, /provider/i);
     const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: input.run.id });
-    assert.ok(trace.events.some((event) => event.event_type === "provider_worker_fallback_to_mock"));
+    assert.equal(trace.events.some((event) => event.event_type === "worker_provider_unavailable"), true);
 
     const provider = new FakeProvider();
     const defaultProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace, providerFactory: () => provider });
@@ -159,10 +159,10 @@ test("provider-backed worker falls back to mock in auto mode but uses explicit p
     assert.equal(provider.calls.length, 1);
     assert.doesNotMatch(providerResult.summary, /completed plan work/);
 
-    const explicitMock = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "mock", providerFactory: () => provider });
-    const mockResult = await explicitMock.run(workerInput(workspace, { role: "PlannerAgent", type: "plan", runId: "swarm_explicit_mock" }));
-    assert.match(mockResult.summary, /completed plan work/);
-    assert.equal(provider.calls.length, 1);
+    const explicitProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "provider_read_only", providerFactory: () => provider });
+    const secondProviderResult = await explicitProvider.run(workerInput(workspace, { role: "PlannerAgent", type: "plan", runId: "swarm_explicit_provider" }));
+    assert.equal(secondProviderResult.status, "succeeded");
+    assert.equal(provider.calls.length, 2);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "experiment_id": "swarm_experiment_6bcab78c-3df9-4faa-aee0-fcd957d53ff2",
+  "summary": "Ran 10 automatic staffing scenario(s); 10/10 staffing accuracy.",
+  "scenarios_run": 10,
+  "staffing_accuracy": 1,
+  "modes_compared": [
+    "autopilot-deep"
+  ],
+  "key_metrics": {
+    "runs": 10,
+    "failures": 0,
+    "average_agents": 66.2,
+    "comparison_recommendation": "not_run"
+  },
+  "wins": [
+    "Staffing matched tiny for: Change the label text in one HTML/component file.",
+    "Staffing matched small for: Fix a small bug in one function.",
+    "Staffing matched medium for: Add a feature touching one module and its tests.",
+    "Staffing matched large for: Refactor a cross-module service while preserving public API behavior.",
+    "Staffing matched huge for: Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files."
+  ],
+  "losses": [],
+  "bottlenecks": [],
+  "safety_findings": [
+    "Change the label text in one HTML/component file.: executor_limit=1, read_only_ratio=0.8",
+    "Fix a small bug in one function.: executor_limit=1, read_only_ratio=0.88",
+    "Add a feature touching one module and its tests.: executor_limit=1, read_only_ratio=0.92",
+    "Refactor a cross-module service while preserving public API behavior.: executor_limit=1, read_only_ratio=0.97",
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: executor_limit=0, read_only_ratio=1",
+    "Modify the authentication/session/permission behavior.: executor_limit=1, read_only_ratio=0.92",
+    "Add or change database migration behavior.: executor_limit=2, read_only_ratio=0.96",
+    "Update a shared UI component with accessibility-safe behavior.: executor_limit=1, read_only_ratio=0.91",
+    "Make the app better and cleaner. Do not edit files until the plan is decomposed.: executor_limit=0, read_only_ratio=1",
+    "Upgrade a major framework version across the project as a staged campaign.: executor_limit=2, read_only_ratio=0.98"
+  ],
+  "specialist_selection_findings": [
+    "Change the label text in one HTML/component file.: specialists=none",
+    "Fix a small bug in one function.: specialists=none",
+    "Add a feature touching one module and its tests.: specialists=AuthSecurityReviewerAgent, TestCoverageReviewerAgent",
+    "Refactor a cross-module service while preserving public API behavior.: specialists=AuthSecurityReviewerAgent, APICompatibilityReviewerAgent",
+    "Analyze the whole repository architecture, identify hotspots, risky files, missing tests, and improvement opportunities. Do not edit files.: specialists=TestCoverageReviewerAgent, DocumentationReviewerAgent",
+    "Modify the authentication/session/permission behavior.: specialists=AuthSecurityReviewerAgent",
+    "Add or change database migration behavior.: specialists=MigrationSafetyReviewerAgent",
+    "Update a shared UI component with accessibility-safe behavior.: specialists=AccessibilityReviewerAgent",
+    "Make the app better and cleaner. Do not edit files until the plan is decomposed.: specialists=none",
+    "Upgrade a major framework version across the project as a staged campaign.: specialists=DependencyUpgradeReviewerAgent"
+  ],
+  "recommended_defaults": [
+    "Default mode: deep",
+    "Default total agents for this class: 5",
+    "Executor limit: 1"
+  ],
+  "next_improvements": [
+    "Connect comparison quality indicators to real provider-backed outcomes.",
+    "Accumulate multiple trial records before changing staffing thresholds.",
+    "Add repository-specific expected behavior overrides when enough evidence exists."
+  ]
+}

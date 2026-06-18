@@ -44,10 +44,18 @@ export type ToolCall = {
 
 export type PatchRiskLevel = "low" | "medium" | "high";
 
-export type PatchProposalStatus = "proposed" | "approved" | "rejected" | "applied" | "apply_failed";
+export type PatchProposalStatus = "proposed" | "approved" | "apply_started" | "applied" | "apply_failed" | "rejected";
 
 export type VerificationStatus = "pending" | "passed" | "failed";
 export type VerificationCheckStatus = "not_run" | "running" | "passed" | "failed" | "skipped" | "unavailable" | "pending";
+export type ValidationTruthStatus =
+  | "verified_passed"
+  | "verified_failed"
+  | "unverified"
+  | "not_run_blocked_by_policy"
+  | "not_run_needs_approval"
+  | "not_run_runtime_error"
+  | "not_run_missing_command";
 
 export type RunMode = "quick_fix" | "normal_run" | "inspect_only" | "deep_audit" | "soak_mode" | "paranoid_mode" | "run_to_green";
 
@@ -99,6 +107,7 @@ export type SessionLifecycleEventType =
 export type PatchLifecycleEventType =
   | "patch.proposed"
   | "patch.approved"
+  | "patch.apply_started"
   | "patch.rejected"
   | "patch.applied"
   | "patch.apply_failed";
@@ -450,6 +459,195 @@ export type ProjectProgressReconstruction = {
 export type ProjectEditGuardrails = {
   summary: string;
   rules: string[];
+};
+
+export type ProjectKnowledgeFreshnessStatus = "fresh" | "stale" | "missing" | "direct_workspace";
+
+export type ProjectKnowledgeFreshness = {
+  status: ProjectKnowledgeFreshnessStatus;
+  checkedAt: string;
+  generatedAt?: string;
+  staleReasons: string[];
+  changedFiles: string[];
+  newFiles: string[];
+  deletedFiles: string[];
+};
+
+export type ProjectKnowledgeNode = {
+  nodeId: string;
+  scope: string;
+  filesOwned: string[];
+  summary: string;
+  importantSymbols: string[];
+  dependencies: string[];
+  risks: string[];
+  children: string[];
+  parent: string | null;
+  freshness: ProjectKnowledgeFreshness;
+  whoUnderstandsThisArea: string[];
+  completeness: {
+    status: "complete" | "incomplete";
+    missingFields: string[];
+  };
+};
+
+export type ProjectKnowledgeFileOwnership = {
+  path: string;
+  primaryOwnerNodeId: string;
+  reviewerNodeIds: string[];
+  dependencyNodeIds: string[];
+};
+
+export type ProjectKnowledgeOrphanedFile = {
+  path: string;
+  reason: string;
+};
+
+export type ProjectKnowledgeRootRoutingGuarantee = {
+  pattern: string;
+  targetNodeId: string;
+  matchingFiles: string[];
+  status: "passed" | "orphaned" | "missing";
+  reason: string;
+};
+
+export type ProjectKnowledgeTree = {
+  id: string;
+  sessionId?: string;
+  workspaceRoot: string;
+  rootNodeId: string;
+  nodes: ProjectKnowledgeNode[];
+  fileOwnership: ProjectKnowledgeFileOwnership[];
+  ownershipMap: Record<string, ProjectKnowledgeFileOwnership>;
+  orphanedFiles: ProjectKnowledgeOrphanedFile[];
+  rootRoutingGuarantees: ProjectKnowledgeRootRoutingGuarantee[];
+  completeness: {
+    status: "ready" | "incomplete";
+    incompleteNodeIds: string[];
+    missingNodeFields: Array<{
+      nodeId: string;
+      missingFields: string[];
+    }>;
+  };
+  routeDetails: Array<{
+    pattern: string;
+    targetNodeId: string;
+    reason: string;
+  }>;
+  evidenceSources: string[];
+  memoryFreshness: ProjectKnowledgeFreshness;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeQueryRoute = {
+  id: string;
+  treeId: string;
+  request: string;
+  affectedNodeIds: string[];
+  primaryNode: string;
+  reviewerNodes: string[];
+  likelyFiles: string[];
+  risks: string[];
+  confidence: number;
+  confidenceLevel: "high" | "medium" | "low";
+  blockedReason?: string;
+  evidenceUsed: string[];
+  why: string[];
+  createdAt: string;
+};
+
+export type KnowledgeBranchTargetBlockedReason =
+  | "owner_node_incomplete"
+  | "owner_node_stale"
+  | "orphaned_file_scope"
+  | "confidence_too_low"
+  | "review_chain_incomplete"
+  | "unsafe_scope_overlap"
+  | "missing_allowed_files";
+
+export type KnowledgeBranchTargetReviewChain = {
+  leafReview: string[];
+  parentScopeReview: string[];
+  siblingAffectedNodeReview: string[];
+  rootIntegrationReview: string[];
+};
+
+export type KnowledgeBranchTarget = {
+  targetId: string;
+  sourceKnowledgeNodeId: string;
+  scope: string;
+  objective: string;
+  filesAllowed: string[];
+  filesForbidden: string[];
+  primaryOwnerNodeId: string;
+  reviewerNodeIds: string[];
+  dependencyNodeIds: string[];
+  risks: string[];
+  evidenceUsed: string[];
+  confidence: number;
+  confidenceLevel: KnowledgeQueryRoute["confidenceLevel"];
+  requiredReviewChain: KnowledgeBranchTargetReviewChain;
+  executionModeHint: "read_only" | "patch_candidate";
+  status: "planned" | "blocked_review_chain_incomplete" | "blocked";
+  blockedReasons: KnowledgeBranchTargetBlockedReason[];
+  freshness: ProjectKnowledgeFreshness;
+  recursiveBranchId?: string;
+  createdAt: string;
+};
+
+export type KnowledgeGuidedEditPlan = {
+  id: string;
+  treeId: string;
+  routeId: string;
+  userIntentSummary: string;
+  affectedNodes: string[];
+  targetFiles: string[];
+  filesNotToTouch: string[];
+  localNodeRisks: Array<{
+    nodeId: string;
+    risks: string[];
+  }>;
+  crossNodeRisks: string[];
+  requiredReviewChain: {
+    leafReview: string[];
+    parentScopeReview: string[];
+    siblingAffectedNodeReview: string[];
+    rootIntegrationReview: string[];
+  };
+  knowledgeBranchTargets: KnowledgeBranchTarget[];
+  suggestedBranchTargets: KnowledgeBranchTarget[];
+  executionState: "Execution has not started. This edit was routed through the Project Knowledge Tree.";
+  executionStarted: false;
+  createdAt: string;
+};
+
+export type KnowledgeRoutedEditReviewChain = {
+  leafReview: string[];
+  parentScopeReview: string[];
+  siblingAffectedNodeReview: string[];
+  rootIntegrationReview: string[];
+};
+
+export type KnowledgeRoutedEdit = {
+  id: string;
+  treeId: string;
+  route: KnowledgeQueryRoute;
+  plan: KnowledgeGuidedEditPlan;
+  intentSummary: string;
+  affectedNodeIds: string[];
+  primaryNode: string;
+  likelyFiles: string[];
+  filesNotToTouch: string[];
+  risks: string[];
+  reviewChain: KnowledgeRoutedEditReviewChain;
+  knowledgeBranchTargets: KnowledgeBranchTarget[];
+  confidence: number;
+  confidenceLevel: KnowledgeQueryRoute["confidenceLevel"];
+  evidenceUsed: string[];
+  executionStarted: false;
+  status: "proposed" | "ready" | "blocked";
+  createdAt: string;
 };
 
 export type ProjectContextPack = {
@@ -925,12 +1123,18 @@ export type ToolIntent = {
 
 export type ArtifactType =
   | "plan"
+  | "decision_pipeline"
+  | "answer_verification"
+  | "final_decision"
   | "diff"
   | "command_result"
   | "file_tree"
   | "project_intake"
   | "project_explain_report"
   | "project_explain_answer"
+  | "project_understanding"
+  | "claim_ledger"
+  | "question_decomposition"
   | "provider_truth"
   | "evidence_report"
   | "concept_resolution"
@@ -939,7 +1143,14 @@ export type ArtifactType =
   | "evidence_tiers"
   | "context_pack"
   | "module_plan"
+  | "project_knowledge_tree"
+  | "knowledge_edit_route"
+  | "knowledge_branch_targets"
   | "module_execution_summary"
+  | "product_spec"
+  | "technical_plan"
+  | "recursive_graph"
+  | "branch_orchestrator"
   | "run_to_green"
   | "preview"
   | "readme"
@@ -960,6 +1171,7 @@ export type VerificationResult = {
   id: string;
   sessionId: string;
   status: VerificationCheckStatus;
+  truthStatus?: ValidationTruthStatus;
   checks: Array<{
     id?: string;
     label?: string;
@@ -987,6 +1199,9 @@ export type ModelProviderConfig = {
   providerName: string;
   baseUrl: string;
   selectedModel: string;
+  routerModel?: string;
+  verifierModel?: string;
+  embeddingModel?: string;
   apiKeyConfigured: boolean;
   isValid: boolean;
   lastValidatedAt?: string;

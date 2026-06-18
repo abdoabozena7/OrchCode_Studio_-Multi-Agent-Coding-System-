@@ -72,6 +72,20 @@ export function validateStructuredOutput(value: unknown, schema: unknown): Valid
       return validateProjectExplainShape(value);
     case "conversation-intent-decision":
       return validateConversationIntentDecisionShape(value);
+    case "turn-understanding":
+      return validateTurnUnderstandingShape(value);
+    case "reasoning-step":
+      return validateReasoningStepShape(value);
+    case "initial-reasoning-decision":
+      return validateInitialReasoningDecisionShape(value);
+    case "provider-authored-result":
+      return validateProviderAuthoredResultShape(value);
+    case "answer-verification":
+      return validateAnswerVerificationShape(value);
+    case "evidence-curation":
+      return validateEvidenceCurationShape(value);
+    case "adaptive-reasoning-judge":
+      return validateAdaptiveReasoningJudgeShape(value);
     case "worker-output":
       return validateWorkerOutput(value as WorkerOutput);
     case "review":
@@ -79,6 +93,171 @@ export function validateStructuredOutput(value: unknown, schema: unknown): Valid
     default:
       return { valid: true, errors: [] };
   }
+}
+
+function validateTurnUnderstandingShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["turn-understanding must be an object"] };
+  const errors = requiredStrings(value, [
+    "originalRequest",
+    "cleanedRequest",
+    "language",
+    "intentKind",
+    "route",
+    "goal",
+    "risk",
+    "confidence",
+    "rationale"
+  ]);
+  errors.push(...requiredArrays(value, ["ambiguities", "requiredEvidence"]));
+  if (typeof value.needsWorkspace !== "boolean") errors.push("needsWorkspace must be boolean");
+  if (typeof value.intentKind === "string" && !["direct_conversation", "workspace_question", "workspace_action", "run_request"].includes(value.intentKind)) {
+    errors.push("intentKind is invalid");
+  }
+  if (typeof value.route === "string" && !["chat", "inspect_explain", "simple_run", "orchestrated_run", "recursive_factory", "swarm_readonly"].includes(value.route)) {
+    errors.push("route is invalid");
+  }
+  if (value.intentKind === "direct_conversation" && value.needsWorkspace !== false) {
+    errors.push("direct_conversation must not require workspace access");
+  }
+  if (value.intentKind !== "direct_conversation" && value.needsWorkspace !== true) {
+    errors.push("workspace turns must require workspace access");
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateReasoningStepShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["reasoning-step must be an object"] };
+  const errors = requiredStrings(value, ["id", "kind", "rationale"]);
+  errors.push(...requiredArrays(value, ["toolRequests", "missingFacts", "successCriteria"]));
+  if (typeof value.kind === "string" && !["tool_batch", "final", "ask_user", "refuse", "escalate"].includes(value.kind)) {
+    errors.push("kind is invalid");
+  }
+  if (value.kind === "tool_batch" && Array.isArray(value.toolRequests) && value.toolRequests.length === 0) {
+    errors.push("tool_batch must include at least one tool request");
+  }
+  if (value.kind === "final" && isRecord(value.result)) {
+    errors.push(...validateProviderAuthoredResultShape(value.result).errors.map((error) => `result.${error}`));
+  }
+  if (Array.isArray(value.toolRequests)) {
+    value.toolRequests.forEach((request, index) => {
+      if (!isRecord(request)) {
+        errors.push(`toolRequests[${index}] must be an object`);
+        return;
+      }
+      errors.push(...requiredStrings(request, ["id", "kind", "reason"]).map((error) => `toolRequests[${index}].${error}`));
+      errors.push(...validateReasoningToolRequestShape(request).map((error) => `toolRequests[${index}].${error}`));
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateReasoningToolRequestShape(request: Record<string, unknown>) {
+  const errors: string[] = [];
+  const kind = request.kind;
+  const allowedKinds = [
+    "list_files",
+    "repository_search",
+    "read_file",
+    "inspect_manifest",
+    "investigate_project",
+    "semantic_search",
+    "follow_relationships",
+    "read_semantic_sources",
+    "run_command",
+    "propose_patch",
+    "analyze_project",
+    "delegate_readonly"
+  ];
+  if (typeof kind !== "string" || !allowedKinds.includes(kind)) return ["kind is invalid"];
+  if (["repository_search", "investigate_project", "semantic_search", "delegate_readonly"].includes(kind) && !(typeof request.query === "string" && request.query.trim())) {
+    errors.push(`${kind} requires query`);
+  }
+  if (kind === "read_file") {
+    const hasPath = typeof request.path === "string" && request.path.trim();
+    const hasPaths = Array.isArray(request.paths) && request.paths.some((entry) => typeof entry === "string" && entry.trim());
+    if (!hasPath && !hasPaths) errors.push("read_file requires path or paths");
+  }
+  if (["follow_relationships", "read_semantic_sources"].includes(kind)
+    && !(Array.isArray(request.relatedNodeIds) && request.relatedNodeIds.some((entry) => typeof entry === "string" && entry.trim()))) {
+    errors.push(`${kind} requires relatedNodeIds`);
+  }
+  if (kind === "run_command" && !(typeof request.command === "string" && request.command.trim())) {
+    errors.push("run_command requires command");
+  }
+  if (kind === "propose_patch" && !isRecord(request.patch)) {
+    errors.push("propose_patch requires patch");
+  }
+  return errors;
+}
+
+function validateInitialReasoningDecisionShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["initial-reasoning-decision must be an object"] };
+  const errors: string[] = [];
+  if (!isRecord(value.understanding)) errors.push("understanding must be an object");
+  else errors.push(...validateTurnUnderstandingShape(value.understanding).errors.map((error) => `understanding.${error}`));
+  if (!isRecord(value.step)) errors.push("step must be an object");
+  else errors.push(...validateReasoningStepShape(value.step).errors.map((error) => `step.${error}`));
+  return { valid: errors.length === 0, errors };
+}
+
+function validateProviderAuthoredResultShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["provider-authored-result must be an object"] };
+  const errors = requiredStrings(value, ["decision", "answerMarkdown", "rationale"]);
+  errors.push(...requiredArrays(value, ["claims", "evidenceRefs", "unknowns"]));
+  if (typeof value.decision === "string" && !["ANSWER", "FOLLOW_UP", "REFUSE", "ESCALATE"].includes(value.decision)) {
+    errors.push("decision is invalid");
+  }
+  if (Array.isArray(value.claims)) {
+    value.claims.forEach((claim, index) => {
+      if (typeof claim === "string") return;
+      if (!isRecord(claim)) {
+        errors.push(`claims[${index}] must be a string or object`);
+        return;
+      }
+      errors.push(...requiredStrings(claim, ["id", "text", "confidence"]).map((error) => `claims[${index}].${error}`));
+      if (typeof claim.material !== "boolean") errors.push(`claims[${index}].material must be boolean`);
+      if (!Array.isArray(claim.evidenceIds)) errors.push(`claims[${index}].evidenceIds must be an array`);
+      if (typeof claim.confidence === "string" && !["high", "medium", "low"].includes(claim.confidence)) {
+        errors.push(`claims[${index}].confidence is invalid`);
+      }
+    });
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateAnswerVerificationShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["answer-verification must be an object"] };
+  const errors = requiredStrings(value, ["verdict", "rationale"]);
+  errors.push(...requiredArrays(value, ["supportedClaims", "unsupportedClaims", "missingFacts", "evidenceRefs"]));
+  if (typeof value.verdict === "string" && !["pass", "fail", "needs_more_evidence"].includes(value.verdict)) {
+    errors.push("verdict is invalid");
+  }
+  if (value.workspaceEvidenceRequired !== undefined && typeof value.workspaceEvidenceRequired !== "boolean") {
+    errors.push("workspaceEvidenceRequired must be boolean");
+  }
+  if (value.recommendedBudgetProfile !== undefined
+    && (typeof value.recommendedBudgetProfile !== "string"
+      || !["conversation", "project", "deep_project", "action"].includes(value.recommendedBudgetProfile))) {
+    errors.push("recommendedBudgetProfile is invalid");
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function validateEvidenceCurationShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["evidence-curation must be an object"] };
+  const errors = requiredStrings(value, ["rationale"]);
+  errors.push(...requiredArrays(value, ["selectedEvidenceRefs", "missingFacts"]));
+  return { valid: errors.length === 0, errors };
+}
+
+function validateAdaptiveReasoningJudgeShape(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { valid: false, errors: ["adaptive-reasoning-judge must be an object"] };
+  const errors = requiredStrings(value, ["rationale"]);
+  errors.push(...requiredArrays(value, ["unsupportedMaterialClaims", "safetyErrors"]));
+  for (const key of ["correct", "evidenceSupported", "safe", "correctRefusal"]) {
+    if (typeof value[key] !== "boolean") errors.push(`${key} must be boolean`);
+  }
+  return { valid: errors.length === 0, errors };
 }
 
 function requiredStrings(value: Record<string, unknown>, keys: string[]) {

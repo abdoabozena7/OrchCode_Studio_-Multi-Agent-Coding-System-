@@ -1,12 +1,19 @@
 #[path = "../models/mod.rs"]
 mod models;
 
+#[path = "../db/mod.rs"]
+mod db;
+
 #[path = "../security/mod.rs"]
 mod security;
 
 mod services {
     #[path = "../../services/command_policy.rs"]
     pub mod command_policy;
+    #[path = "../../services/git.rs"]
+    pub mod git;
+    #[path = "../../services/patch.rs"]
+    pub mod patch;
     #[path = "../../services/terminal.rs"]
     pub mod terminal;
     #[path = "../../services/workspace.rs"]
@@ -14,8 +21,11 @@ mod services {
 }
 
 use chrono::Utc;
-use models::{CommandResult, SafetySettingsInput};
-use serde_json::json;
+use db::DatabaseService;
+use models::{CommandResult, PatchApplyResult, SafetySettingsInput};
+use serde_json::{json, Value};
+use services::git::GitService;
+use services::patch::{extract_patch_payload, PatchService};
 use services::terminal::TerminalService;
 use services::workspace::WorkspaceService;
 use std::collections::HashMap;
@@ -56,6 +66,30 @@ async fn run() -> Result<(), String> {
                 "sampleFiles": files.iter().take(20).collect::<Vec<_>>()
             }))
             .map_err(|err| err.to_string())?
+        );
+        return Ok(());
+    }
+    if args
+        .get("--apply-runtime-patch")
+        .map(|value| value == "true")
+        .unwrap_or(false)
+    {
+        let session_id = args
+            .get("--session-id")
+            .ok_or_else(|| "Missing --session-id".to_string())?;
+        let patch_id = args
+            .get("--patch-id")
+            .ok_or_else(|| "Missing --patch-id".to_string())?;
+        let proposal_json = args
+            .get("--proposal-json")
+            .ok_or_else(|| "Missing --proposal-json".to_string())?;
+        let proposal: Value = serde_json::from_str(proposal_json)
+            .map_err(|err| format!("Invalid --proposal-json: {err}"))?;
+        let result = apply_runtime_patch_for_smoke(&workspace, session_id, patch_id, proposal)?;
+        println!(
+            "{}",
+            serde_json::to_string(&json!({ "patchResult": result }))
+                .map_err(|err| err.to_string())?
         );
         return Ok(());
     }
@@ -138,6 +172,130 @@ async fn run() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn apply_runtime_patch_for_smoke(
+    workspace: &PathBuf,
+    session_id: &str,
+    patch_id: &str,
+    proposal: Value,
+) -> Result<PatchApplyResult, String> {
+    let db = DatabaseService::new().map_err(|err| format!("Failed to open desktop DB: {err}"))?;
+    db.create_orchestration_run(
+        session_id,
+        "patch truth smoke",
+        "needs_approval",
+        "default_permissions",
+        "",
+        "",
+    )
+    .map_err(|err| format!("Failed to create smoke session row: {err}"))?;
+    db.append_session_event(
+        session_id,
+        "runtime.patch.proposed",
+        &json!({
+            "type": "runtime.patch.proposed",
+            "sessionId": session_id,
+            "proposal": proposal_with_status(&proposal, "proposed")
+        })
+        .to_string(),
+    )
+    .map_err(|err| format!("Failed to persist patch proposal: {err}"))?;
+    db.append_session_event(
+        session_id,
+        "runtime.patch.approved",
+        &json!({
+            "type": "runtime.patch.approved",
+            "sessionId": session_id,
+            "proposal": proposal_with_status(&proposal, "approved")
+        })
+        .to_string(),
+    )
+    .map_err(|err| format!("Failed to persist patch approval: {err}"))?;
+    let approved = db
+        .patch_approval_exists_for_session(session_id, patch_id)
+        .map_err(|err| format!("Failed to verify patch approval: {err}"))?;
+    let persisted_proposal = db
+        .patch_payload_for_session(session_id, patch_id)
+        .map_err(|err| format!("Failed to look up patch proposal: {err}"))?;
+    let lookup_result = if persisted_proposal.is_some() { "found" } else { "missing" };
+    eprintln!(
+        "patch_apply_lookup proposal_id={} persistence_target=sqlite.session_events lookup_source=session_events lookup_result={} approved={}",
+        patch_id, lookup_result, approved
+    );
+    if !approved {
+        return Err("patch_not_approved: Patch approval was not found in sqlite.session_events.".to_string());
+    }
+    let persisted_payload = persisted_proposal
+        .ok_or_else(|| "proposal_not_found: Patch proposal not found in sqlite.session_events.".to_string())?;
+    let (patch_text, files_changed) = extract_patch_payload(&persisted_payload, patch_id)?;
+    let patch = PatchService::new();
+    patch.preflight_patch(&patch_text, &files_changed, workspace)?;
+    let git = GitService::new();
+    let before_snapshot = git.snapshot(workspace, "rust_git_snapshot");
+    db.append_authoritative_session_event(
+        session_id,
+        "runtime.patch.apply_started",
+        &json!({
+            "patchId": patch_id,
+            "status": "apply_started",
+            "snapshotSource": "rust_git_snapshot",
+            "beforeSnapshotAvailable": before_snapshot.available
+        })
+        .to_string(),
+    )
+    .map_err(|err| format!("Failed to record patch apply start: {err}"))?;
+    if let Err(error) = patch.apply_patch(&patch_text, workspace) {
+        db.append_authoritative_session_event(
+            session_id,
+            "runtime.patch.apply_failed",
+            &json!({
+                "patchId": patch_id,
+                "status": "apply_failed",
+                "message": error,
+                "lookupSource": "sqlite.session_events",
+                "provenance": { "executionAuthority": "rust_patch_service" }
+            })
+            .to_string(),
+        )
+        .map_err(|err| format!("Failed to record patch apply failure: {err}"))?;
+        return Err(error);
+    }
+    let after_snapshot = git.snapshot(workspace, "rust_git_snapshot");
+    db.append_authoritative_session_event(
+        session_id,
+        "runtime.patch.applied",
+        &json!({
+            "patchId": patch_id,
+            "status": "applied",
+            "message": "Patch applied by Rust authority",
+            "beforeSnapshot": before_snapshot,
+            "afterSnapshot": after_snapshot,
+            "reconciliationSource": "rust_git_snapshot",
+            "provenance": { "executionAuthority": "rust_patch_service" }
+        })
+        .to_string(),
+    )
+    .map_err(|err| format!("Failed to record patch apply: {err}"))?;
+    eprintln!("patch_apply_result proposal_id={} apply_result=applied", patch_id);
+    Ok(PatchApplyResult {
+        patch_id: patch_id.to_string(),
+        status: "applied".to_string(),
+        message: "Patch applied by Rust authority".to_string(),
+        authority: "rust_patch_service".to_string(),
+        reconciliation_source: "rust_git_snapshot".to_string(),
+        before_snapshot: Some(before_snapshot),
+        after_snapshot: Some(after_snapshot),
+        durable_event_ids: Vec::new(),
+    })
+}
+
+fn proposal_with_status(proposal: &Value, status: &str) -> Value {
+    let mut value = proposal.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.insert("status".to_string(), Value::String(status.to_string()));
+    }
+    value
 }
 
 async fn post_runtime_command_result(

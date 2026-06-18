@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
-import { FactoryMetadataAdapter, FactoryMetadataStore, resolveFactoryMetadataDatabasePath } from "./FactoryMetadataStore.js";
+import { FactoryMetadataAdapter, FactoryMetadataStore } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import type { MergedPlan, PlanningEvidenceBundle } from "./MultiPlanModels.js";
 import type { Run, Task } from "./OrchestrationModels.js";
@@ -612,7 +611,14 @@ export class AgentTeamManager {
   }
 
   private async metadataExists() {
-    return existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir));
+    const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+    try {
+      return Boolean(store.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'factory_schema_versions'"));
+    } catch {
+      return false;
+    } finally {
+      store.close();
+    }
   }
 
   private async trace(eventType: string, runId: string, team: AgentTeam, summary: string, artifactRefs: string[], metadata: Record<string, unknown>, severity: "info" | "warning" = "info") {

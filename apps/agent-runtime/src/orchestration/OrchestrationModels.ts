@@ -66,7 +66,7 @@ export type Run = {
     max_context_files: number;
     max_context_chars: number;
     max_task_attempts: number;
-    provider_mode: "mock";
+    provider_mode: "real_provider";
     execution_mode?: "fast" | "deep" | "exhaustive";
     max_tasks_per_run?: number;
     max_parallel_tasks?: number;
@@ -82,7 +82,7 @@ export type Run = {
     require_human_approval_for_risky_files?: boolean;
     validation_timeout?: number;
     safe_commands_allowlist?: string[];
-    swarm_worker_mode?: "mock" | "provider_read_only" | "auto";
+    swarm_worker_mode?: "provider_read_only";
     use_planning_evidence?: boolean;
     planning_evidence_mode?: "off" | "available" | "require_for_provider_mode";
     max_evidence_items?: number;

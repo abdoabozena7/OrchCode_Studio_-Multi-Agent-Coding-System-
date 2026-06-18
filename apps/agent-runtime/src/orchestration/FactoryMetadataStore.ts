@@ -135,8 +135,9 @@ import type {
   TaskStatusUpdateRef
 } from "./IntegrationFinalizationModels.js";
 
-export const FACTORY_METADATA_SCHEMA_VERSION = 26;
+export const FACTORY_METADATA_SCHEMA_VERSION = 27;
 export const FACTORY_METADATA_DATABASE_FILENAME = "factory_metadata.sqlite";
+const initializedFactoryMetadataDatabases = new Set<string>();
 
 type SqliteStatement = {
   run(...params: unknown[]): unknown;
@@ -636,7 +637,11 @@ export class FactoryMetadataStore {
     const rawDatabase = new sqlite.DatabaseSync(databasePath, { readOnly: input.readOnly });
     const database = normalizeSqliteBindings(rawDatabase);
     const store = new FactoryMetadataStore(databasePath, database, path.dirname(databasePath));
-    if (!input.readOnly) store.initializeSchema();
+    store.configureDatabase(Boolean(input.readOnly));
+    if (!input.readOnly && !initializedFactoryMetadataDatabases.has(databasePath)) {
+      store.initializeSchema();
+      initializedFactoryMetadataDatabases.add(databasePath);
+    }
     return store;
   }
 
@@ -645,6 +650,7 @@ export class FactoryMetadataStore {
     this.migrateTraceEventSchema();
     this.migratePromptSchema();
     this.migrateLockSchema();
+    this.migrateStateJsonSchema();
     this.database.prepare(
       "INSERT INTO factory_schema_versions(id, schema_version, applied_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET schema_version = excluded.schema_version, applied_at = excluded.applied_at"
     ).run("factory_metadata", FACTORY_METADATA_SCHEMA_VERSION, nowIso());
@@ -652,6 +658,14 @@ export class FactoryMetadataStore {
 
   close() {
     this.database.close();
+  }
+
+  private configureDatabase(readOnly: boolean) {
+    this.database.exec("PRAGMA foreign_keys = ON");
+    this.database.exec("PRAGMA busy_timeout = 5000");
+    if (!readOnly) {
+      this.database.exec("PRAGMA journal_mode = WAL");
+    }
   }
 
   all<T extends Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
@@ -1110,9 +1124,9 @@ export class FactoryMetadataStore {
       INSERT INTO factory_runs (
         id, run_kind, campaign_id, parent_run_id, status, mode, user_request,
         workspace_path, memory_dir, artifacts_path, run_artifact_ref,
-        schema_version, created_at, updated_at, metadata_json
+        schema_version, created_at, updated_at, state_json, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         run_kind = excluded.run_kind,
         campaign_id = excluded.campaign_id,
@@ -1126,6 +1140,7 @@ export class FactoryMetadataStore {
         run_artifact_ref = excluded.run_artifact_ref,
         schema_version = excluded.schema_version,
         updated_at = excluded.updated_at,
+        state_json = excluded.state_json,
         metadata_json = excluded.metadata_json
     `).run(
       run.id,
@@ -1142,6 +1157,7 @@ export class FactoryMetadataStore {
       run.schema_version,
       run.created_at,
       run.updated_at,
+      JSON.stringify(run),
       jsonMetadata({ root_task_count: run.root_task_ids.length, summary_present: Boolean(run.summary) })
     );
     this.recordArtifact({
@@ -1159,9 +1175,9 @@ export class FactoryMetadataStore {
       INSERT INTO factory_runs (
         id, run_kind, campaign_id, parent_run_id, status, mode, user_request,
         workspace_path, memory_dir, artifacts_path, run_artifact_ref,
-        schema_version, created_at, updated_at, metadata_json
+        schema_version, created_at, updated_at, state_json, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         run_kind = excluded.run_kind,
         campaign_id = excluded.campaign_id,
@@ -1173,6 +1189,7 @@ export class FactoryMetadataStore {
         run_artifact_ref = excluded.run_artifact_ref,
         schema_version = excluded.schema_version,
         updated_at = excluded.updated_at,
+        state_json = excluded.state_json,
         metadata_json = excluded.metadata_json
     `).run(
       run.id,
@@ -1189,6 +1206,7 @@ export class FactoryMetadataStore {
       run.schema_version,
       run.created_at,
       run.updated_at,
+      JSON.stringify(run),
       jsonMetadata({
         effective_total_logical_agents: run.effective_total_logical_agents,
         active_agent_count: run.active_agent_count,
@@ -1218,9 +1236,9 @@ export class FactoryMetadataStore {
     this.database.prepare(`
       INSERT INTO factory_tasks (
         id, run_id, task_id, parent_task_id, task_kind, title, objective, role,
-        status, priority, artifact_ref, schema_version, created_at, updated_at, metadata_json
+        status, priority, artifact_ref, schema_version, created_at, updated_at, state_json, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         parent_task_id = excluded.parent_task_id,
         task_kind = excluded.task_kind,
@@ -1232,6 +1250,7 @@ export class FactoryMetadataStore {
         artifact_ref = COALESCE(excluded.artifact_ref, factory_tasks.artifact_ref),
         schema_version = excluded.schema_version,
         updated_at = excluded.updated_at,
+        state_json = excluded.state_json,
         metadata_json = excluded.metadata_json
     `).run(
       recordId,
@@ -1248,6 +1267,7 @@ export class FactoryMetadataStore {
       task.schema_version,
       task.created_at,
       task.updated_at,
+      JSON.stringify(task),
       jsonMetadata({
         dependency_count: task.dependencies.length,
         artifact_count: task.artifacts.length,
@@ -1270,9 +1290,9 @@ export class FactoryMetadataStore {
     this.database.prepare(`
       INSERT INTO factory_tasks (
         id, run_id, task_id, parent_task_id, task_kind, title, objective, role,
-        status, priority, artifact_ref, schema_version, created_at, updated_at, metadata_json
+        status, priority, artifact_ref, schema_version, created_at, updated_at, state_json, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         parent_task_id = excluded.parent_task_id,
         task_kind = excluded.task_kind,
@@ -1284,6 +1304,7 @@ export class FactoryMetadataStore {
         artifact_ref = COALESCE(excluded.artifact_ref, factory_tasks.artifact_ref),
         schema_version = excluded.schema_version,
         updated_at = excluded.updated_at,
+        state_json = excluded.state_json,
         metadata_json = excluded.metadata_json
     `).run(
       recordId,
@@ -1300,6 +1321,7 @@ export class FactoryMetadataStore {
       item.schema_version,
       item.created_at,
       item.updated_at,
+      JSON.stringify(item),
       jsonMetadata({
         dependency_count: item.dependencies.length,
         read_file_count: item.read_files.length,
@@ -2062,6 +2084,41 @@ export class FactoryMetadataStore {
 
   recordSchedulerTrace(entry: SchedulerTraceEntry, artifactRef: string) {
     this.recordFactoryTraceEvent(factoryTraceEventFromSchedulerTrace({ entry, artifactRef }));
+  }
+
+  recordStructuredEventAndTrace(
+    source: OrchestratorEvent | SwarmEvent | SchedulerTraceEntry,
+    trace: FactoryTraceEvent,
+    artifactRef: string
+  ) {
+    this.withImmediateTransaction(() => {
+      const streamKind = "run_id" in source ? "orchestration" : "type" in source ? "swarm" : "scheduler";
+      const streamId = "run_id" in source ? source.run_id : source.swarm_run_id;
+      const eventType = "type" in source ? source.type : source.decision;
+      const existing = this.database.prepare("SELECT sequence FROM factory_event_stream WHERE id = ?").get(source.id);
+      if (!existing) {
+        const next = this.database.prepare(
+          "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM factory_event_stream WHERE stream_kind = ? AND stream_id = ?"
+        ).get(streamKind, streamId);
+        this.database.prepare(`
+          INSERT INTO factory_event_stream(
+            id, stream_kind, stream_id, sequence, event_type, created_at,
+            payload_json, artifact_ref, content_hash
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          source.id,
+          streamKind,
+          streamId,
+          Number(next?.next_sequence ?? 1),
+          eventType,
+          source.created_at,
+          JSON.stringify(source),
+          artifactRef,
+          sha256(JSON.stringify(source))
+        );
+      }
+      this.recordFactoryTraceEvent(trace);
+    });
   }
 
   recordMemoryChunk(pack: ContextPack, artifactRef: string) {
@@ -5123,9 +5180,9 @@ export class FactoryMetadataStore {
     this.database.prepare(`
       INSERT INTO factory_campaigns (
         id, status, title, original_goal, artifact_ref, final_report_ref,
-        created_at, updated_at, metadata_json
+        created_at, updated_at, state_json, metadata_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
         title = excluded.title,
@@ -5133,6 +5190,7 @@ export class FactoryMetadataStore {
         artifact_ref = excluded.artifact_ref,
         final_report_ref = excluded.final_report_ref,
         updated_at = excluded.updated_at,
+        state_json = excluded.state_json,
         metadata_json = excluded.metadata_json
     `).run(
       campaign.id,
@@ -5143,6 +5201,7 @@ export class FactoryMetadataStore {
       campaign.final_report_ref,
       campaign.created_at,
       campaign.updated_at,
+      JSON.stringify(campaign),
       jsonMetadata({
         run_count: campaign.runs.length,
         milestone_count: campaign.milestones.length,
@@ -5363,6 +5422,33 @@ export class FactoryMetadataStore {
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_factory_locks_active ON factory_locks(status, expires_at)");
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_factory_locks_scope ON factory_locks(normalized_scope_key, lock_mode, status)");
     this.database.exec("CREATE INDEX IF NOT EXISTS idx_factory_locks_task ON factory_locks(run_id, task_id, status)");
+  }
+
+  private migrateStateJsonSchema() {
+    for (const table of ["factory_runs", "factory_tasks", "factory_campaigns"]) {
+      const columns = new Set(this.all<{ name: string }>(`PRAGMA table_info(${table})`).map((row) => row.name));
+      if (!columns.has("state_json")) this.database.exec(`ALTER TABLE ${table} ADD COLUMN state_json TEXT`);
+    }
+  }
+
+  private withImmediateTransaction<T>(operation: () => T): T {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        this.database.exec("BEGIN IMMEDIATE");
+        const result = operation();
+        this.database.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          this.database.exec("ROLLBACK");
+        } catch {
+          // BEGIN can fail before a transaction exists.
+        }
+        if (!/SQLITE_BUSY|database is locked/i.test(error instanceof Error ? error.message : String(error)) || attempt === 4) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (2 ** attempt));
+      }
+    }
+    throw new Error("SQLite transaction retry exhausted.");
   }
 
   private replaceTaskDependencies(runId: string, taskId: string, dependencies: string[], artifactRef?: string, updatedAt?: string) {
@@ -5823,6 +5909,14 @@ export class FactoryMetadataAdapter {
     await this.write((store) => store.recordTraceEvent(event, artifactRef));
   }
 
+  async recordStructuredEventAndTrace(
+    source: OrchestratorEvent | SwarmEvent | SchedulerTraceEntry,
+    trace: FactoryTraceEvent,
+    artifactRef: string
+  ) {
+    await this.writeRequired((store) => store.recordStructuredEventAndTrace(source, trace, artifactRef));
+  }
+
   async recordSchedulerTraceAppended(entry: SchedulerTraceEntry, artifactRef: string) {
     await this.write((store) => store.recordSchedulerTrace(entry, artifactRef));
   }
@@ -5914,6 +6008,15 @@ export class FactoryMetadataAdapter {
       // Metadata writes are best-effort so artifact persistence behavior remains unchanged.
     }
   }
+
+  private async writeRequired(operation: (store: FactoryMetadataStore) => void) {
+    const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir });
+    try {
+      operation(store);
+    } finally {
+      store.close();
+    }
+  }
 }
 
 export function factoryMetadataStableId(prefix: string, parts: Array<string | number | undefined>) {
@@ -5944,6 +6047,7 @@ CREATE TABLE IF NOT EXISTS factory_runs (
   schema_version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  state_json TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -5978,6 +6082,7 @@ CREATE TABLE IF NOT EXISTS factory_tasks (
   schema_version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  state_json TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   UNIQUE(run_id, task_id)
 );
@@ -7705,7 +7810,21 @@ CREATE TABLE IF NOT EXISTS factory_campaigns (
   final_report_ref TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  state_json TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_event_stream (
+  id TEXT PRIMARY KEY,
+  stream_kind TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  artifact_ref TEXT,
+  content_hash TEXT NOT NULL,
+  UNIQUE(stream_kind, stream_id, sequence)
 );
 
 CREATE INDEX IF NOT EXISTS idx_factory_tasks_run ON factory_tasks(run_id);
@@ -7815,6 +7934,7 @@ CREATE INDEX IF NOT EXISTS idx_factory_context_items_pack ON factory_context_ite
 CREATE INDEX IF NOT EXISTS idx_factory_context_items_task ON factory_context_items(run_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_factory_metrics_run ON factory_metrics(run_id);
 CREATE INDEX IF NOT EXISTS idx_factory_campaigns_status ON factory_campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_factory_event_stream_stream ON factory_event_stream(stream_kind, stream_id, sequence);
 `;
 
 function jsonMetadata(value: Record<string, unknown>) {

@@ -20,6 +20,7 @@ target/
 .agent_memory/index_state.json
 .agent_memory/project_intelligence.json
 .agent_memory/factory_metadata.sqlite*
+.agent_memory/backups/
 .agent_memory/runs/
 .agent_memory/campaigns/
 .agent_memory/evals/

@@ -5,12 +5,13 @@ import type {
   ProviderTruthTelemetry,
   SanitizedProviderConfig
 } from "@hivo/protocol";
-import type { LlmProvider, LlmRequest } from "./LlmProvider.js";
+import type { EmbeddingRequest, EmbeddingResponse, LlmProvider, LlmRequest } from "./LlmProvider.js";
 
 type ProviderTelemetryInput = {
   mode: AgentRuntimeMode;
   providerConfig?: SanitizedProviderConfig;
   activeProviderSource?: ActiveProviderSource;
+  modelCertification?: ProviderTruthTelemetry["modelCertification"];
 };
 
 type ProviderRequestType = ProviderPromptLatency["requestType"];
@@ -25,9 +26,9 @@ export class ProviderTelemetryRecorder {
   private totalProviderResponseChars = 0;
   private totalProviderContextChars = 0;
   private perPromptProviderLatencyMs: ProviderPromptLatency[] = [];
-  private fallbackUsed = false;
-  private fallbackReason: string | undefined;
   private lastError: string | undefined;
+  private finalResponseSource: ProviderTruthTelemetry["finalResponseSource"] = "none";
+  private terminalFailure: string | undefined;
 
   constructor(private readonly input: ProviderTelemetryInput) {}
 
@@ -41,12 +42,16 @@ export class ProviderTelemetryRecorder {
       this.recordLatency({
         requestId,
         requestType,
+        purpose: request.purpose,
+        reasoningStage: request.reasoningStage,
         latencyMs: Date.now() - startedAt,
         status: "success",
         ...promptSize,
-        responseChars: estimateSerializedChars(result)
+        responseChars: estimateSerializedChars(result),
+        maxOutputTokens: request.maxOutputTokens
       });
       this.providerResponseCount += 1;
+      if (!this.terminalFailure) this.lastError = undefined;
       return result;
     } catch (error) {
       this.markProviderError(error);
@@ -54,10 +59,13 @@ export class ProviderTelemetryRecorder {
       this.recordLatency({
         requestId,
         requestType,
+        purpose: request.purpose,
+        reasoningStage: request.reasoningStage,
         latencyMs: Date.now() - startedAt,
         status: timeout ? "timeout" : "failure",
         errorSummary: summarizeProviderError(error),
-        ...promptSize
+        ...promptSize,
+        maxOutputTokens: request.maxOutputTokens
       });
       this.providerFailureCount += 1;
       if (timeout) this.providerTimeoutCount += 1;
@@ -65,13 +73,18 @@ export class ProviderTelemetryRecorder {
     }
   }
 
-  markFallback(reason: string) {
-    this.fallbackUsed = true;
-    this.fallbackReason = this.fallbackReason ? `${this.fallbackReason}; ${reason}` : reason;
-  }
-
   markProviderError(error: unknown) {
     this.lastError = summarizeProviderError(error);
+  }
+
+  markProviderAuthoredResponse() {
+    this.finalResponseSource = "provider";
+  }
+
+  markTerminalFailure(error: unknown) {
+    this.terminalFailure = summarizeProviderError(error);
+    this.lastError = this.terminalFailure;
+    this.finalResponseSource = "none";
   }
 
   snapshot(): ProviderTruthTelemetry {
@@ -83,8 +96,7 @@ export class ProviderTelemetryRecorder {
       modelName,
       providerBaseUrl: sanitizeProviderBaseUrl(this.input.providerConfig?.baseUrl),
       providerRequestCount: this.providerRequestCount,
-      mockProviderRequestCount: this.input.mode === "demo_mock" ? this.providerRequestCount : 0,
-      realProviderRequestCount: this.input.mode === "real_provider" ? this.providerRequestCount : 0,
+      realProviderRequestCount: this.providerRequestCount,
       providerResponseCount: this.providerResponseCount,
       providerFailureCount: this.providerFailureCount,
       providerTimeoutCount: this.providerTimeoutCount,
@@ -93,12 +105,19 @@ export class ProviderTelemetryRecorder {
       totalProviderResponseChars: this.totalProviderResponseChars,
       totalProviderContextChars: this.totalProviderContextChars,
       perPromptProviderLatencyMs: this.perPromptProviderLatencyMs,
-      fallbackUsed: this.fallbackUsed,
-      fallbackReason: this.fallbackReason,
       lastError: this.lastError,
-      deterministicOnly: this.providerRequestCount === 0,
-      mockProviderUsed: this.input.mode === "demo_mock" && this.providerRequestCount > 0,
-      realProviderUsed: this.input.mode === "real_provider" && this.providerRequestCount > 0,
+      reasoningAttempts: this.perPromptProviderLatencyMs.filter((entry) => entry.purpose === "route" || entry.purpose === "reason").length,
+      repairAttempts: this.perPromptProviderLatencyMs.filter((entry) => entry.purpose === "repair").length,
+      providerRequestRefs: this.perPromptProviderLatencyMs.map((entry) => entry.requestId),
+      finalResponseSource: this.finalResponseSource,
+      terminalFailure: this.terminalFailure,
+      modelCertification: this.input.modelCertification ?? {
+        status: "uncertified",
+        routerModel: this.input.providerConfig?.routerModel ?? modelName,
+        authorModel: modelName,
+        verifierModel: this.input.providerConfig?.verifierModel ?? modelName,
+        reason: "No certification registry was supplied to provider telemetry."
+      },
       activeProviderSource: this.input.activeProviderSource ?? "unknown",
       updatedAt: new Date().toISOString()
     };
@@ -117,12 +136,10 @@ export class ProviderTelemetryRecorder {
   }
 
   private providerName() {
-    if (this.input.mode === "demo_mock") return "mock_demo";
     return this.input.providerConfig?.providerName || this.input.providerConfig?.providerType || "real_provider";
   }
 
   private modelName() {
-    if (this.input.mode === "demo_mock") return "mock-demo";
     return this.input.providerConfig?.selectedModel;
   }
 }
@@ -140,6 +157,15 @@ export class TelemetryLlmProvider implements LlmProvider {
   generateText(input: LlmRequest): Promise<string> {
     return this.recorder.measure("text", input, () => this.inner.generateText(input));
   }
+
+  embed(input: EmbeddingRequest): Promise<EmbeddingResponse> {
+    if (!this.inner.embed) return Promise.reject(new Error("provider.embedding_not_supported"));
+    return this.recorder.measure("structured", {
+      purpose: "retrieve",
+      systemPrompt: "Embedding request",
+      userPrompt: input.inputs.join("\n")
+    }, () => this.inner.embed!(input));
+  }
 }
 
 export function createProviderTelemetryRecorder(input: ProviderTelemetryInput) {
@@ -153,7 +179,6 @@ export function inferActiveProviderSource(
   mode: AgentRuntimeMode,
   providerConfig?: SanitizedProviderConfig
 ): ActiveProviderSource {
-  if (mode === "demo_mock" && !providerConfig) return "runtime_default";
   if (providerConfig?.isValid) return "session_override";
   return "unknown";
 }

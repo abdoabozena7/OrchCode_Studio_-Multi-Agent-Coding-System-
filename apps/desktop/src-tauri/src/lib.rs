@@ -63,6 +63,7 @@ pub fn run() {
             commands::sessions::get_tasks_for_session,
             commands::sessions::get_agent_statuses,
             commands::system::open_external_target,
+            commands::system::get_code_freshness_status,
             commands::system::restart_with_latest_code,
             commands::model_provider::validate_model_provider,
             commands::model_provider::list_available_models,

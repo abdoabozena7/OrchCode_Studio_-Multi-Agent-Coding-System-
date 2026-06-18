@@ -9,7 +9,7 @@ import { buildServer } from "../server.js";
 import { buildModuleExecutionPlan, summarizeModuleExecution, validatePatchAgainstModulePlan } from "../runtime/ModuleExecutionPlanning.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
-test("existing project creates a module execution plan before implementation", async () => {
+test("existing project edit records intake and Knowledge Tree route before implementation", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-plan-existing-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-plan-existing-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -27,10 +27,14 @@ test("existing project creates a module execution plan before implementation", a
     await runtime.runTurn(created.sessionId, "update the main module");
     const session = runtime.getSession(created.sessionId);
 
-    assert.ok(session?.moduleExecutionPlan);
-    assert.equal(session?.moduleExecutionPlan?.status, "blocked");
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "module_plan"));
-    assert.ok((session?.decisionLedger ?? []).some((record) => /scoped module execution plan/i.test(record.finding)));
+    assert.equal(session?.moduleExecutionPlan, undefined);
+    assert.ok(session?.projectKnowledgeTree);
+    assert.ok(session?.latestKnowledgeRoute);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "project_intake"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "context_pack"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "project_knowledge_tree"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "knowledge_edit_route"));
+    assert.ok((session?.decisionLedger ?? []).some((record) => /Project Knowledge Tree/i.test(record.decision)));
   } finally {
     await app.close();
     await rm(workspace, { recursive: true, force: true });
@@ -112,7 +116,7 @@ test("context pack fields flow into the module execution plan", () => {
   assert.ok(modulePlan.unknowns.includes("Missing mechanism link: backend_handler"));
 });
 
-test("agent contracts receive owned and forbidden paths from the module plan", async () => {
+test("Knowledge Tree route records target files and review chain for existing project edit", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-contract-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-contract-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -129,11 +133,14 @@ test("agent contracts receive owned and forbidden paths from the module plan", a
     });
     await runtime.runTurn(created.sessionId, "update auth.ts");
     const session = runtime.getSession(created.sessionId);
-    const worker = session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_task_1");
+    const tree = session?.projectKnowledgeTree;
+    const route = session?.latestKnowledgeRoute;
 
-    assert.ok(worker);
-    assert.deepEqual(worker?.ownedPaths, session?.moduleExecutionPlan?.ownedPaths);
-    assert.ok((worker?.forbiddenPaths ?? []).includes(".git/"));
+    assert.ok(tree);
+    assert.ok(route);
+    assert.ok(tree.fileOwnership.some((entry) => entry.path === "src/auth.ts"));
+    assert.ok(route.plan.requiredReviewChain.rootIntegrationReview.length > 0);
+    assert.equal(session?.patchProposals.length, 0);
   } finally {
     await app.close();
     await rm(workspace, { recursive: true, force: true });
@@ -228,7 +235,7 @@ test("new dependency changes require review unless explicitly allowed", async ()
   }
 });
 
-test("review gate includes scope verdict for existing project continuation", async () => {
+test("Knowledge Tree route stops existing project edit before review-gate application", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-scope-review-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-scope-review-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -246,8 +253,10 @@ test("review gate includes scope verdict for existing project continuation", asy
     await runtime.runTurn(created.sessionId, "update the main module");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.reviewGate?.scopeValidation?.verdict, "blocked");
-    assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+    assert.equal(session?.reviewGate, undefined);
+    assert.ok(session?.latestKnowledgeRoute);
+    assert.equal(session?.runSummary?.gates[0]?.name, "Project Knowledge Tree routing");
+    assert.match(session?.messages.at(-1)?.content ?? "", /Execution has not started/i);
   } finally {
     await app.close();
     await rm(workspace, { recursive: true, force: true });
@@ -396,7 +405,7 @@ function createSessionFixture(): AgentRuntimeSession {
   return {
     id: "session_1",
     workspacePath: "workspace",
-    mode: "demo_mock",
+    mode: "real_provider",
     trustProfile: "strict_gated",
     executionMode: "simple_mode",
     accessProfile: "default_permissions",

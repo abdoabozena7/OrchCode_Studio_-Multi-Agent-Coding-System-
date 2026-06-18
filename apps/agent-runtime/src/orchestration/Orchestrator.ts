@@ -7,9 +7,9 @@ import { rebuildRepoIndex } from "../memory/RepoIndexer.js";
 import type { CommandInventory, RepoIndex } from "../memory/types.js";
 import { assessIndexFreshness } from "../memory/IndexFreshness.js";
 import { SeniorCodingAgent } from "../agents/SeniorCodingAgent.js";
-import { MockLlmProvider } from "../llm/MockLlmProvider.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
 import { AgentTeamManager } from "./AgentTeamManager.js";
 import type { AgentTeamHierarchy } from "./AgentTeamModels.js";
@@ -427,7 +427,7 @@ export class CoreOrchestrator {
     }
     await this.writeCheckpoint(run, tasks, "resume_requested", [
       reconciliation.ok
-        ? "Run artifact and factory metadata agree for resume inspection."
+        ? "SQLite run state and factory metadata agree for resume inspection."
         : reconciliation.reason,
       ["succeeded", "failed", "cancelled"].includes(run.status)
         ? "Run is terminal; resume is a safe no-op."
@@ -448,12 +448,6 @@ export class CoreOrchestrator {
 
   private async reconcileRunForResume(run: Run): Promise<{ ok: boolean; reason: string; severity?: "blocked" | "failed" }> {
     const paths = await this.artifactStore.pathsForRun(run.id);
-    if (!existsSync(paths.run)) {
-      return { ok: false, reason: `Run artifact is missing: ${paths.run}`, severity: "failed" };
-    }
-    if (!existsSync(paths.tasks)) {
-      return { ok: false, reason: `Task artifact is missing: ${paths.tasks}`, severity: "blocked" };
-    }
     const metadataPath = await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir);
     if (!existsSync(metadataPath)) {
       return { ok: false, reason: `Factory metadata database is missing: ${metadataPath}`, severity: "blocked" };
@@ -488,7 +482,7 @@ export class CoreOrchestrator {
           severity: "blocked"
         };
       }
-      return { ok: true, reason: "Run artifact and factory metadata agree." };
+      return { ok: true, reason: "SQLite run state and factory metadata agree." };
     } finally {
       metadata.close();
     }
@@ -517,7 +511,7 @@ export class CoreOrchestrator {
         max_context_files: this.maxContextFiles,
         max_context_chars: this.maxContextChars,
         max_task_attempts: this.maxTaskAttempts,
-        provider_mode: "mock",
+        provider_mode: "real_provider",
         execution_mode: this.config.execution_mode,
         max_tasks_per_run: this.config.max_tasks_per_run,
         max_parallel_tasks: this.config.max_parallel_tasks,
@@ -617,8 +611,7 @@ export class CoreOrchestrator {
       }));
     }
     const snapshot = await rebuildRepoIndex(this.workspacePath, { memoryDir: this.memoryDir });
-    const memoryPaths = resolveMemoryPaths(this.workspacePath, this.memoryDir);
-    run.memory_snapshot_ref = path.relative(run.artifacts_path, memoryPaths.repoIndex).replaceAll("\\", "/");
+    run.memory_snapshot_ref = "sqlite:factory_memory_snapshots/repo_index";
     await this.artifactStore.saveRun(assertValid("Run", run, validateRun));
     await this.artifactStore.appendEvent(this.event(run.id, "repo.indexed", `Indexed ${snapshot.repoIndex.totals.indexedFiles} file(s).`, {
       indexed_files: snapshot.repoIndex.totals.indexedFiles,
@@ -923,33 +916,30 @@ export class CoreOrchestrator {
     const sessionManager = new SessionManager(storageDir, new EventBus(), { runtimeEventLoader: async () => [] });
     await sessionManager.load();
     const provider = this.providerFactory ? this.providerFactory(task.role_required) : undefined;
+    if (!provider) throw new Error(`provider_required_for_executor:${task.role_required}`);
     const session = await sessionManager.createSession({
       workspacePath: this.workspacePath,
-      mode: provider ? "real_provider" : "demo_mock",
+      mode: "real_provider",
       executionMode: "simple_mode",
       userPrompt: invocation.prompt,
       accessProfile: "default_permissions",
-      activeProviderSource: provider ? "session_override" : "runtime_default"
+      activeProviderSource: "session_override"
     });
-    const seniorAgent = new SeniorCodingAgent(provider ?? new MockLlmProvider(), sessionManager);
+    const seniorAgent = new SeniorCodingAgent(provider, sessionManager);
     const completed = await seniorAgent.runTurn(session.id, invocation.prompt);
     invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, completed);
     return summarizeSeniorSession(completed, task, pack, invocation.raw_output_ref);
   }
 
   private async shouldInvokeProviderReadOnlyRole(task: Task) {
-    if (!this.providerFactory) return false;
     if (task.allowed_files_to_edit.length > 0) return false;
-    const provider = this.providerFactory(task.role_required);
-    return !(provider instanceof MockLlmProvider);
+    return true;
   }
 
   private async invokeProviderReadOnlyRole(run: Run, task: Task, pack: ContextPack, invocation: AgentInvocation): Promise<ParsedAgentOutput> {
     const provider = this.providerFactory?.(task.role_required);
-    if (!provider || provider instanceof MockLlmProvider) {
-      return this.invokeDeterministicRole(run, task, pack, invocation);
-    }
-    const generated = await provider.generateStructured<unknown>({
+    if (!provider) throw new Error(`provider_required_for_readonly_worker:${task.role_required}`);
+    const generated = await invokeReasoningProviderStructured<unknown>(provider, {
       systemPrompt: [
         `You are ${task.role_required}, a read-only worker inside Hivo Studio's CoreOrchestrator.`,
         "Return only strict JSON matching this TypeScript shape:",
@@ -3143,7 +3133,7 @@ function executorProviderTruthLimitation(outputs: ParsedAgentOutput[]) {
   }
   return outputs.some((output) => output.limitations.some((entry) => /provider-backed planner/i.test(entry)))
     ? "ExecutorAgent used a provider-backed SeniorCodingAgent planner; write output remains gated by review, validation, and patch authority."
-    : "ExecutorAgent uses mock provider mode unless providerFactory is explicitly wired into the orchestrator.";
+    : "ExecutorAgent cannot run because a providerFactory was not wired into the orchestrator.";
 }
 
 function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: ContextPack, rawOutputRef: string): ParsedAgentOutput {
@@ -3181,7 +3171,7 @@ function seniorSessionProviderTruthLimitation(session: AgentRuntimeSession) {
   if (session.mode === "real_provider") {
     return "ExecutorAgent invoked the existing SeniorCodingAgent path with a provider-backed planner; write output remains gated by review, validation, and patch authority.";
   }
-  return "ExecutorAgent invoked the existing SeniorCodingAgent path in demo mock mode.";
+  return "ExecutorAgent requires a configured provider-backed SeniorCodingAgent path.";
 }
 
 function normalizeProviderReadOnlyOutput(value: unknown): ParsedAgentOutput {

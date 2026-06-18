@@ -390,7 +390,11 @@ export function resolveInvestigationConcept(question: string): InvestigationConc
   let inferredPatternName: string | undefined;
   let secondaryConcepts: string[] = [];
 
-  if (/\b(?:dbscan|fit_dbscan)\b/i.test(normalized) || asciiTokens.includes("dbscan")) {
+  if (/\b(?:tech|technology)\s+stack\b/i.test(normalized)) {
+    targetConcept = "general";
+    requestedConceptText = "tech stack";
+    notes.push("Tech-stack inventory is a structural project question, not a literal implementation concept.");
+  } else if (/\b(?:dbscan|fit_dbscan)\b/i.test(normalized) || asciiTokens.includes("dbscan")) {
     targetConcept = "dbscan";
     requestedConceptText = "DBSCAN";
     resolvedName = "DBSCAN";
@@ -1526,6 +1530,7 @@ function isInvestigationStopWord(value: string) {
   return new Set([
     "how", "what", "where", "why", "does", "do", "is", "are", "the", "this", "that",
     "here", "project", "code", "explain", "detail", "detailed", "work", "works",
-    "applied", "apply", "changes", "change", "after", "before", "user", "system"
+    "applied", "apply", "changes", "change", "after", "before", "user", "system",
+    "tell", "show", "describe", "summarize", "list", "me", "full"
   ]).has(value);
 }

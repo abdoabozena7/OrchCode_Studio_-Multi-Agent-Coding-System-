@@ -6,7 +6,7 @@ import test from "node:test";
 import type { AgentRuntimeSession, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { userPromptWithContext, type LlmProvider, type LlmRequest } from "../llm/LlmProvider.js";
-import { MockLlmProvider } from "../llm/MockLlmProvider.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 import { TelemetryLlmProvider, createProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { EventBus } from "../runtime/EventBus.js";
@@ -58,6 +58,39 @@ test("provider telemetry records prompt context and response character volume", 
   assert.equal(snapshot.perPromptProviderLatencyMs[0]?.promptChars, snapshot.totalProviderPromptChars);
   assert.equal(snapshot.perPromptProviderLatencyMs[0]?.contextChars, snapshot.totalProviderContextChars);
   assert.equal(snapshot.perPromptProviderLatencyMs[0]?.responseChars, snapshot.totalProviderResponseChars);
+});
+
+test("provider telemetry clears recovered last errors after a later provider success", async () => {
+  class RecoveringProvider implements LlmProvider {
+    private calls = 0;
+
+    async generateStructured<T>(): Promise<T> {
+      throw new Error("Unexpected structured request");
+    }
+
+    async generateText(): Promise<string> {
+      this.calls += 1;
+      if (this.calls === 1) throw new Error("real_provider.malformed_response: missing message.content");
+      return "provider-authored recovery";
+    }
+  }
+
+  const recorder = createProviderTelemetryRecorder({
+    mode: "real_provider",
+    providerConfig: validOllamaConfig,
+    activeProviderSource: "explicit_cli"
+  });
+  const provider = new TelemetryLlmProvider(new RecoveringProvider(), recorder);
+  const request = { systemPrompt: "system", userPrompt: "answer" };
+
+  await assert.rejects(provider.generateText(request), /missing message\.content/);
+  await provider.generateText(request);
+
+  const snapshot = recorder.snapshot();
+  assert.equal(snapshot.providerFailureCount, 1);
+  assert.equal(snapshot.providerResponseCount, 1);
+  assert.equal(snapshot.lastError, undefined);
+  assert.equal(snapshot.perPromptProviderLatencyMs.some((entry) => entry.status === "failure"), true);
 });
 
 test("provider user prompt includes serialized context so real models can inspect evidence", () => {
@@ -129,7 +162,6 @@ test("real provider required without config fails with provider_missing", async 
       () => runtime.createSession({
         workspacePath: fixture.workspace,
         mode: "real_provider",
-        requireRealProvider: true,
         activeProviderSource: "explicit_cli",
         accessProfile: "full_access",
         userPrompt: "How is DBSCAN applied here?"
@@ -152,7 +184,6 @@ test("real provider required forbids mock mode and MockProvider factories", asyn
       () => runtime.createSession({
         workspacePath: fixture.workspace,
         mode: "demo_mock",
-        requireRealProvider: true,
         activeProviderSource: "runtime_default",
         accessProfile: "full_access",
         userPrompt: "How is DBSCAN applied here?"
@@ -163,11 +194,10 @@ test("real provider required forbids mock mode and MockProvider factories", asyn
       }
     );
 
-    const runtimeWithMockFactory = await createRuntime(fixture.storageDir, () => new MockLlmProvider());
+    const runtimeWithMockFactory = await createRuntime(fixture.storageDir, () => new ScriptedProvider());
     const created = await runtimeWithMockFactory.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
-      requireRealProvider: true,
       providerConfig: validOllamaConfig,
       activeProviderSource: "session_override",
       accessProfile: "full_access",
@@ -189,11 +219,10 @@ test("real provider required forbids mock mode and MockProvider factories", asyn
 test("real provider requested and mock fallback attempt fails the session clearly", async () => {
   const fixture = await createDbscanFixture("provider-gate-runtime-mock-forbidden");
   try {
-    const runtime = await createRuntime(fixture.storageDir, () => new MockLlmProvider());
+    const runtime = await createRuntime(fixture.storageDir, () => new ScriptedProvider());
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
-      requireRealProvider: true,
       providerConfig: validOllamaConfig,
       activeProviderSource: "session_override",
       accessProfile: "full_access",
@@ -208,10 +237,8 @@ test("real provider requested and mock fallback attempt fails the session clearl
     assert.equal(session.status, "failed_provider");
     assert.match(answer, /real model provider was required|MockProvider/i);
     assert.equal(session.providerTelemetry?.activeProviderSource, "session_override");
-    assert.equal(session.providerTelemetry?.mockProviderUsed, false);
-    assert.equal(session.providerTelemetry?.mockProviderRequestCount, 0);
     assert.equal(session.providerTelemetry?.providerRequestCount, 0);
-    assert.equal(session.providerTelemetry?.fallbackUsed, true);
+    assert.equal(session.providerTelemetry?.finalResponseSource, "none");
     assert.match(session.providerTelemetry?.lastError ?? "", /MockProvider is forbidden/i);
   } finally {
     await fixture.close();
@@ -225,7 +252,6 @@ test("valid provider config creates real-provider sessions with provider truth s
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
-      requireRealProvider: true,
       providerConfig: validOllamaConfig,
       activeProviderSource: "explicit_cli",
       accessProfile: "full_access",
@@ -233,7 +259,6 @@ test("valid provider config creates real-provider sessions with provider truth s
     });
     const session = requireSession(runtime.getSession(created.sessionId));
     assert.equal(session.mode, "real_provider");
-    assert.equal(session.requireRealProvider, true);
     assert.equal(session.providerConfig?.providerName, "Ollama");
     assert.equal(session.activeProviderSource, "explicit_cli");
   } finally {
@@ -263,13 +288,11 @@ test("real-provider inspect/explain stops local synthesis after provider timeout
     assert.equal(telemetry.providerMode, "real_provider");
     assert.equal(telemetry.activeProviderSource, "session_override");
     assert.equal(telemetry.providerBaseUrl, "http://127.0.0.1:11434");
-    assert.equal(telemetry.realProviderUsed, true);
-    assert.equal(telemetry.mockProviderUsed, false);
     assert.equal(telemetry.providerRequestCount > 0, true);
     assert.equal(telemetry.providerFailureCount > 0, true);
     assert.equal(telemetry.providerTimeoutCount > 0, true);
-    assert.equal(telemetry.fallbackUsed, true);
-    assert.match(telemetry.fallbackReason ?? "", /timeout|provider failed/i);
+    assert.equal(telemetry.finalResponseSource, "none");
+    assert.match(telemetry.terminalFailure ?? telemetry.lastError ?? "", /timeout|provider failed/i);
     assert.equal(evidenceReport.excludedEvidenceCandidates.some((file) => file.includes("tmp/root-cause-audit/explain-repro-results.json")), true);
     assert.equal(evidenceReport.finalEvidenceFilesActuallyUsed.some((file) => file.includes("tmp/root-cause-audit")), false);
     assert.equal(evidenceReport.evidenceFilesByTier.source_code.some((file) => file === "src/clustering.py"), true);
@@ -396,11 +419,8 @@ test("mock inspect/explain telemetry is marked as mock, not real", async () => {
     await runtime.runTurn(created.sessionId, "How is DBSCAN applied here?");
     const telemetry = requireSession(runtime.getSession(created.sessionId)).providerTelemetry;
     assert.ok(telemetry);
-    assert.equal(telemetry.providerMode, "demo_mock");
-    assert.equal(telemetry.mockProviderUsed, true);
-    assert.equal(telemetry.realProviderUsed, false);
-    assert.equal(telemetry.mockProviderRequestCount, telemetry.providerRequestCount);
-    assert.equal(telemetry.realProviderRequestCount, 0);
+    assert.equal(telemetry.providerMode, "real_provider");
+    assert.equal(telemetry.realProviderRequestCount, telemetry.providerRequestCount);
   } finally {
     await fixture.close();
   }
@@ -410,12 +430,15 @@ test("runtime health default stays separate from active desktop provider source"
   const fixture = await createDbscanFixture("provider-truth-health");
   const server = await buildServer({
     ...loadConfig(),
-    defaultMode: "demo_mock",
+    defaultMode: "real_provider",
     storageDir: fixture.storageDir
   });
   try {
     const health = await server.app.inject({ method: "GET", url: "/health" });
-    assert.equal(JSON.parse(health.body).mode, "demo_mock");
+    const healthBody = JSON.parse(health.body);
+    assert.equal(healthBody.mode, "real_provider");
+    assert.equal(typeof healthBody.startedAt, "string");
+    assert.ok(Number.isFinite(Date.parse(healthBody.startedAt)));
     const created = await server.runtime.createSession({
       workspacePath: fixture.workspace,
       mode: "real_provider",
@@ -439,7 +462,7 @@ async function createRuntime(storageDir: string, providerFactory?: (session: Age
   return new AgentRuntime(
     {
       ...loadConfig(),
-      defaultMode: "demo_mock",
+      defaultMode: "real_provider",
       storageDir
     },
     sessionManager,

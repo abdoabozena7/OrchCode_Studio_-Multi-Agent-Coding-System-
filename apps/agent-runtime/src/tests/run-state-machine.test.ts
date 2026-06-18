@@ -148,7 +148,7 @@ test("resume from a valid checkpoint leaves the run in its persisted resume-safe
   }
 });
 
-test("resume with metadata and artifact mismatch marks the run blocked", async () => {
+test("resume uses DB-first state when compatibility run artifacts are stale or missing", async () => {
   const workspace = await fixtureWorkspace("factory-state-resume-mismatch");
   try {
     const store = new OrchestrationArtifactStore(workspace);
@@ -158,10 +158,10 @@ test("resume with metadata and artifact mismatch marks the run blocked", async (
 
     const mismatched = { ...run, status: "executing" as const, updated_at: new Date().toISOString() };
     await writeJson(path.join(run.artifacts_path, "run.json"), mismatched);
+    await rm(path.join(run.artifacts_path, "tasks.json"), { force: true });
 
     const result = await new CoreOrchestrator({ workspacePath: workspace }).resumeRun(run.id);
-    assert.equal(result.run.status, "blocked");
-    assert.match(result.run.summary ?? result.report.limitations.join(" "), /status mismatch/);
+    assert.equal(result.run.status, "task_graph_ready");
 
     const metadata = await FactoryMetadataStore.open({ workspacePath: workspace, readOnly: true });
     try {
@@ -170,7 +170,7 @@ test("resume with metadata and artifact mismatch marks the run blocked", async (
         run.id,
         "blocked"
       );
-      assert.deepEqual(blockedTransition, { next_status: "blocked", transition_trigger: "resume" });
+      assert.equal(blockedTransition, undefined);
     } finally {
       metadata.close();
     }
@@ -210,7 +210,7 @@ function fakeRun(workspace: string, id: string, status: Run["status"]): Run {
       max_context_files: 2,
       max_context_chars: 1200,
       max_task_attempts: 1,
-      provider_mode: "mock"
+      provider_mode: "real_provider"
     },
     artifacts_path: path.join(workspace, ".agent_memory", "runs", id)
   };

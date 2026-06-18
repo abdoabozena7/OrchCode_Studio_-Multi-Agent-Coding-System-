@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appendJsonl, ensureMemoryLayout, readJson, writeJson } from "../memory/ProjectMemory.js";
+import { SqliteMemoryStore } from "../memory/SqliteMemoryStore.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import type { RunTransitionRecord } from "./RunStateMachine.js";
@@ -95,6 +96,7 @@ export class SwarmArtifactStore {
 
   async saveSwarmRun(run: SwarmRun) {
     const paths = await this.ensureRunLayout(run.id);
+    await this.saveStructuredState("swarm_run", run.id, run, run.status, paths.swarmRun);
     await writeJson(paths.swarmRun, run);
     await writeJson(paths.schedulerConfig, run.scheduler_config);
     await this.metadata.recordSwarmRunSaved(run, paths.swarmRun);
@@ -103,12 +105,12 @@ export class SwarmArtifactStore {
   }
 
   async loadSwarmRun(runId: string): Promise<SwarmRun> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<SwarmRun>(paths.swarmRun);
+    return this.requireStructuredState<SwarmRun>("swarm_run", runId);
   }
 
   async saveStaffingPlan(plan: StaffingPlan) {
     const paths = await this.ensureRunLayout(plan.swarm_run_id);
+    await this.saveStructuredState("swarm_staffing_plan", plan.swarm_run_id, plan, undefined, paths.staffingPlan, plan.swarm_run_id);
     await writeJson(paths.staffingPlan, plan);
     await this.metadata.recordSwarmStaffingPlanSaved(plan, paths.staffingPlan);
     await this.traceWriter.write({
@@ -128,48 +130,48 @@ export class SwarmArtifactStore {
   }
 
   async loadStaffingPlan(runId: string): Promise<StaffingPlan> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<StaffingPlan>(paths.staffingPlan);
+    return this.requireStructuredState<StaffingPlan>("swarm_staffing_plan", runId);
   }
 
   async saveAgentTemplates(runId: string, templates: AgentTemplate[]) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("swarm_agent_templates", runId, templates, undefined, paths.agentTemplates, runId);
     await writeJson(paths.agentTemplates, templates);
     await this.metadata.recordSwarmAgentTemplatesSaved(runId, templates, paths.agentTemplates);
     return paths.agentTemplates;
   }
 
   async loadAgentTemplates(runId: string): Promise<AgentTemplate[]> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<AgentTemplate[]>(paths.agentTemplates);
+    return this.requireStructuredState<AgentTemplate[]>("swarm_agent_templates", runId);
   }
 
   async saveAgentInstances(runId: string, instances: AgentInstance[]) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("swarm_agent_instances", runId, instances, undefined, paths.agentInstances, runId);
     await writeJson(paths.agentInstances, instances);
     await this.metadata.recordSwarmAgentInstancesSaved(runId, instances, paths.agentInstances);
     return paths.agentInstances;
   }
 
   async loadAgentInstances(runId: string): Promise<AgentInstance[]> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<AgentInstance[]>(paths.agentInstances);
+    return this.requireStructuredState<AgentInstance[]>("swarm_agent_instances", runId);
   }
 
   async saveWorkItems(runId: string, workItems: WorkItem[]) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("swarm_work_items", runId, workItems, undefined, paths.workItems, runId);
     await writeJson(paths.workItems, workItems);
     await this.metadata.recordWorkItemsSaved(runId, workItems, paths.workItems);
     return paths.workItems;
   }
 
   async loadWorkItems(runId: string): Promise<WorkItem[]> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<WorkItem[]>(paths.workItems);
+    return this.requireStructuredState<WorkItem[]>("swarm_work_items", runId);
   }
 
   async saveLeases(runId: string, leases: unknown[]) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("swarm_leases", runId, leases, undefined, paths.leases, runId);
     await writeJson(paths.leases, leases);
     await this.metadata.recordSwarmConfigArtifactSaved({ runId, kind: "swarm_leases", artifactRef: paths.leases, count: leases.length });
     return paths.leases;
@@ -177,15 +179,15 @@ export class SwarmArtifactStore {
 
   async appendEvent(event: SwarmEvent) {
     const paths = await this.ensureRunLayout(event.swarm_run_id);
-    await appendJsonl(paths.events, event);
     await this.traceWriter.recordArtifactEvent(event, paths.events);
+    await appendJsonl(paths.events, event);
     return paths.events;
   }
 
   async appendSchedulerTrace(entry: SchedulerTraceEntry) {
     const paths = await this.ensureRunLayout(entry.swarm_run_id);
-    await appendJsonl(paths.schedulerTrace, entry);
     await this.traceWriter.recordSchedulerTrace(entry, paths.schedulerTrace);
+    await appendJsonl(paths.schedulerTrace, entry);
     return paths.schedulerTrace;
   }
 
@@ -278,6 +280,7 @@ export class SwarmArtifactStore {
 
   async saveMetrics(runId: string, metrics: SwarmMetrics) {
     const paths = await this.ensureRunLayout(runId);
+    await this.saveStructuredState("swarm_metrics", runId, metrics, undefined, paths.metrics, runId);
     await writeJson(paths.metrics, metrics);
     await this.metadata.recordSwarmMetricsSaved(metrics, paths.metrics);
     await this.traceWriter.write({
@@ -297,8 +300,7 @@ export class SwarmArtifactStore {
   }
 
   async loadMetrics(runId: string): Promise<SwarmMetrics> {
-    const paths = await this.pathsForRun(runId);
-    return readJson<SwarmMetrics>(paths.metrics);
+    return this.requireStructuredState<SwarmMetrics>("swarm_metrics", runId);
   }
 
   async saveFinalReport(runId: string, markdown: string) {
@@ -328,17 +330,11 @@ export class SwarmArtifactStore {
   }
 
   async listEvents(runId: string): Promise<SwarmEvent[]> {
-    const paths = await this.pathsForRun(runId);
-    if (!existsSync(paths.events)) return [];
-    const raw = await readFile(paths.events, "utf8");
-    return raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as SwarmEvent);
+    return this.structuredEvents<SwarmEvent>("swarm", runId);
   }
 
   async listSchedulerTrace(runId: string): Promise<SchedulerTraceEntry[]> {
-    const paths = await this.pathsForRun(runId);
-    if (!existsSync(paths.schedulerTrace)) return [];
-    const raw = await readFile(paths.schedulerTrace, "utf8");
-    return raw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as SchedulerTraceEntry);
+    return this.structuredEvents<SchedulerTraceEntry>("scheduler", runId);
   }
 
   async artifactTree(runId: string) {
@@ -347,22 +343,30 @@ export class SwarmArtifactStore {
   }
 
   async listRuns() {
-    const memory = await ensureMemoryLayout(this.workspacePath, this.memoryDir);
-    const swarmRunsDir = path.join(memory.rootDir, "swarm_runs");
-    if (!existsSync(swarmRunsDir)) return [];
-    const entries = await readdir(swarmRunsDir, { withFileTypes: true });
-    const runs: SwarmRun[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const runPath = path.join(swarmRunsDir, entry.name, "swarm_run.json");
-      if (!existsSync(runPath)) continue;
-      try {
-        runs.push(JSON.parse(await readFile(runPath, "utf8")) as SwarmRun);
-      } catch {
-        // Keep listing resilient; direct inspect commands can fail loudly.
-      }
+    return this.withStructuredStore((store) => store.states<SwarmRun>("swarm_run").sort((left, right) => right.created_at.localeCompare(left.created_at)));
+  }
+
+  private async saveStructuredState(kind: string, id: string, state: unknown, status?: string, artifactRef?: string, parentId?: string) {
+    await this.withStructuredStore((store) => store.saveState({ kind, id, parentId, status, state, artifactRef }));
+  }
+
+  private async requireStructuredState<T>(kind: string, id: string): Promise<T> {
+    const value = await this.withStructuredStore((store) => store.state<T>(kind, id));
+    if (value === undefined) throw new Error(`SQLite structured state not found: ${kind}/${id}`);
+    return value;
+  }
+
+  private async structuredEvents<T>(kind: "swarm" | "scheduler", streamId: string): Promise<T[]> {
+    return this.withStructuredStore((store) => store.events<T>(kind, streamId));
+  }
+
+  private async withStructuredStore<T>(operation: (store: SqliteMemoryStore) => T): Promise<T> {
+    const store = await SqliteMemoryStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir });
+    try {
+      return operation(store);
+    } finally {
+      store.close();
     }
-    return runs.sort((left, right) => right.created_at.localeCompare(left.created_at));
   }
 }
 

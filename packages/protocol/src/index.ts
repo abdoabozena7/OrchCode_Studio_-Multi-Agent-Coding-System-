@@ -1,3 +1,4 @@
+export * from "./acp.js";
 export * from "./agent-runtime.js";
 export * from "./agents.js";
 export * from "./approvals.js";
@@ -5,6 +6,7 @@ export * from "./events.js";
 export * from "./models.js";
 export * from "./orchestration.js";
 export * from "./patch.js";
+export * from "./project-understanding.js";
 export * from "./sessions.js";
 export * from "./task-graph.js";
 export * from "./tools.js";

@@ -163,7 +163,8 @@ const CONCEPT_ALIASES: Record<string, string[]> = {
 
 const STYLE_TERMS = new Set([
   "answer", "applied", "apply", "code", "current", "detail", "details", "detailed",
-  "chain", "explain", "flow", "full", "here", "how", "implementation", "implemented", "inside",
+  "chain", "describe", "explain", "flow", "full", "here", "how", "implementation", "implemented", "inside",
+  "list", "me", "show", "summarize", "tell",
   "path", "project", "snippet", "snippets", "stage", "stages", "step", "steps", "usage", "walkthrough", "work",
   "works", "ازاي", "إزاي", "كيف", "اشرح", "بالتفصيل", "هنا", "المشروع", "بيطبق", "بيتطبق"
 ]);

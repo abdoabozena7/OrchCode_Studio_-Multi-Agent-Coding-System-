@@ -1,40 +1,35 @@
 import { randomUUID } from "node:crypto";
-import { appendJsonl, ensureMemoryLayout } from "../memory/ProjectMemory.js";
+import { appendMemoryRecord } from "../memory/ProjectMemory.js";
 import type { SwarmTrialMemoryRecord } from "./SwarmTrialModels.js";
 import { SWARM_TRIAL_SCHEMA_VERSION } from "./SwarmTrialModels.js";
 
 export async function appendSwarmStaffingLesson(workspacePath: string, input: Omit<SwarmTrialMemoryRecord, "schema_version" | "id" | "created_at">, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record = createRecord(input);
-  await appendJsonl(paths.swarmStaffingLessons, record);
+  await appendMemoryRecord(workspacePath, "swarm_staffing_lesson", record, memoryDir);
   return record;
 }
 
 export async function appendSwarmTuningHistory(workspacePath: string, input: Omit<SwarmTrialMemoryRecord, "schema_version" | "id" | "created_at">, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record = createRecord(input);
-  await appendJsonl(paths.swarmTuningHistory, record);
+  await appendMemoryRecord(workspacePath, "swarm_tuning_history", record, memoryDir);
   return record;
 }
 
 export async function appendSwarmFailurePattern(workspacePath: string, input: Omit<SwarmTrialMemoryRecord, "schema_version" | "id" | "created_at">, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record = createRecord(input);
-  await appendJsonl(paths.swarmFailurePatterns, record);
+  await appendMemoryRecord(workspacePath, "swarm_failure_pattern", record, memoryDir);
   return record;
 }
 
 export async function appendSwarmSuccessPattern(workspacePath: string, input: Omit<SwarmTrialMemoryRecord, "schema_version" | "id" | "created_at">, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record = createRecord(input);
-  await appendJsonl(paths.swarmSuccessPatterns, record);
+  await appendMemoryRecord(workspacePath, "swarm_success_pattern", record, memoryDir);
   return record;
 }
 
 export async function appendSwarmSpecialistSelectionHistory(workspacePath: string, input: Omit<SwarmTrialMemoryRecord, "schema_version" | "id" | "created_at">, memoryDir?: string) {
-  const paths = await ensureMemoryLayout(workspacePath, memoryDir);
   const record = createRecord(input);
-  await appendJsonl(paths.swarmSpecialistSelectionHistory, record);
+  await appendMemoryRecord(workspacePath, "swarm_specialist_selection", record, memoryDir);
   return record;
 }
 

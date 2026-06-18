@@ -1,4 +1,4 @@
-import type { EvidenceProvenance, EvidenceTruthReport, GroundedEvidenceItem, ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection, RejectedEvidenceItem } from "@hivo/protocol";
+import type { EvidenceProvenance, EvidenceTruthReport, GroundedEvidenceItem, ProjectExplainEvidenceRef, ProjectExplainReport, ProjectExplainSection, ProjectUnderstandingAnswer, RejectedEvidenceItem } from "@hivo/protocol";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { analyzeAlgorithmInventory } from "./AlgorithmInventoryAnalyzer.js";
@@ -75,6 +75,8 @@ import {
   type WorkspaceEvidenceLike,
   type WorkspaceIntentUnderstanding
 } from "./WorkspaceReasoningPipeline.js";
+import { projectUnderstandingKernelMode, runProjectUnderstandingKernel } from "./ProjectUnderstandingKernel.js";
+import { runReadOnlyUnderstandingEscalation } from "./ProjectUnderstandingEscalation.js";
 
 export type UniversalInspectTopic =
   | "frontend"
@@ -240,6 +242,7 @@ export type ProjectQuestionEvidencePack = {
   laneSynthesizedGraph: InspectExplainLaneSynthesizedGraph;
   evidenceReview: InspectExplainEvidenceReview;
   agenticTask?: AgenticProjectExplainDebug;
+  projectUnderstanding?: ProjectUnderstandingAnswer;
 };
 
 export type AgenticProjectExplainDebug = {
@@ -285,21 +288,13 @@ export type UniversalProjectQuestionResult = ProjectQuestionEvidencePack & {
 
 export type ProjectAnswerStrategyName =
   | "provider_final"
-  | "provider_revision_final"
-  | "agentic_kernel_after_provider_fallback"
-  | "provider_failed_notice"
-  | "provider_validation_notice"
-  | "insufficient_evidence_notice"
-  | "local_synthesis_concept_not_found"
-  | "local_synthesis_after_provider_failure"
-  | "local_synthesis_after_provider_validation_failure"
-  | "local_synthesis_after_local_validation_failure";
+  | "provider_revision_final";
 
 export type ProjectAnswerStrategy = {
   strategy: ProjectAnswerStrategyName;
-  finalAnswerSource: "provider" | "agentic_kernel" | "local_evidence_synthesis" | "local_notice";
-  providerDraftStatus: "accepted_first" | "accepted_revision" | "not_called" | "failed" | "failed_local_validation" | "replaced_by_local_validation";
-  fallbackUsed: boolean;
+  finalAnswerSource: "provider";
+  providerDraftStatus: "accepted_first" | "accepted_revision";
+  fallbackUsed: false;
   reason?: string;
 };
 
@@ -318,9 +313,9 @@ const IGNORED_PATH_RE = /(^|\/)(\.agent_memory|\.cache|\.git|\.hivo-agent-runtim
 
 const COMMON_STOP_WORDS = new Set([
   "about", "after", "all", "and", "answer", "are", "code", "current", "does", "each",
-  "explain", "file", "files", "find", "for", "from", "have", "here", "how", "inside",
+  "describe", "explain", "file", "files", "find", "for", "from", "full", "have", "here", "how", "inside",
   "is", "list", "many", "me", "of", "project", "show", "system", "that", "the",
-  "this", "what", "where", "which", "with", "work", "works"
+  "this", "tell", "summarize", "what", "where", "which", "with", "work", "works"
 ]);
 
 const FACET_ALIASES: Record<WorkspaceEvidenceFacet, string[]> = {
@@ -378,9 +373,8 @@ export async function answerUniversalProjectQuestion(input: {
   userPrompt: string;
   explainReport: ProjectExplainReport;
   intent?: WorkspaceIntentUnderstanding;
-  providerFailureSynthesis?: "allow_local_synthesis" | "notice_only";
+  embeddingModel?: string;
 }): Promise<UniversalProjectQuestionResult> {
-  const providerFailureSynthesis = input.providerFailureSynthesis ?? "notice_only";
   const preparedPrompt = prepareWorkspacePromptForUnderstanding(input.userPrompt);
   const understandingPrompt = preparedPrompt.workspaceMessage || input.userPrompt;
   const intent = input.intent ?? inferWorkspaceIntent(input.userPrompt);
@@ -406,6 +400,27 @@ export async function answerUniversalProjectQuestion(input: {
       provider: input.provider,
       tools: input.tools,
       config: agenticConfig
+    })
+    : undefined;
+  const understandingKernelMode = projectUnderstandingKernelMode();
+  const projectUnderstanding = agenticIntent.complexity === "complex" && understandingKernelMode !== "off"
+    ? await runProjectUnderstandingKernel({
+      question: understandingPrompt,
+      provider: input.provider,
+      tools: input.tools,
+      embeddingModel: input.embeddingModel,
+      mode: understandingKernelMode,
+      escalate: understandingKernelMode === "on"
+        ? async (question, missingFacts, budget) => {
+          return runReadOnlyUnderstandingEscalation({
+            workspacePath: input.tools.getWorkspacePath(),
+            provider: input.provider,
+            question,
+            missingFacts,
+            budget
+          });
+        }
+        : undefined
     })
     : undefined;
   const allFiles = input.tools.workspace
@@ -522,9 +537,7 @@ export async function answerUniversalProjectQuestion(input: {
     provider: input.provider,
     userPrompt: understandingPrompt,
     report: augmentedReport,
-    requireProviderForConceptNotFound: providerFailureSynthesis === "notice_only",
-    providerFailureBehavior: providerFailureSynthesis === "notice_only" ? "notice_only" : "deterministic_synthesis",
-    providerAnswerMode: providerFailureSynthesis === "notice_only" ? "natural_text" : "structured_json"
+    providerAnswerMode: "natural_text"
   });
 
   let answerMarkdown = explainResult.answerMarkdown;
@@ -535,48 +548,9 @@ export async function answerUniversalProjectQuestion(input: {
   const validationErrors = [
     ...explainResult.unsupportedOrUnclearParts
   ];
-  let fallbackUsed = explainResult.fallbackUsed || explainResult.unsupportedOrUnclearParts.length > 0;
-  let fallbackReason = explainResult.fallbackReason;
+  let fallbackUsed = false;
+  let fallbackReason: string | undefined;
   let agenticUsedForFinalAnswer = false;
-  const localSynthesisStoppedForProviderIssue =
-    providerFailureSynthesis === "notice_only" &&
-    explainResult.fallbackUsed &&
-    (/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") || isProviderAnswerValidationFailure(explainResult.fallbackReason));
-  const allowLocalFinalAnswer = providerFailureSynthesis === "allow_local_synthesis";
-  if (localSynthesisStoppedForProviderIssue) {
-    answerMarkdown = createProviderNoSynthesisNotice({
-      questionUnderstanding,
-      intent,
-      providerReason: explainResult.fallbackReason,
-      negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
-      kind: /provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") ? "failed" : "rejected"
-    });
-    evidenceRefs = [];
-    fallbackUsed = true;
-    fallbackReason = `${/provider failed during project explanation/i.test(explainResult.fallbackReason ?? "") ? "provider_failed_notice" : "provider_validation_notice"}: ${explainResult.fallbackReason}`;
-    agenticUsedForFinalAnswer = false;
-  }
-  if (
-    agenticKernelResult
-    && !localSynthesisStoppedForProviderIssue
-    && allowLocalFinalAnswer
-    && agenticConfig.projectExplainUseAgenticKernel
-    && agenticKernelResult.finalOutput.validationStatus !== "blocked"
-    && agenticKernelResult.evidenceGraph.accepted.length > 0
-    && !questionUnderstanding.wantsCodeExamples
-    && questionUnderstanding.detailLevel !== "detailed"
-    && questionUnderstanding.detailLevel !== "deep"
-    && (agenticConfig.agenticTaskKernelMode === "force" || explainResult.fallbackUsed)
-  ) {
-    answerMarkdown = agenticKernelResult.finalOutput.markdown;
-    evidenceRefs = uniqueStrings([
-      ...agenticKernelResult.finalOutput.citations,
-      ...agenticKernelResult.evidenceGraph.accepted.slice(0, 20).map((item) => `${item.path}:${item.lineStart ?? 1}`)
-    ]);
-    fallbackUsed = explainResult.fallbackUsed;
-    fallbackReason = explainResult.fallbackReason ?? agenticKernelResult.draft.fallbackReason;
-    agenticUsedForFinalAnswer = true;
-  }
   let answerShapeValidation = validateAnswer({
     question: understandingPrompt,
     answerMarkdown,
@@ -622,97 +596,8 @@ export async function answerUniversalProjectQuestion(input: {
   validationErrors.push(...answerShapeValidation.errors, ...targetEvidenceValidation.errors, ...mechanismCoverageValidation.errors, ...readLaneAnswerValidation.errors);
   validationErrors.push(...detectStaleCannedOuterloopAnswer(answerMarkdown, questionUnderstanding));
 
-  if (validationErrors.length && !localSynthesisStoppedForProviderIssue) {
-    const initialValidationErrors = [...validationErrors];
-    const stopLocalSynthesisAfterValidation = providerFailureSynthesis === "notice_only";
-    const insufficientEvidence = !stopLocalSynthesisAfterValidation && shouldUseInsufficientEvidenceNotice({
-      questionUnderstanding,
-      topic,
-      positiveEvidence,
-      structuredFacts,
-      conceptResolution,
-      mechanismChain
-    });
-    answerMarkdown = stopLocalSynthesisAfterValidation
-      ? createProviderNoSynthesisNotice({
-        questionUnderstanding,
-        intent,
-        providerReason: explainResult.fallbackReason ?? initialValidationErrors.find((error) => /provider|validation|citation|evidence/i.test(error)),
-        negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
-        kind: "rejected"
-      })
-      : insufficientEvidence
-      ? createInsufficientEvidenceNotice({
-        questionUnderstanding,
-        topic,
-        intent,
-        providerReason: explainResult.fallbackReason,
-        validationErrors: initialValidationErrors,
-        negativeEvidence: conceptResolution.userVisibleNegativeEvidence
-      })
-      : createEvidenceFallbackAnswer({
-        question: understandingPrompt,
-        questionUnderstanding,
-        topic,
-        structuredFacts,
-        positiveEvidence,
-        implementationEvidence,
-        conceptFlow,
-        conceptResolution,
-        mechanismChain,
-        mechanismEvidence,
-        negativeEvidence: conceptResolution.userVisibleNegativeEvidence,
-        intent,
-        projectSourceFiles,
-        readFile: (relativePath) => input.tools.workspace.readWholeFile(relativePath)
-      });
-    evidenceRefs = stopLocalSynthesisAfterValidation ? [] : positiveEvidence.slice(0, 20).map((item) => item.ref);
-    fallbackUsed = true;
-    fallbackReason = `${stopLocalSynthesisAfterValidation ? "provider_validation_notice" : insufficientEvidence ? "local_validation_failed_insufficient_evidence" : "local_validation_failed"}: ${initialValidationErrors.slice(0, 3).join("; ")}`;
-    agenticUsedForFinalAnswer = false;
-    answerShapeValidation = {
-      ...validateAnswer({
-        question: understandingPrompt,
-        answerMarkdown,
-        intent,
-        questionUnderstanding,
-        topic,
-        positiveEvidence,
-        structuredFacts,
-        implementationEvidence,
-        conceptFlow,
-        conceptResolution
-      }),
-      repairedFrom: initialValidationErrors
-    };
-    coverageValidation = validateConceptCoverage({
-      answerMarkdown,
-      targetConcept: questionUnderstanding.targetConcept,
-      requestedFacets: questionUnderstanding.requestedFacets,
-      implementationEvidence,
-      conceptFlow
-    });
-    languageValidation = validateAnswerLanguage({
-      answerMarkdown,
-      expected: intent.language
-    });
-    targetEvidenceValidation = validateTargetEvidence({
-      answerMarkdown,
-      questionUnderstanding,
-      conceptResolution,
-      conceptFlow
-    });
-    mechanismCoverageValidation = validateMechanismCoverage({
-      targetConcept: questionUnderstanding.targetConcept,
-      mechanismChain,
-      graph: projectIntelligenceGraph,
-      answerMarkdown
-    });
-    readLaneAnswerValidation = validateAnswerAgainstReadLaneEvidence({
-      answerMarkdown,
-      targetConcept: questionUnderstanding.targetConcept,
-      readLaneRun
-    });
+  if (validationErrors.length) {
+    throw new Error(`provider_answer_failed_local_validation_after_repair: ${uniqueStrings(validationErrors).slice(0, 8).join("; ")}`);
   }
 
   const finalCitationGuard = guardFinalAnswerCitations({
@@ -724,6 +609,20 @@ export async function answerUniversalProjectQuestion(input: {
   });
   answerMarkdown = finalCitationGuard.answerMarkdown;
   evidenceRefs = finalCitationGuard.evidenceRefs;
+  if (projectUnderstanding?.mode === "on") {
+    answerMarkdown = projectUnderstanding.finalAnswerMarkdown;
+    evidenceRefs = projectUnderstanding.evidenceRefs;
+    fallbackUsed = projectUnderstanding.decision !== "ANSWER";
+    fallbackReason = projectUnderstanding.decisionReason;
+    agenticUsedForFinalAnswer = projectUnderstanding.decision === "ANSWER";
+    validationErrors.splice(
+      0,
+      validationErrors.length,
+      ...projectUnderstanding.claimLedger.claims
+        .filter((claim) => claim.material && claim.status !== "supported")
+        .map((claim) => `Unsupported project-understanding claim: ${claim.text}`)
+    );
+  }
 
   const openedFiles = uniqueStrings([
     ...positiveEvidence.map((item) => item.path),
@@ -819,6 +718,7 @@ export async function answerUniversalProjectQuestion(input: {
     agenticTask: agenticKernelResult
       ? createAgenticDebug(agenticKernelResult, agenticUsedForFinalAnswer)
       : createDisabledAgenticDebug(agenticIntent, agenticConfig),
+    projectUnderstanding,
     answerMarkdown,
     evidenceRefs,
     usedEvidenceRefs: evidenceRefs,
@@ -827,228 +727,17 @@ export async function answerUniversalProjectQuestion(input: {
     validationWarnings: uniqueStrings([...explainResult.validationWarnings, ...conceptResolution.userVisibleNegativeEvidence, ...finalCitationGuard.warnings]),
     grounding: explainResult.grounding,
     augmentedReport,
-    answerStrategy: createProjectAnswerStrategy({
-      explainResult,
-      fallbackUsed,
-      fallbackReason,
-      agenticUsedForFinalAnswer
-    })
+    answerStrategy: createProjectAnswerStrategy(explainResult)
   };
 }
 
-function createProjectAnswerStrategy(input: {
-  explainResult: Awaited<ReturnType<typeof explainProjectWithLlm>>;
-  fallbackUsed: boolean;
-  fallbackReason?: string;
-  agenticUsedForFinalAnswer: boolean;
-}): ProjectAnswerStrategy {
-  if (input.agenticUsedForFinalAnswer) {
-    return {
-      strategy: "agentic_kernel_after_provider_fallback",
-      finalAnswerSource: "agentic_kernel",
-      providerDraftStatus: input.explainResult.fallbackUsed ? providerFallbackStatus(input.explainResult.fallbackReason) : "accepted_first",
-      fallbackUsed: input.fallbackUsed,
-      reason: input.fallbackReason
-    };
-  }
-  if (!input.fallbackUsed) {
-    return {
-      strategy: input.explainResult.revisionCount > 0 ? "provider_revision_final" : "provider_final",
-      finalAnswerSource: "provider",
-      providerDraftStatus: input.explainResult.revisionCount > 0 ? "accepted_revision" : "accepted_first",
-      fallbackUsed: false
-    };
-  }
-  const reason = input.fallbackReason ?? input.explainResult.fallbackReason;
-  if (/^local_validation_failed_insufficient_evidence\b/i.test(reason ?? "")) {
-    return {
-      strategy: "insufficient_evidence_notice",
-      finalAnswerSource: "local_notice",
-      providerDraftStatus: input.explainResult.fallbackUsed ? providerFallbackStatus(input.explainResult.fallbackReason) : "replaced_by_local_validation",
-      fallbackUsed: true,
-      reason
-    };
-  }
-  if (/^provider_failed_notice\b/i.test(reason ?? "")) {
-    return {
-      strategy: "provider_failed_notice",
-      finalAnswerSource: "local_notice",
-      providerDraftStatus: "failed",
-      fallbackUsed: true,
-      reason
-    };
-  }
-  if (/^provider_validation_notice\b/i.test(reason ?? "")) {
-    return {
-      strategy: "provider_validation_notice",
-      finalAnswerSource: "local_notice",
-      providerDraftStatus: isProviderAnswerValidationFailure(input.explainResult.fallbackReason) ? "failed_local_validation" : "replaced_by_local_validation",
-      fallbackUsed: true,
-      reason
-    };
-  }
-  if (input.explainResult.fallbackReason === "concept_not_found_without_provider_answer") {
-    return {
-      strategy: "local_synthesis_concept_not_found",
-      finalAnswerSource: "local_evidence_synthesis",
-      providerDraftStatus: "not_called",
-      fallbackUsed: true,
-      reason
-    };
-  }
-  if (/provider failed during project explanation/i.test(reason ?? "")) {
-    return {
-      strategy: "local_synthesis_after_provider_failure",
-      finalAnswerSource: "local_evidence_synthesis",
-      providerDraftStatus: "failed",
-      fallbackUsed: true,
-      reason
-    };
-  }
-  if (isProviderAnswerValidationFailure(input.explainResult.fallbackReason)) {
-    return {
-      strategy: "local_synthesis_after_provider_validation_failure",
-      finalAnswerSource: "local_evidence_synthesis",
-      providerDraftStatus: "failed_local_validation",
-      fallbackUsed: true,
-      reason
-    };
-  }
+function createProjectAnswerStrategy(explainResult: Awaited<ReturnType<typeof explainProjectWithLlm>>): ProjectAnswerStrategy {
   return {
-    strategy: "local_synthesis_after_local_validation_failure",
-    finalAnswerSource: "local_evidence_synthesis",
-    providerDraftStatus: "replaced_by_local_validation",
-    fallbackUsed: true,
-    reason
+    strategy: explainResult.revisionCount > 0 ? "provider_revision_final" : "provider_final",
+    finalAnswerSource: "provider",
+    providerDraftStatus: explainResult.revisionCount > 0 ? "accepted_revision" : "accepted_first",
+    fallbackUsed: false
   };
-}
-
-function providerFallbackStatus(reason: string | undefined): ProjectAnswerStrategy["providerDraftStatus"] {
-  if (reason === "concept_not_found_without_provider_answer") return "not_called";
-  if (isProviderAnswerValidationFailure(reason)) return "failed_local_validation";
-  if (/provider failed during project explanation/i.test(reason ?? "")) return "failed";
-  return "replaced_by_local_validation";
-}
-
-function isProviderAnswerValidationFailure(reason: string | undefined) {
-  return /^provider_answer_failed_local_validation\b/i.test(reason ?? "");
-}
-
-function shouldUseInsufficientEvidenceNotice(input: {
-  questionUnderstanding: ProjectQuestionUnderstanding;
-  topic: UniversalInspectTopic;
-  positiveEvidence: ProjectQuestionEvidence[];
-  structuredFacts: InspectExplainFacts;
-  conceptResolution: ConceptResolution;
-  mechanismChain: MechanismChain;
-}) {
-  const asksForJudgment = input.questionUnderstanding.wantsJudgment
-    || input.questionUnderstanding.expectedAnswerShape === "compare"
-    || input.questionUnderstanding.answerGoal === "yes_no";
-  if (!isTargetedConceptQuestion(input.questionUnderstanding, input.topic)) {
-    if (asksForJudgment) {
-      const hasImplementationEvidence = input.positiveEvidence.some((item) =>
-        item.sourceRole === "implementation" || item.sourceRole === "orchestration" || item.sourceRole === "downstream_stage"
-      );
-      return !structuredFactsHaveEvidence(input.topic, input.structuredFacts) && (!hasImplementationEvidence || input.positiveEvidence.length < 3);
-    }
-    return !structuredFactsHaveEvidence(input.topic, input.structuredFacts) && input.positiveEvidence.length < 2;
-  }
-  if (asksForJudgment && !hasEvidenceEnoughForJudgment(input.conceptResolution, input.mechanismChain, input.positiveEvidence)) {
-    return true;
-  }
-  if (input.conceptResolution.resolutionStatus === "direct_found" || input.conceptResolution.resolutionStatus === "alias_found") {
-    return false;
-  }
-  if (input.conceptResolution.resolutionStatus === "behavioral_found" && input.positiveEvidence.length >= 2) {
-    return false;
-  }
-  if (input.mechanismChain.status === "confirmed" && input.positiveEvidence.length >= 2) {
-    return false;
-  }
-  return !conceptHasTargetEvidence(input.conceptResolution) || input.positiveEvidence.length === 0;
-}
-
-function hasEvidenceEnoughForJudgment(
-  conceptResolution: ConceptResolution,
-  mechanismChain: MechanismChain,
-  positiveEvidence: ProjectQuestionEvidence[]
-) {
-  const hasImplementationEvidence = positiveEvidence.some((item) =>
-    item.sourceRole === "implementation" || item.sourceRole === "orchestration" || item.sourceRole === "downstream_stage"
-  );
-  if ((conceptResolution.resolutionStatus === "direct_found" || conceptResolution.resolutionStatus === "alias_found") && hasImplementationEvidence && positiveEvidence.length >= 2) return true;
-  if (conceptResolution.resolutionStatus === "behavioral_found" && hasImplementationEvidence && positiveEvidence.length >= 2) return true;
-  if (mechanismChain.status === "confirmed" && positiveEvidence.length >= 2) return true;
-  if (conceptResolution.resolutionStatus === "architectural_pattern_found" && positiveEvidence.length >= 3 && mechanismChain.status !== "not_found") return true;
-  return false;
-}
-
-function createInsufficientEvidenceNotice(input: {
-  questionUnderstanding: ProjectQuestionUnderstanding;
-  topic: UniversalInspectTopic;
-  intent: WorkspaceIntentUnderstanding;
-  providerReason?: string;
-  validationErrors: string[];
-  negativeEvidence: string[];
-}) {
-  const target = input.questionUnderstanding.topicPhrase || input.questionUnderstanding.targetConcept || String(input.topic);
-  const providerLine = input.providerReason
-    ? input.providerReason
-    : input.validationErrors.find((error) => /provider|validation|citation|evidence/i.test(error));
-  const searched = input.negativeEvidence.slice(0, 4).join("; ");
-  if (input.intent.language === "arabic") {
-    return [
-      `مش هصنّع إجابة عن \`${target}\` من أدلة ضعيفة.`,
-      "",
-      providerLine ? `حالة المزود/التحقق: ${providerLine}.` : "رد المزود لم يمر كإجابة موثوقة بالأدلة الحالية.",
-      searched ? `اللي اتراجع ولم يثبت المطلوب: ${searched}.` : "الأدلة المحلية الحالية لا تكفي لإثبات المطلوب من المشروع.",
-      "",
-      "الخطوة الصح هنا: حدّد الملف أو الموديول المقصود، أو شغّل مزود أقوى/أطول وقتًا، بدل ما أطلع رد يبدو واثق وهو مبني على إشارات غير كافية."
-    ].join("\n");
-  }
-  return [
-    `I will not synthesize an answer about \`${target}\` from weak evidence.`,
-    "",
-    providerLine ? `Provider/validation state: ${providerLine}.` : "The provider answer did not pass as a trustworthy evidence-backed answer.",
-    searched ? `Checked but did not prove the target: ${searched}.` : "The current local evidence is not enough to prove the requested behavior from the project.",
-    "",
-    "The correct next step is to point me to the intended file/module or use a stronger/longer-running provider, instead of returning a confident-looking local template."
-  ].join("\n");
-}
-
-function createProviderNoSynthesisNotice(input: {
-  questionUnderstanding: ProjectQuestionUnderstanding;
-  intent: WorkspaceIntentUnderstanding;
-  providerReason?: string;
-  negativeEvidence: string[];
-  kind: "failed" | "rejected";
-}) {
-  const target = input.questionUnderstanding.topicPhrase || input.questionUnderstanding.targetConcept || "the project question";
-  const searched = input.negativeEvidence.slice(0, 4).join("; ");
-  const state = input.kind === "failed" ? "failed" : "did not pass validation";
-  if (input.intent.language === "arabic") {
-    return [
-      input.kind === "failed"
-        ? `مش هصنّع إجابة محلية عن \`${target}\` بعد فشل المزود.`
-        : `مش هصنّع إجابة محلية عن \`${target}\` بعد ما رد المزود فشل في التحقق.`,
-      "",
-      input.providerReason ? `حالة المزود: ${input.providerReason}.` : "المزود لم يرجع إجابة موثوقة.",
-      searched ? `إشارات اتراجعت محليًا لكنها ليست بديلًا عن إجابة المزود: ${searched}.` : "الأدلة المحلية ممكن تساعد في التحقق، لكنها مش هتتحول هنا لإجابة بديلة بعد فشل المزود.",
-      "",
-      "السبب: الجلسة تعمل في real-provider mode، ولو رديت من local synthesis بعد فشل المزود أو فشل التحقق يبقى ده نفس سلوك الردود المحفوظة اللي يخلي النظام يبان فاهم وهو فعليًا لا يملك إجابة مزود موثوقة."
-    ].join("\n");
-  }
-  return [
-    input.kind === "failed"
-      ? `I will not synthesize a local answer about \`${target}\` after the provider failed.`
-      : `I will not synthesize a local answer about \`${target}\` after the provider answer failed validation.`,
-    "",
-    input.providerReason ? `Provider state: ${input.providerReason}.` : `The provider ${state}.`,
-    searched ? `Local signals checked, but not used as a replacement answer: ${searched}.` : "Local evidence can help validate a provider answer, but it is not being promoted into a replacement answer here.",
-    "",
-    "Reason: this session is in real-provider mode. Returning local synthesis after a timeout, provider failure, or validation failure would make deterministic fallback look like provider-backed understanding."
-  ].join("\n");
 }
 
 function createAgenticDebug(result: AgenticTaskResult, usedForFinalAnswer: boolean): AgenticProjectExplainDebug {
@@ -3324,91 +3013,6 @@ function arabicMissingMechanismLink(value: string) {
   if (value === "feedback_storage_or_log_usage") return "قراءة أو كتابة feedback في storage/log";
   if (value === "downstream_feedback_consumer") return "مستهلك لاحق مثل retraining أو review مثبت باعتماد بيانات";
   return value;
-}
-
-function createEvidenceFallbackAnswer(input: {
-  question: string;
-  questionUnderstanding: ProjectQuestionUnderstanding;
-  topic: UniversalInspectTopic;
-  structuredFacts: InspectExplainFacts;
-  positiveEvidence: ProjectQuestionEvidence[];
-  implementationEvidence: ImplementationEvidence[];
-  conceptFlow: ConceptFlow;
-  conceptResolution: ConceptResolution;
-  mechanismChain: MechanismChain;
-  mechanismEvidence: MechanismEvidenceBuckets;
-  negativeEvidence: string[];
-  intent: WorkspaceIntentUnderstanding;
-  projectSourceFiles: string[];
-  readFile: (relativePath: string) => string;
-}) {
-  const needsDetailedSynthesis = input.questionUnderstanding.detailLevel === "detailed" || input.questionUnderstanding.detailLevel === "deep";
-  if (isForecastingAssessmentQuestion(input.question, input.questionUnderstanding)) {
-    const assessment = buildForecastingAssessment({
-      question: input.question,
-      positiveEvidence: input.positiveEvidence,
-      projectSourceFiles: input.projectSourceFiles,
-      readFile: input.readFile
-    });
-    return composeForecastingAssessmentAnswer(assessment, input.intent.language);
-  }
-  if (isMechanismQuestion(input.questionUnderstanding, input.mechanismEvidence)) {
-    return composeMechanismNarrativeAnswer(input);
-  }
-  if (isTargetedConceptQuestion(input.questionUnderstanding, input.topic)) {
-    return composeResolutionAwareAnswer(input);
-  }
-  if (needsDetailedSynthesis && input.conceptFlow.steps.length) {
-    return composeConceptCentricAnswer(input);
-  }
-  if (
-    needsDetailedSynthesis &&
-    (input.topic === "code_flow" || input.topic === "training_inference") &&
-    structuredFactsHaveEvidence(input.topic, input.structuredFacts)
-  ) {
-    return composeDetailedEvidenceAnswer(input);
-  }
-  if (structuredFactsHaveEvidence(input.topic, input.structuredFacts) && input.topic !== "general") {
-    return composeAnswer(input.structuredFacts, input.topic, input.intent.language, input.intent.style);
-  }
-  const evidence = input.positiveEvidence.slice(0, 10);
-  if (!evidence.length) {
-    const searched = input.negativeEvidence.slice(0, 8).join("; ");
-    if (input.intent.language === "arabic") {
-      return [
-        `لم أقدر أثبت \`${input.questionUnderstanding.topicPhrase}\` من ملفات المشروع بعد بحث محلي موثق.`,
-        "",
-        searched ? `البحث الذي تم: ${searched}.` : "لم تظهر أدلة محلية كافية لهذا السؤال.",
-        "هذا ليس معناه أنه مستحيل، لكنه غير مثبت من الملفات التي تم تفتيشها."
-      ].join("\n");
-    }
-    return [
-      `I could not prove \`${input.questionUnderstanding.topicPhrase}\` from the project files after a documented local search.`,
-      "",
-      searched ? `Search performed: ${searched}.` : "No sufficient local evidence was collected for this question.",
-      "That does not prove it cannot exist elsewhere; it is not proven by the inspected files."
-    ].join("\n");
-  }
-
-  if (needsDetailedSynthesis) {
-    return composeDetailedEvidenceAnswer(input);
-  }
-
-  const lines = evidence.map((item) => `- ${summarizeEvidence(item)} ${item.markdownLink}`);
-  if (input.intent.language === "arabic") {
-    const header = input.questionUnderstanding.expectedAnswerShape === "flow"
-      ? "ده الفلو اللي قدرت أثبته من ملفات المشروع:"
-      : input.questionUnderstanding.expectedAnswerShape === "locate"
-        ? "أقوى أماكن مرتبطة بالسؤال في المشروع:"
-        : `دورت على \`${input.questionUnderstanding.topicPhrase}\` ودي أقوى الأدلة من الملفات:`;
-    return [header, "", ...lines].join("\n");
-  }
-  const header = input.questionUnderstanding.expectedAnswerShape === "flow"
-    ? "This is the flow I can prove from the project files:"
-    : input.questionUnderstanding.expectedAnswerShape === "locate"
-      ? "Strongest locations related to the question:"
-      : `I searched for \`${input.questionUnderstanding.topicPhrase}\`; strongest local evidence:`;
-  return [header, "", ...lines].join("\n");
 }
 
 function composeResolutionAwareAnswer(input: {

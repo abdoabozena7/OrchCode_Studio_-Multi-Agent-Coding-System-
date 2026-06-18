@@ -1,6 +1,6 @@
 use crate::models::PatchApplyResult;
+use crate::services::patch::extract_patch_payload;
 use crate::AppState;
-use serde_json::Value;
 use std::sync::Arc;
 use tauri::State;
 use uuid::Uuid;
@@ -23,14 +23,42 @@ pub fn apply_runtime_patch(
             .db
             .lock()
             .map_err(|_| "Database lock poisoned".to_string())?;
-        db.patch_payload_for_session(&session_id, &patch_id)
-            .map_err(|err| format!("Failed to load patch proposal: {err}"))?
-            .ok_or_else(|| "Patch proposal not found in Rust session_events".to_string())?
+        let approved = db
+            .patch_approval_exists_for_session(&session_id, &patch_id)
+            .map_err(|err| format!("Failed to load patch approval: {err}"))?;
+        let payload = db.patch_payload_for_session(&session_id, &patch_id)
+            .map_err(|err| format!("Failed to load patch proposal: {err}"))?;
+        eprintln!(
+            "patch_apply_lookup proposal_id={} persistence_target=sqlite.session_events lookup_source=session_events lookup_result={} approved={}",
+            patch_id,
+            if payload.is_some() { "found" } else { "proposal_not_found" },
+            approved
+        );
+        if !approved {
+            let error = "patch_not_approved: Rust apply requires a persisted patch.approved event.".to_string();
+            record_apply_failure_locked(&db, &session_id, &patch_id, &error)?;
+            return Err(error);
+        }
+        match payload {
+            Some(payload) => payload,
+            None => {
+                let error = "proposal_not_found: Patch proposal not found in Rust session_events (lookup_source=session_events).".to_string();
+                record_apply_failure_locked(&db, &session_id, &patch_id, &error)?;
+                return Err(error);
+            }
+        }
     };
-    let patch_text = extract_patch_text(&payload, &patch_id)?;
-    state
-        .patch
-        .validate_patch_paths_inside_workspace(&patch_text, &workspace_path)?;
+    let (patch_text, files_changed) = match extract_patch_payload(&payload, &patch_id) {
+        Ok(extracted) => extracted,
+        Err(error) => {
+            record_apply_failure(&state, &session_id, &patch_id, &error)?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = state.patch.preflight_patch(&patch_text, &files_changed, &workspace_path) {
+        record_apply_failure(&state, &session_id, &patch_id, &error)?;
+        return Err(error);
+    }
     let before_snapshot = state.git.snapshot(&workspace_path, "rust_git_snapshot");
     let apply_started_event_id = append_canonical_runtime_event(
         &state,
@@ -47,28 +75,12 @@ pub fn apply_runtime_patch(
     )?;
 
     if let Err(err) = state.patch.apply_patch(&patch_text, &workspace_path) {
-        let db = state
-            .db
-            .lock()
-            .map_err(|_| "Database lock poisoned".to_string())?;
-        db.append_authoritative_session_event(
-            &session_id,
-            "runtime.patch.apply_failed",
-            &serde_json::json!({
-                "patchId": patch_id,
-                "status": "apply_failed",
-                "message": err.clone(),
-                "provenance": {
-                    "executionAuthority": "rust_patch_service"
-                }
-            })
-            .to_string(),
-        )
-        .map_err(|append_err| format!("Failed to record patch apply failure: {append_err}"))?;
+        record_apply_failure(&state, &session_id, &patch_id, &err)?;
         return Err(err);
     }
 
     let after_snapshot = state.git.snapshot(&workspace_path, "rust_git_snapshot");
+    eprintln!("patch_apply_result proposal_id={} apply_result=applied", patch_id);
     let reconciliation_event_id = {
         let db = state
             .db
@@ -166,18 +178,41 @@ pub fn reject_runtime_patch(
     })
 }
 
-fn extract_patch_text(payload: &str, patch_id: &str) -> Result<String, String> {
-    let value: Value = serde_json::from_str(payload)
-        .map_err(|err| format!("Invalid patch event payload: {err}"))?;
-    let proposal = value.get("proposal").unwrap_or(&value);
-    if proposal.get("id").and_then(Value::as_str) != Some(patch_id) {
-        return Err("Patch event payload did not match requested patch id".to_string());
-    }
-    proposal
-        .get("unifiedDiff")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "Patch payload does not include unifiedDiff".to_string())
+fn record_apply_failure(
+    state: &State<'_, Arc<AppState>>,
+    session_id: &str,
+    patch_id: &str,
+    error: &str,
+) -> Result<(), String> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    record_apply_failure_locked(&db, session_id, patch_id, error)
+}
+
+fn record_apply_failure_locked(
+    db: &crate::db::DatabaseService,
+    session_id: &str,
+    patch_id: &str,
+    error: &str,
+) -> Result<(), String> {
+    eprintln!("patch_apply_result proposal_id={} apply_result=apply_failed error={}", patch_id, error);
+    db.append_authoritative_session_event(
+        session_id,
+        "runtime.patch.apply_failed",
+        &serde_json::json!({
+            "patchId": patch_id,
+            "status": "apply_failed",
+            "message": error,
+            "lookupSource": "sqlite.session_events",
+            "provenance": {
+                "executionAuthority": "rust_patch_service"
+            }
+        })
+        .to_string(),
+    )
+    .map_err(|append_err| format!("Failed to record patch apply failure: {append_err}"))
 }
 
 fn append_canonical_runtime_event(

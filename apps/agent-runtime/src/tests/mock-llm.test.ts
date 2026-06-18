@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MockLlmProvider } from "../llm/MockLlmProvider.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 import { agentPlanSchema } from "../schemas/sessionSchemas.js";
 
-test("MockLlmProvider returns deterministic plans", async () => {
-  const provider = new MockLlmProvider();
+test("ScriptedProvider returns deterministic plans", async () => {
+  const provider = new ScriptedProvider();
   const first = await provider.generateStructured(
     { systemPrompt: "system", userPrompt: "add tests" },
     agentPlanSchema

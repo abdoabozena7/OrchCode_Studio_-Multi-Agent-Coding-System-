@@ -514,7 +514,7 @@ export function extractRequestedConcept(userPrompt: string): RequestedConcept {
 }
 
 function isStructuralFileContextQuestion(userPrompt: string) {
-  return isEntrypointInventoryQuestion(userPrompt) || isSourceFlowFileQuestion(userPrompt);
+  return isEntrypointInventoryQuestion(userPrompt) || isSourceFlowFileQuestion(userPrompt) || /\b(?:tech|technology)\s+stack\b/i.test(userPrompt);
 }
 
 function isEntrypointInventoryQuestion(userPrompt: string) {

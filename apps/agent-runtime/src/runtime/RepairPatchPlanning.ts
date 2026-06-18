@@ -154,26 +154,31 @@ function createFileDiff(filePath: string, content: string) {
 function createReplaceRangeDiff(filePath: string, before: string, after: string, start: number, end: number) {
   const beforeLines = splitLinesForDiff(before);
   const afterLines = splitLinesForDiff(after);
-  const oldStartLineIndex = lineIndexAt(before, start);
-  const oldEndLineIndex = lineIndexAt(before, Math.max(start, end - 1));
-  const replacementLength = after.length - before.length + (end - start);
-  const newEndExclusive = start + replacementLength;
-  const newStartLineIndex = lineIndexAt(after, Math.min(start, after.length));
-  const newEndLineIndex = lineIndexAt(after, Math.max(start, Math.min(newEndExclusive - 1, Math.max(after.length - 1, 0))));
-  const contextBeforeCount = Math.min(2, oldStartLineIndex);
-  const contextAfterCount = Math.min(2, beforeLines.length - oldEndLineIndex - 1);
-  const oldSliceStart = oldStartLineIndex - contextBeforeCount;
-  const oldSliceEnd = oldEndLineIndex + contextAfterCount;
-  const newSliceStart = Math.max(0, newStartLineIndex - contextBeforeCount);
-  const newSliceEnd = Math.min(afterLines.length - 1, newEndLineIndex + contextAfterCount);
-  const oldChangedCount = oldEndLineIndex - oldStartLineIndex + 1;
-  const newChangedCount = newEndLineIndex - newStartLineIndex + 1;
+  void start;
+  void end;
+  let prefix = 0;
+  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < beforeLines.length - prefix
+    && suffix < afterLines.length - prefix
+    && beforeLines[beforeLines.length - suffix - 1] === afterLines[afterLines.length - suffix - 1]
+  ) suffix += 1;
+  const contextBeforeCount = Math.min(2, prefix);
+  const contextAfterCount = Math.min(2, suffix);
+  const oldSliceStart = prefix - contextBeforeCount;
+  const newSliceStart = prefix - contextBeforeCount;
+  const oldChanged = beforeLines.slice(prefix, beforeLines.length - suffix);
+  const newChanged = afterLines.slice(prefix, afterLines.length - suffix);
+  const trailingContext = beforeLines.slice(beforeLines.length - suffix, beforeLines.length - suffix + contextAfterCount);
+  const oldCount = contextBeforeCount + oldChanged.length + contextAfterCount;
+  const newCount = contextBeforeCount + newChanged.length + contextAfterCount;
 
   const hunkLines = [
-    ...beforeLines.slice(oldSliceStart, oldStartLineIndex).map((line) => ` ${line}`),
-    ...beforeLines.slice(oldStartLineIndex, oldStartLineIndex + oldChangedCount).map((line) => `-${line}`),
-    ...afterLines.slice(newStartLineIndex, newStartLineIndex + newChangedCount).map((line) => `+${line}`),
-    ...afterLines.slice(newEndLineIndex + 1, newSliceEnd + 1).map((line) => ` ${line}`)
+    ...beforeLines.slice(oldSliceStart, prefix).map((line) => ` ${line}`),
+    ...oldChanged.map((line) => `-${line}`),
+    ...newChanged.map((line) => `+${line}`),
+    ...trailingContext.map((line) => ` ${line}`)
   ];
 
   return [
@@ -181,7 +186,7 @@ function createReplaceRangeDiff(filePath: string, before: string, after: string,
     "index 1111111..2222222 100644",
     `--- a/${filePath}`,
     `+++ b/${filePath}`,
-    `@@ -${oldSliceStart + 1},${oldSliceEnd - oldSliceStart + 1} +${newSliceStart + 1},${newSliceEnd - newSliceStart + 1} @@`,
+    `@@ -${oldSliceStart + 1},${oldCount} +${newSliceStart + 1},${newCount} @@`,
     ...hunkLines
   ].join("\n");
 }

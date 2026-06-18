@@ -15,7 +15,6 @@ import {
   SwarmArtifactStore,
   SwarmScheduler,
   createAgentInstancesForPlan,
-  defaultMockWorker,
   durableLocksConflict,
   moduleLocksForTask,
   reconstructFactoryRunTrace,
@@ -31,6 +30,7 @@ import {
 } from "../orchestration/index.js";
 import { ContextPackBuilder } from "../orchestration/ContextPackBuilder.js";
 import { SWARM_SCHEMA_VERSION } from "../orchestration/SwarmModels.js";
+import { scriptedSwarmWorker } from "./fixtures/ScriptedSwarmWorker.js";
 
 test("durable locks persist acquisition rejection refs and normalized scope keys", async () => {
   const workspace = await fixtureWorkspace("durable-lock-basic");
@@ -188,7 +188,7 @@ test("durable locks emit trace events including derived semantic and module lock
   }
 });
 
-test("CoreOrchestrator acquires durable executor locks and rejects conflicts before invocation", async () => {
+test("CoreOrchestrator refuses executor work without a provider before acquiring locks", async () => {
   const workspace = await fixtureWorkspace("durable-lock-core");
   try {
     const clean = await new CoreOrchestrator({
@@ -200,26 +200,11 @@ test("CoreOrchestrator acquires durable executor locks and rejects conflicts bef
         enable_multi_plan_factory: false
       }
     }).runAgenticTask("Change src/index.ts in a small safe way.");
-    assert.ok((clean.report.locks_acquired ?? 0) > 0);
+    assert.equal(clean.report.locks_acquired ?? 0, 0);
     assert.equal(clean.report.active_locks_at_end, 0);
-
-    const blocker = new DurableLockManager({ workspacePath: workspace, ttlMs: 600_000 });
-    const blockerResult = await blocker.acquireFileLock("external_run", "external_task", "src/index.ts", "write");
-    assert.equal(blockerResult.acquired, true);
-    const blocked = await new CoreOrchestrator({
-      workspacePath: workspace,
-      maxContextFiles: 3,
-      maxContextChars: 2500,
-      config: {
-        prompt_writer_mode: "off",
-        enable_multi_plan_factory: false
-      }
-    }).runAgenticTask("Change src/index.ts in a small safe way.");
-    assert.equal(blocked.tasks.some((task) => task.status === "blocked"), true);
-    const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: blocked.run.id });
-    assert.ok(trace.events.some((event) => event.event_type === "lock_rejected" || event.event_type === "lock_conflict_detected"));
-    const executorStarted = trace.events.some((event) => event.event_type === "agent_invocation_started" && /ExecutorAgent/i.test(JSON.stringify(event.metadata_json)));
-    assert.equal(executorStarted, false);
+    assert.equal(clean.tasks.some((task) => task.status === "failed" || task.status === "blocked"), true);
+    const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: clean.run.id });
+    assert.equal(trace.events.some((event) => event.event_type === "lock_acquired"), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -238,7 +223,7 @@ test("SwarmScheduler can use durable locks for write work while read-only worker
       fakeWorkItem(run.id, "read_only_scout", "scout", "ScoutAgent", { write_files: [], read_files: ["src/index.ts"] }),
       fakeWorkItem(run.id, "locked_write", "execute", "ExecutorAgent", { write_files: ["src/index.ts"], read_files: ["src/index.ts"] })
     ];
-    const result = await new SwarmScheduler(workspace, new SwarmArtifactStore(workspace), locks, defaultMockWorker).run({
+    const result = await new SwarmScheduler(workspace, new SwarmArtifactStore(workspace), locks, scriptedSwarmWorker).run({
       run,
       staffingPlan: plan,
       agentTemplates: templates,
@@ -378,7 +363,7 @@ function baseConfig() {
     require_human_approval_for_risky_files: true,
     validation_timeout: 30000,
     safe_commands_allowlist: ["git diff --check"],
-    swarm_worker_mode: "mock" as const,
+    swarm_worker_mode: "provider_read_only" as const,
     use_planning_evidence: true,
     planning_evidence_mode: "available" as const,
     max_evidence_items: 20,

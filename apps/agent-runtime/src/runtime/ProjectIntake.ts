@@ -270,6 +270,14 @@ export function classifyRunIntent(message: string, conversationUnderstanding?: C
   if (understanding.routeDecision.route === "inspect_explain" || understanding.routeDecision.route === "swarm_readonly") {
     return "inspect_only";
   }
+  if (
+    /\b(read-?only|inspect-?only)\s+(?:plan|analysis|understanding|review)\b/.test(normalized) ||
+    /\b(?:architecture|module|data flow|runtime|project)\s+understanding\s+plan\b/.test(normalized) ||
+    /\bplan\s+(?:for|to)\s+(?:understand|inspect|explain|analy[sz]e|review)\b/.test(normalized) ||
+    /\b(?:explain|inspect|understand|analy[sz]e|review)\b.*\b(?:without|no)\s+(?:editing|edits|changes|writing|writes)\b/.test(normalized)
+  ) {
+    return "inspect_only";
+  }
   
   if (
     /\b(run to green|make it run|fix until it starts|fix until it runs|boot it|start it working)\b/.test(normalized) ||

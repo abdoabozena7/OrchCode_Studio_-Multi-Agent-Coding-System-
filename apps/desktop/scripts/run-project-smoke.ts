@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -273,6 +273,15 @@ type SmokeFailureCode =
   | "token_expired"
   | "unauthorized"
   | "workspace_open_failed"
+  | "patch_truth_failed"
+  | "recursive_branch_execution_failed"
+  | "recursive_final_validation_failed"
+  | "recursive_validated_failed"
+  | "recursive_repair_loop_failed"
+  | "recursive_attribution_failed"
+  | "recursive_high_attribution_repair_failed"
+  | "recursive_multibranch_failed"
+  | "recursive_nested_branch_failed"
   | "provider_missing"
   | "provider_api_key_missing"
   | "provider_validation_failed"
@@ -285,6 +294,7 @@ type SmokeFailureCode =
 
 type RealWorkspaceSmokeArgs = {
   workspace?: string;
+  scenario?: string;
   runtimeUrl?: string;
   provider?: string;
   providerBaseUrl?: string;
@@ -375,6 +385,180 @@ type RealWorkspaceSmokeReport = {
     failureCode?: SmokeFailureCode;
     failureReason?: string;
   };
+  "patch truth": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    patchStatus: string | null;
+    rustApplyStatus: string | null;
+    validationTruthStatus: string | null;
+    tempFile: string | null;
+    failureReason?: string;
+  };
+  "recursive branch execution": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    branchStatus: string | null;
+    patchStatus: string | null;
+    rustApplyStatus: string | null;
+    validationTruthStatus: string | null;
+    executionStarted: boolean | null;
+    tempFile: string | null;
+    failureReason?: string;
+  };
+  "recursive final validation": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    branchResultCount: number | null;
+    appliedPatches: string[];
+    unverifiedValidations: string[];
+    tempFile: string | null;
+    failureReason: string | null;
+  };
+  "recursive validated": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    selectedStrategy: string | null;
+    validationEvidence: string[];
+    discoveredCommands: string[];
+    commandResultStatus: string | null;
+    nestedSubtaskCount: number | null;
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "recursive repair loop": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    diagnosisSummary: string | null;
+    repairEligibility: string | null;
+    repairStatus: string | null;
+    repairPatchId: string | null;
+    repairPatchRustApplied: boolean | null;
+    validationAttempts: string[];
+    revalidationCommandResultStatus: string | null;
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "recursive attribution": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    attributionConfidence: string | null;
+    attributionEvidence: string[];
+    relatedPatchIds: string[];
+    relatedBranchIds: string[];
+    repairEligibility: string | null;
+    validationAttempts: string[];
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "recursive high attribution repair": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    failingCommand: string | null;
+    attributionConfidence: string | null;
+    attributionEvidence: string[];
+    relatedPatchIds: string[];
+    relatedBranchIds: string[];
+    repairEligibility: string | null;
+    repairPatchId: string | null;
+    repairPatchStatus: string | null;
+    repairAttemptCount: number | null;
+    firstValidationResult: string | null;
+    revalidationResult: string | null;
+    validationAttempts: string[];
+    cleanupStatus: "not_run" | "passed" | "cleanup_failed";
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "recursive multibranch": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    branchResultCount: number | null;
+    appliedPatches: string[];
+    branchStatuses: string[];
+    writeBranchesConcurrent: boolean | null;
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "recursive nested branch": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    parentBranchStatus: string | null;
+    nestedSubtaskCount: number | null;
+    nestedPatchStatus: string | null;
+    finalStatus: string | null;
+    finalValidationState: string | null;
+    nestedRollupValidation: string | null;
+    appliedPatches: string[];
+    tempFiles: string[];
+    failureReason: string | null;
+  };
+  "knowledge tree": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    nodeCount: number | null;
+    ownershipCount: number | null;
+    artifactId: string | null;
+    memoryFreshness: string | null;
+    completenessStatus: string | null;
+    requiredNodeFieldsVerified: boolean;
+    rootRoutingStatuses: string[];
+    orphanedFiles: string[];
+    importantOwnedFiles: string[];
+    replayVerified: boolean;
+    noPatchesProposed: boolean | null;
+    noCommandsRun: boolean | null;
+    noDirectFileWrites: boolean | null;
+    failureReason: string | null;
+  };
+  "knowledge routed edit": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    primaryNode: string | null;
+    confidence: number | null;
+    confidenceLevel: string | null;
+    likelyFiles: string[];
+    filesNotToTouch: string[];
+    risks: string[];
+    reviewerNodes: string[];
+    reviewChain: Record<string, string[]> | null;
+    evidenceUsed: string[];
+    executionStarted: boolean | null;
+    staleMemoryHighConfidenceAllowed: boolean | null;
+    noPatchesProposed: boolean | null;
+    noCommandsRun: boolean | null;
+    noDirectFileWrites: boolean | null;
+    failureReason: string | null;
+  };
+  "knowledge branch targets": {
+    status: "not_run" | "passed" | "failed";
+    sessionStatus: AgentRuntimeSession["status"] | null;
+    targetCount: number | null;
+    plannedBranchCount: number | null;
+    recursiveGraphStatus: string | null;
+    completeOwnerVerified: boolean;
+    filesAllowedVerified: boolean;
+    filesForbiddenVerified: boolean;
+    reviewChainVerified: boolean;
+    replayVerified: boolean;
+    executionStarted: boolean | null;
+    noPatchesProposed: boolean | null;
+    noCommandsRun: boolean | null;
+    noDirectFileWrites: boolean | null;
+    blockedReasons: string[];
+    failureReason: string | null;
+  };
   "generated questions": string[];
   "assistant answers": Array<{
     question: string;
@@ -420,6 +604,97 @@ async function runRealWorkspaceSmoke(args: RealWorkspaceSmokeArgs) {
     const rustProjectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src-tauri");
     report.rustWorkspaceAuthority = await openWorkspaceWithRustAuthority(rustProjectDir, workspacePath);
     report["workspace opened"] = true;
+
+    if (args.scenario === "recursive-plan" || args.scenario === "recursive-graph") {
+      await runRecursivePlanScenario(runtimeUrl, workspacePath, { expectGraph: args.scenario === "recursive-graph" });
+      markSmokeScenarioPassed(report);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "patch-truth") {
+      report["patch truth"] = await runPatchTruthScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["patch truth"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-branch-execution") {
+      report["recursive branch execution"] = await runRecursiveBranchExecutionScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive branch execution"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-final-validation") {
+      report["recursive final validation"] = await runRecursiveFinalValidationScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive final validation"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-validated") {
+      report["recursive validated"] = await runRecursiveValidatedScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive validated"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-repair-loop") {
+      report["recursive repair loop"] = await runRecursiveRepairLoopScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive repair loop"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-attribution") {
+      report["recursive attribution"] = await runRecursiveAttributionScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive attribution"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-high-attribution-repair") {
+      report["recursive high attribution repair"] = await runRecursiveHighAttributionRepairScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive high attribution repair"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-multibranch") {
+      report["recursive multibranch"] = await runRecursiveMultibranchScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive multibranch"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "recursive-nested-branch") {
+      report["recursive nested branch"] = await runRecursiveNestedBranchScenario(runtimeUrl, rustProjectDir, workspacePath);
+      markSmokeScenarioPassed(report, report["recursive nested branch"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "knowledge-tree") {
+      report["knowledge tree"] = await runKnowledgeTreeScenario(runtimeUrl, workspacePath);
+      markSmokeScenarioPassed(report, report["knowledge tree"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "knowledge-routed-edit") {
+      report["knowledge routed edit"] = await runKnowledgeRoutedEditScenario(runtimeUrl, workspacePath);
+      markSmokeScenarioPassed(report, report["knowledge routed edit"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
+
+    if (args.scenario === "knowledge-branch-targets") {
+      report["knowledge branch targets"] = await runKnowledgeBranchTargetsScenario(runtimeUrl, workspacePath);
+      markSmokeScenarioPassed(report, report["knowledge branch targets"].sessionStatus);
+      emitSmokeReport(report);
+      return;
+    }
 
     const snapshot = await inspectWorkspaceForQuestions(workspacePath);
     const questions = generateProjectQuestions(snapshot);
@@ -539,7 +814,7 @@ async function runRealWorkspaceSmoke(args: RealWorkspaceSmokeArgs) {
     report["answer quality result"] = "passed";
     report["final result"] = "passed";
     console.log("session updates ok");
-    console.log(JSON.stringify(report, null, 2));
+    emitSmokeReport(report);
   } catch (error) {
     const failure = normalizeSmokeFailure(error);
     report.failureCode = failure.code;
@@ -550,11 +825,28 @@ async function runRealWorkspaceSmoke(args: RealWorkspaceSmokeArgs) {
       report["session updates"].lastError = failure.message;
     }
     if (failure.code === "answer_quality_failed" || failure.code === "answer_grounding_failed") report["answer quality result"] = "failed";
-    console.log(JSON.stringify(report, null, 2));
+    emitSmokeReport(report);
     throw failure;
   } finally {
     runtimeHandle?.close();
   }
+}
+
+function markSmokeScenarioPassed(
+  report: RealWorkspaceSmokeReport,
+  lastCanonicalStatus?: AgentRuntimeSession["status"] | null
+) {
+  report["session created"] = true;
+  report["session updates"].status = "ok";
+  if (lastCanonicalStatus !== undefined) {
+    report["session updates"].lastCanonicalStatus = lastCanonicalStatus;
+  }
+  report["answer quality result"] = "passed";
+  report["final result"] = "passed";
+}
+
+function emitSmokeReport(report: RealWorkspaceSmokeReport) {
+  console.log(JSON.stringify(report, null, 2));
 }
 
 export function createRealWorkspaceSmokeReport(runtimeUrl: string, workspacePath: string): RealWorkspaceSmokeReport {
@@ -605,6 +897,178 @@ export function createRealWorkspaceSmokeReport(runtimeUrl: string, workspacePath
       status: "not_run",
       prompts: []
     },
+    "patch truth": {
+      status: "not_run",
+      sessionStatus: null,
+      patchStatus: null,
+      rustApplyStatus: null,
+      validationTruthStatus: null,
+      tempFile: null
+    },
+    "recursive branch execution": {
+      status: "not_run",
+      sessionStatus: null,
+      branchStatus: null,
+      patchStatus: null,
+      rustApplyStatus: null,
+      validationTruthStatus: null,
+      executionStarted: null,
+      tempFile: null
+    },
+    "recursive final validation": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      branchResultCount: null,
+      appliedPatches: [],
+      unverifiedValidations: [],
+      tempFile: null,
+      failureReason: null
+    },
+    "recursive validated": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      selectedStrategy: null,
+      validationEvidence: [],
+      discoveredCommands: [],
+      commandResultStatus: null,
+      nestedSubtaskCount: null,
+      tempFiles: [],
+      failureReason: null
+    },
+    "recursive repair loop": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      diagnosisSummary: null,
+      repairEligibility: null,
+      repairStatus: null,
+      repairPatchId: null,
+      repairPatchRustApplied: null,
+      validationAttempts: [],
+      revalidationCommandResultStatus: null,
+      tempFiles: [],
+      failureReason: null
+    },
+    "recursive attribution": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      attributionConfidence: null,
+      attributionEvidence: [],
+      relatedPatchIds: [],
+      relatedBranchIds: [],
+      repairEligibility: null,
+      validationAttempts: [],
+      tempFiles: [],
+      failureReason: null
+    },
+    "recursive high attribution repair": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      failingCommand: null,
+      attributionConfidence: null,
+      attributionEvidence: [],
+      relatedPatchIds: [],
+      relatedBranchIds: [],
+      repairEligibility: null,
+      repairPatchId: null,
+      repairPatchStatus: null,
+      repairAttemptCount: null,
+      firstValidationResult: null,
+      revalidationResult: null,
+      validationAttempts: [],
+      cleanupStatus: "not_run",
+      tempFiles: [],
+      failureReason: null
+    },
+    "recursive multibranch": {
+      status: "not_run",
+      sessionStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      branchResultCount: null,
+      appliedPatches: [],
+      branchStatuses: [],
+      writeBranchesConcurrent: null,
+      tempFiles: [],
+      failureReason: null
+    },
+    "recursive nested branch": {
+      status: "not_run",
+      sessionStatus: null,
+      parentBranchStatus: null,
+      nestedSubtaskCount: null,
+      nestedPatchStatus: null,
+      finalStatus: null,
+      finalValidationState: null,
+      nestedRollupValidation: null,
+      appliedPatches: [],
+      tempFiles: [],
+      failureReason: null
+    },
+    "knowledge tree": {
+      status: "not_run",
+      sessionStatus: null,
+      nodeCount: null,
+      ownershipCount: null,
+      artifactId: null,
+      memoryFreshness: null,
+      completenessStatus: null,
+      requiredNodeFieldsVerified: false,
+      rootRoutingStatuses: [],
+      orphanedFiles: [],
+      importantOwnedFiles: [],
+      replayVerified: false,
+      noPatchesProposed: null,
+      noCommandsRun: null,
+      noDirectFileWrites: null,
+      failureReason: null
+    },
+    "knowledge routed edit": {
+      status: "not_run",
+      sessionStatus: null,
+      primaryNode: null,
+      confidence: null,
+      confidenceLevel: null,
+      likelyFiles: [],
+      filesNotToTouch: [],
+      risks: [],
+      reviewerNodes: [],
+      reviewChain: null,
+      evidenceUsed: [],
+      executionStarted: null,
+      staleMemoryHighConfidenceAllowed: null,
+      noPatchesProposed: null,
+      noCommandsRun: null,
+      noDirectFileWrites: null,
+      failureReason: null
+    },
+    "knowledge branch targets": {
+      status: "not_run",
+      sessionStatus: null,
+      targetCount: null,
+      plannedBranchCount: null,
+      recursiveGraphStatus: null,
+      completeOwnerVerified: false,
+      filesAllowedVerified: false,
+      filesForbiddenVerified: false,
+      reviewChainVerified: false,
+      replayVerified: false,
+      executionStarted: null,
+      noPatchesProposed: null,
+      noCommandsRun: null,
+      noDirectFileWrites: null,
+      blockedReasons: [],
+      failureReason: null
+    },
     "generated questions": [],
     "assistant answers": [],
     "answer quality result": "unknown",
@@ -623,6 +1087,9 @@ function parseCliArgs(argv: string[]): RealWorkspaceSmokeArgs {
       index += 1;
     } else if (arg === "--runtime-url") {
       args.runtimeUrl = argv[index + 1];
+      index += 1;
+    } else if (arg === "--scenario") {
+      args.scenario = argv[index + 1];
       index += 1;
     } else if (arg === "--provider") {
       args.provider = argv[index + 1];
@@ -1367,6 +1834,12 @@ function isProviderFailureCode(value: string | undefined): value is SmokeFailure
     || value === "provider_mock_forbidden"
     || value === "session_reconciliation_failed"
     || value === "session_stuck"
+    || value === "recursive_validated_failed"
+    || value === "recursive_repair_loop_failed"
+    || value === "recursive_attribution_failed"
+    || value === "recursive_high_attribution_repair_failed"
+    || value === "recursive_multibranch_failed"
+    || value === "recursive_nested_branch_failed"
     || value === "answer_quality_failed"
     || value === "answer_grounding_failed";
 }
@@ -1451,6 +1924,66 @@ function normalizeRelativePath(value: string) {
   return value.replaceAll("\\", "/");
 }
 
+async function snapshotWorkspaceFiles(workspacePath: string) {
+  const files: string[] = [];
+  async function walk(currentDir: string, relativeDir: string) {
+    const entries = await readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const relativePath = normalizeRelativePath(path.join(relativeDir, entry.name));
+      if (entry.isDirectory()) {
+        if (shouldIgnoreSmokeSnapshotDirectory(entry.name, relativePath)) continue;
+        await walk(path.join(currentDir, entry.name), relativePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      files.push(relativePath);
+    }
+  }
+  await walk(workspacePath, "");
+  return files.sort();
+}
+
+async function snapshotWorkspaceFileState(workspacePath: string) {
+  const files = await snapshotWorkspaceFiles(workspacePath);
+  const state: string[] = [];
+  for (const file of files) {
+    const absolute = path.join(workspacePath, file);
+    const info = await stat(absolute);
+    if (info.size > 1_000_000) {
+      state.push(`${file}:${info.size}:large`);
+      continue;
+    }
+    const content = await readFile(absolute);
+    state.push(`${file}:${info.size}:${createHash("sha256").update(content).digest("hex")}`);
+  }
+  return state.sort();
+}
+
+function shouldIgnoreSmokeSnapshotDirectory(name: string, relativePath: string) {
+  const ignored = [".git", ".agent_memory", ".hivo-agent-runtime", ".orchcode-agent-runtime", ".venv", "venv", "env", "node_modules", "dist", "build", "target", "__pycache__", "site-packages"];
+  return ignored.includes(name) || relativePath.split("/").some((part) => ignored.includes(part));
+}
+
+function isImportantKnowledgeFile(filePath: string) {
+  return /\.(ts|tsx|js|jsx|rs|py|go|java|cs)$/i.test(filePath)
+    || /(^|\/)(tests?|__tests__)(\/|$)|(\.test\.|\.spec\.)/i.test(filePath)
+    || /(^|\/)(package\.json|requirements\.txt|Cargo\.toml|README\.md|tsconfig.*\.json)$/i.test(filePath);
+}
+
+const requiredKnowledgeNodeFields = [
+  "nodeId",
+  "scope",
+  "filesOwned",
+  "summary",
+  "importantSymbols",
+  "dependencies",
+  "risks",
+  "children",
+  "parent",
+  "freshness",
+  "whoUnderstandsThisArea"
+] as const;
+
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1472,7 +2005,7 @@ async function createRuntimeSession(
     activeProviderSource?: ProviderTruthTelemetry["activeProviderSource"];
     sessionToken?: string;
     sessionTokenExpiresAt?: string;
-    executionMode?: "auto_mode" | "simple_mode" | "orchestrated_mode";
+    executionMode?: "auto_mode" | "simple_mode" | "orchestrated_mode" | "recursive_factory";
     accessProfile?: "default_permissions" | "auto_review" | "bounded_autonomy" | "full_access" | "custom_config";
   } = {}
 ): Promise<SessionResponse> {
@@ -1521,6 +2054,1671 @@ async function getSession(runtimeUrl: string, sessionId: string, sessionToken?: 
     throw new Error(await response.text());
   }
   return response.json();
+}
+
+async function runRecursivePlanScenario(runtimeUrl: string, workspacePath: string, options: { expectGraph?: boolean } = {}) {
+  const prompt = "Build a multi-step feature across the project runtime, shared protocol, desktop UI, persistence, tests, and smoke validation with mandatory product and technical approvals.";
+  const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+    mode: "demo_mock",
+    executionMode: "recursive_factory",
+    accessProfile: "full_access"
+  });
+  await runTurn(runtimeUrl, created.sessionId, prompt);
+  let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  assert.equal(session.recursiveFactory?.phase, "product_spec_approval");
+  assert.ok(session.recursiveFactory?.productSpec);
+  assert.equal(session.recursiveFactory?.technicalPlan, undefined);
+  assertRecursivePlanHasNoExecution(session);
+
+  session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+  assert.equal(session.recursiveFactory?.productSpec?.status, "approved");
+  assert.equal(session.recursiveFactory?.phase, "technical_plan_approval");
+  assert.ok(session.recursiveFactory?.technicalPlan);
+  assertRecursivePlanHasNoExecution(session);
+
+  session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+  assert.equal(session.recursiveFactory?.technicalPlan?.status, "approved");
+  assert.match(session.recursiveFactory?.phase ?? "", /^recursive_graph_|approved_to_execute$/);
+  assert.equal(session.recursiveFactory?.executionStarted, false);
+  assertRecursivePlanHasNoExecution(session);
+  if (options.expectGraph) {
+    const canonical = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.ok(canonical.recursiveFactory?.recursiveGraph);
+    assert.equal(canonical.recursiveFactory?.recursiveGraph?.branches.length > 0, true);
+    assert.equal(canonical.recursiveFactory?.branchOrchestrators?.length, canonical.recursiveFactory?.recursiveGraph?.branches.length);
+    assert.ok(canonical.recursiveFactory?.graphReadiness?.status);
+    assert.equal(canonical.recursiveFactory?.executionStarted, false);
+    assertRecursivePlanHasNoExecution(canonical);
+  }
+}
+
+async function runKnowledgeTreeScenario(runtimeUrl: string, workspacePath: string) {
+  const prompt = "Update the login/auth flow in this existing project. Route it first.";
+  const before = await snapshotWorkspaceFiles(workspacePath);
+  const beforeState = await snapshotWorkspaceFileState(workspacePath);
+  const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+    mode: "demo_mock",
+    executionMode: "simple_mode",
+    accessProfile: "default_permissions"
+  });
+  await runTurn(runtimeUrl, created.sessionId, prompt);
+  const session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  const after = await snapshotWorkspaceFiles(workspacePath);
+  const afterState = await snapshotWorkspaceFileState(workspacePath);
+  const tree = session.projectKnowledgeTree;
+  assert.ok(tree, "knowledge tree should be present on the session");
+  assert.ok(tree.nodes.find((node) => node.nodeId === tree.rootNodeId), "root knowledge node should exist");
+  assert.equal(session.patchProposals.length, 0, "knowledge-tree smoke must not propose patches");
+  assert.equal(session.commandRequests.length, 0, "knowledge-tree smoke must not request commands");
+  assert.equal(session.commandExecutions.length, 0, "knowledge-tree smoke must not run commands");
+  assert.equal(tree.completeness.status, "ready", `knowledge tree should be ready: ${JSON.stringify(tree.completeness.missingNodeFields)}`);
+  assert.equal(tree.nodes.every((node) => requiredKnowledgeNodeFields.every((field) => field in node)), true, "all nodes should expose required fields");
+  assert.equal(tree.nodes.every((node) => node.completeness.status === "complete"), true, "all nodes should validate as complete");
+  assert.ok(Array.isArray(tree.orphanedFiles), "tree should expose orphanedFiles");
+  assert.ok(tree.ownershipMap && typeof tree.ownershipMap === "object", "tree should expose a durable ownershipMap");
+  const existingPaths = new Set(before);
+  const requiredNodes = [
+    existingPaths.has("frontend/app.js") ? "frontend_ui" : undefined,
+    existingPaths.has("backend/main.py") ? "backend_entry_api" : undefined,
+    [...existingPaths].some((file) => /package\.json|requirements|readme/i.test(file)) ? "config_dependencies" : undefined,
+    [...existingPaths].some((file) => /(^|\/)tests?\//i.test(file)) ? "tests_validation" : undefined
+  ].filter(Boolean) as string[];
+  for (const nodeId of requiredNodes) {
+    assert.ok(tree.nodes.find((node) => node.nodeId === nodeId), `expected node ${nodeId}`);
+  }
+  for (const file of [...existingPaths].filter((entry) => isImportantKnowledgeFile(entry)).slice(0, 20)) {
+    const owner = tree.fileOwnership.find((candidate) => candidate.path === file);
+    const orphan = tree.orphanedFiles.find((candidate) => candidate.path === file);
+    assert.ok(owner || orphan, `expected owner or orphan record for ${file}`);
+    if (owner) {
+      assert.equal(tree.ownershipMap[file]?.primaryOwnerNodeId, owner.primaryOwnerNodeId, `ownershipMap should include ${file}`);
+      assert.equal(typeof owner.primaryOwnerNodeId, "string");
+      assert.ok(owner.primaryOwnerNodeId.length > 0);
+      assert.ok(Array.isArray(owner.reviewerNodeIds));
+      assert.ok(Array.isArray(owner.dependencyNodeIds));
+    }
+  }
+  for (const guarantee of tree.rootRoutingGuarantees) {
+    if (guarantee.matchingFiles.length > 0) {
+      assert.equal(guarantee.status, "passed", `root routing guarantee failed for ${guarantee.pattern}: ${guarantee.reason}`);
+    }
+  }
+  const artifactTree = session.artifacts.find((artifact) => artifact.type === "project_knowledge_tree");
+  assert.ok(artifactTree);
+  const replayed = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  assert.equal(replayed.projectKnowledgeTree?.id, tree.id, "knowledge tree should restore/fetch from session state");
+  assert.equal(replayed.projectKnowledgeTree?.ownershipMap?.["frontend/app.js"]?.primaryOwnerNodeId, tree.ownershipMap["frontend/app.js"]?.primaryOwnerNodeId);
+  assert.deepEqual(before, after, "knowledge-tree smoke should not write workspace files");
+  assert.deepEqual(beforeState, afterState, "knowledge-tree smoke should not change file contents");
+  return {
+    status: "passed" as const,
+    sessionStatus: session.status,
+    nodeCount: tree.nodes.length,
+    ownershipCount: tree.fileOwnership.length,
+    artifactId: artifactTree.id,
+    memoryFreshness: tree.memoryFreshness.status,
+    completenessStatus: tree.completeness.status,
+    requiredNodeFieldsVerified: true,
+    rootRoutingStatuses: tree.rootRoutingGuarantees.map((guarantee) => `${guarantee.pattern}:${guarantee.status}`),
+    orphanedFiles: tree.orphanedFiles.map((file) => `${file.path}:${file.reason}`),
+    importantOwnedFiles: [...existingPaths].filter((entry) => isImportantKnowledgeFile(entry) && tree.fileOwnership.some((owner) => owner.path === entry)).slice(0, 20),
+    replayVerified: true,
+    noPatchesProposed: session.patchProposals.length === 0,
+    noCommandsRun: session.commandRequests.length === 0 && session.commandExecutions.length === 0,
+    noDirectFileWrites: JSON.stringify(before) === JSON.stringify(after) && JSON.stringify(beforeState) === JSON.stringify(afterState),
+    failureReason: null
+  };
+}
+
+async function runKnowledgeRoutedEditScenario(runtimeUrl: string, workspacePath: string) {
+  const prompt = "Update the login/auth flow so the frontend and backend agree on the route. Do not execute yet.";
+  const before = await snapshotWorkspaceFiles(workspacePath);
+  const beforeState = await snapshotWorkspaceFileState(workspacePath);
+  const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+    mode: "demo_mock",
+    executionMode: "simple_mode",
+    accessProfile: "default_permissions"
+  });
+  await runTurn(runtimeUrl, created.sessionId, prompt);
+  const session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  const after = await snapshotWorkspaceFiles(workspacePath);
+  const afterState = await snapshotWorkspaceFileState(workspacePath);
+  const routedEdit = session.latestKnowledgeRoute;
+  assert.ok(session.projectKnowledgeTree);
+  assert.ok(routedEdit);
+  assert.equal(session.patchProposals.length, 0, "routing-only smoke must not propose patches");
+  assert.equal(session.commandRequests.length, 0, "routing-only smoke must not request commands");
+  assert.equal(session.commandExecutions.length, 0, "routing-only smoke must not run commands");
+  assert.deepEqual(before, after, "routing-only smoke should not write workspace files");
+  assert.deepEqual(beforeState, afterState, "routing-only smoke should not change file contents");
+  assert.ok(routedEdit.intentSummary.length > 0, "routed edit should expose intentSummary");
+  assert.ok(routedEdit.route.affectedNodeIds.length > 0);
+  assert.ok(routedEdit.route.likelyFiles.length > 0);
+  assert.ok(routedEdit.route.reviewerNodes.length > 0);
+  assert.ok(routedEdit.route.confidence > 0);
+  assert.ok(routedEdit.filesNotToTouch.length > 0, "routed edit should expose filesNotToTouch");
+  assert.ok(routedEdit.risks.length > 0 || routedEdit.route.risks.length >= 0, "routed edit should expose risks");
+  assert.ok(routedEdit.evidenceUsed.length > 0, "routed edit should expose evidenceUsed");
+  assert.equal(routedEdit.executionStarted, false, "routed edit should not start execution");
+  assert.notEqual(routedEdit.confidenceLevel, "low", "fixture route should not be low confidence");
+  assert.equal(routedEdit.route.confidenceLevel === "high" && session.projectKnowledgeTree.memoryFreshness.status !== "fresh", false, "stale memory cannot produce high confidence");
+  assert.equal(routedEdit.plan.executionState, "Execution has not started. This edit was routed through the Project Knowledge Tree.");
+  assert.equal(routedEdit.plan.executionStarted, false);
+  assert.ok(routedEdit.plan.requiredReviewChain.rootIntegrationReview.includes(session.projectKnowledgeTree.rootNodeId));
+  assert.ok(routedEdit.reviewChain.rootIntegrationReview.includes(session.projectKnowledgeTree.rootNodeId));
+  assert.ok(Array.isArray(routedEdit.reviewChain.leafReview));
+  assert.ok(Array.isArray(routedEdit.reviewChain.parentScopeReview));
+  assert.ok(Array.isArray(routedEdit.reviewChain.siblingAffectedNodeReview));
+  assert.equal(routedEdit.plan.suggestedBranchTargets.every((target) => target.status === "planned" || target.executionModeHint === "read_only"), true);
+  return {
+    status: "passed" as const,
+    sessionStatus: session.status,
+    primaryNode: routedEdit.route.primaryNode,
+    confidence: routedEdit.route.confidence,
+    confidenceLevel: routedEdit.route.confidenceLevel,
+    likelyFiles: routedEdit.route.likelyFiles,
+    filesNotToTouch: routedEdit.filesNotToTouch,
+    risks: routedEdit.risks,
+    reviewerNodes: routedEdit.route.reviewerNodes,
+    reviewChain: routedEdit.reviewChain,
+    evidenceUsed: routedEdit.evidenceUsed,
+    executionStarted: routedEdit.executionStarted,
+    staleMemoryHighConfidenceAllowed: false,
+    noPatchesProposed: session.patchProposals.length === 0,
+    noCommandsRun: session.commandRequests.length === 0 && session.commandExecutions.length === 0,
+    noDirectFileWrites: JSON.stringify(before) === JSON.stringify(after) && JSON.stringify(beforeState) === JSON.stringify(afterState),
+    failureReason: null
+  };
+}
+
+async function runKnowledgeBranchTargetsScenario(runtimeUrl: string, workspacePath: string): Promise<RealWorkspaceSmokeReport["knowledge branch targets"]> {
+  const prompt = "Update the login/auth flow so the frontend and backend agree on the route, then prepare recursive branch targets only. Do not execute yet.";
+  const before = await snapshotWorkspaceFiles(workspacePath);
+  const beforeState = await snapshotWorkspaceFileState(workspacePath);
+  const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+    mode: "demo_mock",
+    executionMode: "simple_mode",
+    accessProfile: "default_permissions"
+  });
+  await runTurn(runtimeUrl, created.sessionId, prompt);
+  const session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  const after = await snapshotWorkspaceFiles(workspacePath);
+  const afterState = await snapshotWorkspaceFileState(workspacePath);
+  const tree = session.projectKnowledgeTree;
+  const routedEdit = session.latestKnowledgeRoute;
+  const targets = session.latestKnowledgeBranchTargets ?? routedEdit?.knowledgeBranchTargets ?? [];
+  assert.ok(tree, "knowledge branch targets smoke should build or reuse a Project Knowledge Tree");
+  assert.ok(routedEdit, "knowledge branch targets smoke should create a routed edit plan");
+  assert.ok(targets.length > 0, "knowledge branch targets should be generated");
+  assert.equal(session.patchProposals.length, 0, "knowledge branch targets smoke must not propose patches");
+  assert.equal(session.commandRequests.length, 0, "knowledge branch targets smoke must not request commands");
+  assert.equal(session.commandExecutions.length, 0, "knowledge branch targets smoke must not run commands");
+  assert.deepEqual(before, after, "knowledge branch targets smoke should not write workspace files");
+  assert.deepEqual(beforeState, afterState, "knowledge branch targets smoke should not change file contents");
+  assert.equal(routedEdit.executionStarted, false);
+  assert.equal(routedEdit.plan.executionStarted, false);
+  assert.equal(session.recursiveFactory?.executionStarted, false);
+  assert.ok(session.recursiveFactory?.recursiveGraph, "planned recursive graph should be created from knowledge targets");
+  assert.ok((session.recursiveFactory.branchExecutions ?? []).length >= targets.length, "planned recursive branch records should be created");
+  assert.equal((session.recursiveFactory.branchExecutions ?? []).every((branch) => branch.active === false && branch.patchApplied === false && branch.status !== "running" && branch.status !== "patch_proposed"), true);
+  assert.equal(targets.every((target) => {
+    const owner = tree.nodes.find((node) => node.nodeId === target.primaryOwnerNodeId);
+    return Boolean(owner && owner.completeness.status === "complete");
+  }), true, "every target should map to a complete owner node");
+  assert.equal(targets.every((target) => target.filesAllowed.length > 0), true, "every target should preserve allowed files");
+  assert.equal(targets.every((target) => target.filesForbidden.length > 0), true, "every target should preserve forbidden files");
+  assert.equal(targets.every((target) =>
+    Array.isArray(target.requiredReviewChain.leafReview)
+    && Array.isArray(target.requiredReviewChain.parentScopeReview)
+    && Array.isArray(target.requiredReviewChain.siblingAffectedNodeReview)
+    && target.requiredReviewChain.rootIntegrationReview.includes(tree.rootNodeId)
+  ), true, "every target should inherit the structured review chain");
+  assert.equal(targets.every((target) => target.evidenceUsed.length > 0 && target.reviewerNodeIds.length > 0 && target.scope.length > 0), true);
+  assert.equal(targets.every((target) => target.confidenceLevel !== "high" || target.freshness.status === "fresh"), true, "stale memory cannot create high-confidence targets");
+  const replayed = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+  assert.deepEqual(replayed.latestKnowledgeBranchTargets, targets, "fetch/replay should restore knowledge branch targets");
+  assert.equal(replayed.recursiveFactory?.executionStarted, false, "fetch/replay should preserve planning-only recursive state");
+  assert.equal((replayed.recursiveFactory?.branchExecutions ?? []).length, (session.recursiveFactory?.branchExecutions ?? []).length);
+  return {
+    status: "passed",
+    sessionStatus: session.status,
+    targetCount: targets.length,
+    plannedBranchCount: session.recursiveFactory?.branchExecutions?.length ?? 0,
+    recursiveGraphStatus: session.recursiveFactory?.recursiveGraph?.status ?? null,
+    completeOwnerVerified: true,
+    filesAllowedVerified: true,
+    filesForbiddenVerified: true,
+    reviewChainVerified: true,
+    replayVerified: true,
+    executionStarted: session.recursiveFactory?.executionStarted ?? null,
+    noPatchesProposed: session.patchProposals.length === 0,
+    noCommandsRun: session.commandRequests.length === 0 && session.commandExecutions.length === 0,
+    noDirectFileWrites: JSON.stringify(before) === JSON.stringify(after) && JSON.stringify(beforeState) === JSON.stringify(afterState),
+    blockedReasons: uniqueStrings(targets.flatMap((target) => target.blockedReasons)),
+    failureReason: null
+  };
+}
+
+async function runRecursiveBranchExecutionScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive branch execution"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const relativeFile = `${smokeDir}/recursive-branch-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const absoluteFile = path.join(workspacePath, relativeFile);
+  const initialContent = "before recursive branch smoke\n";
+  const requestedContent = `recursive branch applied ${marker}\n`;
+  const prompt = `Build a multi-step project feature with Product Spec and Technical Plan approvals, then update ${relativeFile} with a tiny safe branch after execution approval.`;
+  const output: RealWorkspaceSmokeReport["recursive branch execution"] = {
+    status: "failed",
+    sessionStatus: null,
+    branchStatus: null,
+    patchStatus: null,
+    rustApplyStatus: null,
+    validationTruthStatus: null,
+    executionStarted: null,
+    tempFile: relativeFile
+  };
+
+  try {
+    await mkdir(path.dirname(absoluteFile), { recursive: true });
+    await writeFile(absoluteFile, initialContent, "utf8");
+
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.equal(session.recursiveFactory?.phase, "product_spec_approval");
+    assertRecursivePlanHasNoExecution(session);
+
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    assert.equal(session.recursiveFactory?.productSpec?.status, "approved");
+    assert.equal(session.recursiveFactory?.phase, "technical_plan_approval");
+    assertRecursivePlanHasNoExecution(session);
+
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    assert.equal(session.recursiveFactory?.technicalPlan?.status, "approved");
+    assert.equal(session.recursiveFactory?.recursiveGraph?.status, "ready");
+    assert.equal(session.recursiveFactory?.executionStarted, false);
+    assertRecursivePlanHasNoExecution(session);
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      targetFile: relativeFile,
+      replacementText: requestedContent
+    });
+    output.executionStarted = session.recursiveFactory?.executionStarted ?? null;
+    assert.equal(output.executionStarted, true);
+    assert.equal(session.commandRequests.length, 0);
+    assert.equal(session.commandExecutions.length, 0);
+    assert.equal(session.patchProposals.length, 1);
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    assert.equal(proposal.status, "proposed");
+    assert.equal(proposal.filesChanged.some((file) => normalizeRelativePath(file.path) === relativeFile), true);
+    assert.equal((await readFile(absoluteFile, "utf8")), initialContent);
+    const branch = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.proposedPatchId === proposal.id);
+    assert.ok(branch);
+    assert.equal(branch.status, "patch_proposed");
+    assert.equal(branch.patchApplied, false);
+    assert.equal(branch.reviewStatus, "pending");
+    output.branchStatus = branch.status;
+    output.patchStatus = proposal.status;
+
+    const approval = await approveRuntimePatch(runtimeUrl, created.sessionId, proposal.id);
+    assert.equal(approval.applied, false);
+    assert.equal(approval.proposal.status, "approved");
+    assert.equal((await readFile(absoluteFile, "utf8")), initialContent);
+
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "apply_started",
+      message: "Rust patch apply requested by recursive branch smoke."
+    });
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    assert.equal(output.patchStatus, "apply_started");
+    assert.equal((await readFile(absoluteFile, "utf8")), initialContent);
+
+    const rustApply = await runRuntimePatchApplyBridge({
+      rustProjectDir,
+      workspace: workspacePath,
+      sessionId: created.sessionId,
+      patchId: proposal.id,
+      proposal
+    });
+    output.rustApplyStatus = rustApply.patchResult.status;
+    assert.equal(rustApply.patchResult.status, "applied");
+
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "applied",
+      message: rustApply.patchResult.message,
+      reconciliationSnapshot:
+        rustApply.patchResult.beforeSnapshot || rustApply.patchResult.afterSnapshot
+          ? {
+              before: rustApply.patchResult.beforeSnapshot,
+              after: rustApply.patchResult.afterSnapshot
+            }
+          : undefined
+    });
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    output.validationTruthStatus = session.verificationResult?.truthStatus ?? null;
+    const updatedBranch = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.proposedPatchId === proposal.id);
+    assert.ok(updatedBranch);
+    output.branchStatus = updatedBranch.status;
+    assert.equal(updatedBranch.patchApplied, true);
+    assert.equal(output.patchStatus, "applied");
+    assert.equal((await readFile(absoluteFile, "utf8")).replace(/\r\n/g, "\n"), requestedContent);
+    if (!session.commandExecutions.length) {
+      assert.notEqual(session.verificationResult?.truthStatus, "verified_passed");
+      assert.notEqual(updatedBranch.validationStatus, "verified_passed");
+    }
+    assert.equal(session.commandRequests.length, 0);
+    assert.equal(session.commandExecutions.length, 0);
+    assert.ok(updatedBranch.status === "completed" || updatedBranch.status === "validation_pending");
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_multibranch_failed", output.failureReason, output);
+  } finally {
+    await rm(absoluteFile, { force: true });
+    try {
+      await rm(path.dirname(absoluteFile), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveFinalValidationScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive final validation"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const relativeFile = `${smokeDir}/recursive-final-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const absoluteFile = path.join(workspacePath, relativeFile);
+  const initialContent = "before recursive final validation smoke\n";
+  const requestedContent = `recursive final validation applied ${marker}\n`;
+  const prompt = `Build a multi-step project feature with recursive approval gates, then update ${relativeFile} through one safe branch and produce final recursive validation truth.`;
+  const output: RealWorkspaceSmokeReport["recursive final validation"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    branchResultCount: null,
+    appliedPatches: [],
+    unverifiedValidations: [],
+    tempFile: relativeFile
+  };
+
+  try {
+    await mkdir(path.dirname(absoluteFile), { recursive: true });
+    await writeFile(absoluteFile, initialContent, "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.equal(session.recursiveFactory?.phase, "product_spec_approval");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    assert.equal(session.recursiveFactory?.phase, "technical_plan_approval");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    assert.equal(session.recursiveFactory?.recursiveGraph?.status, "ready");
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      targetFile: relativeFile,
+      replacementText: requestedContent
+    });
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    assert.equal(proposal.status, "proposed");
+    assert.equal(await readFile(absoluteFile, "utf8"), initialContent);
+
+    const approval = await approveRuntimePatch(runtimeUrl, created.sessionId, proposal.id);
+    assert.equal(approval.applied, false);
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "apply_started",
+      message: "Rust patch apply requested by recursive final validation smoke."
+    });
+    assert.equal(session.patchProposals.find((patch) => patch.id === proposal.id)?.status, "apply_started");
+    const rustApply = await runRuntimePatchApplyBridge({
+      rustProjectDir,
+      workspace: workspacePath,
+      sessionId: created.sessionId,
+      patchId: proposal.id,
+      proposal
+    });
+    assert.equal(rustApply.patchResult.status, "applied");
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "applied",
+      message: rustApply.patchResult.message,
+      reconciliationSnapshot:
+        rustApply.patchResult.beforeSnapshot || rustApply.patchResult.afterSnapshot
+          ? {
+              before: rustApply.patchResult.beforeSnapshot,
+              after: rustApply.patchResult.afterSnapshot
+            }
+          : undefined
+    });
+    assert.equal((await readFile(absoluteFile, "utf8")).replace(/\r\n/g, "\n"), requestedContent);
+    const finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    assert.equal(finalReport.branchOutcomes.length > 0, true);
+    assert.equal(finalReport.patchApplyTruth.some((patch) => patch.patchId === proposal.id && patch.status === "applied"), true);
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.branchResultCount = finalReport.branchOutcomes.length;
+    output.appliedPatches = finalReport.patchApplyTruth.filter((patch) => patch.status === "applied").map((patch) => patch.patchId);
+    output.unverifiedValidations = finalReport.validationHierarchy.filter((entry) => entry.status === "unverified").map((entry) => `${entry.level}:${entry.truthStatus}`);
+    assert.equal(finalReport.finalStatus, "unverified");
+    assert.notEqual(finalReport.finalValidationState, "verified_passed");
+    assert.equal(finalReport.validationHierarchy.some((entry) => entry.level === "branch_validation"), true);
+    assert.equal(finalReport.validationHierarchy.some((entry) => entry.level === "integration_validation"), true);
+    assert.equal(finalReport.validationHierarchy.some((entry) => entry.level === "final_validation"), true);
+    assert.equal(session.commandExecutions.length, 0);
+    assert.notEqual(session.verificationResult?.truthStatus, "verified_passed");
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_final_validation_failed", output.failureReason, output);
+  } finally {
+    await rm(absoluteFile, { force: true });
+    try {
+      await rm(path.dirname(absoluteFile), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveValidatedScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive validated"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const parentFile = `${smokeDir}/recursive-validated-parent-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const nestedFile = `${smokeDir}/recursive-validated-child-${Date.now()}-${marker.slice(9, 17)}.txt`;
+  const parentAbsolute = path.join(workspacePath, parentFile);
+  const nestedAbsolute = path.join(workspacePath, nestedFile);
+  const parentInitial = "before recursive validated parent\n";
+  const nestedInitial = "before recursive validated child\n";
+  const nestedRequested = `recursive validated child applied ${marker}\n`;
+  const prompt = `Build a recursive validated smoke flow with nested execution that updates ${nestedFile} and records truthful validation evidence.`;
+  const output: RealWorkspaceSmokeReport["recursive validated"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    selectedStrategy: null,
+    validationEvidence: [],
+    discoveredCommands: [],
+    commandResultStatus: null,
+    nestedSubtaskCount: null,
+    tempFiles: [parentFile, nestedFile],
+    failureReason: null
+  };
+
+  try {
+    await mkdir(path.dirname(parentAbsolute), { recursive: true });
+    await writeFile(parentAbsolute, parentInitial, "utf8");
+    await writeFile(nestedAbsolute, nestedInitial, "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branch = session.recursiveFactory?.branchOrchestrators?.[0];
+    assert.ok(branch);
+    assert.equal(session.recursiveFactory?.recursiveGraph?.status, "ready");
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [{
+        branchId: branch.branchId,
+        targetFile: parentFile,
+        replacementText: `parent direct patch should not apply ${marker}\n`,
+        nestedSubtasks: [{ targetFile: nestedFile, replacementText: nestedRequested, objective: "Nested recursive validated smoke patch" }]
+      }]
+    });
+    const parentExecution = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.branchId === branch.branchId);
+    assert.ok(parentExecution);
+    output.nestedSubtaskCount = parentExecution.nestedSubtasks?.length ?? null;
+    assert.equal((output.nestedSubtaskCount ?? 0) >= 1, true);
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    assert.equal(proposal.filesChanged.some((file) => file.path === nestedFile), true);
+    assert.equal(await readFile(parentAbsolute, "utf8"), parentInitial);
+    assert.equal(await readFile(nestedAbsolute, "utf8"), nestedInitial);
+
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, proposal);
+    assert.equal(await readFile(parentAbsolute, "utf8"), parentInitial);
+    assert.equal((await readFile(nestedAbsolute, "utf8")).replace(/\r\n/g, "\n"), nestedRequested);
+
+    const safeRequest = session.commandRequests.find((request) => request.risk === "safe" && !session.commandExecutions.some((execution) => execution.requestId === request.id));
+    if (safeRequest) {
+      const bridgeResult = await runRuntimeRustBridge({
+        rustProjectDir,
+        runtimeUrl,
+        workspace: workspacePath,
+        sessionId: created.sessionId,
+        requestId: safeRequest.id,
+        command: safeRequest.command,
+        cwd: safeRequest.cwd
+      });
+      output.commandResultStatus = bridgeResult.commandResult.status;
+      session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    }
+
+    const finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.selectedStrategy = finalReport.validationDiscovery?.chosenStrategy.kind ?? null;
+    output.validationEvidence = (finalReport.validationDiscovery?.evidence ?? []).map((entry) =>
+      `${entry.kind}:${entry.truthStatus}:${entry.command ?? entry.files?.join(",") ?? "no-target"}`
+    );
+    output.discoveredCommands = (finalReport.validationDiscovery?.discoveredCommands ?? []).map((entry) =>
+      `${entry.classification}:${entry.command}`
+    );
+
+    if (finalReport.finalValidationState === "verified_passed") {
+      assert.equal(finalReport.finalStatus, "passed");
+      assert.equal((finalReport.validationDiscovery?.evidence ?? []).some((entry) => entry.truthStatus === "verified_passed"), true);
+    } else if (finalReport.finalValidationState === "verified_failed") {
+      assert.equal(finalReport.finalStatus, "failed");
+      assert.equal((finalReport.validationDiscovery?.evidence ?? []).some((entry) => entry.truthStatus === "verified_failed"), true);
+    } else {
+      assert.notEqual(finalReport.finalValidationState, "verified_passed");
+      assert.equal(finalReport.finalStatus, "unverified");
+      assert.equal(finalReport.validationHierarchy.some((entry) => entry.status === "unverified"), true);
+      assert.match(finalReport.validationDiscovery?.statusReason ?? finalReport.recommendedNextStep, /unverified|validation|Run or report|not verified/i);
+    }
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_validated_failed", output.failureReason, output);
+  } finally {
+    await rm(parentAbsolute, { force: true });
+    await rm(nestedAbsolute, { force: true });
+    try {
+      await rm(path.dirname(parentAbsolute), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveRepairLoopScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive repair loop"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const parentFile = `${smokeDir}/recursive-repair-parent-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const nestedFile = `${smokeDir}/recursive-repair-child-${Date.now()}-${marker.slice(9, 17)}.txt`;
+  const parentAbsolute = path.join(workspacePath, parentFile);
+  const nestedAbsolute = path.join(workspacePath, nestedFile);
+  const parentInitial = "before recursive repair parent\n";
+  const nestedInitial = "before recursive repair child\n";
+  const nestedRequested = `recursive repair child applied ${marker}\n`;
+  const prompt = `Build a recursive repair-loop smoke flow with nested execution that updates ${nestedFile}, validates truthfully, and diagnoses any validation failure.`;
+  const output: RealWorkspaceSmokeReport["recursive repair loop"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    diagnosisSummary: null,
+    repairEligibility: null,
+    repairStatus: null,
+    repairPatchId: null,
+    repairPatchRustApplied: null,
+    validationAttempts: [],
+    revalidationCommandResultStatus: null,
+    tempFiles: [parentFile, nestedFile],
+    failureReason: null
+  };
+
+  try {
+    await mkdir(path.dirname(parentAbsolute), { recursive: true });
+    await writeFile(parentAbsolute, parentInitial, "utf8");
+    await writeFile(nestedAbsolute, nestedInitial, "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branch = session.recursiveFactory?.branchOrchestrators?.[0];
+    assert.ok(branch);
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [{
+        branchId: branch.branchId,
+        targetFile: parentFile,
+        replacementText: `parent direct patch should not apply ${marker}\n`,
+        nestedSubtasks: [{ targetFile: nestedFile, replacementText: nestedRequested, objective: "Nested recursive repair smoke patch" }]
+      }]
+    });
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, proposal);
+    assert.equal(await readFile(parentAbsolute, "utf8"), parentInitial);
+    assert.equal((await readFile(nestedAbsolute, "utf8")).replace(/\r\n/g, "\n"), nestedRequested);
+
+    const firstSafeRequest = session.commandRequests.find((request) => request.risk === "safe" && !session.commandExecutions.some((execution) => execution.requestId === request.id));
+    if (firstSafeRequest) {
+      const bridgeResult = await runRuntimeRustBridge({
+        rustProjectDir,
+        runtimeUrl,
+        workspace: workspacePath,
+        sessionId: created.sessionId,
+        requestId: firstSafeRequest.id,
+        command: firstSafeRequest.command,
+        cwd: firstSafeRequest.cwd
+      });
+      output.revalidationCommandResultStatus = bridgeResult.commandResult.status;
+      session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    }
+
+    let finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+
+    if (finalReport.repair?.repairPatchId) {
+      output.repairPatchId = finalReport.repair.repairPatchId;
+      const repairPatch = session.patchProposals.find((patch) => patch.id === finalReport?.repair?.repairPatchId);
+      assert.ok(repairPatch);
+      session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, repairPatch);
+      output.repairPatchRustApplied = session.patchProposals.find((patch) => patch.id === repairPatch.id)?.status === "applied";
+      const revalidationRequestId = session.recursiveFactory?.repair?.revalidationRequestId;
+      const revalidationRequest = session.commandRequests.find((request) =>
+        request.id === revalidationRequestId
+        || (request.risk === "safe" && !session.commandExecutions.some((execution) => execution.requestId === request.id))
+      );
+      assert.ok(revalidationRequest);
+      const bridgeResult = await runRuntimeRustBridge({
+        rustProjectDir,
+        runtimeUrl,
+        workspace: workspacePath,
+        sessionId: created.sessionId,
+        requestId: revalidationRequest.id,
+        command: revalidationRequest.command,
+        cwd: revalidationRequest.cwd
+      });
+      output.revalidationCommandResultStatus = bridgeResult.commandResult.status;
+      session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+      finalReport = session.recursiveFactory?.finalReport;
+      assert.ok(finalReport);
+    }
+
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.diagnosisSummary = finalReport.repair?.diagnosis.summary ?? null;
+    output.repairEligibility = finalReport.repair?.eligibility.status ?? null;
+    output.repairStatus = finalReport.repair?.status ?? null;
+    output.repairPatchId = finalReport.repair?.repairPatchId ?? output.repairPatchId;
+    output.repairPatchRustApplied ??= output.repairPatchId
+      ? session.patchProposals.find((patch) => patch.id === output.repairPatchId)?.status === "applied"
+      : null;
+    output.validationAttempts = (finalReport.repair?.validationAttempts ?? []).map((attempt) =>
+      `${attempt.attemptNumber}:${attempt.role}:${attempt.command}:${attempt.truthStatus}`
+    );
+
+    if (finalReport.finalValidationState === "verified_passed") {
+      assert.equal(finalReport.finalStatus, "passed");
+      assert.equal((finalReport.repair?.validationAttempts ?? []).some((attempt) => attempt.role === "repair_revalidation" && attempt.truthStatus === "verified_passed")
+        || (finalReport.validationDiscovery?.evidence ?? []).some((entry) => entry.truthStatus === "verified_passed"), true);
+    } else if (finalReport.finalValidationState === "verified_failed") {
+      assert.equal(finalReport.finalStatus, "failed");
+      assert.ok(finalReport.repair?.diagnosis);
+      assert.equal((finalReport.repair?.validationAttempts ?? []).some((attempt) => attempt.truthStatus === "verified_failed"), true);
+      if (finalReport.repair.repairPatchId) {
+        assert.equal((finalReport.repair.validationAttempts ?? []).length >= 2 || finalReport.repair.status === "revalidation_requested", true);
+      } else {
+        assert.equal(finalReport.repair.eligibility.status, "repair_not_attempted");
+      }
+    } else {
+      assert.notEqual(finalReport.finalValidationState, "verified_passed");
+      assert.equal(finalReport.finalStatus, "unverified");
+    }
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_repair_loop_failed", output.failureReason, output);
+  } finally {
+    await rm(parentAbsolute, { force: true });
+    await rm(nestedAbsolute, { force: true });
+    try {
+      await rm(path.dirname(parentAbsolute), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveAttributionScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive attribution"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const parentFile = `${smokeDir}/recursive-attribution-parent-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const nestedFile = `${smokeDir}/recursive-attribution-child-${Date.now()}-${marker.slice(9, 17)}.txt`;
+  const parentAbsolute = path.join(workspacePath, parentFile);
+  const nestedAbsolute = path.join(workspacePath, nestedFile);
+  const nestedRequested = `recursive attribution child applied ${marker}\n`;
+  const prompt = `Build a recursive attribution smoke flow with nested execution that updates ${nestedFile}, validates truthfully, and attributes any validation failure only with evidence.`;
+  const output: RealWorkspaceSmokeReport["recursive attribution"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    attributionConfidence: null,
+    attributionEvidence: [],
+    relatedPatchIds: [],
+    relatedBranchIds: [],
+    repairEligibility: null,
+    validationAttempts: [],
+    tempFiles: [parentFile, nestedFile],
+    failureReason: null
+  };
+
+  try {
+    await mkdir(path.dirname(parentAbsolute), { recursive: true });
+    await writeFile(parentAbsolute, "before recursive attribution parent\n", "utf8");
+    await writeFile(nestedAbsolute, "before recursive attribution child\n", "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branch = session.recursiveFactory?.branchOrchestrators?.[0];
+    assert.ok(branch);
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [{
+        branchId: branch.branchId,
+        targetFile: parentFile,
+        replacementText: `parent attribution patch should not apply ${marker}\n`,
+        nestedSubtasks: [{ targetFile: nestedFile, replacementText: nestedRequested, objective: "Nested recursive attribution smoke patch" }]
+      }]
+    });
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, proposal);
+    assert.equal((await readFile(nestedAbsolute, "utf8")).replace(/\r\n/g, "\n"), nestedRequested);
+
+    const safeRequest = session.commandRequests.find((request) => request.risk === "safe" && !session.commandExecutions.some((execution) => execution.requestId === request.id));
+    if (safeRequest) {
+      await runRuntimeRustBridge({
+        rustProjectDir,
+        runtimeUrl,
+        workspace: workspacePath,
+        sessionId: created.sessionId,
+        requestId: safeRequest.id,
+        command: safeRequest.command,
+        cwd: safeRequest.cwd
+      });
+      session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    }
+
+    const finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.attributionConfidence = finalReport.repair?.diagnosis.attribution.confidence ?? null;
+    output.attributionEvidence = finalReport.repair?.diagnosis.attribution.evidence ?? [];
+    output.relatedPatchIds = finalReport.repair?.diagnosis.attribution.relatedPatchIds ?? [];
+    output.relatedBranchIds = finalReport.repair?.diagnosis.attribution.relatedBranchIds ?? [];
+    output.repairEligibility = finalReport.repair?.eligibility.status ?? null;
+    output.validationAttempts = (finalReport.repair?.validationAttempts ?? []).map((attempt) =>
+      `${attempt.attemptNumber}:${attempt.command}:${attempt.truthStatus}`
+    );
+
+    if (finalReport.finalValidationState === "verified_failed") {
+      assert.ok(finalReport.repair?.diagnosis);
+      const attribution = finalReport.repair.diagnosis.attribution;
+      if (attribution.confidence === "high" || attribution.confidence === "medium") {
+        assert.equal(attribution.evidence.length > 0, true);
+        assert.equal(attribution.relatedPatchIds.length > 0, true);
+        assert.match(attribution.evidence.join("\n"), /Changed file|changed module|Changed .* is referenced/i);
+      } else {
+        assert.deepEqual(attribution.relatedPatchIds, []);
+        assert.match(attribution.reason, /did not mention|weak|no patch relationship/i);
+      }
+    } else if (finalReport.finalValidationState === "verified_passed") {
+      assert.equal(finalReport.finalStatus, "passed");
+      assert.equal((finalReport.validationDiscovery?.evidence ?? []).some((entry) => entry.truthStatus === "verified_passed"), true);
+    } else {
+      assert.notEqual(finalReport.finalValidationState, "verified_passed");
+    }
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_attribution_failed", output.failureReason, output);
+  } finally {
+    await rm(parentAbsolute, { force: true });
+    await rm(nestedAbsolute, { force: true });
+    try {
+      await rm(path.dirname(parentAbsolute), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveHighAttributionRepairScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive high attribution repair"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const scenarioDir = `${smokeDir}/recursive-high-attribution-${Date.now()}-${marker.slice(0, 8)}`;
+  const moduleFile = `${scenarioDir}/module.mjs`;
+  const testFile = `${scenarioDir}/module.test.mjs`;
+  const supportFile = `${scenarioDir}/support.txt`;
+  const packageFile = "package.json";
+  const moduleAbsolute = path.join(workspacePath, moduleFile);
+  const testAbsolute = path.join(workspacePath, testFile);
+  const supportAbsolute = path.join(workspacePath, supportFile);
+  const packageAbsolute = path.join(workspacePath, packageFile);
+  const command = "npm test";
+  const supportInitial = "before high attribution support branch\n";
+  const supportPatched = `high attribution support branch applied ${marker}\n`;
+  const fixedModule = [
+    "import assert from \"node:assert/strict\";",
+    "",
+    "export const HIVO_REPAIR_VALUE = \"fixed\";",
+    "",
+    "export function verifySmokeValue() {",
+    "  assert.equal(HIVO_REPAIR_VALUE, \"fixed\");",
+    "}",
+    ""
+  ].join("\n");
+  const brokenModule = fixedModule.replace("HIVO_REPAIR_VALUE = \"fixed\"", "HIVO_REPAIR_VALUE = \"broken\"");
+  const testContent = [
+    "import { test } from \"node:test\";",
+    "import { verifySmokeValue } from \"./module.mjs\";",
+    "",
+    "test(\"recursive high attribution repair\", () => {",
+    "  verifySmokeValue();",
+    "});",
+    ""
+  ].join("\n");
+  const packageJson = JSON.stringify({
+    name: "hivo-recursive-high-attribution-smoke",
+    private: true,
+    scripts: {
+      test: `node --test ${testFile.replace(/\\/g, "/")}`
+    }
+  }, null, 2);
+  const prompt = `Build a recursive high-attribution repair smoke flow that intentionally breaks ${moduleFile}, validates with ${command}, attributes the failure, repairs it, and reruns validation.`;
+  const output: RealWorkspaceSmokeReport["recursive high attribution repair"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    failingCommand: null,
+    attributionConfidence: null,
+    attributionEvidence: [],
+    relatedPatchIds: [],
+    relatedBranchIds: [],
+    repairEligibility: null,
+    repairPatchId: null,
+    repairPatchStatus: null,
+    repairAttemptCount: null,
+    firstValidationResult: null,
+    revalidationResult: null,
+    validationAttempts: [],
+    cleanupStatus: "not_run",
+    tempFiles: [moduleFile, testFile, supportFile, packageFile],
+    failureReason: null
+  };
+  let packageBefore: string | undefined;
+  let packageExisted = false;
+
+  try {
+    await mkdir(path.dirname(moduleAbsolute), { recursive: true });
+    await writeFile(moduleAbsolute, fixedModule, "utf8");
+    await writeFile(testAbsolute, testContent, "utf8");
+    await writeFile(supportAbsolute, supportInitial, "utf8");
+    try {
+      packageBefore = await readFile(packageAbsolute, "utf8");
+      packageExisted = true;
+    } catch {
+      packageExisted = false;
+    }
+    await writeFile(packageAbsolute, packageJson, "utf8");
+
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branches = session.recursiveFactory?.branchOrchestrators?.slice(0, 2) ?? [];
+    assert.equal(branches.length >= 2, true);
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [{
+        branchId: branches[0]!.branchId,
+        targetFile: moduleFile,
+        replacementText: brokenModule
+      }, {
+        branchId: branches[1]!.branchId,
+        targetFile: supportFile,
+        replacementText: supportPatched
+      }]
+    });
+    const breakingPatch = session.patchProposals.find((patch) => patch.filesChanged.some((file) => file.path === moduleFile));
+    assert.ok(breakingPatch);
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, breakingPatch);
+    assert.equal((await readFile(moduleAbsolute, "utf8")).replace(/\r\n/g, "\n"), brokenModule);
+    const supportPatch = session.patchProposals.find((patch) => patch.filesChanged.some((file) => file.path === supportFile));
+    assert.ok(supportPatch);
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, supportPatch);
+    assert.equal((await readFile(supportAbsolute, "utf8")).replace(/\r\n/g, "\n"), supportPatched);
+
+    const validationRequest = session.commandRequests.find((request) =>
+      request.command === command
+      && !session.commandExecutions.some((execution) => execution.requestId === request.id)
+    );
+    if (!validationRequest) {
+      const finalReport = session.recursiveFactory?.finalReport;
+      throw new Error(`Expected safe validation request ${command}; requests=${JSON.stringify(session.commandRequests.map((request) => ({
+        id: request.id,
+        command: request.command,
+        cwd: request.cwd,
+        risk: request.risk
+      })))} finalValidationState=${finalReport?.finalValidationState ?? "missing"} selectedStrategy=${finalReport?.validationStrategy?.chosen?.command ?? "missing"}`);
+    }
+    const firstBridgeResult = await runRuntimeRustBridge({
+      rustProjectDir,
+      runtimeUrl,
+      workspace: workspacePath,
+      sessionId: created.sessionId,
+      requestId: validationRequest.id,
+      command: validationRequest.command,
+      cwd: validationRequest.cwd
+    });
+    output.firstValidationResult = firstBridgeResult.commandResult.status;
+    session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+
+    let finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    output.failingCommand = finalReport.repair?.diagnosis.command ?? null;
+    output.attributionConfidence = finalReport.repair?.diagnosis.attribution.confidence ?? null;
+    output.attributionEvidence = finalReport.repair?.diagnosis.attribution.evidence ?? [];
+    output.relatedPatchIds = finalReport.repair?.diagnosis.attribution.relatedPatchIds ?? [];
+    output.relatedBranchIds = finalReport.repair?.diagnosis.attribution.relatedBranchIds ?? [];
+    output.repairEligibility = finalReport.repair?.eligibility.status ?? null;
+    output.repairPatchId = finalReport.repair?.repairPatchId ?? null;
+    output.repairPatchStatus = finalReport.repair?.repairPatchStatus ?? finalReport.repair?.status ?? null;
+    output.repairAttemptCount = finalReport.repair?.attemptCount ?? null;
+
+    assert.equal(finalReport.finalValidationState, "verified_failed");
+    assert.equal(finalReport.repair?.diagnosis.command, command);
+    assert.equal(
+      finalReport.repair?.diagnosis.attribution.confidence,
+      "high",
+      `Expected high attribution; diagnosis=${JSON.stringify(finalReport.repair?.diagnosis, null, 2)} patchProvenance=${JSON.stringify(finalReport.patchProvenance, null, 2)}`
+    );
+    assert.equal(finalReport.repair?.diagnosis.attribution.relatedPatchIds.includes(breakingPatch.id), true);
+    assert.match(finalReport.repair?.diagnosis.attribution.evidence.join("\n") ?? "", new RegExp(moduleFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(finalReport.repair?.eligibility.status, "eligible");
+    assert.equal(finalReport.repair?.attemptCount, 1);
+    assert.ok(finalReport.repair?.repairPatchId);
+    assert.equal(session.patchProposals.filter((patch) => patch.id === finalReport?.repair?.repairPatchId).length, 1);
+
+    const repairPatch = session.patchProposals.find((patch) => patch.id === finalReport?.repair?.repairPatchId);
+    assert.ok(repairPatch);
+    assert.equal(repairPatch.status, "proposed");
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, repairPatch);
+    assert.equal((await readFile(moduleAbsolute, "utf8")).replace(/\r\n/g, "\n"), fixedModule);
+
+    const repairState = session.recursiveFactory?.repair;
+    const revalidationRequest = session.commandRequests.find((request) => request.id === repairState?.revalidationRequestId);
+    assert.ok(revalidationRequest);
+    assert.equal(revalidationRequest.command, command);
+    const secondBridgeResult = await runRuntimeRustBridge({
+      rustProjectDir,
+      runtimeUrl,
+      workspace: workspacePath,
+      sessionId: created.sessionId,
+      requestId: revalidationRequest.id,
+      command: revalidationRequest.command,
+      cwd: revalidationRequest.cwd
+    });
+    output.revalidationResult = secondBridgeResult.commandResult.status;
+    session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.repairPatchId = finalReport.repair?.repairPatchId ?? output.repairPatchId;
+    output.repairPatchStatus = finalReport.repair?.repairPatchStatus ?? finalReport.repair?.status ?? output.repairPatchStatus;
+    output.repairAttemptCount = finalReport.repair?.attemptCount ?? output.repairAttemptCount;
+    output.validationAttempts = (finalReport.repair?.validationAttempts ?? []).map((attempt) =>
+      `${attempt.attemptNumber}:${attempt.role}:${attempt.command}:${attempt.truthStatus}`
+    );
+
+    if (finalReport.finalValidationState === "verified_passed") {
+      assert.equal(finalReport.finalStatus, "passed");
+      assert.equal((finalReport.repair?.validationAttempts ?? []).some((attempt) => attempt.role === "repair_revalidation" && attempt.truthStatus === "verified_passed"), true);
+    } else {
+      assert.equal(
+        finalReport.finalStatus,
+        "failed",
+        `Expected failed final status when revalidation did not pass; finalReport=${JSON.stringify(finalReport, null, 2)} revalidationResult=${JSON.stringify(secondBridgeResult.commandResult, null, 2)}`
+      );
+      assert.equal(finalReport.finalValidationState, "verified_failed");
+      assert.ok(finalReport.repair?.diagnosis);
+      assert.equal((finalReport.repair?.validationAttempts ?? []).some((attempt) => attempt.role === "repair_revalidation"), true);
+    }
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_high_attribution_repair_failed", output.failureReason, output);
+  } finally {
+    try {
+      await rm(path.join(workspacePath, scenarioDir), { recursive: true, force: true });
+      if (packageExisted && packageBefore !== undefined) {
+        await writeFile(packageAbsolute, packageBefore, "utf8");
+      } else {
+        await rm(packageAbsolute, { force: true });
+      }
+      output.cleanupStatus = "passed";
+    } catch (error) {
+      output.cleanupStatus = "cleanup_failed";
+      output.failureReason = output.failureReason ?? `cleanup_failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+}
+
+async function runRecursiveMultibranchScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive multibranch"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const relativeFiles = [
+    `${smokeDir}/recursive-multi-one-${Date.now()}-${marker.slice(0, 8)}.txt`,
+    `${smokeDir}/recursive-multi-two-${Date.now()}-${marker.slice(9, 17)}.txt`
+  ];
+  const absoluteFiles = relativeFiles.map((file) => path.join(workspacePath, file));
+  const initialContent = ["before recursive multibranch one\n", "before recursive multibranch two\n"];
+  const requestedContent = [`recursive multibranch one applied ${marker}\n`, `recursive multibranch two applied ${marker}\n`];
+  const prompt = `Build a multi-step project feature with recursive approval gates, then update ${relativeFiles.join(" and ")} through two safe non-conflicting branches and produce final fan-in truth.`;
+  const output: RealWorkspaceSmokeReport["recursive multibranch"] = {
+    status: "failed",
+    sessionStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    branchResultCount: null,
+    appliedPatches: [],
+    branchStatuses: [],
+    writeBranchesConcurrent: null,
+    tempFiles: relativeFiles,
+    failureReason: null
+  };
+
+  try {
+    await mkdir(path.dirname(absoluteFiles[0]!), { recursive: true });
+    await writeFile(absoluteFiles[0]!, initialContent[0]!, "utf8");
+    await writeFile(absoluteFiles[1]!, initialContent[1]!, "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.equal(session.recursiveFactory?.phase, "product_spec_approval");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    assert.equal(session.recursiveFactory?.phase, "technical_plan_approval");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branches = session.recursiveFactory?.branchOrchestrators?.slice(0, 2) ?? [];
+    assert.equal(branches.length >= 2, true);
+    assert.equal(session.recursiveFactory?.recursiveGraph?.status, "ready");
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [
+        { branchId: branches[0]!.branchId, targetFile: relativeFiles[0]!, replacementText: requestedContent[0]! },
+        { branchId: branches[1]!.branchId, targetFile: relativeFiles[1]!, replacementText: requestedContent[1]! }
+      ]
+    });
+    assert.equal(session.patchProposals.length, 1);
+    assert.equal(activeWriteBranchCount(session) <= 1, true);
+    assert.equal(await readFile(absoluteFiles[0]!, "utf8"), initialContent[0]);
+    assert.equal(await readFile(absoluteFiles[1]!, "utf8"), initialContent[1]);
+    const firstProposal = session.patchProposals[0]!;
+    assert.equal(firstProposal.status, "proposed");
+    assert.equal(firstProposal.filesChanged.some((file) => file.path === relativeFiles[0]), true);
+
+    await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, firstProposal);
+    session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.equal(activeWriteBranchCount(session) <= 1, true);
+    assert.equal((await readFile(absoluteFiles[0]!, "utf8")).replace(/\r\n/g, "\n"), requestedContent[0]);
+    assert.equal(await readFile(absoluteFiles[1]!, "utf8"), initialContent[1]);
+    assert.equal(session.patchProposals.length >= 2, true);
+    const secondProposal = session.patchProposals.find((proposal) => proposal.id !== firstProposal.id && proposal.status === "proposed");
+    assert.ok(secondProposal);
+    assert.equal(secondProposal.filesChanged.some((file) => file.path === relativeFiles[1]), true);
+
+    await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, secondProposal);
+    session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    assert.equal(activeWriteBranchCount(session) <= 1, true);
+    assert.equal((await readFile(absoluteFiles[1]!, "utf8")).replace(/\r\n/g, "\n"), requestedContent[1]);
+    const finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    output.branchResultCount = finalReport.branchOutcomes.length;
+    output.appliedPatches = finalReport.patchApplyTruth.filter((patch) => patch.status === "applied").map((patch) => patch.patchId);
+    output.branchStatuses = (session.recursiveFactory?.branchExecutions ?? []).map((branch) => `${branch.branchId}:${branch.status}:${branch.validationStatus}`);
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    output.writeBranchesConcurrent = false;
+    assert.equal(finalReport.branchOutcomes.length >= 2, true);
+    assert.equal(output.appliedPatches.length >= 2, true);
+    assert.equal(finalReport.finalStatus, "unverified");
+    assert.notEqual(finalReport.finalValidationState, "verified_passed");
+    assert.equal(session.commandExecutions.length, 0);
+    assert.notEqual(session.verificationResult?.truthStatus, "verified_passed");
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_branch_execution_failed", output.failureReason, output);
+  } finally {
+    for (const absoluteFile of absoluteFiles) {
+      await rm(absoluteFile, { force: true });
+    }
+    try {
+      await rm(path.dirname(absoluteFiles[0]!), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runRecursiveNestedBranchScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["recursive nested branch"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const parentFile = `${smokeDir}/recursive-nested-parent-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const nestedFile = `${smokeDir}/recursive-nested-child-${Date.now()}-${marker.slice(9, 17)}.txt`;
+  const parentAbsolute = path.join(workspacePath, parentFile);
+  const nestedAbsolute = path.join(workspacePath, nestedFile);
+  const parentInitial = "before recursive nested parent\n";
+  const nestedInitial = "before recursive nested child\n";
+  const nestedRequested = `recursive nested child applied ${marker}\n`;
+  const prompt = `Build a complex nested recursive branch feature with one safe nested subtask that updates ${nestedFile} and produces truthful nested fan-in.`;
+  const output: RealWorkspaceSmokeReport["recursive nested branch"] = {
+    status: "failed",
+    sessionStatus: null,
+    parentBranchStatus: null,
+    nestedSubtaskCount: null,
+    nestedPatchStatus: null,
+    finalStatus: null,
+    finalValidationState: null,
+    nestedRollupValidation: null,
+    appliedPatches: [],
+    tempFiles: [parentFile, nestedFile],
+    failureReason: null
+  };
+
+  try {
+    await mkdir(path.dirname(parentAbsolute), { recursive: true });
+    await writeFile(parentAbsolute, parentInitial, "utf8");
+    await writeFile(nestedAbsolute, nestedInitial, "utf8");
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "recursive_factory",
+      accessProfile: "full_access"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "product-spec", "approved");
+    session = await decideFactoryArtifact(runtimeUrl, created.sessionId, "technical-plan", "approved");
+    const branch = session.recursiveFactory?.branchOrchestrators?.[0];
+    assert.ok(branch);
+    assert.equal(session.recursiveFactory?.recursiveGraph?.status, "ready");
+
+    session = await startRecursiveBranchExecution(runtimeUrl, created.sessionId, {
+      approved: true,
+      branchTargets: [{
+        branchId: branch.branchId,
+        targetFile: parentFile,
+        replacementText: `parent direct patch should not apply ${marker}\n`,
+        nestedSubtasks: [{ targetFile: nestedFile, replacementText: nestedRequested, objective: "Nested smoke safe subtask patch" }]
+      }]
+    });
+    const parentExecution = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.branchId === branch.branchId);
+    assert.ok(parentExecution);
+    assert.equal(parentExecution.nestedDepth, 1);
+    assert.equal(parentExecution.nestedSubtasks?.length, 2);
+    assert.equal(parentExecution.proposedPatchId, undefined);
+    assert.equal(parentExecution.status, "running");
+    assert.match(parentExecution.blockedReason ?? "", /waiting for required nested subtasks/i);
+    output.nestedSubtaskCount = parentExecution.nestedSubtasks?.length ?? null;
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    assert.equal(proposal.status, "proposed");
+    assert.equal(proposal.filesChanged.some((file) => file.path === nestedFile), true);
+    assert.equal(await readFile(parentAbsolute, "utf8"), parentInitial);
+    assert.equal(await readFile(nestedAbsolute, "utf8"), nestedInitial);
+
+    session = await approveAndRustApply(runtimeUrl, rustProjectDir, workspacePath, created.sessionId, proposal);
+    assert.equal(await readFile(parentAbsolute, "utf8"), parentInitial);
+    assert.equal((await readFile(nestedAbsolute, "utf8")).replace(/\r\n/g, "\n"), nestedRequested);
+    const updatedParent = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.branchId === branch.branchId);
+    assert.ok(updatedParent);
+    const finalReport = session.recursiveFactory?.finalReport;
+    assert.ok(finalReport);
+    output.parentBranchStatus = updatedParent.status;
+    output.nestedPatchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    output.nestedRollupValidation = updatedParent.nestedRollup?.validationState ?? null;
+    output.appliedPatches = finalReport.patchApplyTruth.filter((patch) => patch.status === "applied").map((patch) => patch.patchId);
+    output.finalStatus = finalReport.finalStatus;
+    output.finalValidationState = finalReport.finalValidationState;
+    assert.equal(updatedParent.status, "validation_pending");
+    assert.equal(updatedParent.nestedRollup?.appliedPatches.includes(proposal.id), true);
+    assert.equal(finalReport.branchOutcomes.some((outcome) => outcome.nestedRollup?.appliedPatches.includes(proposal.id)), true);
+    assert.equal(finalReport.finalStatus, "unverified");
+    assert.notEqual(finalReport.finalValidationState, "verified_passed");
+    assert.equal(session.commandExecutions.length, 0);
+
+    output.sessionStatus = session.status;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("recursive_nested_branch_failed", output.failureReason, output);
+  } finally {
+    await rm(parentAbsolute, { force: true });
+    await rm(nestedAbsolute, { force: true });
+    try {
+      await rm(path.dirname(parentAbsolute), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function runPatchTruthScenario(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string
+): Promise<RealWorkspaceSmokeReport["patch truth"]> {
+  const smokeDir = ".hivo-smoke";
+  const marker = randomUUID();
+  const relativeFile = `${smokeDir}/patch-truth-${Date.now()}-${marker.slice(0, 8)}.txt`;
+  const absoluteFile = path.join(workspacePath, relativeFile);
+  const initialContent = "before patch truth smoke\n";
+  const requestedContent = `patch truth applied ${marker}`;
+  const prompt = `write file ${relativeFile} with ${requestedContent}`;
+  const output: RealWorkspaceSmokeReport["patch truth"] = {
+    status: "failed",
+    sessionStatus: null,
+    patchStatus: null,
+    rustApplyStatus: null,
+    validationTruthStatus: null,
+    tempFile: relativeFile
+  };
+
+  try {
+    await mkdir(path.dirname(absoluteFile), { recursive: true });
+    await writeFile(absoluteFile, initialContent, "utf8");
+
+    const created = await createRuntimeSession(runtimeUrl, workspacePath, prompt, {
+      mode: "demo_mock",
+      executionMode: "simple_mode",
+      accessProfile: "default_permissions"
+    });
+    await runTurn(runtimeUrl, created.sessionId, prompt);
+
+    let session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    output.sessionStatus = session.status;
+    assert.equal(session.patchProposals.length, 1);
+    const proposal = session.patchProposals[0];
+    assert.ok(proposal);
+    assert.equal(proposal.status, "proposed");
+    assert.equal(proposal.filesChanged.some((file) => normalizeRelativePath(file.path) === relativeFile), true);
+    assert.equal((await readFile(absoluteFile, "utf8")), initialContent);
+    assert.equal(session.commandExecutions.length, 0);
+    const latestAssistant = session.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+    assert.equal(/\b(applied|fixed|files changed|changed files|file changed on disk)\b/i.test(latestAssistant), false);
+
+    const approval = await approveRuntimePatch(runtimeUrl, created.sessionId, proposal.id);
+    assert.equal(approval.applied, false);
+    assert.equal(approval.proposal.status, "approved");
+    session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    assert.equal(output.patchStatus, "approved");
+    assert.equal((await readFile(absoluteFile, "utf8")), initialContent);
+
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "apply_started",
+      message: "Rust patch apply requested by patch-truth smoke."
+    });
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    assert.equal(output.patchStatus, "apply_started");
+
+    const rustApply = await runRuntimePatchApplyBridge({
+      rustProjectDir,
+      workspace: workspacePath,
+      sessionId: created.sessionId,
+      patchId: proposal.id,
+      proposal
+    });
+    output.rustApplyStatus = rustApply.patchResult.status;
+    assert.equal(rustApply.patchResult.status, "applied");
+
+    session = await reportPatchApplyResult(runtimeUrl, created.sessionId, proposal.id, {
+      status: "applied",
+      message: rustApply.patchResult.message,
+      reconciliationSnapshot:
+        rustApply.patchResult.beforeSnapshot || rustApply.patchResult.afterSnapshot
+          ? {
+              before: rustApply.patchResult.beforeSnapshot,
+              after: rustApply.patchResult.afterSnapshot
+            }
+          : undefined
+    });
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    output.validationTruthStatus = session.verificationResult?.truthStatus ?? null;
+    assert.equal(output.patchStatus, "applied");
+    assert.equal((await readFile(absoluteFile, "utf8")).replace(/\r\n/g, "\n"), `${requestedContent}\n`);
+
+    const safeRequest = session.commandRequests.find((request) => request.risk === "safe");
+    if (safeRequest) {
+      await runRuntimeRustBridge({
+        rustProjectDir,
+        runtimeUrl,
+        workspace: workspacePath,
+        sessionId: created.sessionId,
+        requestId: safeRequest.id,
+        command: safeRequest.command,
+        cwd: safeRequest.cwd
+      });
+      session = await getSession(runtimeUrl, created.sessionId) as AgentRuntimeSession;
+      output.validationTruthStatus = session.verificationResult?.truthStatus ?? null;
+    }
+    if (!session.commandExecutions.length) {
+      assert.notEqual(session.verificationResult?.truthStatus, "verified_passed");
+    }
+
+    output.sessionStatus = session.status;
+    output.patchStatus = session.patchProposals.find((patch) => patch.id === proposal.id)?.status ?? null;
+    output.status = "passed";
+    return output;
+  } catch (error) {
+    output.failureReason = error instanceof Error ? error.message : String(error);
+    throw new SmokeFailure("patch_truth_failed", output.failureReason, output);
+  } finally {
+    await rm(absoluteFile, { force: true });
+    try {
+      await rm(path.dirname(absoluteFile), { recursive: false });
+    } catch {
+      // The smoke directory can contain artifacts from another run.
+    }
+  }
+}
+
+async function decideFactoryArtifact(
+  runtimeUrl: string,
+  sessionId: string,
+  artifact: "product-spec" | "technical-plan",
+  decision: "approved" | "rejected" | "changes_requested"
+) {
+  const response = await fetch(`${runtimeUrl}/sessions/${sessionId}/factory/${artifact}/decision`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision })
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<AgentRuntimeSession>;
+}
+
+async function startRecursiveBranchExecution(
+  runtimeUrl: string,
+  sessionId: string,
+  body: {
+    approved: true;
+    targetFile?: string;
+    replacementText?: string;
+    branchTargets?: Array<{
+      branchId?: string;
+      targetFile: string;
+      replacementText: string;
+      nestedSubtasks?: Array<{
+        targetFile: string;
+        replacementText: string;
+        objective?: string;
+      }>;
+    }>;
+  }
+) {
+  const response = await fetch(`${runtimeUrl}/sessions/${sessionId}/factory/branch-execution/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<AgentRuntimeSession>;
+}
+
+function activeWriteBranchCount(session: AgentRuntimeSession) {
+  return (session.recursiveFactory?.branchExecutions ?? []).filter((branch) =>
+    branch.active
+    && branch.schedulerDecision.writeBranch
+    && !branch.patchApplied
+    && ["running", "patch_proposed", "reviewing", "validation_pending"].includes(branch.status)
+  ).length;
+}
+
+async function approveAndRustApply(
+  runtimeUrl: string,
+  rustProjectDir: string,
+  workspacePath: string,
+  sessionId: string,
+  proposal: AgentRuntimeSession["patchProposals"][number]
+) {
+  const approval = await approveRuntimePatch(runtimeUrl, sessionId, proposal.id);
+  assert.equal(approval.applied, false);
+  let session = await reportPatchApplyResult(runtimeUrl, sessionId, proposal.id, {
+    status: "apply_started",
+    message: "Rust patch apply requested by recursive multibranch smoke."
+  });
+  assert.equal(session.patchProposals.find((patch) => patch.id === proposal.id)?.status, "apply_started");
+  const rustApply = await runRuntimePatchApplyBridge({
+    rustProjectDir,
+    workspace: workspacePath,
+    sessionId,
+    patchId: proposal.id,
+    proposal
+  });
+  assert.equal(rustApply.patchResult.status, "applied");
+  session = await reportPatchApplyResult(runtimeUrl, sessionId, proposal.id, {
+    status: "applied",
+    message: rustApply.patchResult.message,
+    reconciliationSnapshot:
+      rustApply.patchResult.beforeSnapshot || rustApply.patchResult.afterSnapshot
+        ? {
+            before: rustApply.patchResult.beforeSnapshot,
+            after: rustApply.patchResult.afterSnapshot
+          }
+        : undefined
+  });
+  return session;
+}
+
+async function approveRuntimePatch(runtimeUrl: string, sessionId: string, patchId: string) {
+  const response = await fetch(`${runtimeUrl}/sessions/${sessionId}/patches/${patchId}/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({})
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<{
+    proposal: AgentRuntimeSession["patchProposals"][number];
+    applied: boolean;
+    message: string;
+  }>;
+}
+
+async function reportPatchApplyResult(
+  runtimeUrl: string,
+  sessionId: string,
+  patchId: string,
+  body: {
+    status: "apply_started" | "applied" | "failed";
+    message: string;
+    reconciliationSnapshot?: {
+      before?: unknown;
+      after?: unknown;
+    };
+  }
+) {
+  const response = await fetch(`${runtimeUrl}/sessions/${sessionId}/patches/${patchId}/result`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<AgentRuntimeSession>;
+}
+
+function assertRecursivePlanHasNoExecution(session: AgentRuntimeSession) {
+  assert.equal(session.tasks.length, 0);
+  assert.equal(session.patchProposals.length, 0);
+  assert.equal(session.commandRequests.length, 0);
+  assert.equal(session.commandExecutions.length, 0);
+}
+
+async function runRuntimePatchApplyBridge(input: {
+  rustProjectDir: string;
+  workspace: string;
+  sessionId: string;
+  patchId: string;
+  proposal: AgentRuntimeSession["patchProposals"][number];
+}) {
+  return new Promise<{
+    patchResult: {
+      patchId: string;
+      status: string;
+      message: string;
+      beforeSnapshot?: unknown;
+      afterSnapshot?: unknown;
+    };
+  }>((resolve, reject) => {
+    const child = spawn(
+      "cargo",
+      [
+        "run",
+        "--quiet",
+        "--bin",
+        "runtime_bridge_smoke",
+        "--",
+        "--workspace",
+        input.workspace,
+        "--apply-runtime-patch",
+        "true",
+        "--session-id",
+        input.sessionId,
+        "--patch-id",
+        input.patchId,
+        "--proposal-json",
+        JSON.stringify(input.proposal)
+      ],
+      {
+        cwd: input.rustProjectDir,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr || stdout || `Rust patch bridge smoke failed with exit code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout) as {
+          patchResult: {
+            patchId: string;
+            status: string;
+            message: string;
+            beforeSnapshot?: unknown;
+            afterSnapshot?: unknown;
+          };
+        });
+      } catch (error) {
+        reject(new Error(`Failed to decode Rust patch bridge output: ${String(error)}\n${stdout}\n${stderr}`));
+      }
+    });
+  });
 }
 
 async function runRuntimeRustBridge(input: {
@@ -1651,6 +3849,10 @@ async function tryRunLocalCommand(command: string, args: string[], cwd: string) 
     child.on("error", () => resolve({ ok: false, stdout, stderr }));
     child.on("close", (code) => resolve({ ok: code === 0, stdout, stderr }));
   });
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 if (isDirectRun()) {

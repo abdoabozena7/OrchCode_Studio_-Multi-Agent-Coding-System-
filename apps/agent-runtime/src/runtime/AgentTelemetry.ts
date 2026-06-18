@@ -178,14 +178,30 @@ export function buildDiffAwareRunSummary(
     appliedPatchIds: session.patchProposals.filter((patch) => patch.status === "applied").map((patch) => patch.id),
     proposedPatchIds: session.patchProposals.filter((patch) => patch.status !== "applied").map((patch) => patch.id),
     commandResults: session.commandRequests.map((request) => `${request.command}: ${request.status}`),
+    commandTruth: session.commandExecutions.map((execution) => ({
+      command: execution.command,
+      status: execution.status,
+      risk: execution.risk,
+      approvalRequired: execution.status === "approval_required" || execution.provenance?.policyDecision === "require_approval",
+      blockedReason: execution.status === "blocked" || execution.status === "approval_required"
+        ? execution.diagnosis?.summary ?? execution.message ?? execution.provenance?.policyReason
+        : undefined,
+      stdoutSummary: summarizeCommandStream(execution.stdout),
+      stderrSummary: summarizeCommandStream(execution.stderr)
+    })),
     gates: verification.checks.map((check) => ({
       name: check.name,
-      status: check.status === "failed" ? "failed" : "passed",
+      status: check.status === "failed" ? "failed" : check.status === "passed" ? "passed" : "blocked",
       notes: [check.detail]
     })),
     nextAction,
     createdAt: new Date().toISOString()
   };
+}
+
+function summarizeCommandStream(value: string, max = 240) {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
 }
 
 type ClaimedAgent = {

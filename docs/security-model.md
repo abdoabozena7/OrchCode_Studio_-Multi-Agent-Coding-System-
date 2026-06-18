@@ -47,6 +47,8 @@ Patch application is disabled in Module 1. In the current Module 2 and Module 3 
 
 - The frontend invokes `apply_runtime_patch` in `apps/desktop/src-tauri/src/commands/patch.rs`.
 - Rust loads the latest patch proposal payload from SQLite `session_events`.
+- Rust requires a persisted approval event and rejects missing diffs, path/header mismatches, workspace escapes, secret files, and failed `git apply --check` preflight.
+- Proposal lookup and apply results log the proposal ID, persistence target, lookup source/result, and terminal apply result.
 - `PatchService` validates that all patch targets stay inside the active workspace before running `git apply`.
 - Rust appends an `apply.completed` event after a successful apply.
 - The TypeScript runtime then updates its own session state only after the frontend reports that Rust result back to `/sessions/:id/patches/:patchId/result`.

@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ensureMemoryLayout } from "../memory/ProjectMemory.js";
+import { readMemoryRecords } from "../memory/ProjectMemory.js";
 import { rebuildRepoIndex } from "../memory/RepoIndexer.js";
 import {
   SpecialistAgentFactory,
@@ -146,10 +146,9 @@ test("Phase 6 reports include safety findings and tuning lessons with confidence
   try {
     await rebuildRepoIndex(workspace);
     const result = await new SwarmTrialLab({ workspacePath: workspace }).runStaffingEval();
-    const memory = await ensureMemoryLayout(workspace);
-    const staffingLessons = await readJsonl(memory.swarmStaffingLessons);
-    const tuningHistory = await readJsonl(memory.swarmTuningHistory);
-    const specialistHistory = await readJsonl(memory.swarmSpecialistSelectionHistory);
+    const staffingLessons = await readMemoryRecords<Record<string, any>>(workspace, "swarm_staffing_lesson");
+    const tuningHistory = await readMemoryRecords<Record<string, any>>(workspace, "swarm_tuning_history");
+    const specialistHistory = await readMemoryRecords<Record<string, any>>(workspace, "swarm_specialist_selection");
 
     assert.ok(result.trialReport.safety_findings.length >= result.staffingEvaluations.length);
     assert.ok(result.trialReport.specialist_selection_findings.length >= result.staffingEvaluations.length);
@@ -183,14 +182,6 @@ async function fixtureWorkspace(prefix: string, fileCount: number) {
     await writeFile(path.join(workspace, "src", `module${index}.ts`), `export const value${index} = ${index};\n`, "utf8");
   }
   return workspace;
-}
-
-async function readJsonl(filePath: string): Promise<Array<Record<string, any>>> {
-  const content = await readFile(filePath, "utf8");
-  return content
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, any>);
 }
 
 function findEval(evaluations: StaffingEvaluationResult[], title: string) {

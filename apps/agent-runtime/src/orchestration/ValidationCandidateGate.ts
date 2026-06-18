@@ -7,7 +7,7 @@ import type { OrchestrationSafetyConfig } from "./OrchestrationConfig.js";
 import type { ExecutionPreparationPlan } from "./ExecutionPreparationModels.js";
 import type { OneWriterDryRunProposal } from "./OneWriterDryRunModels.js";
 import type { PatchProposalReview } from "./PatchProposalReviewModels.js";
-import { resolveMemoryPaths, readJson } from "../memory/ProjectMemory.js";
+import { readJson, readMemorySnapshot } from "../memory/ProjectMemory.js";
 import type { CommandInventory } from "../memory/types.js";
 import { runValidationPreflightCheck, type ValidationPlanDraft } from "./ValidationPreflightChecker.js";
 import {
@@ -506,9 +506,7 @@ export class ValidationCandidateGate {
   }
 
   private async loadCommandInventory(): Promise<CommandInventory | undefined> {
-    const paths = await resolveMemoryPaths(this.workspacePath, this.memoryDir);
-    if (!existsSync(paths.commandInventory)) return undefined;
-    return readJson<CommandInventory>(paths.commandInventory);
+    return readMemorySnapshot<CommandInventory>(this.workspacePath, "command_inventory", this.memoryDir);
   }
 
   private planFromCandidate(candidate: ValidationCandidate): ValidationPlanDraft {

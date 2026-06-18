@@ -1,12 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   getRelevantFiles,
-  readJson,
-  readJsonl,
-  resolveMemoryPaths
+  readMemoryRecords,
+  readMemorySnapshot
 } from "../memory/ProjectMemory.js";
 import { assessIndexFreshness } from "../memory/IndexFreshness.js";
 import type {
@@ -67,18 +66,17 @@ export class ContextPackBuilder {
   ) {}
 
   async build(runId: string, task: Task, buildOptions: ContextPackBuildOptions = {}): Promise<ContextPack> {
-    const memoryPaths = resolveMemoryPaths(this.workspacePath, this.options.memoryDir);
     const initialFreshness = await assessIndexFreshness(this.workspacePath, this.options.memoryDir);
-    if (!existsSync(memoryPaths.repoIndex) || !existsSync(memoryPaths.fileSummaries) || !existsSync(memoryPaths.commandInventory) || initialFreshness.status !== "fresh") {
+    if (initialFreshness.status !== "fresh") {
       await rebuildRepoIndex(this.workspacePath, { memoryDir: this.options.memoryDir });
     }
     const freshness = await assessIndexFreshness(this.workspacePath, this.options.memoryDir);
-    const repoIndex = await readJson<RepoIndex>(memoryPaths.repoIndex);
-    const commandInventory = await readJson<CommandInventory>(memoryPaths.commandInventory);
-    const decisions = await readJsonl<DecisionRecord>(memoryPaths.decisions);
-    const failures = await readJsonl<FailedAttemptRecord>(memoryPaths.failedAttempts);
-    const lessons = await readJsonl<LessonLearnedRecord>(memoryPaths.lessonsLearned);
-    const successfulPatterns = await readJsonl<SuccessfulPatternRecord>(memoryPaths.successfulPatterns);
+    const repoIndex = await requiredSnapshot<RepoIndex>(this.workspacePath, "repo_index", this.options.memoryDir);
+    const commandInventory = await requiredSnapshot<CommandInventory>(this.workspacePath, "command_inventory", this.options.memoryDir);
+    const decisions = await readMemoryRecords<DecisionRecord>(this.workspacePath, "decision", this.options.memoryDir);
+    const failures = await readMemoryRecords<FailedAttemptRecord>(this.workspacePath, "failed_attempt", this.options.memoryDir);
+    const lessons = await readMemoryRecords<LessonLearnedRecord>(this.workspacePath, "lesson", this.options.memoryDir);
+    const successfulPatterns = await readMemoryRecords<SuccessfulPatternRecord>(this.workspacePath, "successful_pattern", this.options.memoryDir);
     const teamContext = await this.resolveTeamContext(runId, task, buildOptions, { decisions, failures, lessons, successfulPatterns });
     const memoryForContext = teamContext
       ? {
@@ -493,6 +491,12 @@ function isLikelyGeneratedOrSecret(filePath: string) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+async function requiredSnapshot<T>(workspacePath: string, kind: string, memoryDir?: string): Promise<T> {
+  const value = await readMemorySnapshot<T>(workspacePath, kind, memoryDir);
+  if (value === undefined) throw new Error(`Required SQLite memory snapshot is missing: ${kind}`);
+  return value;
 }
 
 function buildInclusionExplanation(input: {

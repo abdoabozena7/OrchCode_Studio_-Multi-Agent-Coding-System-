@@ -2,6 +2,8 @@ import Fastify from "fastify";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type {
   CreateRuntimeSessionRequest,
+  FactoryApprovalDecisionRequest,
+  RecursiveBranchExecutionStartRequest,
   ReportCommandResultRequest,
   ReportPatchApplyResultRequest,
   RuntimeTurnRequest
@@ -19,6 +21,7 @@ export type RuntimeServer = {
 
 export async function buildServer(config: RuntimeConfig = loadConfig()): Promise<RuntimeServer> {
   const app = Fastify({ logger: false });
+  const startedAt = new Date().toISOString();
   const eventBus = new EventBus();
   const sessionManager = new SessionManager(config.storageDir, eventBus);
   await sessionManager.load();
@@ -32,7 +35,7 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.options("*", async (_request, reply) => reply.status(204).send());
 
-  app.get("/health", async () => ({ status: "ok", mode: config.defaultMode }));
+  app.get("/health", async () => ({ status: "ok", mode: config.defaultMode, startedAt }));
 
   app.post("/sessions", async (request, reply) => {
     const body = request.body as CreateRuntimeSessionRequest;
@@ -67,6 +70,45 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
     const session = runtime.getSession(id);
     if (!session) return reply.status(404).send({ error: "Session not found" });
     return session;
+  });
+
+  app.post("/sessions/:id/factory/product-spec/decision", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    const body = request.body as FactoryApprovalDecisionRequest;
+    if (!isFactoryDecision(body?.decision)) return reply.status(400).send({ error: "valid decision is required" });
+    try {
+      return await runtime.decideProductSpec(id, body);
+    } catch (error) {
+      return reply.status(409).send({ error: String(error) });
+    }
+  });
+
+  app.post("/sessions/:id/factory/technical-plan/decision", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    const body = request.body as FactoryApprovalDecisionRequest;
+    if (!isFactoryDecision(body?.decision)) return reply.status(400).send({ error: "valid decision is required" });
+    try {
+      return await runtime.decideTechnicalPlan(id, body);
+    } catch (error) {
+      return reply.status(409).send({ error: String(error) });
+    }
+  });
+
+  app.post("/sessions/:id/factory/branch-execution/start", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    const body = request.body as RecursiveBranchExecutionStartRequest;
+    if (body?.approved !== true) return reply.status(400).send({ error: "approved=true is required" });
+    try {
+      return await runtime.startRecursiveBranchExecution(id, body);
+    } catch (error) {
+      return reply.status(409).send({ error: String(error) });
+    }
   });
 
   app.get("/sessions/:id/events", async (request, reply) => {
@@ -141,6 +183,10 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
   });
 
   return { app, runtime, sessionManager };
+}
+
+function isFactoryDecision(value: unknown): value is FactoryApprovalDecisionRequest["decision"] {
+  return value === "approved" || value === "rejected" || value === "changes_requested";
 }
 
 function authorizeSessionRequest(sessionManager: SessionManager, sessionId: string, request: { headers: Record<string, unknown>; query?: unknown }) {

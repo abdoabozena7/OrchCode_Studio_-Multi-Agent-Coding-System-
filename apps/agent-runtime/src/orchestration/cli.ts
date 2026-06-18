@@ -387,7 +387,7 @@ Commands:
   agent resume <run_id>         Reconcile a saved swarm run
   agent trial staffing-eval     Run automatic staffing eval scenarios
   agent trial compare "<goal>"  Compare baseline, orchestrated, and autopilot modes
-  agent trial scheduler-scale   Stress scheduler with 300 mock read-only work items
+  agent trial scheduler-scale   Stress scheduler with 300 scripted read-only test work items
   agent trial architecture-scan Read-only architecture trial with automatic staffing
   agent trial test-discovery    Read-only source/test mapping trial
   agent trial small-safe-fix "<goal>"

@@ -4,3 +4,6 @@ export * from "./RepoIndexer.js";
 export * from "./CommandInventory.js";
 export * from "./IndexFreshness.js";
 export * from "./ProjectIntelligence.js";
+export * from "./MemoryCache.js";
+export * from "./SqliteMemoryStore.js";
+export * from "./SemanticProjectModel.js";

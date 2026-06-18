@@ -35,9 +35,33 @@ test("ConversationRouter sends deep architecture questions to read-only swarm an
   assert.equal(routeConversation("How does the provider telemetry work in this project?").route, "swarm_readonly");
   assert.equal(routeConversation("امتى الـ orchestrator يعمل direct dispatch؟ وامتى يحوّل لـ human review حتى لو فيه agents بتقترح action؟").route, "swarm_readonly");
   assert.equal(routeConversation("Fix one file so the status label handles provider failure").route, "simple_run");
-  assert.equal(routeConversation("Refactor auth, database, and frontend state across many files").route, "orchestrated_run");
+  assert.equal(routeConversation("Refactor auth, database, and frontend state across many files").route, "recursive_factory");
   assert.equal(routeConversation("Audit the whole repo read-only with swarm scouts").route, "swarm_readonly");
   assert.notEqual(routeConversation("Review this component quickly").route, "swarm_readonly");
+});
+
+test("ConversationRouter treats tech-stack requests as workspace questions", () => {
+  for (const message of [
+    "tell me the full tech stack",
+    "show me the technology stack",
+    "describe the tech stack",
+    "list the full tech stack"
+  ]) {
+    assert.equal(routeConversation(message).route, "inspect_explain", message);
+    assert.equal(decideIntentBeforeRetrieval(message).kind, "workspace_question", message);
+    assert.equal(createConversationUnderstanding(message).workspaceIntent?.actionMode, "answer_only", message);
+  }
+});
+
+test("Arabic answer-link decision questions stay read-only instead of becoming implementation plans", () => {
+  const prompt = "\u0627\u0645\u062a\u0649 \u0627\u0644\u0646\u0638\u0627\u0645 \u064a\u0642\u0631\u0631 Re-cluster \u0628\u062f\u0644 \u0645\u0627 \u064a\u0628\u0639\u062a offer\u061f \u0627\u0631\u0628\u0637 \u0625\u062c\u0627\u0628\u062a\u0643 \u0628\u064a\u0646 drift detection \u0648 FCM membership \u0648 orchestrator rules.";
+  const understanding = createConversationUnderstanding(prompt);
+
+  assert.equal(routeConversation(prompt).route, "swarm_readonly");
+  assert.equal(decideIntentBeforeRetrieval(prompt).kind, "workspace_question");
+  assert.equal(understanding.intentDecision.kind, "workspace_question");
+  assert.equal(understanding.workspaceIntent?.actionMode, "answer_only");
+  assert.equal(classifyRunIntent(prompt, understanding), "inspect_only");
 });
 
 test("IntentDecisionEngine routes social messages without workspace retrieval", () => {
@@ -83,9 +107,9 @@ test("ConversationUnderstanding carries one cleaned prompt into downstream class
   assert.equal(classifyRunIntent("هاي شغل المشروع", run), "run_to_green");
 });
 
-test("real-provider direct conversation uses local intent gate before provider or workspace retrieval", async () => {
+test("real-provider direct conversation uses provider routing before skipping workspace retrieval", async () => {
   const storageDir = path.join(os.tmpdir(), `hivo-provider-intent-storage-${Date.now()}`);
-  const provider = new NoProviderCallsFixture();
+  const provider = new DirectConversationProvider();
   const runtime = await createRuntime(storageDir, provider);
   const created = await runtime.createSession({
     workspacePath: path.join(os.tmpdir(), `missing-workspace-${Date.now()}`),
@@ -98,7 +122,7 @@ test("real-provider direct conversation uses local intent gate before provider o
   const session = runtime.getSession(created.sessionId);
   const answer = session?.messages.at(-1)?.content ?? "";
 
-  assert.equal(provider.calls, 0);
+  assert.equal(provider.calls, 1);
   assert.equal(session?.status, "completed");
   assert.equal(session?.projectIntake, undefined);
   assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake"), false);
@@ -110,7 +134,7 @@ test("real-provider direct conversation uses local intent gate before provider o
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("real-provider direct conversation is not blocked by provider failure", async () => {
+test("real-provider direct conversation falls back to the local route guard after provider failure", async () => {
   const storageDir = path.join(os.tmpdir(), `hivo-provider-intent-fail-storage-${Date.now()}`);
   const provider = new NoProviderCallsFixture(new Error("provider unavailable"));
   const runtime = await createRuntime(storageDir, provider);
@@ -125,9 +149,10 @@ test("real-provider direct conversation is not blocked by provider failure", asy
   const session = runtime.getSession(created.sessionId);
   const answer = session?.messages.at(-1)?.content ?? "";
 
-  assert.equal(provider.calls, 0);
+  assert.equal(provider.calls, 1);
   assert.equal(session?.status, "completed");
   assert.equal(session?.projectIntake, undefined);
+  assert.equal(session?.latestDecisionPipeline?.finalResponseSource ?? "none", "none");
   assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake" || artifact.type === "project_explain_report"), false);
   assert.equal(session?.progressEvents.at(-1)?.taskTitle, "رد مباشر");
   assert.match(session?.progressEvents.at(-1)?.summary ?? "", /لا تطلب كود|مش محتاجة بحث/);
@@ -165,5 +190,26 @@ class NoProviderCallsFixture implements LlmProvider {
     this.calls += 1;
     if (this.error) throw this.error;
     throw new Error("Unexpected provider text call after intent gate");
+  }
+}
+
+class DirectConversationProvider implements LlmProvider {
+  calls = 0;
+
+  async generateStructured<T>(): Promise<T> {
+    this.calls += 1;
+    return {
+      kind: "direct_conversation",
+      language: "arabic",
+      needsWorkspace: false,
+      confidence: "high",
+      rationale: "The message is a greeting.",
+      workspaceMessage: ""
+    } as T;
+  }
+
+  async generateText(): Promise<string> {
+    this.calls += 1;
+    throw new Error("Unexpected provider text call after direct-conversation routing");
   }
 }

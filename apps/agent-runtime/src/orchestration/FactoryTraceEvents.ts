@@ -45,7 +45,6 @@ export const FACTORY_TRACE_EVENT_TYPES = [
   "provider_output_schema_repaired",
   "provider_output_schema_failed",
   "provider_worker_result_recorded",
-  "provider_worker_fallback_to_mock",
   "context_pack_created",
   "context_item_included",
   "context_item_excluded",

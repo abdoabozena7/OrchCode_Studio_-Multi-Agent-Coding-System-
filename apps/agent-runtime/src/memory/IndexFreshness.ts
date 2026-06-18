@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { ensureMemoryLayout, readJson, writeJson } from "./ProjectMemory.js";
+import { readMemorySnapshot, saveMemory } from "./ProjectMemory.js";
 import { rebuildRepoIndex, type RebuildRepoIndexOptions } from "./RepoIndexer.js";
 import { MEMORY_SCHEMA_VERSION, type FileManifestEntry, type IndexFreshnessReport, type IndexState } from "./types.js";
 
@@ -61,9 +60,10 @@ const TEXT_EXTENSIONS = new Set([
 
 export async function assessIndexFreshness(workspacePath: string, memoryDir?: string): Promise<IndexFreshnessReport> {
   const workspaceRoot = path.resolve(workspacePath);
-  const paths = await ensureMemoryLayout(workspaceRoot, memoryDir);
   const checkedAt = new Date().toISOString();
-  if (!existsSync(paths.fileManifest) || !existsSync(paths.repoIndex)) {
+  const manifest = await readMemorySnapshot<FileManifestEntry[]>(workspaceRoot, "file_manifest", memoryDir);
+  const repoIndex = await readMemorySnapshot<unknown>(workspaceRoot, "repo_index", memoryDir);
+  if (!manifest || !repoIndex) {
     return {
       schemaVersion: MEMORY_SCHEMA_VERSION,
       status: "missing",
@@ -76,7 +76,6 @@ export async function assessIndexFreshness(workspacePath: string, memoryDir?: st
     };
   }
 
-  const manifest = await readJson<FileManifestEntry[]>(paths.fileManifest);
   const manifestByPath = new Map(manifest.map((entry) => [entry.path, entry]));
   const currentFiles = await collectCurrentTextFiles(workspaceRoot);
   const changedFiles: string[] = [];
@@ -99,7 +98,7 @@ export async function assessIndexFreshness(workspacePath: string, memoryDir?: st
     if (!currentPathSet.has(previous.path)) deletedFiles.push(previous.path);
   }
 
-  const state = existsSync(paths.indexState) ? await readJson<IndexState>(paths.indexState) : undefined;
+  const state = await readMemorySnapshot<IndexState & { lastFreshnessCheck?: IndexFreshnessReport }>(workspaceRoot, "index_state", memoryDir);
   const stale = changedFiles.length > 0 || newFiles.length > 0 || deletedFiles.length > 0;
   const report: IndexFreshnessReport = {
     schemaVersion: MEMORY_SCHEMA_VERSION,
@@ -114,7 +113,7 @@ export async function assessIndexFreshness(workspacePath: string, memoryDir?: st
     deletedFiles: deletedFiles.sort(),
     warnings: stale ? ["Repository files changed after the last index. Refresh before relying on context packs."] : []
   };
-  await writeJson(paths.indexState, {
+  await saveMemory(workspaceRoot, { indexState: {
     ...(state ?? {
       schemaVersion: MEMORY_SCHEMA_VERSION,
       indexVersion: MEMORY_SCHEMA_VERSION,
@@ -124,7 +123,7 @@ export async function assessIndexFreshness(workspacePath: string, memoryDir?: st
       hash: manifestHash(manifest)
     }),
     lastFreshnessCheck: report
-  });
+  } }, memoryDir);
   return report;
 }
 
@@ -136,13 +135,13 @@ export async function refreshRepoIndex(
   const snapshot = await rebuildRepoIndex(workspacePath, options);
   const after = await assessIndexFreshness(workspacePath, options.memoryDir);
   return {
-    mode: options.changedOnly ? "changed-only-report-full-refresh" : "full-refresh",
+    mode: options.changedOnly ? "changed-only-fingerprint-refresh" : "fingerprint-refresh",
     before,
     after,
     snapshot,
     note: options.changedOnly
-      ? "Phase 4 reports changed files first, then performs a full refresh for correctness."
-      : "Full repository memory refresh completed."
+      ? "Changed files were reported first; durable file, symbol, semantic, FTS, and embedding records were updated by content fingerprint."
+      : "Repository snapshots were regenerated deterministically while durable index records were updated by content fingerprint."
   };
 }
 

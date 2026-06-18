@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { SanitizedProviderConfig } from "@hivo/protocol";
-import { MockLlmProvider } from "../llm/MockLlmProvider.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
-import { ensureMemoryLayout, writeJson } from "../memory/ProjectMemory.js";
+import { appendDecision, saveMemory } from "../memory/ProjectMemory.js";
 import type { CommandInventory, FileSummaryRecord, RepoIndex } from "../memory/types.js";
 import { SeniorCodingAgent } from "../agents/SeniorCodingAgent.js";
 import { EventBus } from "../runtime/EventBus.js";
@@ -49,7 +49,7 @@ test("Phase 2 Run and Task model validation fails loudly for invalid data", () =
       max_context_files: 4,
       max_context_chars: 4000,
       max_task_attempts: 1,
-      provider_mode: "mock"
+      provider_mode: "real_provider"
     },
     artifacts_path: "runs/run_1"
   } as Run);
@@ -234,7 +234,7 @@ test("old simple SeniorCodingAgent path still works alongside Phase 2", async ()
       executionMode: "simple_mode",
       userPrompt: "Explain this project."
     });
-    const completed = await new SeniorCodingAgent(new MockLlmProvider(), sessionManager)
+    const completed = await new SeniorCodingAgent(new ScriptedProvider(), sessionManager)
       .runTurn(session.id, "Explain this project.");
     assert.equal(completed.status, "completed");
     assert.ok(completed.messages.some((message) => message.role === "assistant"));
@@ -300,7 +300,7 @@ test("provider-backed SeniorCodingAgent inspect stops instead of returning local
   }
 });
 
-class CountingMockProvider extends MockLlmProvider {
+class CountingMockProvider extends ScriptedProvider {
   structuredCalls = 0;
 
   override async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
@@ -309,7 +309,7 @@ class CountingMockProvider extends MockLlmProvider {
   }
 }
 
-class FinalInspectProvider extends MockLlmProvider {
+class FinalInspectProvider extends ScriptedProvider {
   textCalls = 0;
 
   constructor(private readonly behavior: "ok" | "fail" = "ok") {
@@ -369,7 +369,6 @@ async function createFixtureWorkspace(prefix: string) {
 }
 
 async function writeFakeMemory(workspace: string) {
-  const paths = await ensureMemoryLayout(workspace);
   const repoIndex: RepoIndex = {
     schemaVersion: 1,
     generatedAt: new Date("2026-05-21T00:00:00.000Z").toISOString(),
@@ -438,14 +437,14 @@ async function writeFakeMemory(workspace: string) {
     relatedTests: ["src/index.test.ts"],
     purposeGuess: "exports greet"
   };
-  await writeJson(paths.repoIndex, repoIndex);
-  await writeJson(paths.commandInventory, commandInventory);
-  await writeFile(paths.fileSummaries, `${JSON.stringify(summary)}\n`, "utf8");
-  await writeFile(paths.decisions, `${JSON.stringify({
-    id: "decision_test",
-    createdAt: new Date("2026-05-21T00:00:00.000Z").toISOString(),
+  await saveMemory(workspace, {
+    repoIndex,
+    commandInventory,
+    fileSummaries: [summary]
+  });
+  await appendDecision(workspace, {
     summary: "Keep Phase 1 memory file-backed for now."
-  })}\n`, "utf8");
+  });
 }
 
 function createTestTask(runId: string): Task {

@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { buildCommandInventory } from "./CommandInventory.js";
 import { buildProjectIntelligence } from "./ProjectIntelligence.js";
+import { buildSemanticProjectModel } from "./SemanticProjectModel.js";
 import {
   appendRunHistory,
   ensureMemoryLayout,
-  writeJson
+  saveMemory
 } from "./ProjectMemory.js";
 import {
   DEFAULT_MEMORY_DIR,
@@ -205,7 +206,7 @@ const BUILD_BASENAMES = new Set([
 export async function rebuildRepoIndex(workspacePath: string, options: RebuildRepoIndexOptions = {}): Promise<RepoMemorySnapshot> {
   const workspaceRoot = path.resolve(workspacePath);
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
-  const memoryPaths = await ensureMemoryLayout(
+  await ensureMemoryLayout(
     workspaceRoot,
     options.memoryDir ?? process.env.HIVO_MEMORY_DIR ?? process.env.ORCHCODE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR
   );
@@ -232,13 +233,24 @@ export async function rebuildRepoIndex(workspacePath: string, options: RebuildRe
     symbolIndex,
     commandInventory
   });
+  const semanticProjectModel = buildSemanticProjectModel({
+    generatedAt,
+    manifestHash: manifestHash(fileManifest),
+    manifest: fileManifest,
+    summaries: fileSummaries,
+    symbols: symbolIndex,
+    fileText
+  });
 
-  await writeJson(memoryPaths.repoIndex, repoIndex);
-  await writeJson(memoryPaths.fileManifest, fileManifest);
-  await writeJson(memoryPaths.symbolIndex, symbolIndex);
-  await writeJson(memoryPaths.commandInventory, commandInventory);
-  await writeJson(memoryPaths.projectIntelligence, projectIntelligence);
-  await writeJson(memoryPaths.indexState, {
+  await saveMemory(workspaceRoot, {
+    repoIndex,
+    fileManifest,
+    symbolIndex,
+    fileSummaries,
+    commandInventory,
+    projectIntelligence,
+    semanticProjectModel,
+    indexState: {
     schemaVersion: MEMORY_SCHEMA_VERSION,
     indexVersion: MEMORY_SCHEMA_VERSION,
     generatedAt,
@@ -246,13 +258,12 @@ export async function rebuildRepoIndex(workspacePath: string, options: RebuildRe
     fileCount: fileManifest.length,
     hash: manifestHash(fileManifest),
     projectIntelligenceRef: "project_intelligence.json"
-  });
-  await mkdir(path.dirname(memoryPaths.fileSummaries), { recursive: true });
-  await writeFile(memoryPaths.fileSummaries, fileSummaries.map((summary) => JSON.stringify(summary)).join("\n") + "\n", "utf8");
+    }
+  }, options.memoryDir);
   await appendRunHistory(workspaceRoot, {
     task: "rebuild_repo_index",
     status: "completed",
-    summary: `Indexed ${fileManifest.length} file(s), ${symbolIndex.symbols.length} symbol hint(s), and ${commandInventory.commands.length} command(s).`,
+    summary: `Indexed ${fileManifest.length} file(s), ${symbolIndex.symbols.length} symbol hint(s), ${semanticProjectModel.relationships.length} semantic relationship(s), and ${commandInventory.commands.length} command(s).`,
     relatedFiles: ["repo_index.json", "file_manifest.json", "symbol_index.json", "command_inventory.json"],
     commands: ["memory index repo"]
   }, options.memoryDir);
@@ -263,7 +274,8 @@ export async function rebuildRepoIndex(workspacePath: string, options: RebuildRe
     symbolIndex,
     fileSummaries,
     commandInventory,
-    projectIntelligence
+    projectIntelligence,
+    semanticProjectModel
   };
 }
 

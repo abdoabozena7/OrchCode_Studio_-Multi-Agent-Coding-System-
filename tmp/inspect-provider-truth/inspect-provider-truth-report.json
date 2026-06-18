@@ -1,50 +1,58 @@
 {
-  "sessionId": "session_b464e3bc-ce7f-40da-8973-c50c1a9c07c6",
-  "mode": "real_provider",
-  "configuredProvider": {
-    "providerType": "ollama",
-    "providerName": "Ollama",
-    "baseUrl": "http://127.0.0.1:11434",
-    "selectedModel": "qwen2.5-coder:7b",
-    "isValid": true
-  },
+  "sessionId": "session_55215c36-1bbe-45d8-ba91-ceda33279ae3",
+  "mode": "demo_mock",
+  "configuredProvider": null,
   "providerTelemetry": {
-    "providerMode": "real_provider",
-    "providerName": "Ollama",
-    "modelName": "qwen2.5-coder:7b",
-    "providerBaseUrl": "http://127.0.0.1:11434",
+    "providerMode": "demo_mock",
+    "providerName": "mock_demo",
+    "modelName": "mock-demo",
     "providerRequestCount": 2,
-    "mockProviderRequestCount": 0,
-    "realProviderRequestCount": 2,
+    "mockProviderRequestCount": 2,
+    "realProviderRequestCount": 0,
     "providerResponseCount": 2,
     "providerFailureCount": 0,
     "providerTimeoutCount": 0,
-    "totalProviderLatencyMs": 61823,
+    "totalProviderLatencyMs": 0,
+    "totalProviderPromptChars": 21471,
+    "totalProviderResponseChars": 766,
+    "totalProviderContextChars": 0,
     "perPromptProviderLatencyMs": [
       {
-        "requestId": "provider_1779623058194_1",
+        "requestId": "provider_1781442457596_1",
         "requestType": "structured",
-        "latencyMs": 26412,
+        "purpose": "compose",
+        "latencyMs": 0,
         "status": "success",
-        "providerName": "Ollama",
-        "modelName": "qwen2.5-coder:7b"
+        "systemPromptChars": 2166,
+        "userPromptChars": 7611,
+        "contextChars": 0,
+        "promptChars": 9777,
+        "responseChars": 383,
+        "providerName": "mock_demo",
+        "modelName": "mock-demo"
       },
       {
-        "requestId": "provider_1779623084612_2",
+        "requestId": "provider_1781442457600_2",
         "requestType": "structured",
-        "latencyMs": 35411,
+        "purpose": "compose",
+        "latencyMs": 0,
         "status": "success",
-        "providerName": "Ollama",
-        "modelName": "qwen2.5-coder:7b"
+        "systemPromptChars": 2166,
+        "userPromptChars": 9528,
+        "contextChars": 0,
+        "promptChars": 11694,
+        "responseChars": 383,
+        "providerName": "mock_demo",
+        "modelName": "mock-demo"
       }
     ],
     "fallbackUsed": true,
-    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided orchcode-file link.; answer mentions unsupported project/domain claim(s): dataset; usedEvidenceRefs contains an unknown ref: [src/clustering.py:1](orchcode-file:src%2Fclustering.py:1)",
+    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided hivo-file link or verified plain file ref.; answer must cite evidence that directly supports the requested concept: dbscan; answer must explain the current project identity/domain before the focused concept: forecasting or trend model",
     "deterministicOnly": false,
-    "mockProviderUsed": false,
-    "realProviderUsed": true,
-    "activeProviderSource": "explicit_cli",
-    "updatedAt": "2026-05-24T11:45:20.032Z"
+    "mockProviderUsed": true,
+    "realProviderUsed": false,
+    "activeProviderSource": "runtime_default",
+    "updatedAt": "2026-06-14T13:07:37.617Z"
   },
   "evidenceReport": {
     "topEvidenceFiles": [
@@ -72,27 +80,90 @@
     "finalEvidenceFilesActuallyUsed": [
       "src/clustering.py"
     ],
+    "groundedEvidence": [
+      {
+        "ref": "src/clustering.py:1",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      },
+      {
+        "ref": "src/clustering.py:3",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      },
+      {
+        "ref": "src/clustering.py:4",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      },
+      {
+        "ref": "src/clustering.py:2",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      },
+      {
+        "ref": "src/clustering.py:5",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      },
+      {
+        "ref": "src/clustering.py:6",
+        "sourceFile": "src/clustering.py",
+        "citedPath": "src/clustering.py",
+        "sourceType": "production_source",
+        "reason": "Evidence path exists and is usable with its classified source type.",
+        "existsOnDisk": true,
+        "directness": "direct_implementation",
+        "confidence": "high"
+      }
+    ],
+    "rejectedEvidence": [],
     "generatedEvidenceExcludedCount": 1,
     "generatedEvidenceIncludedCount": 0,
     "generatedEvidenceIncluded": false,
     "allowGeneratedEvidence": false,
-    "updatedAt": "2026-05-24T11:45:20.031Z"
+    "updatedAt": "2026-06-14T13:07:37.613Z"
   },
   "answerContract": {
+    "answerStrategy": "[Circular]",
     "realProviderAnswered": false,
     "deterministicFallbackAnswered": true,
     "providerTimeoutInvolved": false,
     "providerRequestCount": 2,
     "providerResponseCount": 2,
     "fallbackUsed": true,
-    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided orchcode-file link.; answer mentions unsupported project/domain claim(s): dataset; usedEvidenceRefs contains an unknown ref: [src/clustering.py:1](orchcode-file:src%2Fclustering.py:1)",
-    "finalEvidenceFilesActuallyUsed": [
-      "src/clustering.py"
-    ],
+    "fallbackReason": "local_validation_failed: answerMarkdown must include at least one provided hivo-file link or verified plain file ref.; answer must cite evidence that directly supports the requested concept: dbscan; answer must explain the current project identity/domain before the focused concept: forecasting or trend model",
+    "finalEvidenceFilesActuallyUsed": "[Circular]",
     "generatedArtifactsExcluded": true
   },
-  "answerPreview": "## Summary\nThis answer is centered on `dbscan`, not the whole project pipeline. The strongest implementation evidence is [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n\n## Concept Flow\n### 1. dbscan implementation: apply_dbscan\n- What happens: The code applies DBSCAN through DBSCAN(eps=0.35, min_samples=5), fit_predict(features); this is the density-clustering step proven by the implementation snippet.\n- Evidence role: implementation (Snippet contains a direct target algorithm/library call in the owner body.).\n- Input data: `features`.\n- Parameters/arguments: `eps=0.35`, `min_samples=5`, `features`.\n- Output: `labels`, `noise_mask`, `clean_features`.\n- Related downstream/upstream names: `noise_mask`, `features`, `labels`.\n- Evidence: [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n\n## Direct Answers\n- Where: [src/clustering.py:3](orchcode-file:src%2Fclustering.py:3).\n- Evidence roles: direct implementation is available and preferred over orchestration, downstream, tests, docs, or visualization evidence.\n- Parameters: `eps=0.35`, `min_samples=5`, `features`.\n- Outputs/assigned values: `labels`, `noise_mask`, `clean_features`.\n- Persistence/storage: not prove",
+  "answerPreview": "> Workspace used for this answer: `C:\\Users\\A-plus\\AppData\\Local\\Temp\\hivo-inspect-provider-truth-1781442457337-22ab576634dc`\n> Answer source: local evidence graph synthesis after provider output was unavailable or failed validation. Reason: local_validation_failed: answerMarkdown must include at least one provided hivo-file link or verified plain file ref.; answer must cite evidence that directly supports the requested concept: dbscan; answer must explain t\n\n## Summary\nThis answer is centered on `dbscan`, not the whole project pipeline. The strongest implementation evidence is [src/clustering.py:3](hivo-file:src%2Fclustering.py:3).\n\n## Concept Flow\n### 1. dbscan implementation: apply_dbscan\n- What happens: The code applies DBSCAN through DBSCAN(eps=0.35, min_samples=5), fit_predict(features); this is the density-clustering step proven by the implementation snippet.\n- Evidence role: implementation (Snippet contains a direct target algorithm/library call in the owner body.).\n- Input data: `features`.\n- Parameters/arguments: `eps=0.35`, `min_samples=5`, `features`.\n- Output: `labels`, `noise_mask`, `clean_features`.\n- Related downstream/upstream names: `noise_mask`, `features`, `labe",
   "artifactTypes": [
+    "decision_pipeline",
     "project_intake",
     "context_pack",
     "project_explain_report",
@@ -100,8 +171,13 @@
     "investigation_graph",
     "mechanism_chain",
     "evidence_tiers",
+    "question_decomposition",
+    "claim_ledger",
+    "project_understanding",
     "provider_truth",
     "evidence_report",
+    "answer_verification",
+    "final_decision",
     "verification",
     "project_explain_answer"
   ]

@@ -8,7 +8,8 @@ import {
   appendDecision,
   appendRunHistory,
   getRelevantFiles,
-  readJsonl,
+  readMemoryRecords,
+  readMemorySnapshot,
   rebuildRepoIndex,
   resolveMemoryPaths
 } from "../memory/index.js";
@@ -21,13 +22,12 @@ test("repository indexer creates memory files and ignores generated/vendor direc
     const snapshot = await rebuildRepoIndex(workspace, { now: fixedNow });
     const memoryPaths = resolveMemoryPaths(workspace);
 
-    assert.equal(existsSync(memoryPaths.repoIndex), true);
-    assert.equal(existsSync(memoryPaths.fileManifest), true);
-    assert.equal(existsSync(memoryPaths.symbolIndex), true);
-    assert.equal(existsSync(memoryPaths.fileSummaries), true);
-    assert.equal(existsSync(memoryPaths.commandInventory), true);
-    assert.equal(existsSync(memoryPaths.decisions), true);
-    assert.equal(existsSync(memoryPaths.taskHistory), true);
+    assert.equal(existsSync(memoryPaths.database), true);
+    assert.ok(await readMemorySnapshot(workspace, "repo_index"));
+    assert.ok(await readMemorySnapshot(workspace, "file_manifest"));
+    assert.ok(await readMemorySnapshot(workspace, "symbol_index"));
+    assert.ok(await readMemorySnapshot(workspace, "file_summaries"));
+    assert.ok(await readMemorySnapshot(workspace, "command_inventory"));
 
     const indexedPaths = snapshot.fileManifest.map((file) => file.path);
     assert.equal(indexedPaths.some((file) => file.startsWith("node_modules/")), false);
@@ -82,9 +82,8 @@ test("memory append APIs and relevant-file lookup work from generated summaries"
       status: "completed",
       summary: "Verified append-only JSONL records."
     });
-    const memoryPaths = resolveMemoryPaths(workspace);
-    const decisions = await readJsonl<DecisionRecord>(memoryPaths.decisions);
-    const taskHistory = await readJsonl<TaskHistoryRecord>(memoryPaths.taskHistory);
+    const decisions = await readMemoryRecords<DecisionRecord>(workspace, "decision");
+    const taskHistory = await readMemoryRecords<TaskHistoryRecord>(workspace, "task_history");
     const relevant = await getRelevantFiles(workspace, "start helper");
 
     assert.equal(decisions.some((entry) => entry.id === decision.id), true);

@@ -43,7 +43,7 @@ export function decideIntentBeforeRetrieval(message: string): IntentDecision {
   if (!isWorkspaceRoute(route.route)) {
     return directDecision(route.language, route.rationale, route.confidence);
   }
-  if (route.route === "inspect_explain") {
+  if (route.route === "inspect_explain" || route.route === "swarm_readonly") {
     return workspaceDecision("workspace_question", route.language, route.rationale, route.confidence);
   }
   if (route.route === "simple_run" && looksLikeRunRequest(route.workspacePrompt)) {
@@ -83,24 +83,6 @@ export function normalizeProviderIntentDecision(input: ProviderIntentDecisionMod
   };
 }
 
-export function createDirectConversationReply(decision: IntentDecision) {
-  if (decision.language === "arabic") {
-    if (/thank|thanks|شكرا|شكرًا|متشكر|تسلم/i.test(decision.rationale)) return "العفو. موجود لو عايز نكمل.";
-    return "أهلًا! موجود. ابعتلي السؤال أو المهمة اللي عايز أشتغل عليها.";
-  }
-  return "Hey, I'm here. Send me the question or task you want me to work on.";
-}
-
-export function directConversationProgressTitle(language: IntentDecisionLanguage) {
-  return language === "arabic" ? "رد مباشر" : "Direct reply";
-}
-
-export function directConversationProgressSummary(decision: IntentDecision) {
-  return decision.language === "arabic"
-    ? "الرسالة لا تطلب كود أو ملفات أو تشغيل أو شرح مشروع، فمش محتاجة بحث في المشروع."
-    : "The message does not ask for code, files, running, or project explanation, so no workspace search is needed.";
-}
-
 export function prepareWorkspacePromptForUnderstanding(message: string): WorkspacePromptPreparation {
   const trimmed = message.trim();
   if (!trimmed) return { originalMessage: message, workspaceMessage: "", droppedPreamble: "" };
@@ -116,6 +98,19 @@ export function prepareWorkspacePromptForUnderstanding(message: string): Workspa
 
 function collectIntentSignals(normalized: string): IntentSignals {
   const tokens = normalized.split(" ").filter(Boolean);
+  if (isAnswerRelationshipQuestion(normalized)) {
+    return {
+      tokenCount: tokens.length,
+      hasRunSignal: false,
+      hasWorkspaceQuestionSignal: true,
+      hasWorkspaceActionSignal: false,
+      hasWorkspaceObjectSignal: true,
+      hasCodeLikeSignal: true,
+      hasSocialSignal: false,
+      hasThanksSignal: false,
+      hasQuestionSignal: true
+    };
+  }
   return {
     tokenCount: tokens.length,
     hasRunSignal: /\b(run|start|launch|serve|open|preview|boot)\b/i.test(normalized)
@@ -135,6 +130,15 @@ function collectIntentSignals(normalized: string): IntentSignals {
       || /\b(why|how|what|where|is|does|can|should)\b/i.test(normalized)
       || /(ازاي|إزاي|ايه|إيه|فين|ليه|هل|ازاى)/u.test(normalized)
   };
+}
+
+function isAnswerRelationshipQuestion(text: string) {
+  const asksWhenOrDecision = /\b(when|decide|decision)\b/i.test(text)
+    || /(?:\u0627\u0645\u062a\u0649|\u0645\u062a\u0649|\u064a\u0642\u0631\u0631)/u.test(text);
+  const answerLinkDirective = /(?:\u0627\u0631\u0628\u0637|\u0631\u0628\u0637)\s+(?:\u0625?\u062c\u0627\u0628\u062a\u0643|\u0627\u0644\u0625?\u062c\u0627\u0628\u0629)/u.test(text)
+    || /(?:\u0625?\u062c\u0627\u0628\u062a\u0643|\u0627\u0644\u0625?\u062c\u0627\u0628\u0629).{0,40}(?:\u0627\u0631\u0628\u0637|\u0631\u0628\u0637)/u.test(text);
+  const projectDecisionTerms = /\b(orchestrator|rules?|drift|fcm|membership|cluster|re-cluster|offer)\b/i.test(text);
+  return asksWhenOrDecision && answerLinkDirective && projectDecisionTerms;
 }
 
 function normalizeMessageForIntentDecision(message: string) {
