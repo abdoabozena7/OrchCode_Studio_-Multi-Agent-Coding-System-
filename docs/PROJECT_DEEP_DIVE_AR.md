@@ -3,9 +3,10 @@
 > This document is a practical English deep dive into the repository.
 > It is intentionally long, line-oriented, and searchable.
 > It explains the project from the desktop UI down to the runtime, memory system, swarm autopilot, Rust command authority, and patch application path.
-> Review date: 2026-06-06.
+> Review date: 2026-06-18.
 > Original request: create a detailed Markdown explanation with at least 700 lines.
 > This English version keeps that depth while replacing the earlier Arabic text.
+> Current memory index at this update: schema version 2, fresh, 416 indexed files.
 
 ## 1. Executive Summary
 
@@ -28,27 +29,31 @@
 017. The React frontend displays and controls the operator experience.
 018. The shared protocol package keeps the TypeScript frontend, TypeScript runtime, and Rust bridge aligned.
 019. `.agent_memory/` stores durable repository memory and run artifacts.
-020. The memory index should be checked before context-sensitive work.
-021. The documented memory command for that is `npm run memory:index-status`.
-022. The system supports simple runtime sessions.
-023. The system supports orchestrated multi-agent sessions.
-024. The system supports CLI-driven internal swarm autopilot runs.
-025. The system supports campaign workflows for larger goals.
-026. The internal swarm has a maximum supported logical capacity of 300 agents.
-027. The 300-agent number is a maximum, not a normal default.
-028. Write-capable executors are capped separately from read-only agents.
-029. Read-only fan-out is preferred for exploration, scouting, review, and validation.
-030. Approval-required states are real safety stops.
-031. A run is not verified if validation only produced blocked commands.
-032. Patch fingerprints, file locks, validation logs, review artifacts, and durable events are sources of truth.
-033. The safest debugging strategy is to follow boundaries one by one.
-034. Start with the UI if the operator display is wrong.
-035. Move to runtime HTTP/SSE if live state is wrong.
-036. Move to session state if the runtime lifecycle is wrong.
-037. Move to protocol types if payload shapes are wrong.
-038. Move to Rust commands if workspace, terminal, or patch authority is wrong.
-039. Move to SQLite events if restore or authoritative patch evidence is wrong.
-040. Move to `.agent_memory` if swarm, orchestration, memory, or artifact state is wrong.
+020. `.agent_memory/factory_metadata.sqlite` is now the SQLite-first memory source of truth.
+021. The memory index should be checked before context-sensitive work.
+022. The documented memory command for that is `npm run memory:index-status`.
+023. The system supports simple runtime sessions.
+024. The system supports orchestrated multi-agent sessions.
+025. The system supports CLI-driven internal swarm autopilot runs.
+026. The system supports campaign workflows for larger goals.
+027. The system supports ReasoningKernel v2 adaptive provider loops.
+028. The system supports project-understanding and adaptive-reasoning certification gates.
+029. The system supports planning-only recursive factory approval layers for large work.
+030. The internal swarm has a maximum supported logical capacity of 300 agents.
+031. The 300-agent number is a maximum, not a normal default.
+032. Write-capable executors are capped separately from read-only agents.
+033. Read-only fan-out is preferred for exploration, scouting, review, and validation.
+034. Approval-required states are real safety stops.
+035. A run is not verified if validation only produced blocked commands.
+036. Patch fingerprints, file locks, validation logs, review artifacts, and durable events are sources of truth.
+037. The safest debugging strategy is to follow boundaries one by one.
+038. Start with the UI if the operator display is wrong.
+039. Move to runtime HTTP/SSE if live state is wrong.
+040. Move to session state if the runtime lifecycle is wrong.
+041. Move to protocol types if payload shapes are wrong.
+042. Move to Rust commands if workspace, terminal, or patch authority is wrong.
+043. Move to SQLite events if restore or authoritative patch evidence is wrong.
+044. Move to `.agent_memory` if swarm, orchestration, memory, or artifact state is wrong.
 
 ## 2. Top-Level Repository Map
 
@@ -1635,3 +1640,94 @@ let after_snapshot = state.git.snapshot(&workspace_path, "rust_git_snapshot");
 1298. Shared protocol types make the layers coherent.
 1299. The fastest debugging path is to identify the failing boundary.
 1300. The long-term goal is a trustworthy orchestration-first coding factory.
+
+## 50. Current Idea Update - June 2026
+
+1301. The current idea is no longer only "a multi-agent coding agent."
+1302. The current idea is an orchestration-first, evidence-gated, recursive coding factory.
+1303. The provider owns semantic understanding and final prose in the v2 lane.
+1304. Local code owns repository facts, tools, access policy, evidence validation, and authority gates.
+1305. `ReasoningKernel v2` is the preferred adaptive provider loop for conversation and project-question turns.
+1306. The first v2 provider call returns `TurnUnderstanding` plus an initial `ReasoningStep`.
+1307. Later v2 calls can return tool batches, final answers, ask-user actions, refusals, escalations, or repairs.
+1308. The runtime rejects identical repeated tool batches instead of running them twice.
+1309. Zero-gain tool rounds trigger independent repair.
+1310. A third zero-gain failure ends the turn explicitly.
+1311. Provider failures after the adaptive loop starts preserve partial traces.
+1312. Failed adaptive turns keep `finalResponseSource: none`.
+1313. Failed adaptive turns do not receive local fallback assistant prose.
+1314. Final answers require accepted evidence.
+1315. Final answers require citation verification.
+1316. Final answers require an independent provider verifier.
+1317. Workspace citations store path, line range, content hash, source type, and excerpt.
+1318. Runtime re-reads cited files before accepting an answer.
+1319. The old `ReasoningDirective` is now mostly a compatibility projection.
+1320. `investigate_project` is the preferred deep cross-file read tool.
+1321. `investigate_project` can combine ranked text, FTS, optional vector search, and relationship retrieval.
+1322. `investigate_project` returns bounded source excerpts and hashes.
+1323. `investigate_project` does not write final answers.
+1324. `ProjectUnderstandingKernel` exists for deeper relationship and embedding-backed project questions.
+1325. Deep project understanding can require an embedding model.
+1326. Missing embeddings block the deep lane instead of allowing unsupported understanding claims.
+1327. The durable semantic model lives in `.agent_memory/factory_metadata.sqlite`.
+1328. The semantic model stores file, symbol, route, concept, and data-field nodes.
+1329. The semantic model stores relationship edges.
+1330. The semantic model stores content hashes and freshness.
+1331. The semantic model can store provider embeddings.
+1332. Repository memory is now SQLite-first.
+1333. Root JSON and JSONL memory files are legacy migration inputs or backup exports.
+1334. `SqliteMemoryStore` owns structured memory access in the runtime.
+1335. SQLite FTS5 powers `npm run memory:search`.
+1336. `npm run memory:db-status` inspects the SQLite memory store.
+1337. `npm run memory:migrate-sqlite` migrates legacy memory into SQLite.
+1338. `npm run memory:export-backup` creates checkpointed backup exports.
+1339. Backup restoration verifies manifest hashes before replacing the database.
+1340. `Project Knowledge Tree` is now a planning-only routing layer for existing-project edit requests.
+1341. The tree uses fresh repository memory when available.
+1342. The root node represents whole-project understanding.
+1343. Area nodes represent architectural ownership areas.
+1344. Leaf nodes represent specific file or module ownership.
+1345. The Knowledge Query Router returns affected nodes, primary node, reviewer nodes, likely files, risks, confidence, and reasons.
+1346. Knowledge-guided plans list files to touch.
+1347. Knowledge-guided plans list files not to touch.
+1348. Knowledge-guided plans describe local and cross-node risks.
+1349. This layer does not propose patches.
+1350. This layer does not run commands.
+1351. This layer does not write files.
+1352. The recursive factory lane handles large or explicitly multi-step work.
+1353. Recursive factory first creates a durable Product Specification.
+1354. Product Specification approval is required before technical planning.
+1355. Recursive factory then creates a durable Technical Plan.
+1356. Technical Plan approval is required before branch graph execution can be considered.
+1357. Branch execution remains separately gated.
+1358. Runtime branches still cannot write files directly.
+1359. Branches can propose patches.
+1360. Rust still applies approved patches.
+1361. Validation truth still comes from Rust-authoritative validation commands.
+1362. Recursive final reports include branch outcomes.
+1363. Recursive final reports include conflict truth.
+1364. Recursive final reports include apply truth.
+1365. Recursive final reports include validation truth.
+1366. A failed or blocked required branch prevents green final status.
+1367. Unrun validation remains unverified.
+1368. Approval-required validation remains unverified.
+1369. Missing validation remains unverified.
+1370. Validation failure can produce a durable failure diagnosis artifact.
+1371. Repair loops are bounded.
+1372. Repair loops still require patch approval and Rust apply.
+1373. The action lane is gated by adaptive reasoning certification.
+1374. Read reasoning certification uses sealed 240-case holdouts.
+1375. Action reasoning certification uses sealed 120-case holdouts.
+1376. Certification spans at least eight commit-pinned repositories.
+1377. Certification uses independent semantic judging.
+1378. Keyword overlap is not sufficient.
+1379. Passing records are exact-profile records.
+1380. The exact router, author, verifier, and embedding model profile matters.
+1381. No model or gate is certified by default.
+1382. `npm run test:reasoning-v2` covers adaptive kernel, certification, architecture, and decision-pipeline guards.
+1383. `npm run eval:project-understanding` runs the deep project-understanding release gate.
+1384. `npm run eval:adaptive-reasoning` runs adaptive reasoning certification.
+1385. `npm run smoke:patch-truth` checks Rust patch truth behavior.
+1386. `npm run smoke:real-workspace` checks a real-workspace desktop flow.
+1387. The README now includes Mermaid diagrams for the current architecture and lifecycle.
+1388. The deep-dive doc should be updated again when the v2 action lane fully replaces migration adapters.

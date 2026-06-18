@@ -1,331 +1,310 @@
-# Hivo Studio – Multi‑Agent Coding System  
+# Hivo Studio - Multi-Agent Coding System
 
-**A self‑orchestrating, memory‑backed, safety‑first coding platform that turns many small LLM workers into a reliable software‑factory.**  
+Hivo Studio is an orchestration-first coding platform for turning narrow LLM workers into an auditable software factory. It combines a Tauri desktop operator console, a TypeScript agent runtime, SQLite-backed project memory, adaptive provider reasoning, swarm planning, approval gates, and Rust-owned patch and command authority.
 
-> **TL;DR** – Install, index the repository, start a campaign, and let the built‑in swarm planner staff the right number of narrow agents, enforce locks, run verification loops, and persist the results in `.agent_memory/`.  
+The current idea is bigger than "one coding agent writes code." Hivo is moving toward a recursive coding factory: understand the repository, build durable project knowledge, route work to the right narrow specialists, require evidence before claims, stop at approvals before writes, and verify every important outcome.
 
----  
+## System At A Glance
 
-## Table of Contents  
+```mermaid
+flowchart LR
+  User["Operator"] --> UI["React + Tauri Desktop"]
+  UI --> Runtime["TypeScript Agent Runtime"]
+  Runtime --> Reasoning["ReasoningKernel v2"]
+  Runtime --> Memory["SQLite Project Memory"]
+  Runtime --> Swarm["Internal Swarm Autopilot"]
+  Runtime --> Plans["Campaigns / Recursive Factory Plans"]
+  UI --> Rust["Rust Authority Layer"]
+  Rust --> FS["Workspace Files"]
+  Rust --> Git["Git Evidence"]
+  Rust --> DB["Desktop SQLite Events"]
+  Reasoning --> Tools["Read Tools / Evidence Store"]
+  Memory --> Tools
+  Swarm --> Tools
+  Plans --> Swarm
+```
 
-| Section | Description |
-|---------|-------------|
-| [Project Overview](#project‑overview) | What the system does and why it matters |
-| [Key Features](#key‑features) | Core capabilities of Hivo Studio |
-| [Technologies & Architecture](#technologies‑&‑architecture) | Languages, runtimes and design pillars |
-| [Getting Started](#getting‑started) | Install, build, and initialise the memory store |
-| [Running a Campaign](#running-a-campaign) | Normal workflow – modes, commands and artefacts |
-| [Memory & Indexing](#memory‑&‑indexing) | Persistent repository memory, inspection and maintenance |
-| [Swarm Autopilot & Staffing](#swarm‑autopilot‑&‑staffing) | How the system decides the number & type of agents |
-| [Safety & Verification](#safety‑&‑verification) | Locks, review loops, patch‑safety and approval gates |
-| [Testing & Linting](#testing‑&‑linting) | Keeping the code‑base strict and type‑safe |
-| [Contributing](#contributing) | Guidelines for extending the platform |
-| [License](#license) | Open‑source terms |
-| [References](#references) | Important docs (AGENTS.md, audit report…) |
+## Core Idea
 
----  
+Hivo does not try to make one model act like a huge global brain. It builds reliability around smaller focused workers:
 
-## Project Overview  
+| Layer | What It Does |
+| --- | --- |
+| Repository memory | Indexes source, symbols, commands, semantic nodes, relationships, events, and durable lessons. |
+| Reasoning kernel | Lets the provider choose adaptive read, tool, repair, final, ask-user, refuse, or escalate steps. |
+| Project knowledge tree | Routes edit requests through whole-project, area, and leaf ownership before execution begins. |
+| Swarm autopilot | Staffs internal logical agents automatically from task complexity, risk, scope, and command inventory. |
+| Recursive factory | Splits large goals into approved product specs, technical plans, branch plans, and gated execution. |
+| Rust authority | Owns workspace boundaries, terminal execution, patch application, Git evidence, and local persistence. |
 
-Hivo Studio is **not** a single “smart” LLM that pretends to be a large model.  
-Instead, it **orchestrates many narrow agents** (LLMs, static analysers, test runners, etc.) that each receive a *tiny, well‑defined context pack* and produce deterministic, structured JSON output.  
+## Updated Architecture
 
-The orchestration layer supplies:
+```mermaid
+flowchart TD
+  Prompt["User Prompt"] --> Intake["Conversation + Intent Intake"]
+  Intake --> Kernel["ReasoningKernel v2"]
+  Kernel --> Route{"Route"}
+  Route --> Direct["Direct Conversation"]
+  Route --> Inspect["Project Understanding"]
+  Route --> Action["Action / Patch Planning"]
+  Route --> Factory["Recursive Factory"]
+  Inspect --> Evidence["Evidence Store + Citations"]
+  Evidence --> Verify["Independent Provider Verifier"]
+  Verify --> Answer["Provider-Authored Answer"]
+  Action --> Approval["Approval Gate"]
+  Factory --> Product["Product Spec Approval"]
+  Product --> Tech["Technical Plan Approval"]
+  Tech --> Branches["Branch / Subtask Planning"]
+  Branches --> Approval
+  Approval --> RustApply["Rust Patch / Command Authority"]
+  RustApply --> Validation["Rust-Authoritative Validation"]
+  Validation --> Report["Final Report + Memory Update"]
+```
 
-* **Repository‑wide memory** (`.agent_memory/`) that is incrementally indexed and searchable.  
-* **Campaign‑based execution** – a campaign is a series of safe, checkpointed steps that can be paused, inspected, and resumed.  
-* **Swarm staffing heuristics** – the system automatically decides **how many** logical agents to spin up, what roles they play, and what executor caps apply.  
-* **Safety‑first contracts** – file locks, review & validation loops, approval gates and deterministic patch‑fingerprints protect the code base.  
+## Technology Stack
 
-The overall goal is **a reliable, recursive software factory** that learns from every run while keeping all artefacts auditable.
+| Area | Stack |
+| --- | --- |
+| Desktop shell | Tauri 2 |
+| Frontend | React 19, TypeScript, Vite, CSS, lucide-react |
+| Native backend | Rust, Tauri commands, rusqlite, serde, chrono, uuid |
+| Agent runtime | Node.js, TypeScript ESM, Fastify, Server-Sent Events |
+| Shared contracts | `@hivo/protocol` TypeScript package |
+| Memory | SQLite-first `factory_metadata.sqlite`, FTS5 search, JSON/JSONL backup artifacts |
+| Agent logic | Custom orchestration, swarm, task graph, validation, review, and reasoning kernels |
+| LLM providers | Ollama, OpenAI-compatible endpoints, custom/OpenRouter-compatible APIs, mock/test providers |
+| Build/test | npm workspaces, TypeScript compiler, Node test runner, Cargo, Tauri CLI |
 
----  
+## Frameworks And Libraries
 
-## Key Features  
+| Framework / Library | Where It Is Used |
+| --- | --- |
+| React | Desktop operator console UI. |
+| Vite | Desktop web frontend build and dev server. |
+| Tauri | Native desktop shell and JS-to-Rust command bridge. |
+| Fastify | TypeScript runtime HTTP and SSE server. |
+| SQLite / rusqlite | Desktop persistence and SQLite-first project memory. |
+| Node.js test runner | Runtime test execution after TypeScript build. |
+| Cargo test/check | Rust backend validation. |
+| lucide-react | UI icons. |
+| tsx | TypeScript scripts, CLIs, and dev watch mode. |
 
-| Feature | Description |
-|---------|-------------|
-| **Persistent Repository Memory** | Indexes every file under the repo, stores decisions, lessons, and run artefacts under `.agent_memory/`. |
-| **Campaign & Mode System** | `deep` (default), `fast`, `exhaustive` – each mode tunes risk tolerance, staffing, and verification depth. |
-| **Swarm Autopilot** | Self‑staffing up to 300 logical agents (read‑only only for scouts). Dynamic specialist creation based on detected risk (security, performance, UI, etc.). |
-| **Structured Agent‑to‑Agent Communication** | JSON contracts containing file paths, evidential references, command results, and open risks. |
-| **Verification Loop** | Review → Validation → Repair → Patch‑Safety → Human‑Approval before any write. |
-| **Deterministic Artefact Store** | All run artefacts are stored under `.agent_memory/runs/<run‑id>/` and are fully version‑controlled. |
-| **Cross‑Language Runtime** | Node/TypeScript for orchestration + Rust (Tauri) for desktop UI & SQLite persistence. |
-| **CLI‑First Experience** | `npm run …` commands for memory, campaigns, trials, and agent debugging. |
-| **Extensible Plugin Model** | New workers can be added by implementing the `IWorker` interface and publishing a context‑pack builder. |
-| **Observability** | Event tracing, metrics dashboards, and automatic report generation for each campaign. |
+## Main Components
 
----  
+```mermaid
+flowchart TB
+  subgraph Desktop["apps/desktop"]
+    App["React App.tsx"]
+    TauriAPI["src/lib/tauri.ts"]
+    RuntimeAPI["src/lib/agentRuntime.ts"]
+  end
 
-## Technologies & Architecture  
+  subgraph Rust["apps/desktop/src-tauri"]
+    Workspace["WorkspaceService"]
+    Terminal["TerminalService"]
+    Patch["PatchService"]
+    Git["GitService"]
+    DesktopDB["DatabaseService"]
+    Provider["ModelProviderService"]
+  end
 
-| Layer | Implementation | Notes |
-|-------|----------------|-------|
-| **Orchestrator Core** | `apps/agent-runtime/src/orchestration/Orchestrator.ts` (TypeScript) | Manages run creation, deterministic task graphs, context‑pack construction, and artefact persistence. |
-| **Task Graph & Scheduler** | `TaskGraphManager.ts` & `SwarmScheduler.ts` | Handles state transitions, dependencies, and executor caps. |
-| **Swarm Staffing Planner** | `SwarmStaffingPlanner.ts` | Heuristics based on repo index size, risk scores, and available commands. |
-| **Memory / Index** | `RepoIndexer.ts`, `ProjectMemory.ts`, `SqliteMemoryStore.ts` | SQLite-first repository memory, FTS5 search, migrations, backups, and compacting utilities. |
-| **Verification Primitives** | `ReviewLoop.ts`, `ValidationRunner.ts`, `RepairLoop.ts`, `PatchSafety.ts`, `ApprovalGates.ts` | Enforce read‑only fan‑out, deterministic patches, multi‑stage approval. |
-| **File Locks** | `FileLockManager.ts` | Logical lock objects persisted alongside the artefact store. |
-| **Desktop UI (optional)** | Rust Tauri (`apps/desktop/src-tauri/`) | SQLite DB for long‑term run metadata; Rust‑owned patch authority (`patch.rs`). |
-| **Testing & Type‑Safety** | `jest` + `tsc --noEmit --strict` | Full strict‑mode TypeScript; test suite covers memory, orchestration, and verification. |
-| **Command‑Line Interface** | `agent` (bin) + NPM scripts | Unified entry point for campaigns, trials, inspection, and maintenance. |
+  subgraph Runtime["apps/agent-runtime"]
+    Server["Fastify server.ts"]
+    Sessions["SessionManager"]
+    Agent["AgentRuntime"]
+    Reasoning["ReasoningKernel"]
+    Swarm["SwarmAutopilotRuntime"]
+    Memory["SqliteMemoryStore"]
+  end
 
----  
+  subgraph Protocol["packages/protocol"]
+    Events["AppEvent"]
+    SessionsP["AgentRuntimeSession"]
+    Patches["PatchProposal"]
+    Approvals["Safety / Access Types"]
+  end
 
-## Getting Started  
+  App --> TauriAPI --> Rust
+  App --> RuntimeAPI --> Server
+  Server --> Sessions --> Agent
+  Agent --> Reasoning
+  Agent --> Swarm
+  Agent --> Memory
+  Rust --> DesktopDB
+  Runtime --> Protocol
+  Desktop --> Protocol
+```
 
-> **Prerequisites**  
-> * Node.js ≥ 20 (LTS)  
-> * npm ≥ 10  
-> * (Optional) Rust ≥ 1.70 + Cargo for the desktop UI  
+## Repository Layout
 
-```bash
-# 1️⃣ Clone the repository
-git clone https://github.com/your-org/hivo-studio.git
-cd hivo-studio
+```text
+.
+├─ apps/
+│  ├─ agent-runtime/        TypeScript runtime, reasoning, memory, swarm, campaigns
+│  └─ desktop/              React frontend and Tauri desktop app
+│     └─ src-tauri/         Rust authority layer
+├─ packages/
+│  └─ protocol/             Shared TypeScript contracts
+├─ docs/                    Architecture, security, usage, certification docs
+├─ .agent_memory/           SQLite memory, backups, runs, campaigns, evals
+├─ scripts/                 Launch helpers
+└─ package.json             npm workspace command surface
+```
 
-# 2️⃣ Install Node dependencies
+## Memory And Project Understanding
+
+Hivo memory is now SQLite-first. `.agent_memory/factory_metadata.sqlite` is the source of truth for repository snapshots, durable knowledge, semantic project nodes, relationships, embeddings, structured run state, ordered events, FTS5 search, and orchestration metadata.
+
+```mermaid
+flowchart LR
+  Files["Workspace Files"] --> Indexer["RepoIndexer"]
+  Indexer --> SQLite["factory_metadata.sqlite"]
+  SQLite --> FTS["FTS5 Search"]
+  SQLite --> Graph["Semantic Nodes + Relationships"]
+  SQLite --> Embeddings["Optional Embeddings"]
+  SQLite --> Runs["Run / Campaign / Swarm State"]
+  FTS --> Reasoning["ReasoningKernel Tools"]
+  Graph --> Reasoning
+  Embeddings --> Reasoning
+```
+
+Useful commands:
+
+```powershell
+npm run memory:index
+npm run memory:index-status
+npm run memory:index-refresh
+npm run memory:db-status
+npm run memory:search -- "patch authority"
+npm run memory:export-backup
+```
+
+## Safety Model
+
+The most important rule: runtime workers can read, reason, request commands, and propose patches, but they do not directly write project files.
+
+```mermaid
+sequenceDiagram
+  participant R as Runtime
+  participant U as Operator UI
+  participant T as Rust/Tauri
+  participant G as Git/Workspace
+
+  R->>U: PatchProposal with unified diff
+  U->>R: Approve proposal
+  U->>T: apply_runtime_patch(sessionId, patchId)
+  T->>T: Load proposal from SQLite
+  T->>T: Validate paths, secrets, approval
+  T->>G: git apply --check / git apply
+  T->>G: Capture before/after Git snapshots
+  T->>U: Rust-authoritative apply result
+  U->>R: Report apply result
+```
+
+Command execution follows the same principle: the runtime requests a command, but Rust classifies and executes it only when policy and approval allow.
+
+## ReasoningKernel v2
+
+The adaptive reasoning lane is provider-authored and evidence-gated.
+
+- The first provider call returns `TurnUnderstanding` plus the initial `ReasoningStep`.
+- The provider can request tool batches, repair, final answer, ask-user, refuse, or escalate.
+- Local code executes only allowed tools and stores evidence.
+- Identical repeated tool batches are rejected rather than executed twice.
+- Zero-gain tool rounds trigger repair and then explicit failure.
+- Final answers require citation verification and an independent provider verifier.
+- Operational provider failure ends the turn with `finalResponseSource: none`, not a local fallback answer.
+
+## Recursive Factory
+
+Large goals can enter a recursive factory lane:
+
+```mermaid
+flowchart TD
+  Goal["Large Goal"] --> Product["Product Specification"]
+  Product --> ProductApproval{"Product Approved?"}
+  ProductApproval -->|No| ReviseProduct["Revise Product Spec"]
+  ReviseProduct --> Product
+  ProductApproval -->|Yes| TechPlan["Technical Plan"]
+  TechPlan --> TechApproval{"Technical Plan Approved?"}
+  TechApproval -->|No| ReviseTech["Revise Technical Plan"]
+  ReviseTech --> TechPlan
+  TechApproval -->|Yes| Graph["Recursive Branch Graph"]
+  Graph --> BranchApproval{"Start Execution?"}
+  BranchApproval -->|Yes| Branches["Gated Branch Execution"]
+  Branches --> FanIn["Root Integration + Validation Report"]
+```
+
+The first layers are planning-only. They cannot create patches, run commands, or write files until the relevant approvals are complete.
+
+## Verification And Certification
+
+| Gate | Purpose |
+| --- | --- |
+| `npm run test` | Builds and runs runtime tests. |
+| `npm run test:reasoning-v2` | Runs adaptive reasoning kernel, certification, architecture, and decision-pipeline tests. |
+| `npm run typecheck` | Builds protocol and typechecks all TypeScript workspaces. |
+| `cargo test` | Validates Rust backend behavior inside `apps/desktop/src-tauri`. |
+| `npm run smoke:patch-truth` | Runs Rust patch truth smoke coverage. |
+| `npm run eval:project-understanding` | Runs multi-repository deep project-understanding evals. |
+| `npm run eval:adaptive-reasoning` | Runs sealed adaptive reasoning certification gates. |
+
+Certification is not claimed from unit tests. Adaptive reasoning certification requires exact provider/router/author/verifier/embedding profiles, sealed holdout corpora, commit-pinned repositories, semantic judging, provider provenance, and safety error checks.
+
+## Quick Start
+
+```powershell
 npm ci
-
-# 3️⃣ Build TypeScript sources
-npm run build          # => ./dist/
-```
-
-### Initialise Repository Memory  
-
-```bash
-# Create the persistent memory folder (committed .gitkeep files are already present)
-npm run memory:index          # Full first‑time index
-npm run memory:index-status   # Verify freshness (should be "up‑to‑date")
-```
-
-> **Tip** – For large repos you can run an incremental refresh:  
-
-```bash
-npm run memory:index-refresh -- --changed-only
-```
-
-### Verify the Setup  
-
-```bash
-npm run lint                # ESLint
-npm run typecheck           # tsc --noEmit --strict
-npm test                    # Run the unit‑test suite
-```
-
-If all commands succeed you are ready to launch a campaign.
-
----  
-
-## Running a Campaign  
-
-A **campaign** is a high‑level goal that may span many orchestrated runs.  
-Typical lifecycle:
-
-1. **Create** a campaign (stores goal, initial context, and metadata).  
-2. **Plan** – the orchestrator builds a deterministic task graph.  
-3. **Run** – workers are auto‑staffed, execute, and feed results back.  
-4. **Pause / Inspect** – you can stop after any checkpoint, view artefacts, or adjust the plan.  
-5. **Resume** – the system reconciles saved state with the latest repo index.  
-6. **Report** – an auto‑generated markdown / JSON report summarises outcome, staffing, and lessons learned.  
-
-### Example CLI Flow  
-
-```bash
-# 1️⃣ Start a new deep‑mode campaign
-agent campaign start "Implement a new secure login flow" --mode deep
-
-# 2️⃣ Inspect the generated plan
-agent campaign show-plan
-
-# 3️⃣ Execute the next safe step
-agent campaign run-next
-
-# 4️⃣ (Optional) Pause and inspect artefacts
-agent campaign pause
-agent memory:inspect --run <run-id>
-
-# 5️⃣ Resume after a code change or memory refresh
-npm run memory:index-refresh   # keep index fresh first
-agent campaign resume
-
-# 6️⃣ Generate a final report
-agent campaign report > login-campaign-report.md
-```
-
-#### Modes & When to Use Them  
-
-| Mode | Typical Use‑Case | Behaviour |
-|------|----------------|-----------|
-| **deep** (default) | Production‑grade work, security‑critical changes | Full verification, conservative staffing, all approval gates. |
-| **fast** | Quick prototyping, low‑risk refactors | Minimal verification, higher‑risk staffing, skips exhaustive repair loops. |
-| **exhaustive** | Large migrations, regulatory compliance | Max staffing, exhaustive trial runs, detailed metric collection. |
-
----  
-
-## Memory & Indexing  
-
-All **persistent artefacts** live under the hidden directory `.agent_memory/`.  
-
-| Command | Purpose |
-|--------|---------|
-| `npm run memory:index` | Full repository scan and index creation (first‑time only). |
-| `npm run memory:index-status` | Verify that the index matches the current repo state. |
-| `npm run memory:index-refresh [--changed-only]` | Incremental refresh; `--changed-only` reports files that actually changed. |
-| `npm run memory:compact` | Remove stale artefacts, compress JSON, and deduplicate decisions. |
-| `npm run memory:inspect` | Browse stored decisions, run artefacts, and the memory schema. |
-| `npm run eval:project-understanding -- --corpus <file>` | Run the 120-question, five-repository deep-understanding release gate. |
-| `npm run test:reasoning-v2` | Run the adaptive-kernel, provenance, approval, and architecture guards. |
-| `npm run eval:adaptive-reasoning -- --corpus <holdout-file>` | Run the sealed, eight-repository router/author/verifier/embedding profile certification gate. |
-| `npm run memory:show-commands` | List all registered CLI commands a worker can invoke. |
-| `npm run memory:status` | High‑level health: index freshness, size, last‑compact timestamp. |
-
-**Never commit large generated memory files** – only the static schema files (`README.md`, `schema_version.json`) are version‑controlled.
-
-### Memory Schema (high‑level)  
-
-* `runs/<run-id>/` – JSON artefacts: `plan.json`, `patches.json`, `review.log`, `metrics.json`.  
-* `decisions/` – Append‑only logs of “why we did X”.  
-* `lessons/` – Successful patterns and failure analyses.  
-* `swarm_trials/` – Results of `agent trial …` experiments.  
-
----  
-
-## Swarm Autopilot & Staffing  
-
-The swarm layer **self‑staffs** agents based on five signals:
-
-1. **Repo size & change density** (from the index).  
-2. **Task risk score** (security, performance, UI, test‑coverage heuristics).  
-3. **Available command inventory** (e.g., `npm run lint`, `cargo test`).  
-4. **Current campaign mode** (deep / fast / exhaustive).  
-5. **Operator‑defined caps** (executor, write‑ability).  
-
-**Key Guarantees**
-
-* The default **read‑only fan‑out** never exceeds 300 logical agents; only a handful are write‑capable.  
-* Dynamic specialists (security analyst, performance auditor, docs reviewer) are **created on‑demand** once evidence justifies them.  
-* All staffing decisions are recorded in the artefact store and appear in the final campaign report.  
-
-### Trial Commands (for developers)
-
-```bash
-# Evaluate staffing heuristics across scenario sizes
-agent trial staffing-eval
-
-# Stress-test the scheduler with 300 scripted test workers (read-only only)
-agent trial scheduler-scale
-
-# Compare three orchestration strategies on a sample goal
-agent trial compare "Refactor data‑layer for multi‑tenant support"
-```
-
-All trial artefacts are stored under `.agent_memory/swarm_trials/`.
-
----  
-
-## Safety & Verification  
-
-Safety is baked into **every write path**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| **FileLockManager** | Logical per‑file lock objects; enforced before any patch is accepted. |
-| **PatchSafety** | Diff‑based fingerprinting, ensures patches only touch declared sections. |
-| **ReviewLoop** | Automatic static‑analysis + optional human reviewer; produces a deterministic `review.json`. |
-| **ValidationRunner** | Executes unit/integration tests, type‑checks, lints; only passes on *full* success. |
-| **RepairLoop** | If validation fails, creates a new “repair” work‑item that the swarm executes. |
-| **ApprovalGates** | Configurable human‑approval checkpoint; required for any **write‑capable** agent. |
-| **Executor Caps** | Upper bound on concurrent writers (default = 2) to avoid race conditions. |
-
-> **Important:** A run is considered **verified** only when **all** gates are passed *and* the patch fingerprint matches the stored version. Any blocked or malformed JSON output aborts the run and is logged as an **unverified** status.
-
----  
-
-## Testing & Linting  
-
-```bash
-# Run the full test suite (Jest + integration tests)
-npm test
-
-# Lint the codebase (ESLint + prettier)
-npm run lint
-
-# Type‑check with strict mode
+npm run memory:index-status
 npm run typecheck
+npm run test
 ```
 
-**Test coverage focus**
+Run the desktop app:
 
-* Memory/indexing behaviour  
-* Command detection & context‑pack creation  
-* Orchestration contracts (task graph, state transitions)  
-* Verification logic (review, validation, repair)  
-
-Add new tests whenever you extend a primitive – the project’s operating principle is “small, verifiable changes with focused tests”.
-
----  
-
-## Contributing  
-
-1. **Fork** the repository.  
-2. Create a **feature branch** (`git checkout -b feat/your-feature`).  
-3. Follow the **Operating Principles** from `AGENTS.md`:  
-   * Small coherent changes, no massive rewrites.  
-   * Preserve existing behaviour unless the task explicitly changes it.  
-   * Keep TypeScript strict‑mode clean; ensure all new code runs through the verification pipeline.  
-4. Add **unit / integration tests** that exercise the new logic.  
-5. Update **memory docs** if you modify any contract or schema.  
-6. Run the full CI locally (`npm run lint && npm run typecheck && npm test`).  
-7. Submit a Pull Request – the CI will automatically run the swarm autopilot in `fast` mode to sanity‑check the change.  
-
-### Documentation  
-
-* `AGENTS.md` – the **operating handbook** for all contributors.  
-* `AUDIT_RECURSIVE_AGENTIC_FACTORY_ALIGNMENT.md` – a self‑audit summarising the current alignment score; useful for roadmap planning.  
-
----  
-
-## License  
-
-This project is licensed under the **MIT License**. See `LICENSE` for details.
-
----  
-
-## References  
-
-* **AGENTS.md** – detailed operating principles, memory commands, campaign modes, swarm staffing, coding rules, and communication contracts.  
-* **AUDIT_RECURSIVE_AGENTIC_FACTORY_ALIGNMENT.md** – a systematic audit (May 2026) that scores the repository on 10 alignment dimensions; highlights current strengths (orchestration primitives, memory, safety) and gaps (recursive teams, prompt‑writer agents, durable DB‑backed run state).  
-* **Source Tree Highlights**  
-
-```
-apps/
- └─ agent-runtime/
-     ├─ src/orchestration/
-     │   ├─ Orchestrator.ts
-     │   ├─ TaskGraphManager.ts
-     │   ├─ ArtifactStore.ts
-     │   ├─ ContextPackBuilder.ts
-     │   ├─ ValidationRunner.ts
-     │   ├─ ReviewLoop.ts
-     │   └─ PatchSafety.ts
-     └─ src/swarm/
-         ├─ SwarmRuntime.ts
-         ├─ SwarmScheduler.ts
-         └─ SwarmStaffingPlanner.ts
-apps/
- └─ desktop/src-tauri/
-     ├─ src/db/mod.rs           # SQLite persistence
-     └─ src/commands/patch.rs   # Rust‑owned patch authority
-.agent_memory/
- ├─ README.md
- ├─ schema_version.json
- ├─ runs/
- └─ swarm_trials/
+```powershell
+npm run dev
 ```
 
----  
+Run only the web frontend:
 
-*Happy coding! Let the swarm do the heavy lifting while you stay safely in control.*
+```powershell
+npm run web:dev
+```
+
+Run the agent runtime:
+
+```powershell
+npm run agent:dev
+```
+
+Run a swarm plan:
+
+```powershell
+npm run agent:plan -- "Map the runtime patch approval flow"
+```
+
+Run a swarm task:
+
+```powershell
+npm run agent:run -- "Inspect memory indexing and report risks"
+```
+
+## Operating Notes
+
+- Check memory freshness before relying on repository context.
+- Use campaigns for large goals.
+- Keep executor counts small and read-only fan-out evidence-based.
+- Treat approval-required status as a real stop.
+- Do not bypass Rust-owned patch, command, workspace, or authority boundaries.
+- Update docs when architecture, memory formats, orchestration contracts, or workflows change.
+
+## More Documentation
+
+- [Architecture](docs/architecture.md)
+- [Orchestration Flow](docs/orchestration-flow.md)
+- [Memory And Indexing](docs/architecture/memory-and-indexing.md)
+- [Adaptive Reasoning Certification](docs/adaptive-reasoning-certification.md)
+- [Security Model](docs/security-model.md)
+- [Campaigns](docs/usage/campaigns.md)
+- [Deep Dive](docs/PROJECT_DEEP_DIVE_AR.md)
