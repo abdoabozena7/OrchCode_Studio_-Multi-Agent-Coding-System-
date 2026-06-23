@@ -63,6 +63,11 @@ export type PromptWriterInput = {
   planning_evidence_refs: string[];
   prior_decision_refs?: string[];
   prior_failure_refs?: string[];
+  original_request_ref?: string;
+  intent_contract_ref?: string;
+  intent_contract_status?: import("@hivo/protocol").IntentContractStatus;
+  intent_ledger_refs?: string[];
+  locked_intent_definitions?: import("./IntentLedgerModels.js").LockedIntentDefinition[];
   team_id?: string;
   team_context_refs?: string[];
   team_memory_scope?: string;
@@ -171,6 +176,12 @@ const PATCH_SAFETY_FIELDS = new Set([
   "forbidden_files",
   "read_only_files",
   "context_pack_ref",
+  "original_request_ref",
+  "intent_contract_ref",
+  "intent_contract_status",
+  "intent_ledger_ref",
+  "intent_ledger_refs",
+  "locked_intent_definitions",
   "run_id",
   "task_id",
   "agent_role",
@@ -257,6 +268,26 @@ export function validatePromptWriterOutput(value: unknown, input: PromptWriterIn
         safetyFindings.push(blockedFinding("validation_requirements_weakened", "PromptWriter output attempted to remove validation requirements."));
       }
     }
+    const metadataPatch = asRecord(patch.metadata_json);
+    if (metadataPatch) {
+      const expectedProtectedMetadata: Record<string, unknown> = {
+        original_request_ref: input.original_request_ref,
+        intent_contract_ref: input.intent_contract_ref,
+        intent_contract_status: input.intent_contract_status,
+        intent_ledger_ref: asRecord(input.metadata_json)?.intent_ledger_ref,
+        intent_ledger_refs: input.intent_ledger_refs ?? [],
+        locked_intent_definitions: input.locked_intent_definitions ?? []
+      };
+      for (const key of Object.keys(expectedProtectedMetadata)) {
+        if (Object.prototype.hasOwnProperty.call(metadataPatch, key)) {
+          const attempted = metadataPatch[key];
+          const expected = expectedProtectedMetadata[key];
+          if (!jsonEquivalent(attempted, expected)) {
+            safetyFindings.push(blockedFinding(`patch_metadata_${key}`, `PromptWriter output attempted to change protected intent metadata field ${key}.`));
+          }
+        }
+      }
+    }
   }
 
   const searchableText = JSON.stringify(record);
@@ -294,9 +325,16 @@ export function applyPromptWriterTemplateInputPatch(
     next.validation_requirements = uniqueStrings([...asStringArray(original.validation_requirements), ...requirements]);
   }
   if (asRecord(patch.metadata_json)) {
+    const originalMetadata = asRecord(original.metadata_json) ?? {};
     next.metadata_json = {
-      ...asRecord(original.metadata_json),
+      ...originalMetadata,
       ...asRecord(patch.metadata_json),
+      original_request_ref: originalMetadata.original_request_ref,
+      intent_contract_ref: originalMetadata.intent_contract_ref,
+      intent_contract_status: originalMetadata.intent_contract_status,
+      intent_ledger_ref: originalMetadata.intent_ledger_ref,
+      intent_ledger_refs: originalMetadata.intent_ledger_refs,
+      locked_intent_definitions: originalMetadata.locked_intent_definitions,
       prompt_writer_output_id: output.prompt_writer_output_id
     };
   }
@@ -383,4 +421,18 @@ function asStringArray(value: unknown): string[] {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function jsonEquivalent(left: unknown, right: unknown) {
+  return JSON.stringify(stableJson(left)) === JSON.stringify(stableJson(right));
+}
+
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableJson(entry)])
+  );
 }

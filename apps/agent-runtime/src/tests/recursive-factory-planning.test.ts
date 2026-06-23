@@ -5,11 +5,21 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { declaredAccessPolicyForProfile, resolvedAccessPolicyForProfile } from "@hivo/protocol";
-import type { AgentRuntimeSession, AppEvent, CommandExecutionRecord } from "@hivo/protocol";
+import type {
+  AgentRuntimeSession,
+  AppEvent,
+  BranchOrchestratorRecord,
+  CommandExecutionRecord,
+  RecursiveBranchResultRecord,
+  RecursiveIntegrationSummary,
+  RecursiveValidationRecord,
+  SemanticConflictDecision,
+  SemanticConflictResolutionBatch
+} from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { saveMemory } from "../memory/ProjectMemory.js";
-import { AgentRuntime } from "../runtime/AgentRuntime.js";
+import { AgentRuntime, buildRecursiveIntegrationHierarchy } from "../runtime/AgentRuntime.js";
 import { routeConversation } from "../runtime/ConversationRouter.js";
 import { createDurableRuntimeEvent } from "../runtime/DurableRuntimeEvents.js";
 import { EventBus } from "../runtime/EventBus.js";
@@ -22,6 +32,7 @@ import {
 } from "../runtime/RecursiveValidation.js";
 import { replaySessionFromDurableEvents } from "../runtime/SessionReplay.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
 const largePrompt = "Build a multi-step project feature across the runtime, protocol, desktop UI, durable replay, tests, and smoke validation with product and technical approval gates before any execution.";
 
@@ -122,6 +133,82 @@ test("recursive validation approval_required evidence remains not_run_needs_appr
     const evidence = findRecursiveValidationEvidence({ session, strategy, patches: [] });
     assert.equal(evidence[0]?.truthStatus, "not_run_needs_approval");
     assert.equal(truthFromRecursiveValidation({ strategy, evidence }), "not_run_needs_approval");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("recursive integration hierarchy groups twelve branches and replays semantic decisions", async () => {
+  const workspace = await tempWorkspace("recursive-hierarchy");
+  try {
+    const now = new Date().toISOString();
+    const session = createBareSession(workspace);
+    session.id = "session_recursive_hierarchy";
+    const branches = Array.from({ length: 12 }, (_, index) => createHierarchyBranch(session.id, index, now));
+    session.recursiveFactory = {
+      phase: "branch_execution_completed",
+      executionStarted: true,
+      branchOrchestrators: branches,
+      branchScopeConflicts: [],
+      semanticConflictDecisions: [hierarchySemanticDecision(session.id, now)],
+      updatedAt: now
+    };
+    const branchResults = branches.map((branch, index) => createHierarchyBranchResult(session.id, branch.branchId, index, now));
+    const branchValidations = branches.map((branch) => createHierarchyValidation(session.id, branch.branchId, now));
+    const rootValidation = createHierarchyValidation(session.id, undefined, now);
+    const hierarchy = buildRecursiveIntegrationHierarchy(
+      session,
+      branchResults,
+      branchValidations,
+      rootValidation,
+      [],
+      [],
+      now
+    );
+
+    const localNodes = hierarchy.filter((node) => node.level === "local_team");
+    const areaNodes = hierarchy.filter((node) => node.level === "area");
+    const domainNodes = hierarchy.filter((node) => node.level === "domain");
+    const rootNode = hierarchy.find((node) => node.level === "root");
+    assert.equal(localNodes.length, 3);
+    assert.deepEqual(localNodes.map((node) => node.branchIds.length), [5, 5, 2]);
+    assert.equal(areaNodes.length, 3);
+    assert.equal(domainNodes.length, 3);
+    assert.ok(rootNode);
+    assert.deepEqual(rootNode.childNodeIds.sort(), domainNodes.map((node) => node.id).sort());
+    for (const node of hierarchy) {
+      assert.ok(node.validation.status);
+      assert.equal(typeof node.intentAlignmentScore, "number");
+      assert.ok(Array.isArray(node.conflictReportRefs));
+      assert.ok(Array.isArray(node.unresolvedDecisions));
+    }
+    assert.ok(rootNode.unresolvedDecisions.includes("semantic_decision_branch_12"));
+
+    const integrationSummary: RecursiveIntegrationSummary = {
+      id: `recursive_fan_in_${session.id}`,
+      sessionId: session.id,
+      completedBranches: branchResults.map((result) => result.branchId),
+      blockedBranches: [],
+      failedBranches: [],
+      unverifiedBranches: [],
+      conflictsResolved: [],
+      conflictsUnresolved: [],
+      integrationRisks: [],
+      remainingManualSteps: [],
+      validation: rootValidation,
+      integrationHierarchy: hierarchy,
+      createdAt: now,
+      updatedAt: now
+    };
+    const semanticBatch = hierarchySemanticBatch(session.id, now);
+    const replayed = replaySessionFromDurableEvents([
+      createDurableRuntimeEvent({ sessionId: session.id, sequence: 1, type: "session.created", actor: "system", authority: "system", payload: { session } }),
+      createDurableRuntimeEvent({ sessionId: session.id, sequence: 2, type: "semantic_conflict_resolution.updated", actor: "system", authority: "runtime", payload: { batch: semanticBatch } }),
+      createDurableRuntimeEvent({ sessionId: session.id, sequence: 3, type: "recursive_fan_in.updated", actor: "system", authority: "runtime", payload: { integrationSummary } })
+    ]);
+    assert.equal(replayed.session?.recursiveFactory?.semanticConflictDecisions?.[0]?.decision_id, "semantic_decision_branch_12");
+    assert.equal(replayed.session?.recursiveFactory?.integrationSummary?.integrationHierarchy?.length, hierarchy.length);
+    assert.equal(replayed.session?.recursiveFactory?.integrationSummary?.integrationHierarchy?.filter((node) => node.level === "local_team").length, 3);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1378,6 +1465,118 @@ function createBareSession(workspace: string, commandExecutions: CommandExecutio
   };
 }
 
+function createHierarchyBranch(sessionId: string, index: number, now: string): BranchOrchestratorRecord {
+  const branchNumber = index + 1;
+  const domain = index < 5 ? "ui" : index < 10 ? "runtime" : "validation";
+  const ownerRole = domain === "ui" ? "UIAgent" : domain === "runtime" ? "RuntimeAgent" : "ValidationAgent";
+  return {
+    branchId: `branch_${branchNumber}`,
+    sessionId,
+    graphId: "recursive_graph_hierarchy",
+    title: `${ownerRole} Branch ${branchNumber}`,
+    objective: `Complete ${domain} branch ${branchNumber}.`,
+    ownerRole,
+    inputContextRequirements: [`${domain} context`],
+    fileScopes: [`src/${domain}/branch-${branchNumber}.ts`],
+    semanticScopes: [domain],
+    lockScopes: [`module:${domain}`],
+    dependencies: [],
+    expectedOutputs: ["verified branch result"],
+    reviewerRequirements: ["review semantic alignment"],
+    testerRequirements: ["validate branch result"],
+    status: "completed",
+    risks: [],
+    validationStrategy: ["unit"],
+    expectedIntegrationPoints: [`${domain}:integration`],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function createHierarchyBranchResult(
+  sessionId: string,
+  branchId: string,
+  index: number,
+  now: string
+): RecursiveBranchResultRecord {
+  return {
+    id: `branch_result_${branchId}`,
+    sessionId,
+    branchId,
+    objective: `Complete hierarchy branch ${index + 1}.`,
+    patchIds: [`patch_${branchId}`],
+    appliedState: "applied",
+    reviewResult: "approved",
+    validationState: "verified_passed",
+    filesChanged: [`src/${branchId}.ts`],
+    risksAndLimitations: [],
+    evidenceSummary: ["validated"],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function createHierarchyValidation(sessionId: string, branchId: string | undefined, now: string): RecursiveValidationRecord {
+  return {
+    id: branchId ? `validation_${branchId}` : "validation_root",
+    sessionId,
+    branchId,
+    level: branchId ? "branch_validation" : "integration_validation",
+    truthStatus: "verified_passed",
+    status: "passed",
+    summary: branchId ? `${branchId} passed.` : "Root validation passed.",
+    blockingReasons: [],
+    evidenceRefs: branchId ? [`evidence:${branchId}`] : ["evidence:root"],
+    discoveredCommands: [],
+    evidence: [],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function hierarchySemanticDecision(sessionId: string, now: string): SemanticConflictDecision {
+  return {
+    schema_version: 1,
+    decision_id: "semantic_decision_branch_12",
+    batch_id: "semantic_batch_hierarchy",
+    run_id: sessionId,
+    phase: "integration",
+    conflict: "cost_vs_reliability_branch_12",
+    source_a: "branch_12",
+    source_b: "ProjectGoalSpec",
+    root_intent: "ship the recursive product goal",
+    decision: "ask the user before reducing reliability",
+    reason: "The contract does not decide this tradeoff.",
+    requires_user_approval: true,
+    severity: "blocking",
+    status: "requires_user_approval",
+    question: "Should branch 12 prioritize lower cost or higher reliability?",
+    options: ["lower cost", "higher reliability"],
+    source_refs: ["branch_12"],
+    evidence_refs: ["branch_12"],
+    created_at: now,
+    metadata_json: {}
+  };
+}
+
+function hierarchySemanticBatch(sessionId: string, now: string): SemanticConflictResolutionBatch {
+  const decision = hierarchySemanticDecision(sessionId, now);
+  return {
+    schema_version: 1,
+    batch_id: "semantic_batch_hierarchy",
+    run_id: sessionId,
+    phase: "integration",
+    status: "requires_user_approval",
+    root_intent: "ship the recursive product goal",
+    decision_ids: [decision.decision_id],
+    decisions: [decision],
+    unresolved_decision_ids: [decision.decision_id],
+    provider_used: true,
+    created_at: now,
+    metadata_json: {}
+  };
+}
+
 async function driveRecursiveValidationFailure(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   input: { targetFile: string; appliedContent: string; stdout: string; stderr: string; exitCode: number }
@@ -1428,6 +1627,8 @@ function narrowToFirstBranch(session: AgentRuntimeSession) {
 }
 
 class RecursiveRepairProvider implements LlmProvider {
+  private readonly fallback = new ScriptedProvider();
+
   constructor(
     private readonly targetFile: string,
     private readonly preimageText: string,
@@ -1451,7 +1652,7 @@ class RecursiveRepairProvider implements LlmProvider {
         suggestedCommands: [{ command: "npm test", reason: "Rerun the same validation command." }]
       } as T;
     }
-    return {} as T;
+    return this.fallback.generateStructured(_input, schema);
   }
 
   async generateText(input: LlmRequest): Promise<string> {
@@ -1473,11 +1674,19 @@ async function createFixture(options: { provider?: LlmProvider } = {}) {
   const runtime = new AgentRuntime(
     { ...loadConfig(), storageDir },
     sessionManager,
-    options.provider ? { providerFactory: () => options.provider! } : {}
+    { providerFactory: () => options.provider ?? new ScriptedProvider() }
   );
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: {
+      providerType: "ollama",
+      providerName: "Recursive Fixture Provider",
+      baseUrl: "http://127.0.0.1:11434",
+      selectedModel: "recursive-fixture-model",
+      apiKeyConfigured: false,
+      isValid: true
+    },
     executionMode: "recursive_factory",
     userPrompt: largePrompt
   });

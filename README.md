@@ -232,10 +232,13 @@ flowchart TD
   TechApproval -->|Yes| Graph["Recursive Branch Graph"]
   Graph --> BranchApproval{"Start Execution?"}
   BranchApproval -->|Yes| Branches["Gated Branch Execution"]
-  Branches --> FanIn["Root Integration + Validation Report"]
+  Branches --> LocalIntegration["Local Integration per team"]
+  LocalIntegration --> AreaIntegration["Area Integration"]
+  AreaIntegration --> DomainIntegration["Domain Integration"]
+  DomainIntegration --> FanIn["Root Integration + Validation Report"]
 ```
 
-The first layers are planning-only. They cannot create patches, run commands, or write files until the relevant approvals are complete.
+The first layers are planning-only. They cannot create patches, run commands, or write files until the relevant approvals are complete. Recursive fan-in is hierarchical: root integration consumes domain summaries and verified artifacts, not raw branch diffs from every worker.
 
 ## Verification And Certification
 

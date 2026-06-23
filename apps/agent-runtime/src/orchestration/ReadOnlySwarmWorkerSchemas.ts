@@ -81,6 +81,7 @@ export function validateReadOnlySwarmOutput(value: unknown, schema: { name: stri
     default:
       errors.push(`Unknown read-only swarm schema: ${schema.name}`);
   }
+  errors.push(...validateIntentAlignment(value.intent_alignment));
   if (typeof value.confidence === "number" && (value.confidence < 0 || value.confidence > 1)) {
     errors.push("confidence must be between 0 and 1");
   }
@@ -154,6 +155,11 @@ export function summarizeReadOnlySwarmOutput(value: unknown): {
     ]),
     confidence: typeof record.confidence === "number" ? record.confidence : 0.45
   };
+}
+
+export function intentAlignmentFromReadOnlySwarmOutput(value: unknown) {
+  const record = isRecord(value) ? value : {};
+  return isRecord(record.intent_alignment) ? record.intent_alignment : undefined;
 }
 
 function repairReadOnlyRecord(record: Record<string, unknown>, schemaName: string): Record<string, unknown> {
@@ -244,6 +250,21 @@ function repairReadOnlyRecord(record: Record<string, unknown>, schemaName: strin
     default:
       return record;
   }
+}
+
+function validateIntentAlignment(value: unknown) {
+  const errors: string[] = [];
+  if (!isRecord(value)) return ["intent_alignment must be an object"];
+  for (const key of ["original_request_hash", "task_understanding", "original_goal_contribution"]) {
+    if (typeof value[key] !== "string" || !String(value[key]).trim()) errors.push(`intent_alignment.${key} is required`);
+  }
+  for (const key of ["possible_intent_conflicts", "assumptions_used", "evidence_refs"]) {
+    if (!Array.isArray(value[key])) errors.push(`intent_alignment.${key} must be an array`);
+  }
+  if ("intent_contract_ref" in value && typeof value.intent_contract_ref !== "string") errors.push("intent_alignment.intent_contract_ref must be a string");
+  if ("intent_contract_revision" in value && typeof value.intent_contract_revision !== "number") errors.push("intent_alignment.intent_contract_revision must be a number");
+  if ("task_slice_id" in value && typeof value.task_slice_id !== "string") errors.push("intent_alignment.task_slice_id must be a string");
+  return errors;
 }
 
 function repairReasons(original: Record<string, unknown>, repaired: Record<string, unknown>, validation: ReadOnlySwarmWorkerSchemaValidation) {

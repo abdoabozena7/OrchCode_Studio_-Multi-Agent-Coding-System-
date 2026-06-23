@@ -95,6 +95,13 @@ export function validateStructuredOutput(value: unknown, schema: unknown): Valid
   }
 }
 
+export function normalizeStructuredOutputCandidate<T>(value: T, schema: unknown): T {
+  const schemaName = getSchemaName(schema);
+  if (schemaName === "run-plan") return normalizeRunPlanCandidate(value) as T;
+  if (schemaName === "run-patch-intent") return normalizeRunPatchIntentCandidate(value) as T;
+  return value;
+}
+
 function validateTurnUnderstandingShape(value: unknown): ValidationResult {
   if (!isRecord(value)) return { valid: false, errors: ["turn-understanding must be an object"] };
   const errors = requiredStrings(value, [
@@ -319,6 +326,71 @@ function validateRunPlanShape(value: unknown): ValidationResult {
   return { valid: errors.length === 0, errors };
 }
 
+function normalizeRunPlanCandidate(value: unknown) {
+  const record = plainRecord(value);
+  if (!record) return value;
+  const normalized: Record<string, unknown> = { ...record };
+  const summary = firstString(record, ["summary", "title", "goal"]);
+  if (summary) normalized.summary = summary;
+  const reasoningSummary = firstString(record, ["reasoningSummary", "reasoning_summary", "rationale", "reasoning", "why"]);
+  if (reasoningSummary) normalized.reasoningSummary = reasoningSummary;
+  const mode = normalizeRunPlanMode(firstString(record, ["mode", "runMode", "run_mode", "planMode", "plan_mode"]));
+  if (mode) normalized.mode = mode;
+  if (Array.isArray(record.tasks)) {
+    normalized.tasks = record.tasks.map((task, index) => normalizeRunPlanTaskCandidate(task, index));
+  }
+  const acceptanceCriteria = firstStringArray(record, ["acceptanceCriteria", "acceptance_criteria", "acceptance", "definitionOfDone", "definition_of_done"]);
+  if (acceptanceCriteria) normalized.acceptanceCriteria = acceptanceCriteria;
+  const risks = firstStringArray(record, ["risks", "knownRisks", "known_risks", "riskItems", "risk_items"]);
+  if (risks) normalized.risks = risks;
+  const suggestedCommands = firstValue(record, ["suggestedCommands", "suggested_commands", "commands", "validationCommands", "validation_commands"]);
+  if (Array.isArray(suggestedCommands)) {
+    normalized.suggestedCommands = suggestedCommands.flatMap((item, index) => {
+      if (typeof item === "string" && item.trim()) return [{ command: item.trim(), reason: "Provider-suggested command." }];
+      const commandRecord = plainRecord(item);
+      if (!commandRecord) return [];
+      const command = firstString(commandRecord, ["command", "cmd", "script"]);
+      if (!command) return [];
+      return [{
+        command,
+        reason: firstString(commandRecord, ["reason", "why", "rationale", "description"]) ?? `Provider-suggested command ${index + 1}.`
+      }];
+    });
+  }
+  return normalized;
+}
+
+function normalizeRunPlanTaskCandidate(task: unknown, index: number) {
+  const record = plainRecord(task);
+  if (!record) return task;
+  const normalized: Record<string, unknown> = { ...record };
+  const title = firstString(record, ["title", "name", "label", "task", "summary"]);
+  const objective = firstString(record, ["objective", "goal", "description", "summary", "details", "task"]);
+  const roleTitle = firstString(record, ["roleTitle", "role_title", "role", "roleRequired", "role_required", "agentRole", "agent_role", "owner"]);
+  if (title || objective) normalized.id = firstString(record, ["id", "taskId", "task_id"]) ?? `task_${index + 1}`;
+  if (title) normalized.title = title;
+  else if (objective) normalized.title = compactRunPlanTitle(objective);
+  if (objective) normalized.objective = objective;
+  else if (title) normalized.objective = title;
+  if (roleTitle) normalized.roleTitle = roleTitle;
+  else if (title || objective) normalized.roleTitle = "Implementation Worker";
+  const targetFiles = firstStringArray(record, ["targetFiles", "target_files", "files", "paths", "allowedFiles", "allowed_files", "allowed_files_to_edit"]);
+  if (targetFiles) normalized.targetFiles = targetFiles;
+  const expectedArtifact = firstString(record, ["expectedArtifact", "expected_artifact", "artifact", "output"]);
+  if (expectedArtifact) normalized.expectedArtifact = expectedArtifact;
+  const verification = firstString(record, ["verification", "validation", "validationCommand", "validation_command", "command"]);
+  if (verification) normalized.verification = verification;
+  return normalized;
+}
+
+function normalizeRunPlanMode(value?: string) {
+  const normalized = value?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "create_project" || normalized === "create" || normalized === "scaffold") return "create_project";
+  if (normalized === "edit_project" || normalized === "edit" || normalized === "modify") return "edit_project";
+  if (normalized === "inspect_only" || normalized === "inspect" || normalized === "read_only" || normalized === "readonly") return "inspect_only";
+  return undefined;
+}
+
 function validateRunPatchShape(value: unknown): ValidationResult {
   const errors: string[] = [];
   if (!isRecord(value)) return { valid: false, errors: ["run-patch must be an object"] };
@@ -370,6 +442,90 @@ function validateRunPatchIntentShape(value: unknown): ValidationResult {
     });
   }
   return { valid: errors.length === 0, errors };
+}
+
+function normalizeRunPatchIntentCandidate(value: unknown) {
+  const record = plainRecord(value);
+  if (!record) return value;
+  const normalized: Record<string, unknown> = { ...record };
+  const title = firstString(record, ["title", "name", "label"]);
+  const summary = firstString(record, ["summary", "description", "reason", "rationale"]);
+  if (title) normalized.title = title;
+  else if (summary) normalized.title = compactRunPlanTitle(summary);
+  if (summary) normalized.summary = summary;
+  else if (title) normalized.summary = title;
+
+  const intentSource = firstValue(record, ["intents", "changes", "files", "patches", "edits"]);
+  if (Array.isArray(intentSource)) {
+    normalized.intents = intentSource.map((intent, index) => normalizeRunPatchIntentEntry(intent, index));
+  } else if (hasPatchIntentFields(record)) {
+    normalized.intents = [normalizeRunPatchIntentEntry(record, 0)];
+  }
+
+  const suggestedCommands = firstValue(record, ["suggestedCommands", "suggested_commands", "commands", "validationCommands", "validation_commands"]);
+  if (Array.isArray(suggestedCommands)) {
+    normalized.suggestedCommands = suggestedCommands.flatMap((item, index) => {
+      if (typeof item === "string" && item.trim()) return [{ command: item.trim(), reason: "Provider-suggested command." }];
+      const commandRecord = plainRecord(item);
+      if (!commandRecord) return [];
+      const command = firstString(commandRecord, ["command", "cmd", "script"]);
+      if (!command) return [];
+      return [{
+        command,
+        reason: firstString(commandRecord, ["reason", "why", "rationale", "description"]) ?? `Provider-suggested command ${index + 1}.`
+      }];
+    });
+  }
+  return normalized;
+}
+
+function normalizeRunPatchIntentEntry(value: unknown, index: number) {
+  const record = plainRecord(value);
+  if (!record) return value;
+  const normalized: Record<string, unknown> = { ...record };
+  const targetPath = firstString(record, ["path", "filePath", "file_path", "targetFile", "target_file", "filename", "file"]);
+  const operation = normalizePatchOperation(firstString(record, ["operation", "op", "action", "type", "changeType", "change_type"]));
+  const replacementText = firstStringValue(record, ["replacementText", "replacement_text", "content", "contents", "text", "body", "newText", "new_text", "value"]);
+  const reason = firstString(record, ["reason", "why", "rationale", "summary", "description"]);
+  const risk = normalizePatchRisk(firstString(record, ["risk", "riskLevel", "risk_level", "severity"]));
+  const anchorText = firstStringValue(record, ["anchorText", "anchor_text", "anchor", "afterText", "after_text", "beforeText", "before_text"]);
+  const preimageText = firstStringValue(record, ["preimageText", "preimage_text", "oldText", "old_text", "matchText", "match_text"]);
+
+  if (targetPath) normalized.path = targetPath;
+  if (operation) normalized.operation = operation;
+  else if (targetPath && replacementText !== undefined) normalized.operation = "create_file";
+  if (replacementText !== undefined) normalized.replacementText = replacementText;
+  if (anchorText !== undefined && normalized.anchorText === undefined) normalized.anchorText = anchorText;
+  if (preimageText !== undefined && normalized.preimageText === undefined) normalized.preimageText = preimageText;
+  normalized.reason = reason ?? (targetPath ? `${normalized.operation ?? "Change"} ${targetPath}.` : `Patch intent ${index + 1}.`);
+  normalized.risk = risk ?? "low";
+  return normalized;
+}
+
+function hasPatchIntentFields(record: Record<string, unknown>) {
+  return firstString(record, ["path", "filePath", "file_path", "targetFile", "target_file", "filename", "file"]) !== undefined
+    || firstStringValue(record, ["replacementText", "replacement_text", "content", "contents", "text", "body", "newText", "new_text", "value"]) !== undefined;
+}
+
+function normalizePatchOperation(value?: string) {
+  const normalized = value?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return undefined;
+  if (["create_file", "create", "add", "new", "write_file"].includes(normalized)) return "create_file";
+  if (["overwrite_file", "overwrite", "write", "replace_file", "full_file"].includes(normalized)) return "overwrite_file";
+  if (["replace_range", "replace", "update", "modify", "edit"].includes(normalized)) return "replace_range";
+  if (["insert_after", "append_after", "after"].includes(normalized)) return "insert_after";
+  if (["insert_before", "prepend_before", "before"].includes(normalized)) return "insert_before";
+  if (["delete_range", "delete", "remove"].includes(normalized)) return "delete_range";
+  return value;
+}
+
+function normalizePatchRisk(value?: string) {
+  const normalized = value?.toLowerCase().trim();
+  if (normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
+  if (normalized === "minor" || normalized === "safe") return "low";
+  if (normalized === "moderate") return "medium";
+  if (normalized === "risky" || normalized === "critical") return "high";
+  return undefined;
 }
 
 function validateRunVerificationShape(value: unknown): ValidationResult {
@@ -443,6 +599,49 @@ function validateConversationIntentDecisionShape(value: unknown): ValidationResu
     errors.push("workspaceMessage must not be empty for workspace intents");
   }
   return { valid: errors.length === 0, errors };
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function firstValue(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (key in record) return record[key];
+  }
+  return undefined;
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstStringValue(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+function firstStringArray(record: Record<string, unknown>, keys: string[]) {
+  const value = firstValue(record, keys);
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+  }
+  return undefined;
+}
+
+function compactRunPlanTitle(value: string) {
+  const words = value.trim().split(/\s+/).slice(0, 4);
+  return words.join(" ") || "Task";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

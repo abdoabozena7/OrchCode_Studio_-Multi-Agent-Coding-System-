@@ -373,6 +373,101 @@ export type RuntimeMessage = {
   createdAt: string;
 };
 
+export type AgentRuntimeSwarmNodeStatus = "idle" | "queued" | "running" | "completed" | "blocked" | "failed";
+export type AgentRuntimeSwarmNodeKind =
+  | "root"
+  | "group"
+  | "coordinator"
+  | "worker"
+  | "specialist"
+  | "work_item"
+  | "gate"
+  | "aggregator";
+export type AgentRuntimeSwarmMessageRole = "user" | "agent" | "system";
+
+export type AgentRuntimeSwarmMessage = {
+  id: string;
+  agentId: string;
+  role: AgentRuntimeSwarmMessageRole;
+  content: string;
+  createdAt: string;
+  providerRequestRefs?: string[];
+  status?: "recorded" | "answered" | "blocked" | "failed";
+  error?: string;
+};
+
+export type AgentRuntimeSwarmNode = {
+  id: string;
+  parentId?: string;
+  kind: AgentRuntimeSwarmNodeKind;
+  name: string;
+  role: string;
+  status: AgentRuntimeSwarmNodeStatus;
+  objective: string;
+  currentAction?: string;
+  summary?: string;
+  prompt?: string;
+  output?: string;
+  ownedPaths: string[];
+  targetFiles: string[];
+  changedFiles: string[];
+  artifactRefs: string[];
+  workItemRefs: string[];
+  evidenceRefs: string[];
+  riskRefs: string[];
+  metrics?: {
+    completedWorkItemCount?: number;
+    failureCount?: number;
+    tokenCount?: number;
+    costUsd?: number;
+  };
+  updatedAt: string;
+};
+
+export type AgentRuntimeSwarmState = {
+  schemaVersion: 1;
+  rootId: string;
+  sessionId: string;
+  generatedAt: string;
+  swarmRunId?: string;
+  source: "session" | "orchestration" | "provider_backed_swarm" | "recursive_factory" | "mixed";
+  maxSupportedLogicalAgents: number;
+  effectiveTotalLogicalAgents: number;
+  activeAgentCount: number;
+  statusCounts: Record<AgentRuntimeSwarmNodeStatus, number>;
+  staffingPlan?: {
+    summary: string;
+    recommendedTotalLogicalAgents?: number;
+    maxParallelAgents?: number;
+    writeAgentLimit?: number;
+    validationLevel?: string;
+    riskLevel?: string;
+    roleCounts: Record<string, number>;
+    specialists: Array<{
+      id: string;
+      role: string;
+      purpose: string;
+      readOnly: boolean;
+    }>;
+  };
+  metrics?: Record<string, number | string | boolean>;
+  nodes: AgentRuntimeSwarmNode[];
+  messages: AgentRuntimeSwarmMessage[];
+};
+
+export type AgentScopedMessageRequest = {
+  message: string;
+};
+
+export type AgentScopedMessageResponse = {
+  sessionId: string;
+  agentId: string;
+  status: "recorded" | "answered" | "blocked" | "failed";
+  message: AgentRuntimeSwarmMessage;
+  response?: AgentRuntimeSwarmMessage;
+  session: AgentRuntimeSession;
+};
+
 export type AgentPlan = {
   summary: string;
   steps: Array<{
@@ -398,6 +493,9 @@ export type AgentRuntimeSession = {
   latestDecisionPipeline?: DecisionPipelineState;
   decisionPipelineHistory?: DecisionPipelineState[];
   evidenceReport?: EvidenceTruthReport;
+  intentContract?: import("./orchestration.js").IntentContract;
+  intent_contract_ref?: string;
+  intent_contract_status?: import("./orchestration.js").IntentContractStatus;
   executionMode: RuntimeExecutionMode;
   resolvedExecutionMode?: Exclude<RuntimeExecutionMode, "auto_mode">;
   recursiveFactory?: import("./orchestration.js").RecursiveFactoryState;
@@ -440,6 +538,7 @@ export type AgentRuntimeSession = {
   reasoningSummaries: string[];
   progressEvents: RuntimeProgressEvent[];
   agentWorkStatuses: AgentWorkStatus[];
+  swarmState?: AgentRuntimeSwarmState;
   runSummary?: RunSummary;
   verificationResult?: import("./models.js").VerificationResult;
   delegationDecision?: DelegationDecision;

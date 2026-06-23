@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { SanitizedProviderConfig } from "@hivo/protocol";
+import type { IntentContract, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { BusinessOrchestrator } from "../orchestrators/BusinessOrchestrator.js";
@@ -22,6 +22,38 @@ const validProviderConfig: SanitizedProviderConfig = {
   selectedModel: "test-model",
   isValid: true
 };
+
+function readyIntentContract(runId: string, request: string, definitionOfDone: string[]): IntentContract {
+  const now = new Date().toISOString();
+  return {
+    schema_version: 1,
+    contract_id: `contract_${runId}`,
+    run_id: runId,
+    run_kind: "runtime_session",
+    revision: 1,
+    original_user_request: request,
+    precise_rewrite: request,
+    assumptions: ["Test fixture supplies an already-ready provider-authored intent contract."],
+    missing_questions: [],
+    tradeoffs: [],
+    priorities: {
+      speed: { score: 50, rationale: "Balanced test fixture priority." },
+      quality: { score: 80, rationale: "The test expects a useful plan." },
+      realism: { score: 70, rationale: "The generated plan should match the request." },
+      fun: { score: 60, rationale: "The snake game request has a playful outcome." },
+      security: { score: 70, rationale: "Workspace writes remain gated." },
+      cost: { score: 50, rationale: "Fixture does not optimize cost." }
+    },
+    definition_of_done: definitionOfDone,
+    non_goals: [],
+    conflict_rules: ["Preserve existing behavior unless explicitly changed."],
+    status: "ready",
+    created_at: now,
+    metadata_json: {
+      product_brief_user_intent: "add_feature"
+    }
+  };
+}
 
 test("auto mode keeps small tasks in a single agent", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-auto-simple-${Date.now()}`);
@@ -61,7 +93,15 @@ test("auto mode chooses orchestrated workers dynamically and respects explicit c
     entryPoints: [],
     importantFiles: ["README.md"]
   };
-  const productBrief = new ProductOrchestrator().createBrief(prompt);
+  const productBrief = new ProductOrchestrator().createBrief(readyIntentContract("test_session", prompt, [
+    "Creates index.html, styles.css, and main.js",
+    "Renders a nonblank Three.js scene",
+    "Implements snake movement controlled by arrow keys",
+    "Implements food spawning and growth",
+    "Shows and updates score",
+    "Handles wall or self collision by resetting the game",
+    "Can be previewed locally without a build step"
+  ]));
   const businessBrief = new BusinessOrchestrator().createBrief(productBrief);
   const engineering = new EngineeringOrchestrator().createTechnicalPlan({
     sessionId: "test_session",
@@ -172,6 +212,44 @@ test("auto real-provider Arabic orchestration questions route to provider-backed
   assert.doesNotMatch(answer, /Runtime truth/i);
   assert.doesNotMatch(answer, /Answer from provider worker evidence|Internal Swarm Autopilot Report/i);
   assert.doesNotMatch(answer, /Local Run|provider_validation_notice|local synthesis was not used|human_review_loop/i);
+
+  await rm(workspace, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
+});
+
+test("orchestrated build handoff continues through local run when provider swarm is read-only", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-swarm-handoff-build-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-swarm-handoff-build-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  const provider = new SwarmHandoffBuildProvider();
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => provider
+  });
+  const prompt = "Use multi-agent orchestration. Build a feature-complete browser 3D Crossy Road style game with Three.js in this empty workspace. Include keyboard controls, scoring, collisions, README, and a runnable start script.";
+  const created = await runtime.createSession({
+    workspacePath: workspace,
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
+    executionMode: "orchestrated_mode",
+    accessProfile: "full_access",
+    userPrompt: prompt
+  });
+  const turn = await runtime.runTurn(created.sessionId, prompt);
+  const session = runtime.getSession(created.sessionId);
+
+  assert.equal(turn.status, "needs_approval");
+  assert.equal(session?.status, "needs_approval");
+  assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+  assert.equal(session?.agentName, "Provider-Backed Swarm + Local Run");
+  assert.ok((session?.orchestration?.agentRuns.length ?? 0) > 1);
+  assert.ok((session?.orchestration?.workerOutputs.length ?? 0) > 0);
+  assert.ok((session?.patchProposals.length ?? 0) > 0);
+  assert.ok(session?.patchProposals[0]?.filesChanged.some((file) => file.path === "src/main.js"));
+  assert.ok(session?.reasoningSummaries.some((entry) => /handed write-capable execution/i.test(entry)));
+  assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Read-only swarm handoff"));
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -433,12 +511,163 @@ test("think first stops after planning and waits for confirmation", async () => 
   }
 });
 
+class SwarmHandoffBuildProvider implements LlmProvider {
+  calls: LlmRequest[] = [];
+
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    this.calls.push(input);
+    const schemaName = autoTestSchemaName(schema);
+    const request = extractAutoTestOriginalRequest(input);
+    if (schemaName === "initial-reasoning-decision") {
+      return {
+        understanding: {
+          originalRequest: request,
+          cleanedRequest: request,
+          language: "english",
+          intentKind: "workspace_action",
+          route: "orchestrated_run",
+          needsWorkspace: true,
+          goal: "Use provider-backed swarm preflight and then create a runnable Three.js game through gated writes.",
+          ambiguities: [],
+          requiredEvidence: ["workspace context", "swarm staffing artifacts"],
+          risk: "medium",
+          confidence: "high",
+          rationale: "The user explicitly requested multi-agent orchestration for a browser game implementation."
+        },
+        step: {
+          id: "handoff_initial_step",
+          kind: "final",
+          rationale: "Route to orchestrated mode for swarm staffing before the write handoff.",
+          toolRequests: [],
+          missingFacts: [],
+          successCriteria: ["Create a reviewable local patch after swarm preflight."]
+        }
+      } as T;
+    }
+    if (schemaName === "conversation-intent-decision") {
+      return {
+        kind: "workspace_action",
+        language: "english",
+        needsWorkspace: true,
+        confidence: "high",
+        rationale: "Implementation request with explicit multi-agent orchestration.",
+        workspaceMessage: request
+      } as T;
+    }
+    if (schemaName === "intent-contract") {
+      return readyIntentContract("handoff_test", request, [
+        "Provider-backed swarm records staffing and read-only worker artifacts.",
+        "Write-capable implementation continues through the gated local patch path."
+      ]) as T;
+    }
+    if (schemaName === "intent_review_result") {
+      return { status: "aligned", rationale: "The worker output matches the Crossy Road implementation request.", findings: [] } as T;
+    }
+    if (schemaName === "run-plan") {
+      return {
+        summary: "Create a Vite Three.js Crossy Road scaffold.",
+        reasoningSummary: "Use local gated patch generation after the provider-backed read-only swarm preflight.",
+        mode: "create_project",
+        tasks: [
+          {
+            id: "create_scaffold",
+            title: "Create scaffold",
+            objective: "Create a Vite + Three.js browser game scaffold.",
+            roleTitle: "Project Scaffolder",
+            targetFiles: ["README.md", "package.json", "index.html", "src/main.js"],
+            expectedArtifact: "Reviewable diff",
+            verification: "npm run build"
+          },
+          {
+            id: "gameplay_loop",
+            title: "Build gameplay",
+            objective: "Add lane movement, traffic collision, scoring, and restart state.",
+            roleTitle: "Gameplay Implementer",
+            targetFiles: ["src/main.js"],
+            expectedArtifact: "Reviewable diff",
+            verification: "npm run build"
+          }
+        ],
+        acceptanceCriteria: ["Patch proposal includes runnable scripts.", "Game entrypoint is created under src/main.js."],
+        risks: ["The patch still requires approval before files are written."],
+        suggestedCommands: [{ command: "npm run build", reason: "Verify the generated Vite app after apply." }]
+      } as T;
+    }
+    if (schemaName === "run-patch-intent") {
+      return {
+        title: "Crossy Road Scaffold",
+        summary: "Creates a reviewable Vite + Three.js Crossy Road style scaffold.",
+        intents: [
+          {
+            path: "package.json",
+            operation: "create_file",
+            replacementText: `${JSON.stringify({
+              scripts: { dev: "vite --host 127.0.0.1", build: "vite build" },
+              dependencies: { "@vitejs/plugin-basic-ssl": "^2.0.0", three: "^0.178.0", vite: "^6.0.0" },
+              devDependencies: {}
+            }, null, 2)}\n`,
+            reason: "Adds runnable Vite and Three.js project scripts.",
+            risk: "low"
+          },
+          {
+            path: "index.html",
+            operation: "create_file",
+            replacementText: "<!doctype html>\n<html><head><meta charset=\"UTF-8\"><title>Crossy Road</title></head><body><canvas id=\"game\"></canvas><script type=\"module\" src=\"/src/main.js\"></script></body></html>\n",
+            reason: "Creates the browser entrypoint.",
+            risk: "low"
+          },
+          {
+            path: "src/main.js",
+            operation: "create_file",
+            replacementText: "import * as THREE from 'three';\n\nconst scene = new THREE.Scene();\nconst camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);\nconst renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#game'), antialias: true });\nrenderer.setSize(innerWidth, innerHeight);\nscene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.8));\nconst player = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), new THREE.MeshStandardMaterial({ color: 0x2fd17c }));\nscene.add(player);\nconst cars = Array.from({ length: 8 }, (_, i) => {\n  const car = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 0.8), new THREE.MeshStandardMaterial({ color: i % 2 ? 0xff7a1a : 0x2487ff }));\n  car.position.set((i % 4) * 3 - 5, 0, -i - 3);\n  scene.add(car);\n  return car;\n});\nlet score = 0;\naddEventListener('keydown', (event) => {\n  if (event.key === 'ArrowUp') { player.position.z -= 1; score += 1; }\n  if (event.key === 'ArrowDown') player.position.z += 1;\n  if (event.key === 'ArrowLeft') player.position.x -= 1;\n  if (event.key === 'ArrowRight') player.position.x += 1;\n});\nfunction animate() {\n  requestAnimationFrame(animate);\n  cars.forEach((car, i) => {\n    car.position.x += i % 2 ? 0.035 : -0.035;\n    if (Math.abs(car.position.x) > 7) car.position.x *= -1;\n    if (car.position.distanceTo(player.position) < 0.8) { player.position.set(0, 0, 0); score = 0; }\n  });\n  camera.position.set(player.position.x, 7, player.position.z + 8);\n  camera.lookAt(player.position);\n  renderer.render(scene, camera);\n}\nanimate();\nconsole.log('score', score);\n",
+            reason: "Adds the Three.js render loop, controls, traffic, scoring, and collision reset.",
+            risk: "low"
+          },
+          {
+            path: "README.md",
+            operation: "create_file",
+            replacementText: "# Crossy Road Three.js\n\nRun `npm install`, then `npm run dev`.\n\nUse arrow keys to hop across traffic lanes. The scaffold includes scoring, collisions, camera follow, and restart-on-hit behavior.\n",
+            reason: "Documents how to install and run the generated app.",
+            risk: "low"
+          }
+        ],
+        suggestedCommands: [{ command: "npm run build", reason: "Verify the generated Vite app after apply." }]
+      } as T;
+    }
+    if (schemaName === "run-verification") {
+      return {
+        summary: "Verification pending approved apply.",
+        checks: [{ name: "Build", status: "pending", detail: "Run npm run build after applying the patch." }]
+      } as T;
+    }
+    if (schemaName === "answer-verification") {
+      return {
+        verdict: "pass",
+        rationale: "The fixture only verifies provider-authored structured flow.",
+        supportedClaims: [],
+        unsupportedClaims: [],
+        missingFacts: [],
+        evidenceRefs: []
+      } as T;
+    }
+    if (schemaName === "semantic_conflict_resolution") return { decisions: [] } as T;
+    return withTestIntentAlignment(validSwarmOutput(schemaName), input) as T;
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.calls.push(input);
+    return JSON.stringify(withTestIntentAlignment(validSwarmOutput("swarm_scout_output"), input));
+  }
+}
+
 class FakeSwarmProvider implements LlmProvider {
   calls: LlmRequest[] = [];
 
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.calls.push(input);
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "swarm_specialist_output";
+    const common = commonAutoOrchestrationProviderOutput<T>(input, schemaName);
+    if (common) return common;
     if (schemaName === "conversation-intent-decision") {
       return {
         kind: "workspace_question",
@@ -449,12 +678,12 @@ class FakeSwarmProvider implements LlmProvider {
         workspaceMessage: input.userPrompt.match(/Classify this single user message before retrieval:\n([\s\S]*?)\n\nReturn JSON/i)?.[1]?.trim() ?? input.userPrompt
       } as T;
     }
-    return validSwarmOutput(schemaName) as T;
+    return withTestIntentAlignment(validSwarmOutput(schemaName), input) as T;
   }
 
   async generateText(input: LlmRequest): Promise<string> {
     this.calls.push(input);
-    return JSON.stringify(validSwarmOutput("swarm_scout_output"));
+    return JSON.stringify(withTestIntentAlignment(validSwarmOutput("swarm_scout_output"), input));
   }
 }
 
@@ -492,7 +721,9 @@ class PartialBlockedArabicSwarmProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.calls.push(input);
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "swarm_specialist_output";
-    if (schemaName === "swarm_scout_output") return validReclusterDecisionOutput() as T;
+    const common = commonAutoOrchestrationProviderOutput<T>(input, schemaName);
+    if (common) return common;
+    if (schemaName === "swarm_scout_output") return withTestIntentAlignment(validReclusterDecisionOutput(), input) as T;
     return {
       findings: "not an array",
       relevant_files: "not an array",
@@ -505,7 +736,7 @@ class PartialBlockedArabicSwarmProvider implements LlmProvider {
 
   async generateText(input: LlmRequest): Promise<string> {
     this.calls.push(input);
-    return JSON.stringify(validReclusterDecisionOutput());
+    return JSON.stringify(withTestIntentAlignment(validReclusterDecisionOutput(), input));
   }
 }
 
@@ -515,13 +746,117 @@ class ArtifactInventoryProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.calls.push(input);
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "swarm_specialist_output";
-    return validArtifactInventoryOutput(schemaName) as T;
+    const common = commonAutoOrchestrationProviderOutput<T>(input, schemaName);
+    if (common) return common;
+    return withTestIntentAlignment(validArtifactInventoryOutput(schemaName), input) as T;
   }
 
   async generateText(input: LlmRequest): Promise<string> {
     this.calls.push(input);
-    return JSON.stringify(validArtifactInventoryOutput("swarm_scout_output"));
+    return JSON.stringify(withTestIntentAlignment(validArtifactInventoryOutput("swarm_scout_output"), input));
   }
+}
+
+function commonAutoOrchestrationProviderOutput<T>(input: LlmRequest, schemaName: string): T | undefined {
+  const request = extractAutoTestOriginalRequest(input);
+  const language = /[\u0600-\u06ff]/.test(request) ? "arabic" : "english";
+  if (schemaName === "initial-reasoning-decision") {
+    return {
+      understanding: {
+        originalRequest: request,
+        cleanedRequest: request,
+        language,
+        intentKind: "workspace_action",
+        route: "swarm_readonly",
+        needsWorkspace: true,
+        goal: "Answer from provider-backed read-only swarm evidence.",
+        ambiguities: [],
+        requiredEvidence: ["workspace context", "provider-backed worker outputs"],
+        risk: "high",
+        confidence: "high",
+        rationale: "The fixture routes multi-agent/project understanding prompts to provider-backed read-only swarm."
+      },
+      step: {
+        id: "auto_orchestration_initial_step",
+        kind: "final",
+        rationale: "Continue through provider-backed read-only swarm.",
+        toolRequests: [],
+        missingFacts: [],
+        successCriteria: ["Use worker artifacts instead of local synthesis."]
+      }
+    } as T;
+  }
+  if (schemaName === "intent-contract") {
+    return readyIntentContract("auto_orchestration_test", request, [
+      "Provider-backed read-only swarm records enough evidence to synthesize the answer."
+    ]) as T;
+  }
+  if (schemaName === "intent_review_result") {
+    return { status: "aligned", rationale: "Fixture output aligns with the canonical request.", findings: [] } as T;
+  }
+  if (schemaName === "answer-verification") {
+    return {
+      verdict: "pass",
+      rationale: "Fixture accepted the provider-authored answer.",
+      supportedClaims: [],
+      unsupportedClaims: [],
+      missingFacts: [],
+      evidenceRefs: []
+    } as T;
+  }
+  if (schemaName === "semantic_conflict_resolution") return { decisions: [] } as T;
+  return undefined;
+}
+
+function withTestIntentAlignment(output: Record<string, unknown>, input?: LlmRequest): Record<string, unknown> {
+  const context = typeof input?.context === "object" && input.context !== null
+    ? input.context as Record<string, unknown>
+    : undefined;
+  const frame = typeof context?.intent_frame === "object" && context.intent_frame !== null
+    ? context.intent_frame as Record<string, unknown>
+    : undefined;
+  const taskSlice = typeof frame?.current_task_slice === "object" && frame.current_task_slice !== null
+    ? frame.current_task_slice as Record<string, unknown>
+    : undefined;
+  const contract = typeof frame?.intent_contract === "object" && frame.intent_contract !== null
+    ? frame.intent_contract as Record<string, unknown>
+    : undefined;
+  const alignment: Record<string, unknown> = {
+    schema_version: 1,
+    original_request_hash: typeof frame?.original_request_hash === "string" ? frame.original_request_hash : "test_original_request_hash",
+    task_understanding: "This fixture output is aligned with the test request.",
+    original_goal_contribution: "Provides read-only evidence for the orchestrated test flow.",
+    possible_intent_conflicts: [],
+    assumptions_used: [],
+    evidence_refs: []
+  };
+  if (typeof frame?.intent_contract_ref === "string") alignment.intent_contract_ref = frame.intent_contract_ref;
+  if (typeof contract?.revision === "number") alignment.intent_contract_revision = contract.revision;
+  if (typeof taskSlice?.task_slice_id === "string") alignment.task_slice_id = taskSlice.task_slice_id;
+  return {
+    ...output,
+    intent_alignment: alignment
+  };
+}
+
+function autoTestSchemaName(schema: unknown) {
+  if (typeof schema === "object" && schema && "name" in schema) {
+    return String((schema as { name: string }).name);
+  }
+  return "";
+}
+
+function extractAutoTestOriginalRequest(input: LlmRequest) {
+  const context = typeof input.context === "object" && input.context !== null
+    ? input.context as Record<string, unknown>
+    : undefined;
+  const original = context?.original_user_request;
+  if (typeof original === "string" && original.trim()) return original.trim();
+  const reasoningMatch = input.userPrompt.match(/Understand this user turn and choose its first reasoning step:\s*([\s\S]*?)\n\nReturn \{ understanding, step \}\./i);
+  if (reasoningMatch?.[1]?.trim()) return reasoningMatch[1].trim();
+  const userRequestMatch = input.userPrompt.match(/User request:\s*([\s\S]*?)(?:\n(?:Unified intent understanding|Workspace snapshot|Project intake|Plan|Context pack):|$)/i);
+  if (userRequestMatch?.[1]?.trim()) return userRequestMatch[1].trim();
+  return input.userPrompt.trim();
 }
 
 function validReclusterDecisionOutput(): Record<string, unknown> {

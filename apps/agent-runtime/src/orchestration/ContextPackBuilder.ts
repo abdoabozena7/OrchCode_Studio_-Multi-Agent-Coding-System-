@@ -5,7 +5,8 @@ import path from "node:path";
 import {
   getRelevantFiles,
   readMemoryRecords,
-  readMemorySnapshot
+  readMemorySnapshot,
+  resolveMemoryPaths
 } from "../memory/ProjectMemory.js";
 import { assessIndexFreshness } from "../memory/IndexFreshness.js";
 import type {
@@ -38,6 +39,11 @@ import { AgentTeamManager } from "./AgentTeamManager.js";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
 import { FactoryMetadataAdapter, FactoryMetadataStore } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
+import { IntentLedgerService } from "./IntentLedgerService.js";
+import type { IntentContextSnapshot } from "./IntentLedgerModels.js";
+import { createCoreIntentFrame } from "./IntentHandoffGate.js";
+import { ProjectGoalSpecStore } from "./GoalSteward.js";
+import type { ProjectGoalSpec } from "./GoalStewardModels.js";
 import type {
   TeamContextEvidenceLink,
   TeamContextPackExtension,
@@ -77,6 +83,15 @@ export class ContextPackBuilder {
     const failures = await readMemoryRecords<FailedAttemptRecord>(this.workspacePath, "failed_attempt", this.options.memoryDir);
     const lessons = await readMemoryRecords<LessonLearnedRecord>(this.workspacePath, "lesson", this.options.memoryDir);
     const successfulPatterns = await readMemoryRecords<SuccessfulPatternRecord>(this.workspacePath, "successful_pattern", this.options.memoryDir);
+    const activeGoalSpec = await new ProjectGoalSpecStore({ workspacePath: this.workspacePath, memoryDir: this.options.memoryDir }).loadActiveProjectGoalSpec();
+    const intentContext = await new IntentLedgerService({
+      workspacePath: this.workspacePath,
+      memoryDir: this.options.memoryDir,
+      sourceComponent: "ContextPackBuilder"
+    }).loadContext(runId).catch((): IntentContextSnapshot => ({
+      intent_ledger_refs: [],
+      locked_definitions: []
+    }));
     const teamContext = await this.resolveTeamContext(runId, task, buildOptions, { decisions, failures, lessons, successfulPatterns });
     const memoryForContext = teamContext
       ? {
@@ -112,6 +127,8 @@ export class ContextPackBuilder {
     const snippets = await this.createSnippets(relevantFiles, this.options.maxChars ?? 12_000, this.options.snippetChars ?? 2_400);
     const approximateSize = snippets.reduce((sum, snippet) => sum + snippet.content.length, 0)
       + task.objective.length
+      + (activeGoalSpec?.primary_goal.length ?? 0)
+      + (intentContext.original_request?.original_request.length ?? 0)
       + memoryForContext.decisions.slice(-5).reduce((sum, decision) => sum + decision.summary.length, 0);
     const warnings = [
       initialFreshness.status === "stale" ? "Repository index was stale and refreshed before context pack creation." : "",
@@ -137,8 +154,12 @@ export class ContextPackBuilder {
       initialFreshness,
       mechanismMissingLinks: mechanismChain.missingLinks,
       mechanismSteps: mechanismChain.steps.map((step) => step.label),
+      activeGoalSpec,
       teamContext: teamContext?.extension
     });
+    const intentIncludedItems = intentContextItems({ runId, task }, intentContext);
+    const includedItems = [...intentIncludedItems, ...explanation.includedItems];
+    const retrievalSummary = summarizeRecords(includedItems, explanation.excludedItems);
     const pack: ContextPack = {
       schema_version: ORCHESTRATION_SCHEMA_VERSION,
       id: `ctx_${task.id}`,
@@ -151,14 +172,39 @@ export class ContextPackBuilder {
         "repo_index.json",
         "file_summaries.jsonl",
         "command_inventory.json",
+        ...(activeGoalSpec ? uniqueStrings([`project_goal_spec:${activeGoalSpec.spec_id}`, activeGoalSpec.artifact_ref ?? "", activeGoalSpec.summary_ref ?? ""]) : []),
+        ...(intentContext.original_request_ref ? [`original_user_request:${intentContext.original_request_ref}`] : []),
+        ...(intentContext.intent_contract_ref ? [`intent_contract:${intentContext.intent_contract_ref}`] : []),
+        ...(intentContext.intent_ledger_ref ? [`intent_ledger:${intentContext.intent_ledger_ref}`] : []),
         ...relevantFiles.map((file) => `file:${file}`)
       ],
       constraints: [
+        ...(intentContext.original_request_ref ? [
+          "Treat original_user_request as the canonical source of user intent; do not reinterpret intent through downstream summaries only.",
+          `Original user request ref: ${intentContext.original_request_ref}`
+        ] : []),
+        ...(intentContext.intent_contract_ref ? [
+          "Treat intent_contract as the mandatory compiled user intent gate; do not plan or execute work that contradicts it.",
+          `Intent contract ref: ${intentContext.intent_contract_ref}`,
+          ...(intentContext.intent_contract ? [
+            `Compiled intent: ${intentContext.intent_contract.precise_rewrite}`,
+            `Intent contract status: ${intentContext.intent_contract.status}`,
+            ...intentContext.intent_contract.conflict_rules.map((rule) => `Intent conflict rule: ${rule}`)
+          ] : [])
+        ] : []),
+        ...(intentContext.locked_definitions.length ? [
+          "Locked intent definitions are versioned context; do not change their meaning without a new user-approved revision.",
+          ...intentContext.locked_definitions.map((definition) => `Locked intent ${definition.revision} (${definition.term}): ${definition.definition}`)
+        ] : []),
         "Do not read or write secret-like files.",
         "Do not edit outside allowed_files_to_edit.",
         "Use structured output and include unresolved risks.",
         "Treat repository memory as a map, not a substitute for reading target files.",
-        "Use target_mechanism_chain and confirmed_relevant_files before planning edits; context-only evidence is not proof."
+        "Use target_mechanism_chain and confirmed_relevant_files before planning edits; context-only evidence is not proof.",
+        ...(activeGoalSpec ? [
+          "Do not propose or accept changes that contradict the active ProjectGoalSpec without human approval.",
+          `Active ProjectGoalSpec: ${activeGoalSpec.primary_goal}`
+        ] : [])
       ],
       allowed_files_to_edit: task.allowed_files_to_edit,
       forbidden_files: teamContext ? uniqueStrings([...task.forbidden_files, ...teamContext.extension.scope.forbidden_files]) : task.forbidden_files,
@@ -166,19 +212,60 @@ export class ContextPackBuilder {
       confirmed_relevant_files: confirmedRelevantFiles,
       missing_evidence_links: mechanismChain.missingLinks,
       safe_edit_surface: safeEditSurface,
-      previous_decisions: memoryForContext.decisions.slice(-8).map((decision) => `${decision.createdAt}: ${decision.summary}`),
+      previous_decisions: [
+        ...(intentContext.original_request_hash ? [`Original user request hash: ${intentContext.original_request_hash}`] : []),
+        ...(intentContext.locked_definitions.map((definition) => `LockedIntentDefinition ${definition.definition_id} rev ${definition.revision}: ${definition.term} = ${definition.definition}`)),
+        ...(activeGoalSpec ? [`ProjectGoalSpec ${activeGoalSpec.spec_id}: ${activeGoalSpec.primary_goal}`] : []),
+        ...memoryForContext.decisions.slice(-8).map((decision) => `${decision.createdAt}: ${decision.summary}`)
+      ],
       expected_output_schema: task.expected_output_schema,
       validation_requirements: commands.length ? commands : task.validation_commands,
       approximate_size: approximateSize,
       warnings,
-      included_items: explanation.includedItems,
+      original_request_ref: intentContext.original_request_ref,
+      intent_ledger_ref: intentContext.intent_ledger_ref,
+      intent_contract_ref: intentContext.intent_contract_ref,
+      intent_contract_status: intentContext.intent_contract_status,
+      intent_ledger_refs: intentContext.intent_ledger_refs,
+      locked_intent_definitions: intentContext.locked_definitions,
+      included_items: includedItems,
       excluded_items: explanation.excludedItems,
       freshness_warnings: explanation.freshnessWarnings,
       fallback_items: explanation.fallbackItems,
-      retrieval_summary: explanation.summary,
-      context_retrieval_summary: explanation.summary,
+      retrieval_summary: retrievalSummary,
+      context_retrieval_summary: retrievalSummary,
       team_context: teamContext?.extension
     };
+    if (intentContext.intent_contract?.status === "ready") {
+      pack.intent_frame = createCoreIntentFrame({ runId, task, pack, context: intentContext });
+    }
+    await new IntentLedgerService({
+      workspacePath: this.workspacePath,
+      memoryDir: this.options.memoryDir,
+      sourceComponent: "ContextPackBuilder"
+    }).appendLedgerEntry({
+      runId,
+      runKind: "core",
+      artifactsPath: path.join(resolveMemoryPaths(this.workspacePath, this.options.memoryDir).rootDir, "runs", runId),
+      entryKind: "context_pack_bound",
+      summary: `Context pack ${pack.id} bound to canonical intent references for task ${task.id}.`,
+      artifactRefs: uniqueStrings([
+        `context_pack:${pack.id}`,
+        pack.original_request_ref ?? "",
+        pack.intent_contract_ref ?? "",
+        pack.intent_ledger_ref ?? "",
+        ...(pack.intent_ledger_refs ?? [])
+      ]),
+      metadata: {
+        task_id: task.id,
+        included_item_count: includedItems.length,
+        intent_contract_ref: pack.intent_contract_ref,
+        intent_contract_status: pack.intent_contract_status,
+        locked_definition_count: intentContext.locked_definitions.length
+      }
+    }).catch(() => {
+      pack.warnings = uniqueStrings([...pack.warnings, "Intent ledger append failed for this context pack; canonical refs remain embedded in the pack."]);
+    });
     return assertValid("ContextPack", pack, validateContextPack);
   }
 
@@ -515,6 +602,7 @@ function buildInclusionExplanation(input: {
   initialFreshness: IndexFreshnessReport;
   mechanismMissingLinks: string[];
   mechanismSteps: string[];
+  activeGoalSpec?: ProjectGoalSpec;
   teamContext?: TeamContextPackExtension;
 }) {
   const includedItems: ContextPackInclusionRecord[] = [];
@@ -597,6 +685,31 @@ function buildInclusionExplanation(input: {
       evidenceRefs: [sourceRef],
       warnings: input.freshness.status === "fresh" ? [] : [`Repo index freshness is ${input.freshness.status}.`],
       metadata: { index_generated_at: input.repoIndex.generatedAt, command_inventory_generated_at: input.commandInventory.generatedAt }
+    }));
+  }
+
+  if (input.activeGoalSpec) {
+    includedItems.push(inclusionRecord(input, {
+      itemType: "project_goal_spec",
+      sourceType: "project_goal_spec",
+      sourceRef: input.activeGoalSpec.artifact_ref ?? `project_goal_spec:${input.activeGoalSpec.spec_id}`,
+      accessMode: "reference_only",
+      reason: "Active ProjectGoalSpec included as a non-negotiable project goal guardrail.",
+      relevanceScore: 1,
+      confidence: "high",
+      freshness: "current",
+      evidenceRefs: uniqueStrings([
+        input.activeGoalSpec.artifact_ref ?? "",
+        input.activeGoalSpec.summary_ref ?? "",
+        ...input.activeGoalSpec.source_refs
+      ]),
+      warnings: ["Do not contradict this ProjectGoalSpec without human approval."],
+      metadata: {
+        spec_id: input.activeGoalSpec.spec_id,
+        status: input.activeGoalSpec.status,
+        version: input.activeGoalSpec.version,
+        primary_goal: input.activeGoalSpec.primary_goal
+      }
     }));
   }
 
@@ -771,6 +884,97 @@ function inclusionRecord(input: {
     warnings: value.warnings,
     metadata_json: scrubUndefined(value.metadata)
   };
+}
+
+function intentContextItems(
+  input: { runId: string; task: Task },
+  intentContext: {
+    original_request_ref?: string;
+    original_request_hash?: string;
+    intent_contract_ref?: string;
+    intent_contract_status?: string;
+    intent_ledger_ref?: string;
+    intent_ledger_refs: string[];
+    locked_definitions: Array<{
+      definition_id: string;
+      revision: number;
+      term: string;
+      definition: string;
+      source: string;
+      artifact_ref?: string;
+    }>;
+  }
+): ContextPackInclusionRecord[] {
+  const items: ContextPackInclusionRecord[] = [];
+  if (intentContext.original_request_ref) {
+    items.push(inclusionRecord(input, {
+      itemType: "original_user_request",
+      sourceType: "original_user_request",
+      sourceRef: intentContext.original_request_ref,
+      accessMode: "reference_only",
+      reason: "Canonical original user request included to prevent intent drift across worker handoffs.",
+      relevanceScore: 1,
+      confidence: "high",
+      freshness: "current",
+      evidenceRefs: [intentContext.original_request_ref],
+      warnings: [],
+      metadata: { request_hash: intentContext.original_request_hash }
+    }));
+  }
+  if (intentContext.intent_contract_ref) {
+    items.push(inclusionRecord(input, {
+      itemType: "intent_contract",
+      sourceType: "intent_ledger",
+      sourceRef: intentContext.intent_contract_ref,
+      accessMode: "reference_only",
+      reason: "Compiled intent contract included as the mandatory gate before planning or execution.",
+      relevanceScore: 1,
+      confidence: "high",
+      freshness: "current",
+      evidenceRefs: [intentContext.intent_contract_ref],
+      warnings: intentContext.intent_contract_status === "ready" ? [] : [`Intent contract status is ${intentContext.intent_contract_status ?? "unknown"}.`],
+      metadata: { intent_contract_status: intentContext.intent_contract_status }
+    }));
+  }
+  if (intentContext.intent_ledger_ref) {
+    items.push(inclusionRecord(input, {
+      itemType: "intent_ledger",
+      sourceType: "intent_ledger",
+      sourceRef: intentContext.intent_ledger_ref,
+      accessMode: "reference_only",
+      reason: "Versioned intent ledger included so downstream agents read the original request and locked decisions instead of relying on repeated paraphrases.",
+      relevanceScore: 1,
+      confidence: "high",
+      freshness: "current",
+      evidenceRefs: uniqueStrings([intentContext.intent_ledger_ref, ...intentContext.intent_ledger_refs]),
+      warnings: [],
+      metadata: {
+        intent_ledger_refs: intentContext.intent_ledger_refs,
+        locked_definition_count: intentContext.locked_definitions.length
+      }
+    }));
+  }
+  for (const definition of intentContext.locked_definitions.slice(0, 12)) {
+    items.push(inclusionRecord(input, {
+      itemType: "locked_intent_definition",
+      sourceType: "intent_ledger",
+      sourceRef: definition.artifact_ref ?? definition.definition_id,
+      accessMode: "reference_only",
+      reason: `Locked intent definition included: ${definition.term}.`,
+      relevanceScore: 1,
+      confidence: "high",
+      freshness: "current",
+      evidenceRefs: [definition.artifact_ref ?? definition.definition_id],
+      warnings: [],
+      metadata: {
+        definition_id: definition.definition_id,
+        revision: definition.revision,
+        term: definition.term,
+        source: definition.source
+      }
+    }));
+  }
+  return items;
 }
 
 function applyTeamContextInclusions(

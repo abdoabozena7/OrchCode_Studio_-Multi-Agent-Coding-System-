@@ -51,6 +51,10 @@ export type Run = {
   schema_version: number;
   id: string;
   user_request: string;
+  original_request_ref?: string;
+  intent_ledger_ref?: string;
+  intent_contract_ref?: string;
+  intent_contract_status?: import("@hivo/protocol").IntentContractStatus;
   status: RunStatus;
   created_at: string;
   updated_at: string;
@@ -140,6 +144,9 @@ export type Run = {
     sandbox_validation_mode?: "off" | "report_only" | "execute_safe_commands";
     enable_sandbox_integration_candidates?: boolean;
     sandbox_integration_candidate_mode?: "off" | "report_only" | "create_candidates";
+    enable_goal_steward?: boolean;
+    goal_steward_mode?: "strict" | "report_only";
+    require_active_project_goal_spec?: boolean;
     enable_integration_apply_approval_gate?: boolean;
     integration_apply_approval_mode?: "off" | "report_only" | "require_approval";
     enable_controlled_integration_apply?: boolean;
@@ -228,6 +235,8 @@ export type ContextSnippet = {
 };
 
 export type ContextSourceType =
+  | "original_user_request"
+  | "intent_ledger"
   | "direct_allowed_file"
   | "read_only_dependency"
   | "forbidden_file_reference"
@@ -237,6 +246,7 @@ export type ContextSourceType =
   | "prior_decision"
   | "prior_failure"
   | "successful_pattern"
+  | "project_goal_spec"
   | "lesson"
   | "validation_command"
   | "task_dependency"
@@ -333,6 +343,13 @@ export type ContextPack = {
   validation_requirements: string[];
   approximate_size: number;
   warnings: string[];
+  original_request_ref?: string;
+  intent_ledger_ref?: string;
+  intent_contract_ref?: string;
+  intent_contract_status?: import("@hivo/protocol").IntentContractStatus;
+  intent_frame?: import("@hivo/protocol").AgentIntentInputFrame;
+  intent_ledger_refs?: string[];
+  locked_intent_definitions?: import("./IntentLedgerModels.js").LockedIntentDefinition[];
   included_items?: ContextPackInclusionRecord[];
   excluded_items?: ContextPackInclusionRecord[];
   freshness_warnings?: string[];
@@ -363,6 +380,15 @@ export type FinalRunReport = {
   artifacts_path: string;
   limitations: string[];
   next_recommendations: string[];
+  intent_review_used?: boolean;
+  intent_alignment_status?: string;
+  intent_drift_count?: number;
+  original_request_ref?: string;
+  intent_ledger_ref?: string;
+  intent_review_ref?: string;
+  intent_rewrite_suggestion_ref?: string;
+  intent_contract_ref?: string;
+  intent_contract_status?: string;
   completed_tasks?: string[];
   failed_tasks?: string[];
   changed_files?: string[];
@@ -413,6 +439,11 @@ export type FinalRunReport = {
   rollback_available?: boolean;
   blocked_reason?: string;
   integration_result_ref?: string;
+  goal_steward_used?: boolean;
+  goal_alignment_status?: string;
+  goal_conflict_count?: number;
+  project_goal_spec_ref?: string;
+  goal_steward_review_ref?: string;
   root_team_id?: string;
   team_count?: number;
   max_team_depth?: number;
@@ -577,6 +608,7 @@ export type OrchestratorEvent = {
     | "run.status_changed"
     | "run.checkpoint_written"
     | "run.resumed"
+    | "intent_contract.compiled"
     | "index.stale"
     | "repo.indexed"
     | "task.created"
@@ -630,6 +662,9 @@ export type ParsedAgentOutput = {
   artifacts: string[];
   limitations: string[];
   next_recommendations: string[];
+  intent_alignment?: import("@hivo/protocol").AgentIntentAlignment;
+  intent_handoff_gate_ref?: string;
+  intent_handoff_gate_status?: import("@hivo/protocol").IntentHandoffGateResult["status"];
 };
 
 export type RunCheckpoint = {

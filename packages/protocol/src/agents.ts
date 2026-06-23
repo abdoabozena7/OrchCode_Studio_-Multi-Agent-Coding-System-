@@ -1,4 +1,4 @@
-import type { WorkerSelfCheck } from "./orchestration.js";
+import type { AgentIntentAlignment, IntentHandoffGateResult, WorkerSelfCheck } from "./orchestration.js";
 import type { AgentLifecycleStage } from "./agent-runtime.js";
 import type { AgentRiskRef, AgentWorkJournalEntry, EvidenceRef } from "./models.js";
 
@@ -70,6 +70,8 @@ export type WorkerOutput = {
   commandRequestIds: string[];
   risks: string[];
   selfCheck?: WorkerSelfCheck;
+  intentAlignment?: AgentIntentAlignment;
+  intentHandoffGate?: IntentHandoffGateResult;
   status: "completed" | "blocked" | "failed";
   createdAt: string;
 };

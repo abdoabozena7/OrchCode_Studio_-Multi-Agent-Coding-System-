@@ -11,13 +11,18 @@ import {
   IntegrationManager,
   OrchestrationArtifactStore,
   ORCHESTRATION_SCHEMA_VERSION,
+  ProjectGoalSpecStore,
   createIntegrationCandidate,
   createIntegrationPlan,
   createIntegrationResult,
+  createProjectGoalSpec,
+  type IntegrationManagerOptions,
   type ParsedAgentOutput,
   type Run,
   type Task
 } from "../orchestration/index.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
 test("integration models create metadata refs without storing patch bodies", () => {
   const candidate = createIntegrationCandidate({
@@ -108,6 +113,191 @@ test("integration manager records not_required when no patch or change artifacts
     }
   } finally {
     await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("goal steward allows aligned candidates and blocks conceptual spec conflicts", async () => {
+  const alignedWorkspace = await fixtureWorkspace("integration-goal-aligned");
+  try {
+    const run = fakeRun(alignedWorkspace, "run_goal_aligned");
+    const task = fakeTask(run.id, "task_arcade_gravity", "ExecutorAgent", ["src/gameplay.ts"]);
+    task.objective = "Reduce gravity to make jumps feel playful and fun.";
+    const { output } = await acceptedOutput(alignedWorkspace, run, task);
+    await saveArcadeSpec(alignedWorkspace);
+    const manager = new IntegrationManager({
+      workspacePath: alignedWorkspace,
+      artifactStore: new OrchestrationArtifactStore(alignedWorkspace),
+      config: config(),
+      providerFactory: () => new FakeGoalProvider({
+        decisions: [{
+          conflict: "fun_arcade_physics_vs_realistic_physics",
+          source_a: "MarketingAgent",
+          source_b: "PhysicsAgent",
+          root_intent: "arcade fun car game",
+          decision: "use low gravity arcade physics",
+          reason: "user goal prioritizes fun over realism",
+          requires_user_approval: false,
+          severity: "warning",
+          status: "resolved",
+          source_refs: ["integration_candidate_task_arcade_gravity"],
+          evidence_refs: ["project_goal_spec:arcade"]
+        }]
+      }),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "passed");
+    assert.equal(result.metadata_json.goal_alignment_status, "aligned");
+  } finally {
+    await rm(alignedWorkspace, { recursive: true, force: true });
+  }
+
+  const conflictWorkspace = await fixtureWorkspace("integration-goal-conflict");
+  try {
+    const run = fakeRun(conflictWorkspace, "run_goal_conflict");
+    const task = fakeTask(run.id, "task_realistic_gravity", "ExecutorAgent", ["src/gameplay.ts"]);
+    task.objective = "Increase gravity to make the physics realistic.";
+    const { output } = await acceptedOutput(conflictWorkspace, run, task);
+    await saveArcadeSpec(conflictWorkspace);
+    const manager = new IntegrationManager({
+      workspacePath: conflictWorkspace,
+      artifactStore: new OrchestrationArtifactStore(conflictWorkspace),
+      config: config(),
+      providerFactory: () => new FakeGoalProvider({
+        decisions: [{
+          conflict: "fun_arcade_physics_vs_realistic_physics",
+          source_a: "integration_candidate_task_realistic_gravity",
+          source_b: "ProjectGoalSpec",
+          root_intent: "arcade fun car game",
+          decision: "reject realistic gravity for this integration",
+          reason: "Increasing gravity for realism contradicts the active arcade-physics goal.",
+          requires_user_approval: false,
+          severity: "blocking",
+          status: "blocked",
+          source_refs: ["integration_candidate_task_realistic_gravity"],
+          evidence_refs: ["project_goal_spec:arcade"]
+        }]
+      }),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "blocked");
+    const conflict = result.conflicts.find((entry) => entry.conflict_type === "goal_spec_conflict");
+    assert.ok(conflict);
+    assert.equal(conflict.metadata_json.semantic_conflict, "fun_arcade_physics_vs_realistic_physics");
+    assert.ok(conflict.metadata_json.semantic_conflict_decision_id);
+    assert.equal(result.metadata_json.goal_alignment_status, "conflicts_with_spec");
+    assert.ok(result.metadata_json.goal_steward_review_ref);
+  } finally {
+    await rm(conflictWorkspace, { recursive: true, force: true });
+  }
+});
+
+test("goal steward asks for user approval when cost and reliability tradeoff is undecided", async () => {
+  const workspace = await fixtureWorkspace("integration-goal-cost-reliability");
+  try {
+    const run = fakeRun(workspace, "run_goal_cost_reliability");
+    const task = fakeTask(run.id, "task_reduce_redundancy", "ExecutorAgent", ["src/infra.ts"]);
+    task.objective = "Reduce infrastructure cost by removing redundant reliability safeguards.";
+    const { output } = await acceptedOutput(workspace, run, task);
+    await saveAmbiguousServiceSpec(workspace);
+    const manager = new IntegrationManager({
+      workspacePath: workspace,
+      artifactStore: new OrchestrationArtifactStore(workspace),
+      config: config(),
+      providerFactory: () => new FakeGoalProvider({
+        decisions: [{
+          conflict: "lowest_cost_vs_highest_reliability",
+          source_a: "integration_candidate_task_reduce_redundancy",
+          source_b: "ProjectGoalSpec",
+          root_intent: "ship a useful service within budget",
+          decision: "ask the user whether cost or reliability wins for this change",
+          reason: "The active spec mentions both cost and reliability but does not rank the tradeoff.",
+          requires_user_approval: true,
+          severity: "blocking",
+          status: "requires_user_approval",
+          question: "Should this integration prioritize lower cost or higher reliability?",
+          options: ["lower cost", "higher reliability"],
+          source_refs: ["integration_candidate_task_reduce_redundancy"],
+          evidence_refs: ["project_goal_spec:ambiguous-service"]
+        }]
+      }),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "blocked");
+    const conflict = result.conflicts.find((entry) => entry.conflict_type === "goal_change_requires_approval");
+    assert.ok(conflict);
+    assert.equal(conflict.metadata_json.semantic_conflict, "lowest_cost_vs_highest_reliability");
+    assert.equal(result.metadata_json.goal_alignment_status, "requires_human_approval");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("goal steward keeps no-spec runs compatible and handles provider outage by mode", async () => {
+  const noSpecWorkspace = await fixtureWorkspace("integration-goal-no-spec");
+  try {
+    const run = fakeRun(noSpecWorkspace, "run_goal_no_spec");
+    const task = fakeTask(run.id, "task_no_spec", "ExecutorAgent", ["src/gameplay.ts"]);
+    const { output } = await acceptedOutput(noSpecWorkspace, run, task);
+    const manager = new IntegrationManager({
+      workspacePath: noSpecWorkspace,
+      artifactStore: new OrchestrationArtifactStore(noSpecWorkspace),
+      config: config(),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "passed");
+    assert.equal(result.metadata_json.goal_alignment_status, undefined);
+  } finally {
+    await rm(noSpecWorkspace, { recursive: true, force: true });
+  }
+
+  const strictWorkspace = await fixtureWorkspace("integration-goal-provider-strict");
+  try {
+    const run = fakeRun(strictWorkspace, "run_goal_provider_strict");
+    const task = fakeTask(run.id, "task_provider_strict", "ExecutorAgent", ["src/gameplay.ts"]);
+    const { output } = await acceptedOutput(strictWorkspace, run, task);
+    await saveArcadeSpec(strictWorkspace);
+    const manager = new IntegrationManager({
+      workspacePath: strictWorkspace,
+      artifactStore: new OrchestrationArtifactStore(strictWorkspace),
+      config: config(),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "blocked");
+    assert.ok(result.conflicts.some((conflict) => conflict.conflict_type === "goal_steward_unavailable"));
+    assert.equal(result.metadata_json.goal_alignment_status, "provider_unavailable");
+  } finally {
+    await rm(strictWorkspace, { recursive: true, force: true });
+  }
+
+  const reportOnlyWorkspace = await fixtureWorkspace("integration-goal-provider-report-only");
+  try {
+    const run = fakeRun(reportOnlyWorkspace, "run_goal_provider_report_only");
+    const task = fakeTask(run.id, "task_provider_report_only", "ExecutorAgent", ["src/gameplay.ts"]);
+    const { output } = await acceptedOutput(reportOnlyWorkspace, run, task);
+    await saveArcadeSpec(reportOnlyWorkspace);
+    const manager = new IntegrationManager({
+      workspacePath: reportOnlyWorkspace,
+      artifactStore: new OrchestrationArtifactStore(reportOnlyWorkspace),
+      config: config({ goal_steward_mode: "report_only" }),
+      applyMode: "safe_adapter",
+      adapter: { apply: async () => ({ status: "applied", validation_status: "passed" }) }
+    });
+    const result = await manager.integrate({ run, tasks: [task], parsedOutputs: [output] });
+    assert.equal(result.status, "passed");
+    assert.equal(result.metadata_json.goal_alignment_status, "provider_unavailable");
+    assert.equal(result.conflicts.length, 0);
+  } finally {
+    await rm(reportOnlyWorkspace, { recursive: true, force: true });
   }
 });
 
@@ -317,7 +507,10 @@ test("integration manager emits trace events and persists plan candidate conflic
 test("CoreOrchestrator plan-only runs record not_required integration summary", async () => {
   const workspace = await fixtureWorkspace("integration-plan-only");
   try {
-    const result = await new CoreOrchestrator({ workspacePath: workspace }).planOnly("Explain src/index.ts without changing files.");
+    const result = await new CoreOrchestrator({
+      workspacePath: workspace,
+      providerFactory: () => new ScriptedProvider()
+    }).planOnly("Explain src/index.ts without changing files.");
     assert.equal(result.run.status, "succeeded");
     assert.equal(result.report.integration_status, "not_required");
     assert.equal(result.report.candidates_found, 0);
@@ -361,7 +554,9 @@ function fakeOutput(task: Task, artifacts: string[]): ParsedAgentOutput {
     }],
     artifacts,
     limitations: [],
-    next_recommendations: []
+    next_recommendations: [],
+    intent_handoff_gate_ref: path.join(".agent_memory", "runs", task.run_id, "intent_handoffs", task.id, "handoff_gate.json"),
+    intent_handoff_gate_status: "passed"
   };
 }
 
@@ -414,11 +609,54 @@ async function fixtureWorkspace(name: string) {
   return mkdtemp(path.join(os.tmpdir(), `${name}-`));
 }
 
-function config() {
+async function saveArcadeSpec(workspace: string) {
+  return new ProjectGoalSpecStore({ workspacePath: workspace }).saveProjectGoalSpec(createProjectGoalSpec({
+    title: "Arcade Physics Goal",
+    primary_goal: "The game should feel playful and arcade-like, not physically realistic.",
+    non_goals: ["Do not optimize physics for real-world accuracy."],
+    tradeoffs: [{ name: "physics feel", prefer: "fun low gravity and readable jumps", over: "realistic gravity simulation" }],
+    constraints: ["Favor playful gravity over realism."],
+    accepted_examples: ["Reduce gravity to make jumps feel more fun."],
+    rejected_examples: ["Increase gravity to match real-world physics."],
+    source_refs: [],
+    version: 1,
+    status: "active"
+  }));
+}
+
+async function saveAmbiguousServiceSpec(workspace: string) {
+  return new ProjectGoalSpecStore({ workspacePath: workspace }).saveProjectGoalSpec(createProjectGoalSpec({
+    title: "Useful Service Goal",
+    primary_goal: "Ship a useful service within budget with dependable behavior.",
+    non_goals: [],
+    tradeoffs: [],
+    constraints: ["Do not make irreversible infrastructure changes without review."],
+    accepted_examples: [],
+    rejected_examples: [],
+    source_refs: [],
+    version: 1,
+    status: "active"
+  }));
+}
+
+class FakeGoalProvider implements LlmProvider {
+  constructor(private readonly response: unknown) {}
+
+  async generateStructured<T>(_input: LlmRequest, _schema: unknown): Promise<T> {
+    return this.response as T;
+  }
+
+  async generateText(_input: LlmRequest): Promise<string> {
+    return "";
+  }
+}
+
+function config(overrides: Partial<IntegrationManagerOptions["config"]> = {}): IntegrationManagerOptions["config"] {
   return {
     lock_ttl_ms: 60_000,
     validation_timeout: 1_000,
     max_validation_log_size: 10_000,
-    safe_commands_allowlist: ["npm test"]
+    safe_commands_allowlist: ["npm test"],
+    ...overrides
   };
 }

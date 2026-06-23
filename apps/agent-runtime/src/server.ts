@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type {
   CreateRuntimeSessionRequest,
+  AgentScopedMessageRequest,
   FactoryApprovalDecisionRequest,
   RecursiveBranchExecutionStartRequest,
   ReportCommandResultRequest,
@@ -70,6 +71,28 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
     const session = runtime.getSession(id);
     if (!session) return reply.status(404).send({ error: "Session not found" });
     return session;
+  });
+
+  app.post("/sessions/:id/agents/:agentId/messages", async (request, reply) => {
+    const { id, agentId } = request.params as { id: string; agentId: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    const body = request.body as AgentScopedMessageRequest;
+    if (!body?.message?.trim()) {
+      return reply.status(400).send({ error: "message is required" });
+    }
+    try {
+      return await runtime.sendAgentScopedMessage(id, agentId, body.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/agent_not_found/.test(message)) return reply.status(404).send({ error: "Agent not found" });
+      if (/agent_not_messageable/.test(message)) return reply.status(400).send({ error: "Node does not accept scoped messages" });
+      if (/agent_message_empty/.test(message)) return reply.status(400).send({ error: "message is required" });
+      if (error instanceof ProviderConfigurationError) {
+        return reply.status(409).send({ error: error.message, code: error.code });
+      }
+      return reply.status(409).send({ error: message });
+    }
   });
 
   app.post("/sessions/:id/factory/product-spec/decision", async (request, reply) => {

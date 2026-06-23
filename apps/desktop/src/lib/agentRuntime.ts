@@ -1,5 +1,6 @@
 import type {
   AccessProfile,
+  AgentScopedMessageResponse,
   AgentRuntimeSession,
   AppEvent,
   CreateRuntimeSessionResponse,
@@ -115,6 +116,14 @@ export async function createRuntimeSession(input: {
 export async function runRuntimeTurn(sessionId: string, message: string, sessionToken?: string) {
   await assertRuntimeAvailable();
   return runtimeFetch<RuntimeTurnResponse>(`/sessions/${sessionId}/turn`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+    sessionToken
+  });
+}
+
+export async function sendRuntimeAgentMessage(sessionId: string, agentId: string, message: string, sessionToken?: string) {
+  return runtimeFetch<AgentScopedMessageResponse>(`/sessions/${sessionId}/agents/${encodeURIComponent(agentId)}/messages`, {
     method: "POST",
     body: JSON.stringify({ message }),
     sessionToken

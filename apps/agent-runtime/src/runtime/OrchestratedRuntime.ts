@@ -2,6 +2,7 @@ import type {
   AgentRun,
   AgentRuntimeSession,
   AgentWorkStatus,
+  IntentContract,
   OrchestrationEventType,
   PatchChangeStats,
   PatchProposal,
@@ -12,6 +13,7 @@ import type {
   RuntimeProgressStatus,
   WorkerOutput
 } from "@hivo/protocol";
+import path from "node:path";
 import { ProductOrchestrator } from "../orchestrators/ProductOrchestrator.js";
 import { BusinessOrchestrator } from "../orchestrators/BusinessOrchestrator.js";
 import { EngineeringOrchestrator } from "../orchestrators/EngineeringOrchestrator.js";
@@ -27,7 +29,7 @@ import {
   SecurityAgent,
 } from "../agents/workers/index.js";
 import { isThreeJsSnakePrompt, validateThreeJsSnakeProposal } from "../mock/threeJsSnake.js";
-import { createConversationUnderstanding } from "./ConversationUnderstanding.js";
+import { createLegacyIntentInputFrame, IntentHandoffGate } from "../orchestration/IntentHandoffGate.js";
 
 export class OrchestratedRuntime {
   constructor(private readonly sessionManager: SessionManager) {}
@@ -38,17 +40,21 @@ export class OrchestratedRuntime {
     options: {
       projectMap?: ProjectMap;
       delegationDecision?: import("@hivo/protocol").DelegationDecision;
+      intentContract?: IntentContract;
       thinkFirst?: boolean;
     } = {}
   ) {
     const session = this.sessionManager.getSession(sessionId);
     if (!session?.orchestration) throw new Error("Orchestrated session not found");
+    const intentContract = options.intentContract ?? session.intentContract;
+    if (!intentContract || intentContract.status !== "ready") {
+      throw new Error("OrchestratedRuntime requires a ready IntentContract before planning.");
+    }
     const lastMessage = session.messages.at(-1);
     if (lastMessage?.role !== "user" || lastMessage.content !== message) {
       await this.sessionManager.addMessage(sessionId, { role: "user", content: message });
     }
-    const conversationUnderstanding = createConversationUnderstanding(message);
-    const orchestrationMessage = conversationUnderstanding.workspaceMessage || message;
+    const orchestrationMessage = intentContract.precise_rewrite;
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "running";
       draft.lifecycleStage = "PLAN";
@@ -75,7 +81,7 @@ export class OrchestratedRuntime {
         importantFiles: projectSummary.importantFiles
       };
 
-    const productBrief = new ProductOrchestrator().createBrief(orchestrationMessage);
+    const productBrief = new ProductOrchestrator().createBrief(intentContract);
     await this.recordAgent(sessionId, "Product Orchestrator", "Product Orchestrator", "Create product brief");
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.orchestration!.productBrief = productBrief;
@@ -233,7 +239,23 @@ export class OrchestratedRuntime {
       const spec = engineering.assignmentPlan.workerSpecs.find((candidate) => candidate.objective === workOrder?.objective) ?? engineering.assignmentPlan.workerSpecs[0];
       if (!spec) throw new Error("No worker spec available for task");
       const toolsForWorker = new ToolRegistry(session.workspacePath, spec.capabilityGrant);
-      const worker = new GenericWorkerAgent().assign(spec);
+      const intentFrame = createLegacyIntentInputFrame({
+        sessionId,
+        intentContract,
+        role: spec.roleTitle,
+        taskId: task.id,
+        objective: workOrder?.objective ?? task.description,
+        taskTitle: task.title,
+        dependencies: task.dependsOn,
+        readFiles: workOrder?.requiredArtifacts ?? task.fileLocks,
+        writeFiles: task.fileLocks,
+        allowedFiles: spec.capabilityGrant.allowedPaths,
+        forbiddenFiles: [],
+        expectedOutputSchema: "WorkerOutput",
+        validationRequirements: projectMap.testCommands,
+        contextRefs: artifacts.map((artifact) => artifact.id)
+      });
+      const worker = new GenericWorkerAgent().assign({ ...spec, intentFrame });
       const run = createAgentRun(sessionId, task.assignedAgent, task.title, "running");
       await this.updateWorkStatus(sessionId, {
         agentName: task.assignedAgent,
@@ -263,30 +285,66 @@ export class OrchestratedRuntime {
         workspacePath: session.workspacePath,
         projectMap,
         tools: toolsForWorker,
-        previousArtifacts: artifacts
+        previousArtifacts: artifacts,
+        intentFrame
       });
-      outputs.push(result.output);
-      artifacts.push(result.artifact);
+      const gate = await new IntentHandoffGate({
+        workspacePath: session.workspacePath,
+        sourceComponent: "OrchestratedRuntime"
+      }).evaluate({
+        runId: sessionId,
+        runKind: "runtime_session",
+        artifactsPath: path.join(session.workspacePath, ".agent_memory", "runtime_intents", sessionId),
+        layer: "legacy_orchestrated",
+        taskId: task.id,
+        frame: intentFrame,
+        alignment: result.output.intentAlignment,
+        candidate: result.output,
+        reviewedArtifactRefs: [result.artifact.id],
+        target: "output"
+      });
+      const output = gate.passed ? {
+        ...result.output,
+        intentHandoffGate: gate
+      } : {
+        ...result.output,
+        status: "blocked" as const,
+        risks: [...new Set([...result.output.risks, `Intent handoff gate blocked this output: ${gate.deterministic_errors.join("; ")}`])],
+        intentHandoffGate: gate
+      };
+      const artifact = gate.passed ? {
+        ...result.artifact,
+        intentHandoffGate: gate
+      } : {
+        ...result.artifact,
+        summary: `Blocked by intent handoff gate: ${result.artifact.summary}`,
+        details: [...result.artifact.details, ...gate.deterministic_errors],
+        patchProposalIds: [],
+        commandRequestIds: [],
+        intentHandoffGate: gate
+      };
+      outputs.push(output);
+      artifacts.push(artifact);
       await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.orchestration!.workerOutputs.push(result.output);
+        draft.orchestration!.workerOutputs.push(output);
         draft.orchestration!.artifactHandoffs ??= [];
-        draft.orchestration!.artifactHandoffs.push(result.artifact);
+        draft.orchestration!.artifactHandoffs.push(artifact);
         const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
         if (targetRun) {
-          targetRun.status = "completed";
-          targetRun.lifecycleStage = "DONE";
-          targetRun.artifactJson = result.artifact;
+          targetRun.status = gate.passed ? "completed" : "blocked";
+          targetRun.lifecycleStage = gate.passed ? "DONE" : "BLOCKED";
+          targetRun.artifactJson = artifact;
           targetRun.completedAt = new Date().toISOString();
-          targetRun.lastEvent = "completed";
+          targetRun.lastEvent = gate.passed ? "completed" : "intent_handoff_blocked";
           appendAgentJournalEntry(targetRun, {
             kind: "completed",
             title: task.title,
-            summary: result.output.summary,
-            status: "completed"
+            summary: output.summary,
+            status: gate.passed ? "completed" : "blocked"
           });
         }
       });
-      if (result.patch) {
+      if (gate.passed && result.patch) {
         const patch = result.patch;
         await this.sessionManager.addPatchProposal(sessionId, result.patch);
         const patchStats = getPatchStatsFromPatch(patch).map((stat) => ({
@@ -321,7 +379,7 @@ export class OrchestratedRuntime {
           patchStats
         });
       }
-      if (result.commandRequest) {
+      if (gate.passed && result.commandRequest) {
         await this.sessionManager.addCommandRequest(sessionId, result.commandRequest);
         await this.sessionManager.updateSession(sessionId, (draft) => {
           const targetRun = draft.orchestration!.agentRuns.find((candidate) => candidate.id === run.id);
@@ -336,7 +394,7 @@ export class OrchestratedRuntime {
           });
         });
       }
-      if (!previewRecommendation && result.previewRecommendation) {
+      if (gate.passed && !previewRecommendation && result.previewRecommendation) {
         previewRecommendation = result.previewRecommendation;
       }
       await this.updateWorkStatus(sessionId, {
@@ -344,19 +402,19 @@ export class OrchestratedRuntime {
         role: spec.roleTitle,
         taskTitle: task.title,
         objective: workOrder?.objective ?? task.description,
-        status: "completed",
+        status: gate.passed ? "completed" : "blocked",
         targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? [],
-        summary: result.output.summary,
-        selfCheck: result.output.selfCheck,
+        summary: output.summary,
+        selfCheck: output.selfCheck,
         updatedAt: new Date().toISOString()
       });
       await this.progress(sessionId, {
         stage: "working",
-        status: "completed",
+        status: gate.passed ? "completed" : "blocked",
         agentName: task.assignedAgent,
         role: spec.roleTitle,
         taskTitle: task.title,
-        summary: result.output.summary,
+        summary: output.summary,
         targetFiles: task.fileLocks.length ? task.fileLocks : workOrder?.requiredArtifacts ?? []
       });
     });
@@ -673,6 +731,12 @@ function runQualityGates(
   const reviewerNotes: string[] = [];
 
   for (const output of outputs) {
+    if (output.status !== "completed") {
+      blockingReasons.push(`${output.agentName} did not complete: ${output.status}.`);
+    }
+    if (output.intentHandoffGate?.status !== "passed") {
+      blockingReasons.push(`${output.agentName} failed intent handoff gate: ${output.intentHandoffGate?.deterministic_errors.join("; ") ?? "missing gate"}`);
+    }
     if (output.selfCheck?.failedCriteria.length || output.selfCheck?.missingItems.length) {
       blockingReasons.push(`${output.agentName} failed self-check: ${[...(output.selfCheck.failedCriteria ?? []), ...(output.selfCheck.missingItems ?? [])].join(", ")}`);
     }

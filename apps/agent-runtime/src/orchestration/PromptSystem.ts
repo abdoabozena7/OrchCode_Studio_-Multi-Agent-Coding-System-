@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AgentIntentInputFrame } from "@hivo/protocol";
 import { FactoryMetadataStore } from "./FactoryMetadataStore.js";
 import type { AgentRoleName, ContextPack, Task } from "./OrchestrationModels.js";
 
@@ -94,6 +95,7 @@ export type RolePromptInput = {
   validation_requirements: string[];
   expected_output_schema: string;
   output_schema_name: string;
+  intent_frame?: AgentIntentInputFrame;
   source_component?: string;
   agent_id?: string;
   metadata_json?: Record<string, unknown>;
@@ -264,9 +266,13 @@ export function rolePromptInputFromTask(input: {
     validation_requirements: input.pack.validation_requirements,
     expected_output_schema: input.task.expected_output_schema,
     output_schema_name: input.task.expected_output_schema,
+    intent_frame: input.pack.intent_frame,
     source_component: input.sourceComponent ?? "CoreOrchestrator",
     metadata_json: {
       context_pack_id: input.pack.id,
+      original_request_hash: input.pack.intent_frame?.original_request_hash,
+      intent_contract_ref: input.pack.intent_frame?.intent_contract_ref,
+      task_slice_id: input.pack.intent_frame?.current_task_slice.task_slice_id,
       context_retrieval_summary: input.pack.retrieval_summary,
       team_context: input.pack.team_context ? {
         team_id: input.pack.team_context.scope.team_id,
@@ -431,10 +437,22 @@ function renderLegacyRolePrompt(input: PromptTemplateInput) {
   const forbidden = requiredStringArray(input, "forbidden_files");
   const relevant = requiredStringArray(input, "relevant_files");
   const validation = requiredStringArray(input, "validation_requirements");
+  const intentFrame = asRecord(input.intent_frame);
   return [
     `Role: ${role}`,
     `Task: ${title}`,
     `Objective: ${objective}`,
+    "",
+    "Canonical intent frame:",
+    ...(intentFrame ? [
+      `- original_request_hash: ${String(intentFrame.original_request_hash ?? "")}`,
+      `- original_user_request: ${String(intentFrame.original_user_request ?? "")}`,
+      `- intent_contract_ref: ${String(intentFrame.intent_contract_ref ?? "")}`,
+      `- intent_contract_status: ${String(intentFrame.intent_contract_status ?? "")}`,
+      `- current_task_slice_id: ${String(asRecord(intentFrame.current_task_slice)?.task_slice_id ?? "")}`,
+      `- current_task_slice_objective: ${String(asRecord(intentFrame.current_task_slice)?.objective ?? "")}`,
+      `- compiled_intent: ${String(asRecord(intentFrame.intent_contract)?.precise_rewrite ?? "")}`
+    ] : ["- missing"]),
     "",
     "Allowed files to edit:",
     ...(allowed.length ? allowed.map((file) => `- ${file}`) : ["- none"]),
@@ -464,6 +482,8 @@ function renderSwarmReadOnlyPrompt(input: PromptTemplateInput) {
     "- Do not run shell commands.",
     "- Treat all files as reference context only.",
     "- Do not claim validation passed unless a validation artifact proves it.",
+    "- Include intent_alignment tied to original_request_hash, intent_contract_ref, and current_task_slice_id.",
+    "- If your result may conflict with the intent contract, list the conflict in intent_alignment.possible_intent_conflicts instead of hiding it.",
     "",
     `Return strict JSON matching schema: ${schema}.`,
     "Use exactly these top-level keys for the selected schema:",
@@ -475,20 +495,20 @@ function renderSwarmReadOnlyPrompt(input: PromptTemplateInput) {
 function readOnlySchemaKeyInstruction(schema: string) {
   switch (schema) {
     case "swarm_scout_output":
-      return '{"findings":["..."],"relevant_files":["path/or/module"],"risks":[],"unknowns":[],"suggested_next_steps":[],"confidence":0.7}';
+      return '{"findings":["..."],"relevant_files":["path/or/module"],"risks":[],"unknowns":[],"suggested_next_steps":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_planner_output":
-      return '{"plan_summary":"...","task_drafts":["..."],"dependencies":[],"risks":[],"validation_strategy":[],"assumptions":[],"confidence":0.7}';
+      return '{"plan_summary":"...","task_drafts":["..."],"dependencies":[],"risks":[],"validation_strategy":[],"assumptions":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_risk_analyst_output":
-      return '{"risks":["..."],"severity":"low|medium|high|critical","impacted_files_or_modules":[],"mitigation":[],"blockers":[],"confidence":0.7}';
+      return '{"risks":["..."],"severity":"low|medium|high|critical","impacted_files_or_modules":[],"mitigation":[],"blockers":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_reviewer_output":
-      return '{"decision":"accepted|needs_changes|blocked","severity":"low|medium|high|critical","findings":["..."],"required_changes":[],"validation_recommendations":[],"confidence":0.7}';
+      return '{"decision":"accepted|needs_changes|blocked","severity":"low|medium|high|critical","findings":["..."],"required_changes":[],"validation_recommendations":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_tester_planner_output":
-      return '{"recommended_validation":[],"required_commands":[],"optional_commands":[],"smoke_checks":[],"blocked_or_missing_validation":[],"confidence":0.7}';
+      return '{"recommended_validation":[],"required_commands":[],"optional_commands":[],"smoke_checks":[],"blocked_or_missing_validation":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_reporter_output":
-      return '{"summary":"...","evidence_refs":[],"unresolved_risks":[],"next_steps":[],"confidence":0.7}';
+      return '{"summary":"...","evidence_refs":[],"unresolved_risks":[],"next_steps":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
     case "swarm_specialist_output":
     default:
-      return '{"specialty":"...","findings":["..."],"recommendations":[],"risks":[],"confidence":0.7}';
+      return '{"specialty":"...","findings":["..."],"recommendations":[],"risks":[],"confidence":0.7,"intent_alignment":{"schema_version":1,"original_request_hash":"...","intent_contract_ref":"...","intent_contract_revision":1,"task_slice_id":"...","task_understanding":"...","original_goal_contribution":"...","possible_intent_conflicts":[],"assumptions_used":[],"evidence_refs":[]}}';
   }
 }
 

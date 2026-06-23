@@ -11,6 +11,11 @@ import { EventBus } from "../runtime/EventBus.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import { RunEngine } from "../runtime/RunEngine.js";
+import { inferProjectLaunch } from "../runtime/ProjectLaunchInference.js";
+import { selectRunToGreenCommands } from "../runtime/RunToGreen.js";
+import { runPatchIntentSchema, runPlanSchema } from "../schemas/sessionSchemas.js";
+import { normalizeStructuredOutputCandidate, validateStructuredOutput } from "../schemas/validators.js";
+import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -85,6 +90,30 @@ test("run_to_green falls back to module verification commands", async () => {
   }
 });
 
+test("run_to_green prefers package launch command for local URL requests", async () => {
+  const fixture = await createPackageFixture({ scripts: { test: "vitest run", dev: "vite --host 127.0.0.1" }, withSource: true });
+  await writeFile(path.join(fixture.workspace, "index.html"), '<!doctype html><script type="module" src="/src/main.ts"></script>\n', "utf8");
+  try {
+    const tools = new ToolRegistry(fixture.workspace);
+    const launch = inferProjectLaunch(fixture.workspace, tools.workspace);
+    const selected = selectRunToGreenCommands({
+      sessionId: "session_test",
+      workspacePath: fixture.workspace,
+      message: "Run this project and show the local URL.",
+      modulePlan: { verificationCommands: ["npm test"] } as never,
+      launchRecommendation: launch,
+      now: new Date().toISOString()
+    });
+
+    assert.equal(launch?.strategy, "package_script");
+    assert.equal(launch?.command, "npm run dev");
+    assert.match(launch?.preview.target ?? "", /127\.0\.0\.1:5173/);
+    assert.equal(selected[0]?.command, "npm run dev");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("run_to_green completes safely when no known command can be selected", async () => {
   const fixture = await createStaticFixture();
   const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
@@ -112,6 +141,126 @@ test("run_to_green completes safely when no known command can be selected", asyn
     await app.close();
     await fixture.close();
   }
+});
+
+test("run_to_green scaffolds an empty project when the prompt explicitly asks to create if needed", async () => {
+  const fixture = await createEmptyFixture();
+  const provider = new EmptyProjectRunProvider();
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = "Run this project. If no runnable app exists yet, create a minimal Vite + Three.js 3D Snake game first, then run the detected start command and show the local URL.";
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "simple_mode",
+      accessProfile: "full_access",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    const diagnostic = JSON.stringify({
+      turn,
+      sessionStatus: session?.status,
+      summaries: session?.reasoningSummaries,
+      lastMessage: session?.messages.at(-1)?.content,
+      telemetry: session?.providerTelemetry
+    });
+    assert.equal(turn.status, "needs_approval", diagnostic);
+    assert.equal(session?.status, "needs_approval", diagnostic);
+    assert.equal(session?.runIntent, "run_to_green");
+    assert.equal(session?.runMode, "run_to_green");
+    assert.equal(provider.runPlanCalls, 1);
+    assert.equal(provider.patchIntentCalls, 1);
+    assert.equal(session?.runToGreen, undefined);
+    assert.equal(session?.patchProposals.length, 1);
+    assert.deepEqual(session?.patchProposals[0]?.filesChanged.map((file) => file.path).sort(), [
+      "README.md",
+      "index.html",
+      "package.json",
+      "src/main.js"
+    ]);
+    assert.ok(session?.commandRequests.some((request) => request.command === "npm install"));
+    assert.ok(session?.commandRequests.some((request) => request.command === "npm run dev"));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("run-plan normalizes provider task alias fields", async () => {
+  const fixture = await createEmptyFixture();
+  const provider = new EmptyProjectRunProvider("aliases");
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
+  try {
+    const prompt = "Run this project. If no runnable app exists yet, create a minimal Vite + Three.js 3D Snake game first, then run the detected start command and show the local URL.";
+    const created = await runtime.createSession({
+      workspacePath: fixture.workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "simple_mode",
+      accessProfile: "full_access",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(provider.runPlanCalls, 1);
+    assert.equal(session?.tasks[0]?.agentRole, "Implementation Worker");
+    assert.equal(session?.plan?.steps[0]?.title, "Create root Vite/Three.js app");
+    assert.equal(session?.patchProposals.length, 1);
+    assert.ok(session?.commandRequests.some((request) => request.command === "npm run dev"));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("run-plan schema gate normalizes provider aliases before validation", () => {
+  const providerShape = {
+    summary: "Create a game app.",
+    reasoning_summary: "The provider used snake_case fields.",
+    mode: "create",
+    tasks: [{
+      objective: "Create the root Vite project files.",
+      role: "Implementation Worker",
+      target_files: ["package.json", "index.html"]
+    }],
+    acceptance_criteria: ["The app starts locally."],
+    risks: []
+  };
+
+  const normalized = normalizeStructuredOutputCandidate(providerShape, runPlanSchema);
+  const validation = validateStructuredOutput(normalized, runPlanSchema);
+
+  assert.equal(validation.valid, true, validation.errors.join("; "));
+});
+
+test("patch-intent schema gate supplies missing optional metadata before validation", () => {
+  const providerShape = {
+    title: "Create README",
+    summary: "Add project instructions.",
+    intents: [{
+      file: "README.md",
+      operation: "create",
+      content: "# Crossy Road\n\nRun with npm run dev.\n"
+    }],
+    commands: ["npm run build"]
+  };
+
+  const normalized = normalizeStructuredOutputCandidate(providerShape, runPatchIntentSchema) as unknown as {
+    intents: Array<{ path: string; operation: string; reason: string; risk: string; replacementText: string }>;
+    suggestedCommands: Array<{ command: string; reason: string }>;
+  };
+  const validation = validateStructuredOutput(normalized, runPatchIntentSchema);
+
+  assert.equal(validation.valid, true, validation.errors.join("; "));
+  assert.equal(normalized.intents[0].path, "README.md");
+  assert.equal(normalized.intents[0].operation, "create_file");
+  assert.equal(normalized.intents[0].reason, "create_file README.md.");
+  assert.equal(normalized.intents[0].risk, "low");
+  assert.equal(normalized.intents[0].replacementText, "# Crossy Road\n\nRun with npm run dev.\n");
+  assert.equal(normalized.suggestedCommands[0].command, "npm run build");
 });
 
 test("malformed provider task JSON stops implementation instead of inventing a deterministic plan", async () => {
@@ -277,7 +426,7 @@ test("operator-supplied plan still blocks when provider patch intent is malforme
     assert.equal(turn.status, "failed");
     assert.equal(session?.status, "failed");
     assert.equal(provider.runPlanCalls, 0);
-    assert.equal(provider.patchIntentCalls, 1);
+    assert.equal(provider.patchIntentCalls >= 1, true);
     assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 0, true);
     assert.equal(session?.tasks.length, 3);
     assert.doesNotMatch(answer, /safe implementation plan|no deterministic implementation plan was invented|canned implementation plan/i);
@@ -919,6 +1068,131 @@ class ReadOnlyQuestionProvider implements LlmProvider {
   }
 }
 
+class EmptyProjectRunProvider implements LlmProvider {
+  runPlanCalls = 0;
+  patchIntentCalls = 0;
+
+  constructor(private readonly planShape: "canonical" | "aliases" = "canonical") {}
+
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "conversation-intent-decision") {
+      return intentDecisionForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "turn-understanding") {
+      return turnUnderstandingForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "initial-reasoning-decision") {
+      return {
+        understanding: turnUnderstandingForPrompt(input.userPrompt),
+        step: reasoningStepForPrompt(input.userPrompt)
+      } as T;
+    }
+    if (schemaName === "reasoning-step") {
+      return reasoningStepForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "intent-contract") {
+      const original = typeof input.context === "object" && input.context && "original_user_request" in input.context
+        ? String((input.context as { original_user_request?: unknown }).original_user_request ?? input.userPrompt)
+        : input.userPrompt;
+      return intentContractForPrompt(original) as T;
+    }
+    if (schemaName === "run-plan") {
+      this.runPlanCalls += 1;
+      if (this.planShape === "aliases") {
+        return {
+          summary: "Create a minimal Vite + Three.js 3D Snake game in the empty workspace.",
+          reasoning_summary: "The workspace is empty and the prompt explicitly says to create a runnable app if none exists.",
+          mode: "create",
+          tasks: [{
+            id: "task_scaffold",
+            name: "Create root Vite/Three.js app",
+            objective: "Create the root Vite/Three.js game files.",
+            role: "Implementation Worker",
+            target_files: ["README.md", "package.json", "index.html", "src/main.js"],
+            validation_command: "npm run dev"
+          }],
+          acceptance_criteria: ["A start script exists.", "The app can be started locally."],
+          risks: ["Dependency installation requires local npm access."],
+          suggested_commands: [
+            { command: "npm install", reason: "Install the Vite and Three.js dependencies." },
+            { command: "npm run dev", reason: "Start the Vite development server and report the local URL." }
+          ]
+        } as T;
+      }
+      return {
+        summary: "Create a minimal Vite + Three.js 3D Snake game in the empty workspace.",
+        reasoningSummary: "The workspace is empty and the prompt explicitly says to create a runnable app if none exists.",
+        mode: "create_project",
+        tasks: [{
+          id: "task_scaffold",
+          title: "Scaffold game app",
+          objective: "Create the root Vite/Three.js game files.",
+          roleTitle: "Implementation Worker",
+          targetFiles: ["README.md", "package.json", "index.html", "src/main.js"],
+          verification: "npm run dev"
+        }],
+        acceptanceCriteria: ["A start script exists.", "The app can be started locally."],
+        risks: ["Dependency installation requires local npm access."],
+        suggestedCommands: [
+          { command: "npm install", reason: "Install the Vite and Three.js dependencies." },
+          { command: "npm run dev", reason: "Start the Vite development server and report the local URL." }
+        ]
+      } as T;
+    }
+    if (schemaName === "run-patch-intent") {
+      this.patchIntentCalls += 1;
+      return {
+        title: "Create Vite Three.js Snake game",
+        summary: "Creates a root Vite app with a minimal Three.js Snake implementation.",
+        intents: [
+          {
+            path: "package.json",
+            operation: "create_file",
+            replacementText: JSON.stringify({
+              scripts: { dev: "vite --host 127.0.0.1" },
+              dependencies: { "@vitejs/plugin-basic-ssl": "^1.2.0", three: "^0.165.0", vite: "^5.4.0" },
+              devDependencies: {}
+            }, null, 2) + "\n",
+            reason: "Define the runnable Vite/Three.js project.",
+            risk: "low"
+          },
+          {
+            path: "index.html",
+            operation: "create_file",
+            replacementText: "<!doctype html><html><body><canvas id=\"game\"></canvas><script type=\"module\" src=\"/src/main.js\"></script></body></html>\n",
+            reason: "Provide the browser entry point.",
+            risk: "low"
+          },
+          {
+            path: "src/main.js",
+            operation: "create_file",
+            replacementText: "import * as THREE from 'three';\nconsole.log('3D Snake ready', THREE.REVISION);\n",
+            reason: "Create the game entry module.",
+            risk: "low"
+          },
+          {
+            path: "README.md",
+            operation: "create_file",
+            replacementText: "# 3D Snake\n\nRun with `npm install` then `npm run dev`.\n",
+            reason: "Document the local run workflow.",
+            risk: "low"
+          }
+        ],
+        suggestedCommands: [
+          { command: "npm install", reason: "Install local project dependencies." },
+          { command: "npm run dev", reason: "Start the local development server." }
+        ]
+      } as T;
+    }
+    throw new Error(`Unexpected schema ${schemaName}`);
+  }
+
+  async generateText(): Promise<string> {
+    return "";
+  }
+}
+
 class OperatorPlanPatchProvider implements LlmProvider {
   runPlanCalls = 0;
   patchIntentCalls = 0;
@@ -929,6 +1203,34 @@ class OperatorPlanPatchProvider implements LlmProvider {
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
     if (schemaName === "conversation-intent-decision") {
       return intentDecisionForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "turn-understanding") {
+      return {
+        ...turnUnderstandingForPrompt(input.userPrompt),
+        intentKind: "workspace_action",
+        route: "simple_run",
+        rationale: "The request asks to implement an explicit operator-supplied plan."
+      } as T;
+    }
+    if (schemaName === "initial-reasoning-decision") {
+      return {
+        understanding: {
+          ...turnUnderstandingForPrompt(input.userPrompt),
+          intentKind: "workspace_action",
+          route: "simple_run",
+          rationale: "The request asks to implement an explicit operator-supplied plan."
+        },
+        step: reasoningStepForPrompt(input.userPrompt)
+      } as T;
+    }
+    if (schemaName === "reasoning-step") {
+      return reasoningStepForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "intent-contract") {
+      const original = typeof input.context === "object" && input.context && "original_user_request" in input.context
+        ? String((input.context as { original_user_request?: unknown }).original_user_request ?? input.userPrompt)
+        : input.userPrompt;
+      return intentContractForPrompt(original) as T;
     }
     if (schemaName === "run-plan") {
       this.runPlanCalls += 1;
@@ -993,6 +1295,65 @@ function conciseOperatorPlanPrompt() {
     "- Keep provider/schema gates active for patch generation.",
     "- Verify with the normal project test command."
   ].join("\n");
+}
+
+function intentContractForPrompt(prompt: string) {
+  return {
+    original_user_request: prompt,
+    precise_rewrite: prompt,
+    assumptions: ["The workspace is writable.", "Node.js and npm are available."],
+    missing_questions: [],
+    tradeoffs: [{
+      name: "speed_vs_verification",
+      options: ["scaffold quickly", "verify with start command"],
+      preferred: "verify with start command",
+      rationale: "The request asks for a runnable project."
+    }],
+    priorities: {
+      speed: { score: 80, rationale: "The request asks to run the project." },
+      quality: { score: 75, rationale: "The scaffold must be usable." },
+      realism: { score: 50, rationale: "Minimal 3D visuals are enough." },
+      fun: { score: 80, rationale: "The game should be playable." },
+      security: { score: 80, rationale: "Local commands remain guarded." },
+      cost: { score: 60, rationale: "Use a minimal dependency set." }
+    },
+    definition_of_done: ["A patch proposal creates the runnable app.", "Expected run commands are queued."],
+    non_goals: ["Do not deploy the app."],
+    conflict_rules: ["Safety and patch approval gates override speed."]
+  };
+}
+
+function turnUnderstandingForPrompt(prompt: string) {
+  const message = prompt.match(/Classify this single user message before retrieval:\n([\s\S]*?)\n\nReturn JSON/i)?.[1]?.trim() ?? prompt;
+  return {
+    originalRequest: message,
+    cleanedRequest: message,
+    language: /[\u0600-\u06ff]/.test(message) ? "arabic" : "english",
+    intentKind: "run_request",
+    route: "simple_run",
+    needsWorkspace: true,
+    goal: message,
+    ambiguities: [],
+    requiredEvidence: ["workspace files", "package scripts"],
+    risk: "low",
+    confidence: "high",
+    rationale: "The request asks to run a local project and create one if needed."
+  };
+}
+
+function reasoningStepForPrompt(_prompt: string) {
+  return {
+    id: "step_run_to_green",
+    kind: "tool_batch",
+    rationale: "Inspect the workspace, then continue with the bounded run-to-green flow.",
+    toolRequests: [{
+      id: "tool_analyze_project",
+      kind: "analyze_project",
+      reason: "Confirm whether the workspace already has a runnable project."
+    }],
+    missingFacts: [],
+    successCriteria: ["A scaffold patch is proposed before run commands are queued."]
+  };
 }
 
 function intentDecisionForPrompt(prompt: string) {

@@ -16,9 +16,11 @@ import {
   ContextPackBuilder,
   DEFAULT_ORCHESTRATION_CONFIG,
   FactoryMetadataStore,
+  IntentLedgerService,
   ORCHESTRATION_SCHEMA_VERSION,
   OrchestrationArtifactStore,
   PromptWriterService,
+  ProjectGoalSpecStore,
   evaluatePromptQuality,
   findLowConfidenceContextItems,
   findStaleContextItems,
@@ -27,6 +29,7 @@ import {
   rolePromptInputFromTask,
   reconstructFactoryRunTrace,
   summarizeContextInclusions,
+  createProjectGoalSpec,
   type Task
 } from "../orchestration/index.js";
 
@@ -74,6 +77,40 @@ test("context pack includes explainable inclusion metadata without removing lega
     assert.equal(summarizeContextInclusions(pack).decision_count, 1);
     assert.ok(findLowConfidenceContextItems(pack).length >= 0);
     assert.ok(findStaleContextItems(pack).some((item) => item.freshness === "unknown"));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("context pack includes active ProjectGoalSpec as a non-negotiable guardrail", async () => {
+  const workspace = await fixtureWorkspace("context-inclusion-goal-spec");
+  try {
+    await seedMemory(workspace);
+    const spec = await new ProjectGoalSpecStore({ workspacePath: workspace }).saveProjectGoalSpec(createProjectGoalSpec({
+      title: "Arcade Physics Goal",
+      primary_goal: "The game is fun and arcade-like, not realistic.",
+      non_goals: ["Do not optimize physics for realism."],
+      tradeoffs: [{ name: "physics feel", prefer: "playful low gravity", over: "realistic gravity" }],
+      constraints: ["Keep changes aligned with playful arcade physics."],
+      accepted_examples: ["Reduce gravity to improve jump feel."],
+      rejected_examples: ["Increase gravity for real-world physical accuracy."],
+      source_refs: [],
+      version: 1,
+      status: "active"
+    }));
+    const task = fakeTask("run_context_goal_spec", "task_context_goal_spec", {
+      objective: "Tune player gravity in src/index.ts",
+      relevant_files: ["src/index.ts"],
+      allowed_files_to_edit: ["src/index.ts"],
+      forbidden_files: [".env"],
+      validation_commands: ["npm run test"]
+    });
+    const pack = await new ContextPackBuilder(workspace, { maxFiles: 6, maxChars: 3000 }).build(task.run_id, task);
+    assert.ok(pack.constraints.some((constraint) => constraint.includes("ProjectGoalSpec")));
+    assert.ok(pack.constraints.some((constraint) => constraint.includes("fun and arcade-like")));
+    assert.ok(pack.repo_index_refs.some((ref) => ref.includes(spec.spec_id)));
+    assert.ok(pack.previous_decisions.some((decision) => decision.includes(spec.spec_id)));
+    assert.ok(pack.included_items?.some((item) => item.source_type === "project_goal_spec" && item.source_ref === spec.artifact_ref));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -130,6 +167,57 @@ test("context inclusion metadata persists to SQLite and trace events while prese
     assert.ok(eventTypes.has("context_pack_created"));
     assert.ok(eventTypes.has("context_item_included"));
     assert.ok(trace.artifactRefs.includes(artifactRef));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("context pack binds original request and intent ledger refs", async () => {
+  const workspace = await fixtureWorkspace("context-inclusion-intent");
+  try {
+    await seedMemory(workspace);
+    const runId = "run_context_intent";
+    const task = fakeTask(runId, "task_context_intent", {
+      objective: "Explain src/index.ts without editing files",
+      relevant_files: ["src/index.ts"],
+      allowed_files_to_edit: [],
+      forbidden_files: [".env"],
+      validation_commands: ["npm run test"]
+    });
+    const artifactsPath = path.join(workspace, ".agent_memory", "runs", runId);
+    const ledger = new IntentLedgerService({ workspacePath: workspace });
+    const original = await ledger.saveOriginalRequest({
+      runId,
+      runKind: "core",
+      artifactsPath,
+      originalRequest: "Explain src/index.ts without editing files."
+    });
+    const definition = await ledger.saveLockedDefinition({
+      runId,
+      runKind: "core",
+      artifactsPath,
+      term: "without editing",
+      definition: "The run must remain read-only unless the user explicitly approves a later revision.",
+      source: "user_clarification",
+      approvalRef: "session:test"
+    });
+
+    const pack = await new ContextPackBuilder(workspace, { maxFiles: 6, maxChars: 3000 }).build(runId, task);
+
+    assert.equal(pack.original_request_ref, original.artifact_ref);
+    assert.ok(pack.intent_ledger_ref?.endsWith("intent_ledger.json"));
+    assert.ok((pack.intent_ledger_refs ?? []).some((ref) => ref === original.artifact_ref));
+    assert.ok(pack.locked_intent_definitions?.some((entry) => entry.definition_id === definition.definition_id));
+    assert.ok(pack.constraints.some((constraint) => constraint.includes("canonical source of user intent")));
+    assert.ok(pack.repo_index_refs.some((ref) => ref.startsWith("original_user_request:")));
+    assert.ok(pack.previous_decisions.some((decision) => decision.includes("LockedIntentDefinition")));
+    assert.ok(pack.included_items?.some((item) => item.source_type === "original_user_request"));
+    assert.ok(pack.included_items?.some((item) => item.source_type === "intent_ledger"));
+
+    const ledgerSnapshot = JSON.parse(await readFile(path.join(artifactsPath, "intent", "intent_ledger.json"), "utf8")) as {
+      entries?: Array<{ entry_kind?: string; metadata_json?: { task_id?: string } }>;
+    };
+    assert.ok(ledgerSnapshot.entries?.some((entry) => entry.entry_kind === "context_pack_bound" && entry.metadata_json?.task_id === task.id));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

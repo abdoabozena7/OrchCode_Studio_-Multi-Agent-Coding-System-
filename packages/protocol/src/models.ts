@@ -1124,6 +1124,7 @@ export type ToolIntent = {
 export type ArtifactType =
   | "plan"
   | "decision_pipeline"
+  | "intent_contract"
   | "answer_verification"
   | "final_decision"
   | "diff"

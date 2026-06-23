@@ -9,6 +9,7 @@ import {
   ContextPackBuilder,
   CoreOrchestrator,
   FactoryMetadataStore,
+  IntentLedgerService,
   ORCHESTRATION_SCHEMA_VERSION,
   PromptWriterService,
   deterministicPromptWriterOutput,
@@ -59,6 +60,69 @@ test("PromptWriter models validate safe output and reject invalid or safety-weak
     assert.ok(unsafeValidation.safety_findings.some((finding) => finding.finding_id === "skip_validation"));
 
     assert.equal(pack.task_id, task.id);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PromptWriter input preserves protected intent refs and rejects metadata replacement", async () => {
+  const workspace = await fixtureWorkspace("prompt-writer-intent-refs");
+  try {
+    const runId = "run_prompt_writer_intent";
+    const taskId = "task_prompt_writer_intent";
+    const artifactsPath = path.join(workspace, ".agent_memory", "runs", runId);
+    await new IntentLedgerService({ workspacePath: workspace }).saveOriginalRequest({
+      runId,
+      runKind: "core",
+      artifactsPath,
+      originalRequest: "Explain prompt writer behavior without changing intent refs."
+    });
+    await new IntentLedgerService({ workspacePath: workspace }).saveLockedDefinition({
+      runId,
+      runKind: "core",
+      artifactsPath,
+      term: "intent refs",
+      definition: "original_request_ref and intent_ledger_refs must be preserved exactly.",
+      source: "user_clarification",
+      approvalRef: "session:test"
+    });
+    const { task, pack, contextPackRef, roleInput, render } = await promptWriterFixture(workspace, runId, taskId);
+    const result = await new PromptWriterService({
+      workspacePath: workspace,
+      config: {
+        ...baseConfig(workspace),
+        prompt_writer_mode: "shadow",
+        prompt_writer_provider_mode: "deterministic"
+      }
+    }).run({
+      runId,
+      task,
+      pack,
+      contextPackRef,
+      originalTemplateInput: roleInput,
+      targetPromptType: render.template.prompt_type,
+      templateId: render.template.template_id,
+      templateVersion: render.template.version
+    });
+
+    assert.ok(result?.artifact_refs.input);
+    const writerInput = JSON.parse(await readFile(result.artifact_refs.input, "utf8")) as PromptWriterInput;
+    assert.equal(writerInput.original_request_ref, pack.original_request_ref);
+    assert.ok((writerInput.intent_ledger_refs ?? []).some((ref) => ref.endsWith("intent_ledger.json")));
+    assert.equal(writerInput.locked_intent_definitions?.length, 1);
+
+    const unsafeOutput = deterministicPromptWriterOutput(writerInput, "prompt_writer_output_intent_unsafe");
+    assert.ok(unsafeOutput.template_input_patch);
+    unsafeOutput.template_input_patch.metadata_json = {
+      original_request_ref: "tampered",
+      intent_ledger_refs: ["tampered"],
+      locked_intent_definitions: []
+    };
+    const unsafeValidation = validatePromptWriterOutput(unsafeOutput, writerInput);
+    assert.equal(unsafeValidation.schema_status, "failed");
+    assert.ok(unsafeValidation.safety_findings.some((finding) => finding.finding_id === "patch_metadata_original_request_ref"));
+    assert.ok(unsafeValidation.safety_findings.some((finding) => finding.finding_id === "patch_metadata_intent_ledger_refs"));
+    assert.ok(unsafeValidation.safety_findings.some((finding) => finding.finding_id === "patch_metadata_locked_intent_definitions"));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -258,7 +322,8 @@ test("CoreOrchestrator shadow mode preserves static PromptSystem invocation prom
         prompt_writer_provider_mode: "deterministic"
       }
     }).runAgenticTask("Explain src/index.ts and do not change files.");
-    assert.equal(result.run.status, "succeeded");
+    assert.equal(result.run.status, "failed");
+    assert.ok(result.report.limitations.some((limitation) => /provider_required_for_readonly_worker/i.test(limitation)));
     assert.ok(result.report.prompt_writer_runs && result.report.prompt_writer_runs > 0);
     assert.equal(result.report.prompt_writer_mode, "shadow");
 

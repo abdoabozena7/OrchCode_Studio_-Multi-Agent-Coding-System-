@@ -101,6 +101,10 @@ export type SwarmRun = {
   campaign_id?: string;
   parent_run_id?: string;
   user_goal: string;
+  original_request_ref?: string;
+  intent_ledger_ref?: string;
+  intent_contract_ref?: string;
+  intent_contract_status?: import("@hivo/protocol").IntentContractStatus;
   status: SwarmRunStatus;
   mode: SwarmRunMode;
   staffing_plan_ref: string;
@@ -226,6 +230,9 @@ export type WorkItemResult = {
   validation_passed?: boolean;
   structured_output_valid: boolean;
   confidence: number;
+  intent_alignment?: import("@hivo/protocol").AgentIntentAlignment;
+  intent_handoff_gate_ref?: string;
+  intent_handoff_gate_status?: import("@hivo/protocol").IntentHandoffGateResult["status"];
 };
 
 export type SwarmScoutResult = {
@@ -291,6 +298,7 @@ export type SwarmMetrics = {
 
 export type SwarmEventType =
   | "swarm.run.created"
+  | "swarm.intent_contract.compiled"
   | "swarm.task.analyzed"
   | "swarm.staffing_plan.created"
   | "swarm.effective_agents.selected"
@@ -313,6 +321,8 @@ export type SwarmEventType =
   | "swarm.validation.completed"
   | "swarm.repair_item.created"
   | "swarm.concurrency.reduced"
+  | "swarm.concurrency.increased"
+  | "swarm.scheduler.backpressure_applied"
   | "swarm.run.completed";
 
 export type SwarmEvent = {
@@ -335,6 +345,14 @@ export type SchedulerTraceEntry = {
   deferred_work_items: Array<{ id: string; reason: string }>;
   active_agent_count: number;
   executor_concurrency: number;
+  parallel_limit?: number;
+  queue_depth?: number;
+  resource_snapshot?: Record<string, unknown>;
+  aging_deferrals?: Record<string, number>;
+  selected_role_distribution?: Record<string, number>;
+  deferred_count_by_reason?: Record<string, number>;
+  parallel_backpressure?: number;
+  executor_backpressure?: number;
   created_at: string;
 };
 

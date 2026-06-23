@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { availableParallelism, cpus, loadavg } from "node:os";
 import type { LockAcquisitionResult } from "./FactoryLockModels.js";
 import type { FileLockRecord, LockAcquireResult } from "./FileLockManager.js";
 import type { SwarmArtifactStore } from "./SwarmArtifactStore.js";
@@ -14,6 +15,7 @@ import type {
   WorkItemResult
 } from "./SwarmModels.js";
 import { SWARM_SCHEMA_VERSION } from "./SwarmModels.js";
+import { IntentHandoffGate, intentGateBlockedWorkItemResult } from "./IntentHandoffGate.js";
 
 export type SwarmWorker = (input: {
   workItem: WorkItem;
@@ -34,6 +36,30 @@ export type SchedulerLockManager = {
   releaseByTask(taskId: string): FileLockRecord[] | Promise<unknown[]>;
 };
 
+export type SchedulerResourceSnapshot = {
+  available_parallelism: number;
+  load_average_1m?: number;
+  cpu_pressure?: number;
+  recommended_parallelism?: number;
+  reason?: string;
+};
+
+export type SchedulerResourceMonitor = (input: {
+  run: SwarmRun;
+  staffingPlan: StaffingPlan;
+  readyCount: number;
+  tick: number;
+  currentParallelLimit: number;
+  currentExecutorLimit: number;
+}) => SchedulerResourceSnapshot | Promise<SchedulerResourceSnapshot>;
+
+export type SwarmSchedulerOptions = {
+  resourceMonitor?: SchedulerResourceMonitor;
+  now?: () => number;
+};
+
+type SelectedWorkItem = { workItem: WorkItem; agent: AgentInstance; template: AgentTemplate };
+
 export class SwarmScheduler {
   private tick = 0;
   private lockWaitCount = 0;
@@ -46,15 +72,27 @@ export class SwarmScheduler {
   private executorPeakCount = 0;
   private reviewerPeakCount = 0;
   private scoutPeakCount = 0;
+  private currentParallelLimit: number;
   private currentExecutorLimit: number;
+  private minimumExecutorLimit = 0;
+  private parallelBackpressure = 0;
+  private executorBackpressure = 0;
+  private healthyBatchStreak = 0;
+  private readonly deferralAging = new Map<string, number>();
+  private readonly resourceMonitor: SchedulerResourceMonitor;
+  private readonly now: () => number;
 
   constructor(
     private readonly workspacePath: string,
     private readonly artifactStore: SwarmArtifactStore,
     private readonly lockManager: SchedulerLockManager,
-    private readonly worker: SwarmWorker = providerRequiredWorker
+    private readonly worker: SwarmWorker = providerRequiredWorker,
+    options: SwarmSchedulerOptions = {}
   ) {
-    this.currentExecutorLimit = 1;
+    this.currentParallelLimit = 1;
+    this.currentExecutorLimit = 0;
+    this.resourceMonitor = options.resourceMonitor ?? defaultSchedulerResourceMonitor;
+    this.now = options.now ?? Date.now;
   }
 
   async run(input: {
@@ -64,7 +102,7 @@ export class SwarmScheduler {
     agentInstances: AgentInstance[];
     workItems: WorkItem[];
   }): Promise<SwarmSchedulerResult> {
-    this.currentExecutorLimit = this.effectiveExecutorLimit(input.staffingPlan);
+    this.resetRunState(input.run, input.staffingPlan);
     const workItems = input.workItems;
     const agentInstances = input.agentInstances;
     await this.persist(input.run.id, workItems, agentInstances);
@@ -84,11 +122,21 @@ export class SwarmScheduler {
         break;
       }
 
+      const resourceSnapshot = await this.resourceMonitor({
+        run: input.run,
+        staffingPlan: input.staffingPlan,
+        readyCount: ready.length,
+        tick: this.tick,
+        currentParallelLimit: this.currentParallelLimit,
+        currentExecutorLimit: this.currentExecutorLimit
+      });
+      await this.updateAdaptiveLimits(input.run, input.staffingPlan, ready.length, resourceSnapshot);
       const selection = this.selectBatch({
         ready,
         staffingPlan: input.staffingPlan,
         agentInstances,
-        agentTemplates: input.agentTemplates
+        agentTemplates: input.agentTemplates,
+        parallelLimit: this.currentParallelLimit
       });
       await this.trace(input.run.id, {
         decision: selection.selected.length ? "selected_ready_batch" : "deferred_ready_batch",
@@ -96,7 +144,15 @@ export class SwarmScheduler {
         selected_work_items: selection.selected.map((entry) => entry.workItem.id),
         deferred_work_items: selection.deferred,
         active_agent_count: selection.selected.length,
-        executor_concurrency: this.currentExecutorLimit
+        executor_concurrency: this.currentExecutorLimit,
+        parallel_limit: this.currentParallelLimit,
+        queue_depth: ready.length,
+        resource_snapshot: resourceSnapshot,
+        aging_deferrals: selection.agingDeferrals,
+        selected_role_distribution: roleDistributionForWorkItems(selection.selected.map((entry) => entry.workItem)),
+        deferred_count_by_reason: countDeferredReasons(selection.deferred),
+        parallel_backpressure: this.parallelBackpressure,
+        executor_backpressure: this.executorBackpressure
       });
 
       if (!selection.selected.length) {
@@ -111,8 +167,9 @@ export class SwarmScheduler {
       }
 
       this.recordPeaks(selection.selected.map((entry) => entry.workItem));
-      for (const selected of selection.selected) {
-        await this.executeSelected({
+      const batchStartedAt = this.now();
+      const results = await Promise.all(selection.selected.map((selected) =>
+        this.executeSelected({
           run: input.run,
           staffingPlan: input.staffingPlan,
           workItems,
@@ -121,8 +178,9 @@ export class SwarmScheduler {
           workItem: selected.workItem,
           agent: selected.agent,
           template: selected.template
-        });
-      }
+        })
+      ));
+      await this.recordBatchHealth(input.run.id, results, this.now() - batchStartedAt);
       await this.persist(input.run.id, workItems, agentInstances);
     }
 
@@ -136,16 +194,23 @@ export class SwarmScheduler {
     staffingPlan: StaffingPlan;
     agentInstances: AgentInstance[];
     agentTemplates: AgentTemplate[];
+    parallelLimit: number;
   }) {
-    const selected: Array<{ workItem: WorkItem; agent: AgentInstance; template: AgentTemplate }> = [];
+    const selected: SelectedWorkItem[] = [];
     const deferred: Array<{ id: string; reason: string }> = [];
-    const maxParallel = Math.max(1, input.staffingPlan.max_parallel_agents);
+    const maxParallel = Math.max(1, input.parallelLimit);
     const activeRoleCounts: Record<string, number> = {};
     const batchWriteFiles = new Set<string>();
+    const reservedAgentIds = new Set<string>();
+    const orderedReady = [...input.ready].sort((left, right) =>
+      this.effectivePriority(left) - this.effectivePriority(right)
+      || left.priority - right.priority
+      || left.id.localeCompare(right.id)
+    );
 
-    for (const workItem of input.ready.sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id))) {
+    for (const workItem of orderedReady) {
       if (selected.length >= maxParallel) {
-        deferred.push({ id: workItem.id, reason: `max_parallel_agents ${maxParallel} reached` });
+        deferred.push({ id: workItem.id, reason: `parallel limit ${maxParallel} reached` });
         continue;
       }
       if (isForbiddenWrite(workItem)) {
@@ -174,21 +239,24 @@ export class SwarmScheduler {
           continue;
         }
       }
-      const agent = findIdleAgent(input.agentInstances, workItem.required_role);
+      const agent = findIdleAgent(input.agentInstances, workItem.required_role, reservedAgentIds);
       if (!agent) {
         deferred.push({ id: workItem.id, reason: `no idle ${workItem.required_role} instance` });
         continue;
       }
       selected.push({ workItem, agent, template });
+      reservedAgentIds.add(agent.id);
       activeRoleCounts[workItem.required_role] = (activeRoleCounts[workItem.required_role] ?? 0) + 1;
       for (const file of workItem.write_files) batchWriteFiles.add(file);
     }
 
+    this.recordAging(selected, deferred);
     return {
       selected,
       deferred,
+      agingDeferrals: agingSnapshot(this.deferralAging, orderedReady),
       reasoning: selected.length
-        ? `Selected ${selected.length} work item(s) using dependency readiness, role limits, executor cap ${this.currentExecutorLimit}, and file-lock prechecks.`
+        ? `Selected ${selected.length} work item(s) using dependency readiness, adaptive parallel limit ${maxParallel}, priority aging, role limits, executor cap ${this.currentExecutorLimit}, and file-lock prechecks.`
         : `No ready work item could be selected; ${deferred.length} item(s) were deferred by safety or capacity constraints.`
     };
   }
@@ -202,7 +270,7 @@ export class SwarmScheduler {
     workItem: WorkItem;
     agent: AgentInstance;
     template: AgentTemplate;
-  }) {
+  }): Promise<WorkItemResult> {
     const leaseId = `lease_${randomUUID()}`;
     input.workItem.status = "leased";
     input.workItem.lease_id = leaseId;
@@ -233,7 +301,18 @@ export class SwarmScheduler {
           conflicts: lock.conflicts
         }, input.workItem.id);
         releaseAgent(input.agent);
-        return;
+        return {
+          schema_version: SWARM_SCHEMA_VERSION,
+          work_item_id: input.workItem.id,
+          status: "blocked",
+          summary: `Write lock denied for ${input.workItem.id}.`,
+          relevant_files: input.workItem.read_files.filter((file) => !looksLikeCommand(file)),
+          findings: [],
+          risks: ["write_lock_denied"],
+          unknowns: [],
+          structured_output_valid: true,
+          confidence: 0.2
+        };
       }
       acquired = true;
       await this.event(input.run.id, "swarm.lock.acquired", `Write locks acquired for ${input.workItem.id}.`, {
@@ -264,19 +343,99 @@ export class SwarmScheduler {
     }
 
     try {
-      const result = await this.worker({
+      const invoked = await this.invokeWorker(input);
+      const result = await this.applyIntentHandoffGate(input, invoked);
+      const resultRef = await this.artifactStore.saveWorkItemResult(input.run.id, result, input.workItem.required_role, input.workItem.type);
+      input.workItem.result_ref = resultRef;
+      await this.handleResult(input, result);
+      return result;
+    } finally {
+      if (acquired) await this.lockManager.releaseByTask(input.workItem.id);
+      releaseAgent(input.agent);
+    }
+  }
+
+  private async invokeWorker(input: {
+    run: SwarmRun;
+    staffingPlan: StaffingPlan;
+    workItem: WorkItem;
+    agent: AgentInstance;
+    template: AgentTemplate;
+  }): Promise<WorkItemResult> {
+    try {
+      return await this.worker({
         workItem: input.workItem,
         agent: input.agent,
         template: input.template,
         run: input.run,
         staffingPlan: input.staffingPlan
       });
-      const resultRef = await this.artifactStore.saveWorkItemResult(input.run.id, result, input.workItem.required_role, input.workItem.type);
-      input.workItem.result_ref = resultRef;
-      await this.handleResult(input, result);
-    } finally {
-      if (acquired) await this.lockManager.releaseByTask(input.workItem.id);
-      releaseAgent(input.agent);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.event(input.run.id, "swarm.work_item.failed", `Worker exception in ${input.workItem.id}: ${message}`, {
+        exception: message
+      }, input.workItem.id);
+      return {
+        schema_version: SWARM_SCHEMA_VERSION,
+        work_item_id: input.workItem.id,
+        status: "failed",
+        summary: `Worker exception: ${message}`,
+        relevant_files: input.workItem.read_files.filter((file) => !looksLikeCommand(file)),
+        findings: [],
+        risks: ["worker_exception"],
+        unknowns: [],
+        structured_output_valid: false,
+        confidence: 0
+      };
+    }
+  }
+
+  private async applyIntentHandoffGate(input: {
+    run: SwarmRun;
+    staffingPlan: StaffingPlan;
+    workItems: WorkItem[];
+    agentInstances: AgentInstance[];
+    agentTemplates: AgentTemplate[];
+    workItem: WorkItem;
+    agent: AgentInstance;
+    template: AgentTemplate;
+  }, result: WorkItemResult): Promise<WorkItemResult> {
+    if (result.status !== "succeeded") return result;
+    if (result.intent_handoff_gate_status === "passed" && result.intent_handoff_gate_ref) return result;
+    try {
+      const gateService = new IntentHandoffGate({
+        workspacePath: this.workspacePath,
+        sourceComponent: "SwarmScheduler"
+      });
+      const frame = await gateService.swarmFrame(input.run, input.workItem);
+      const gate = await gateService.evaluate({
+        runId: input.run.id,
+        runKind: "swarm",
+        artifactsPath: input.run.artifacts_path,
+        layer: "swarm",
+        taskId: input.workItem.id,
+        frame,
+        alignment: result.intent_alignment,
+        candidate: result,
+        reviewedArtifactRefs: [input.workItem.result_ref ?? ""],
+        target: "output"
+      });
+      if (gate.passed) {
+        return {
+          ...result,
+          intent_handoff_gate_ref: gate.artifact_ref,
+          intent_handoff_gate_status: gate.status
+        };
+      }
+      return intentGateBlockedWorkItemResult(result, gate);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ...result,
+        status: "blocked",
+        structured_output_valid: false,
+        risks: uniqueStrings([...result.risks, `Intent handoff gate could not run: ${message}`])
+      };
     }
   }
 
@@ -387,6 +546,119 @@ export class SwarmScheduler {
     }, repair.id);
   }
 
+  private resetRunState(run: SwarmRun, staffingPlan: StaffingPlan) {
+    this.tick = 0;
+    this.lockWaitCount = 0;
+    this.retryCount = 0;
+    this.repairTasks = 0;
+    this.invalidStructuredOutputs = 0;
+    this.conflictsDetected = 0;
+    this.approvalGatesTriggered = 0;
+    this.peakActiveAgents = 0;
+    this.executorPeakCount = 0;
+    this.reviewerPeakCount = 0;
+    this.scoutPeakCount = 0;
+    this.parallelBackpressure = 0;
+    this.executorBackpressure = 0;
+    this.healthyBatchStreak = 0;
+    this.deferralAging.clear();
+    this.currentParallelLimit = 1;
+    this.minimumExecutorLimit = staffingPlan.executor_limit > 0 && staffingPlan.executor_count > 0 && run.scheduler_config.executor_limit > 0 ? 1 : 0;
+    this.currentExecutorLimit = this.effectiveExecutorLimit(staffingPlan, run.scheduler_config);
+  }
+
+  private async updateAdaptiveLimits(
+    run: SwarmRun,
+    staffingPlan: StaffingPlan,
+    readyCount: number,
+    resourceSnapshot: SchedulerResourceSnapshot
+  ) {
+    const previousParallel = this.currentParallelLimit;
+    const previousExecutor = this.currentExecutorLimit;
+    const planParallel = Math.max(1, Math.min(
+      staffingPlan.max_parallel_agents,
+      run.scheduler_config.max_parallel_agents
+    ));
+    const resourceParallel = Math.max(1, Math.floor(
+      resourceSnapshot.recommended_parallelism
+      ?? resourceSnapshot.available_parallelism
+      ?? 1
+    ));
+    const parallelCeiling = Math.max(1, Math.min(planParallel, resourceParallel));
+    this.currentParallelLimit = Math.max(1, Math.min(
+      readyCount || 1,
+      Math.max(1, parallelCeiling - this.parallelBackpressure)
+    ));
+
+    const executorCeiling = this.effectiveExecutorLimit(staffingPlan, run.scheduler_config, resourceSnapshot);
+    const executorFloor = Math.min(this.minimumExecutorLimit, executorCeiling);
+    this.currentExecutorLimit = Math.max(executorFloor, Math.min(executorCeiling, executorCeiling - this.executorBackpressure));
+
+    if (this.currentParallelLimit > previousParallel || this.currentExecutorLimit > previousExecutor) {
+      await this.event(run.id, "swarm.concurrency.increased", "Adaptive scheduler increased available concurrency.", {
+        previous_parallel_limit: previousParallel,
+        next_parallel_limit: this.currentParallelLimit,
+        previous_executor_limit: previousExecutor,
+        next_executor_limit: this.currentExecutorLimit,
+        resource_snapshot: resourceSnapshot,
+        parallel_backpressure: this.parallelBackpressure,
+        executor_backpressure: this.executorBackpressure
+      });
+    }
+    if (
+      (this.currentParallelLimit < previousParallel || this.currentExecutorLimit < previousExecutor)
+      && (this.parallelBackpressure > 0 || this.executorBackpressure > 0 || resourceParallel < planParallel)
+    ) {
+      await this.event(run.id, "swarm.scheduler.backpressure_applied", "Adaptive scheduler constrained concurrency from resource or failure pressure.", {
+        previous_parallel_limit: previousParallel,
+        next_parallel_limit: this.currentParallelLimit,
+        previous_executor_limit: previousExecutor,
+        next_executor_limit: this.currentExecutorLimit,
+        plan_parallel_limit: planParallel,
+        resource_parallel_limit: resourceParallel,
+        parallel_backpressure: this.parallelBackpressure,
+        executor_backpressure: this.executorBackpressure
+      });
+    }
+  }
+
+  private async recordBatchHealth(runId: string, results: WorkItemResult[], durationMs: number) {
+    const unhealthy = results.filter((result) => result.status !== "succeeded" || !result.structured_output_valid).length;
+    const averageDurationMs = results.length ? durationMs / results.length : 0;
+    const slowBatch = averageDurationMs > 15_000;
+    if (unhealthy || slowBatch) {
+      this.healthyBatchStreak = 0;
+      if (slowBatch) this.parallelBackpressure = Math.min(8, this.parallelBackpressure + 1);
+      return;
+    }
+    this.healthyBatchStreak += 1;
+    const previousParallelBackpressure = this.parallelBackpressure;
+    const previousExecutorBackpressure = this.executorBackpressure;
+    this.parallelBackpressure = Math.max(0, this.parallelBackpressure - 1);
+    this.executorBackpressure = Math.max(0, this.executorBackpressure - 1);
+    if (this.parallelBackpressure < previousParallelBackpressure || this.executorBackpressure < previousExecutorBackpressure) {
+      await this.event(runId, "swarm.concurrency.increased", "Healthy batch reduced scheduler backpressure for the next tick.", {
+        previous_parallel_backpressure: previousParallelBackpressure,
+        next_parallel_backpressure: this.parallelBackpressure,
+        previous_executor_backpressure: previousExecutorBackpressure,
+        next_executor_backpressure: this.executorBackpressure,
+        batch_duration_ms: Math.round(durationMs)
+      });
+    }
+  }
+
+  private effectivePriority(workItem: WorkItem) {
+    return workItem.priority - ((this.deferralAging.get(workItem.id) ?? 0) * 5);
+  }
+
+  private recordAging(selected: SelectedWorkItem[], deferred: Array<{ id: string; reason: string }>) {
+    for (const entry of selected) this.deferralAging.delete(entry.workItem.id);
+    for (const entry of deferred) {
+      if (!isAgingEligibleDeferral(entry.reason)) continue;
+      this.deferralAging.set(entry.id, (this.deferralAging.get(entry.id) ?? 0) + 1);
+    }
+  }
+
   private roleLimit(staffingPlan: StaffingPlan, role: string, type: WorkItem["type"]) {
     if (type === "execute") return Math.max(0, this.currentExecutorLimit);
     if (type === "test") return Math.max(1, staffingPlan.tester_limit);
@@ -394,19 +666,28 @@ export class SwarmScheduler {
     return Math.max(1, staffingPlan.role_counts[role] ?? 1);
   }
 
-  private effectiveExecutorLimit(plan: StaffingPlan) {
-    if (plan.risk_level === "critical") return Math.min(plan.executor_limit, 1);
-    if (plan.risk_level === "high") return Math.min(plan.executor_limit, 2);
-    return Math.max(0, plan.executor_limit);
+  private effectiveExecutorLimit(plan: StaffingPlan, config: SwarmRun["scheduler_config"], resourceSnapshot?: SchedulerResourceSnapshot) {
+    if (plan.executor_limit <= 0 || plan.executor_count <= 0) return 0;
+    const resourceLimit = resourceSnapshot
+      ? Math.max(0, Math.floor(resourceSnapshot.recommended_parallelism ?? resourceSnapshot.available_parallelism ?? plan.executor_limit))
+      : plan.executor_limit;
+    const configuredLimit = Math.max(0, Math.min(plan.executor_limit, config.executor_limit, resourceLimit));
+    if (plan.risk_level === "critical") return Math.min(configuredLimit, 1);
+    if (plan.risk_level === "high") return Math.min(configuredLimit, 2);
+    return configuredLimit;
   }
 
   private async reduceConcurrency(runId: string, reason: string) {
     const previous = this.currentExecutorLimit;
-    this.currentExecutorLimit = Math.max(1, this.currentExecutorLimit - 1);
+    this.parallelBackpressure = Math.min(8, this.parallelBackpressure + 1);
+    if (this.currentExecutorLimit > 0) this.executorBackpressure = Math.min(8, this.executorBackpressure + 1);
+    this.currentExecutorLimit = Math.max(this.minimumExecutorLimit, this.currentExecutorLimit - 1);
     if (this.currentExecutorLimit < previous) {
       await this.event(runId, "swarm.concurrency.reduced", reason, {
         previous_executor_limit: previous,
-        next_executor_limit: this.currentExecutorLimit
+        next_executor_limit: this.currentExecutorLimit,
+        parallel_backpressure: this.parallelBackpressure,
+        executor_backpressure: this.executorBackpressure
       });
     }
   }
@@ -543,8 +824,8 @@ function findTemplate(templates: AgentTemplate[], role: string, type: WorkItem["
     ?? templates.find((template) => template.role === role);
 }
 
-function findIdleAgent(instances: AgentInstance[], role: string) {
-  return instances.find((agent) => agent.role === role && agent.status === "idle");
+function findIdleAgent(instances: AgentInstance[], role: string, reservedAgentIds: Set<string>) {
+  return instances.find((agent) => agent.role === role && agent.status === "idle" && !reservedAgentIds.has(agent.id));
 }
 
 function activeTypeCount(selected: Array<{ workItem: WorkItem }>, type: WorkItem["type"]) {
@@ -570,6 +851,65 @@ function roleDistribution(instances: AgentInstance[]) {
   const distribution: Record<string, number> = {};
   for (const instance of instances) distribution[instance.role] = (distribution[instance.role] ?? 0) + 1;
   return distribution;
+}
+
+function roleDistributionForWorkItems(workItems: WorkItem[]) {
+  const distribution: Record<string, number> = {};
+  for (const item of workItems) distribution[item.required_role] = (distribution[item.required_role] ?? 0) + 1;
+  return distribution;
+}
+
+function countDeferredReasons(deferred: Array<{ reason: string }>) {
+  const counts: Record<string, number> = {};
+  for (const item of deferred) counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+  return counts;
+}
+
+function agingSnapshot(aging: Map<string, number>, ready: WorkItem[]) {
+  const readyIds = new Set(ready.map((item) => item.id));
+  const snapshot: Record<string, number> = {};
+  for (const [id, count] of aging.entries()) {
+    if (readyIds.has(id) && count > 0) snapshot[id] = count;
+  }
+  return snapshot;
+}
+
+function isAgingEligibleDeferral(reason: string) {
+  return /parallel limit|role limit|executor limit|batch write conflict|no idle/i.test(reason);
+}
+
+function defaultSchedulerResourceMonitor(): SchedulerResourceSnapshot {
+  const available = Math.max(1, safeAvailableParallelism());
+  const [loadAverage] = loadavg();
+  const pressure = loadAverage > 0 ? loadAverage / available : 0;
+  const recommended = pressure >= 1.5
+    ? Math.max(1, Math.floor(available * 0.25))
+    : pressure >= 1
+      ? Math.max(1, Math.floor(available * 0.5))
+      : Math.max(1, available - 1);
+  return {
+    available_parallelism: available,
+    load_average_1m: roundNumber(loadAverage),
+    cpu_pressure: roundNumber(pressure),
+    recommended_parallelism: recommended,
+    reason: pressure >= 1 ? "load_adjusted" : "available_parallelism"
+  };
+}
+
+function safeAvailableParallelism() {
+  try {
+    return availableParallelism();
+  } catch {
+    return cpus().length || 1;
+  }
+}
+
+function roundNumber(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function looksLikeCommand(value: string) {

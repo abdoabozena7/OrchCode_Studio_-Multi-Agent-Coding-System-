@@ -16,6 +16,7 @@ export type ValidationCandidateMode = "off" | "report_only" | "preflight";
 export type PatchApplySandboxMode = "off" | "simulate_only" | "temp_copy" | "git_worktree_if_available";
 export type SandboxValidationMode = "off" | "report_only" | "execute_safe_commands";
 export type SandboxIntegrationCandidateMode = "off" | "report_only" | "create_candidates";
+export type GoalStewardMode = "strict" | "report_only";
 export type IntegrationApplyApprovalMode = "off" | "report_only" | "require_approval";
 export type ControlledIntegrationApplyMode = "off" | "report_only" | "apply_with_approval";
 export type IntegrationFinalizationMode = "off" | "report_only" | "finalize_metadata";
@@ -129,6 +130,9 @@ export type OrchestrationSafetyConfig = {
   require_post_integration_validation_plan?: boolean;
   require_rollback_plan?: boolean;
   max_integration_candidates_per_run?: number;
+  enable_goal_steward?: boolean;
+  goal_steward_mode?: GoalStewardMode;
+  require_active_project_goal_spec?: boolean;
   enable_integration_apply_approval_gate?: boolean;
   integration_apply_approval_mode?: IntegrationApplyApprovalMode;
   require_clean_worktree_for_apply_approval?: boolean;
@@ -262,6 +266,9 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   require_post_integration_validation_plan: true,
   require_rollback_plan: true,
   max_integration_candidates_per_run: 12,
+  enable_goal_steward: true,
+  goal_steward_mode: "strict",
+  require_active_project_goal_spec: false,
   enable_integration_apply_approval_gate: false,
   integration_apply_approval_mode: "report_only",
   require_clean_worktree_for_apply_approval: false,
@@ -494,6 +501,9 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     require_post_integration_validation_plan: envBool("HIVO_REQUIRE_POST_INTEGRATION_VALIDATION_PLAN", input.require_post_integration_validation_plan, DEFAULT_ORCHESTRATION_CONFIG.require_post_integration_validation_plan ?? true),
     require_rollback_plan: envBool("HIVO_REQUIRE_ROLLBACK_PLAN", input.require_rollback_plan, DEFAULT_ORCHESTRATION_CONFIG.require_rollback_plan ?? true),
     max_integration_candidates_per_run: envNumber("HIVO_MAX_INTEGRATION_CANDIDATES_PER_RUN", input.max_integration_candidates_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_integration_candidates_per_run ?? 12),
+    enable_goal_steward: envBool("HIVO_ENABLE_GOAL_STEWARD", input.enable_goal_steward, DEFAULT_ORCHESTRATION_CONFIG.enable_goal_steward ?? true),
+    goal_steward_mode: envGoalStewardMode("HIVO_GOAL_STEWARD_MODE", input.goal_steward_mode ?? DEFAULT_ORCHESTRATION_CONFIG.goal_steward_mode ?? "strict"),
+    require_active_project_goal_spec: envBool("HIVO_REQUIRE_ACTIVE_PROJECT_GOAL_SPEC", input.require_active_project_goal_spec, DEFAULT_ORCHESTRATION_CONFIG.require_active_project_goal_spec ?? false),
     enable_integration_apply_approval_gate: envBool("HIVO_ENABLE_INTEGRATION_APPLY_APPROVAL_GATE", input.enable_integration_apply_approval_gate, DEFAULT_ORCHESTRATION_CONFIG.enable_integration_apply_approval_gate ?? false),
     integration_apply_approval_mode: envIntegrationApplyApprovalMode("HIVO_INTEGRATION_APPLY_APPROVAL_MODE", input.integration_apply_approval_mode ?? DEFAULT_ORCHESTRATION_CONFIG.integration_apply_approval_mode ?? "report_only"),
     require_clean_worktree_for_apply_approval: envBool("HIVO_REQUIRE_CLEAN_WORKTREE_FOR_APPLY_APPROVAL", input.require_clean_worktree_for_apply_approval, DEFAULT_ORCHESTRATION_CONFIG.require_clean_worktree_for_apply_approval ?? false),
@@ -626,6 +636,7 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   if (!["off", "simulate_only", "temp_copy", "git_worktree_if_available"].includes(config.patch_apply_sandbox_mode ?? "off")) throw new Error("Invalid orchestration config patch_apply_sandbox_mode");
   if (!["off", "report_only", "execute_safe_commands"].includes(config.sandbox_validation_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_validation_mode");
   if (!["off", "report_only", "create_candidates"].includes(config.sandbox_integration_candidate_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_integration_candidate_mode");
+  if (!["strict", "report_only"].includes(config.goal_steward_mode ?? "strict")) throw new Error("Invalid orchestration config goal_steward_mode");
   if (!["off", "report_only", "require_approval"].includes(config.integration_apply_approval_mode ?? "off")) throw new Error("Invalid orchestration config integration_apply_approval_mode");
   if (!["off", "report_only", "apply_with_approval"].includes(config.controlled_apply_mode ?? "off")) throw new Error("Invalid orchestration config controlled_apply_mode");
   if (!["off", "report_only", "finalize_metadata"].includes(config.integration_finalization_mode ?? "off")) throw new Error("Invalid orchestration config integration_finalization_mode");
@@ -762,6 +773,12 @@ function envSandboxValidationMode(name: string, fallback: SandboxValidationMode)
 function envSandboxIntegrationCandidateMode(name: string, fallback: SandboxIntegrationCandidateMode): SandboxIntegrationCandidateMode {
   const raw = envRaw(name);
   if (raw === "off" || raw === "report_only" || raw === "create_candidates") return raw;
+  return fallback;
+}
+
+function envGoalStewardMode(name: string, fallback: GoalStewardMode): GoalStewardMode {
+  const raw = envRaw(name);
+  if (raw === "strict" || raw === "report_only") return raw;
   return fallback;
 }
 

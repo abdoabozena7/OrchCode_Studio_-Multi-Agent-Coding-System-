@@ -49,6 +49,15 @@ import type {
   IntegrationResult
 } from "./IntegrationModels.js";
 import type {
+  GoalStewardFinding,
+  GoalStewardReview,
+  ProjectGoalSpec
+} from "./GoalStewardModels.js";
+import type {
+  SemanticConflictDecision,
+  SemanticConflictResolutionBatch
+} from "./SemanticConflictResolverModels.js";
+import type {
   MergedPlan,
   PlanEvaluation,
   PlanVariant,
@@ -135,7 +144,7 @@ import type {
   TaskStatusUpdateRef
 } from "./IntegrationFinalizationModels.js";
 
-export const FACTORY_METADATA_SCHEMA_VERSION = 27;
+export const FACTORY_METADATA_SCHEMA_VERSION = 28;
 export const FACTORY_METADATA_DATABASE_FILENAME = "factory_metadata.sqlite";
 const initializedFactoryMetadataDatabases = new Set<string>();
 
@@ -222,6 +231,31 @@ export type FactoryIntegrationConflictRecordInput = {
 export type FactoryIntegrationResultRecordInput = {
   result: IntegrationResult;
   artifactRef?: string;
+};
+
+export type FactoryProjectGoalSpecRecordInput = {
+  spec: ProjectGoalSpec;
+  artifactRef?: string;
+  summaryRef?: string;
+};
+
+export type FactoryGoalStewardReviewRecordInput = {
+  review: GoalStewardReview;
+  artifactRef?: string;
+  summaryRef?: string;
+};
+
+export type FactorySemanticConflictBatchRecordInput = {
+  batch: SemanticConflictResolutionBatch;
+  artifactRef?: string;
+  summaryRef?: string;
+};
+
+export type FactorySemanticConflictDecisionRecordInput = {
+  decision: SemanticConflictDecision;
+  batchId?: string;
+  artifactRef?: string;
+  summaryRef?: string;
 };
 
 export type FactoryAgentTeamRecordInput = {
@@ -1878,6 +1912,269 @@ export class FactoryMetadataStore {
         }
       });
     }
+  }
+
+  recordProjectGoalSpec(input: FactoryProjectGoalSpecRecordInput) {
+    const spec = input.spec;
+    this.database.prepare(`
+      INSERT INTO factory_project_goal_specs (
+        spec_id, project_id, title, primary_goal, non_goals_json, tradeoffs_json,
+        constraints_json, accepted_examples_json, rejected_examples_json, source_refs_json,
+        version, status, artifact_ref, summary_ref, created_at, updated_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(spec_id) DO UPDATE SET
+        project_id = COALESCE(excluded.project_id, factory_project_goal_specs.project_id),
+        title = excluded.title,
+        primary_goal = excluded.primary_goal,
+        non_goals_json = excluded.non_goals_json,
+        tradeoffs_json = excluded.tradeoffs_json,
+        constraints_json = excluded.constraints_json,
+        accepted_examples_json = excluded.accepted_examples_json,
+        rejected_examples_json = excluded.rejected_examples_json,
+        source_refs_json = excluded.source_refs_json,
+        version = excluded.version,
+        status = excluded.status,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_project_goal_specs.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_project_goal_specs.summary_ref),
+        updated_at = excluded.updated_at,
+        metadata_json = excluded.metadata_json
+    `).run(
+      spec.spec_id,
+      spec.project_id,
+      spec.title,
+      spec.primary_goal,
+      JSON.stringify(spec.non_goals),
+      JSON.stringify(spec.tradeoffs),
+      JSON.stringify(spec.constraints),
+      JSON.stringify(spec.accepted_examples),
+      JSON.stringify(spec.rejected_examples),
+      JSON.stringify(spec.source_refs),
+      spec.version,
+      spec.status,
+      input.artifactRef ?? spec.artifact_ref,
+      input.summaryRef ?? spec.summary_ref,
+      spec.created_at,
+      spec.updated_at,
+      jsonMetadata(spec.metadata_json)
+    );
+    if (input.artifactRef ?? spec.artifact_ref) {
+      this.recordArtifact({
+        kind: "project_goal_spec",
+        artifactRef: input.artifactRef ?? spec.artifact_ref ?? "",
+        status: spec.status,
+        createdAt: spec.created_at,
+        updatedAt: spec.updated_at,
+        metadata: { spec_id: spec.spec_id, version: spec.version, summary_ref: input.summaryRef ?? spec.summary_ref }
+      });
+    }
+  }
+
+  recordGoalStewardReview(input: FactoryGoalStewardReviewRecordInput) {
+    const review = input.review;
+    this.database.prepare(`
+      INSERT INTO factory_goal_steward_reviews (
+        review_id, run_id, spec_id, spec_ref, status, mode, candidate_count,
+        finding_count, rationale, artifact_ref, summary_ref, created_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_id) DO UPDATE SET
+        spec_id = COALESCE(excluded.spec_id, factory_goal_steward_reviews.spec_id),
+        spec_ref = COALESCE(excluded.spec_ref, factory_goal_steward_reviews.spec_ref),
+        status = excluded.status,
+        mode = excluded.mode,
+        candidate_count = excluded.candidate_count,
+        finding_count = excluded.finding_count,
+        rationale = excluded.rationale,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_goal_steward_reviews.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_goal_steward_reviews.summary_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      review.review_id,
+      review.run_id,
+      review.spec_id,
+      review.spec_ref,
+      review.status,
+      review.mode,
+      review.candidate_count,
+      review.findings.length,
+      review.rationale,
+      input.artifactRef ?? review.artifact_ref,
+      input.summaryRef ?? review.summary_ref,
+      review.created_at,
+      jsonMetadata(review.metadata_json)
+    );
+    for (const finding of review.findings) this.recordGoalStewardFinding(review, finding, input.artifactRef ?? review.artifact_ref);
+    if (input.artifactRef ?? review.artifact_ref) {
+      this.recordArtifact({
+        runId: review.run_id,
+        kind: "goal_steward_review",
+        artifactRef: input.artifactRef ?? review.artifact_ref ?? "",
+        status: review.status,
+        createdAt: review.created_at,
+        updatedAt: review.created_at,
+        metadata: { review_id: review.review_id, spec_id: review.spec_id, finding_count: review.findings.length }
+      });
+    }
+  }
+
+  private recordGoalStewardFinding(review: GoalStewardReview, finding: GoalStewardFinding, artifactRef?: string) {
+    this.database.prepare(`
+      INSERT INTO factory_goal_steward_findings (
+        finding_id, review_id, run_id, spec_id, candidate_id, task_id,
+        finding_type, severity, spec_refs_json, candidate_refs_json,
+        rationale, recommended_action, artifact_ref, created_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(finding_id) DO UPDATE SET
+        candidate_id = COALESCE(excluded.candidate_id, factory_goal_steward_findings.candidate_id),
+        task_id = COALESCE(excluded.task_id, factory_goal_steward_findings.task_id),
+        finding_type = excluded.finding_type,
+        severity = excluded.severity,
+        spec_refs_json = excluded.spec_refs_json,
+        candidate_refs_json = excluded.candidate_refs_json,
+        rationale = excluded.rationale,
+        recommended_action = excluded.recommended_action,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_goal_steward_findings.artifact_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      finding.finding_id,
+      finding.review_id,
+      finding.run_id,
+      review.spec_id,
+      finding.candidate_id,
+      finding.task_id,
+      finding.finding_type,
+      finding.severity,
+      JSON.stringify(finding.spec_refs),
+      JSON.stringify(finding.candidate_refs),
+      finding.rationale,
+      finding.recommended_action,
+      artifactRef,
+      finding.created_at,
+      jsonMetadata(finding.metadata_json)
+    );
+  }
+
+  recordSemanticConflictBatch(input: FactorySemanticConflictBatchRecordInput) {
+    const batch = input.batch;
+    this.database.prepare(`
+      INSERT INTO factory_semantic_conflict_batches (
+        batch_id, run_id, phase, status, root_intent, decision_ids_json,
+        unresolved_decision_ids_json, provider_used, artifact_ref, summary_ref,
+        created_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        phase = excluded.phase,
+        status = excluded.status,
+        root_intent = excluded.root_intent,
+        decision_ids_json = excluded.decision_ids_json,
+        unresolved_decision_ids_json = excluded.unresolved_decision_ids_json,
+        provider_used = excluded.provider_used,
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_semantic_conflict_batches.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_semantic_conflict_batches.summary_ref),
+        metadata_json = excluded.metadata_json
+    `).run(
+      batch.batch_id,
+      batch.run_id,
+      batch.phase,
+      batch.status,
+      batch.root_intent,
+      JSON.stringify(batch.decision_ids),
+      JSON.stringify(batch.unresolved_decision_ids),
+      batch.provider_used ? 1 : 0,
+      input.artifactRef ?? batch.artifact_ref,
+      input.summaryRef ?? batch.summary_ref,
+      batch.created_at,
+      jsonMetadata(batch.metadata_json)
+    );
+    for (const decision of batch.decisions) {
+      this.recordSemanticConflictDecision({
+        decision,
+        batchId: batch.batch_id,
+        artifactRef: input.artifactRef ?? batch.artifact_ref,
+        summaryRef: input.summaryRef ?? batch.summary_ref
+      });
+    }
+    if (input.artifactRef ?? batch.artifact_ref) {
+      this.recordArtifact({
+        runId: batch.run_id,
+        kind: "semantic_conflict_resolution_batch",
+        artifactRef: input.artifactRef ?? batch.artifact_ref ?? "",
+        status: batch.status,
+        createdAt: batch.created_at,
+        updatedAt: batch.created_at,
+        metadata: {
+          batch_id: batch.batch_id,
+          phase: batch.phase,
+          decision_count: batch.decisions.length,
+          unresolved_decision_count: batch.unresolved_decision_ids.length,
+          summary_ref: input.summaryRef ?? batch.summary_ref
+        }
+      });
+    }
+  }
+
+  recordSemanticConflictDecision(input: FactorySemanticConflictDecisionRecordInput) {
+    const decision = input.decision;
+    this.database.prepare(`
+      INSERT INTO factory_semantic_conflict_decisions (
+        decision_id, batch_id, run_id, phase, conflict, source_a, source_b,
+        root_intent, decision, reason, requires_user_approval, severity, status,
+        question, options_json, source_refs_json, evidence_refs_json,
+        intent_contract_ref, project_goal_spec_ref, artifact_ref, summary_ref,
+        created_at, resolved_at, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(decision_id) DO UPDATE SET
+        batch_id = COALESCE(excluded.batch_id, factory_semantic_conflict_decisions.batch_id),
+        phase = excluded.phase,
+        conflict = excluded.conflict,
+        source_a = excluded.source_a,
+        source_b = excluded.source_b,
+        root_intent = excluded.root_intent,
+        decision = excluded.decision,
+        reason = excluded.reason,
+        requires_user_approval = excluded.requires_user_approval,
+        severity = excluded.severity,
+        status = excluded.status,
+        question = COALESCE(excluded.question, factory_semantic_conflict_decisions.question),
+        options_json = excluded.options_json,
+        source_refs_json = excluded.source_refs_json,
+        evidence_refs_json = excluded.evidence_refs_json,
+        intent_contract_ref = COALESCE(excluded.intent_contract_ref, factory_semantic_conflict_decisions.intent_contract_ref),
+        project_goal_spec_ref = COALESCE(excluded.project_goal_spec_ref, factory_semantic_conflict_decisions.project_goal_spec_ref),
+        artifact_ref = COALESCE(excluded.artifact_ref, factory_semantic_conflict_decisions.artifact_ref),
+        summary_ref = COALESCE(excluded.summary_ref, factory_semantic_conflict_decisions.summary_ref),
+        resolved_at = COALESCE(excluded.resolved_at, factory_semantic_conflict_decisions.resolved_at),
+        metadata_json = excluded.metadata_json
+    `).run(
+      decision.decision_id,
+      input.batchId ?? decision.batch_id,
+      decision.run_id,
+      decision.phase,
+      decision.conflict,
+      decision.source_a,
+      decision.source_b,
+      decision.root_intent,
+      decision.decision,
+      decision.reason,
+      decision.requires_user_approval ? 1 : 0,
+      decision.severity,
+      decision.status,
+      decision.question,
+      JSON.stringify(decision.options),
+      JSON.stringify(decision.source_refs),
+      JSON.stringify(decision.evidence_refs),
+      decision.intent_contract_ref,
+      decision.project_goal_spec_ref,
+      input.artifactRef ?? decision.artifact_ref,
+      input.summaryRef ?? decision.summary_ref,
+      decision.created_at,
+      decision.resolved_at,
+      jsonMetadata(decision.metadata_json)
+    );
   }
 
   recordAgentTeam(input: FactoryAgentTeamRecordInput) {
@@ -5582,6 +5879,22 @@ export class FactoryMetadataAdapter {
     await this.write((store) => store.recordIntegrationResult(input));
   }
 
+  async recordProjectGoalSpecSaved(input: FactoryProjectGoalSpecRecordInput) {
+    await this.write((store) => store.recordProjectGoalSpec(input));
+  }
+
+  async recordGoalStewardReviewSaved(input: FactoryGoalStewardReviewRecordInput) {
+    await this.write((store) => store.recordGoalStewardReview(input));
+  }
+
+  async recordSemanticConflictBatchSaved(input: FactorySemanticConflictBatchRecordInput) {
+    await this.write((store) => store.recordSemanticConflictBatch(input));
+  }
+
+  async recordSemanticConflictDecisionSaved(input: FactorySemanticConflictDecisionRecordInput) {
+    await this.write((store) => store.recordSemanticConflictDecision(input));
+  }
+
   async recordAgentTeamSaved(input: FactoryAgentTeamRecordInput) {
     await this.write((store) => store.recordAgentTeam(input));
   }
@@ -7476,6 +7789,102 @@ CREATE TABLE IF NOT EXISTS factory_approval_scope_constraints (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS factory_project_goal_specs (
+  spec_id TEXT PRIMARY KEY,
+  project_id TEXT,
+  title TEXT NOT NULL,
+  primary_goal TEXT NOT NULL,
+  non_goals_json TEXT NOT NULL DEFAULT '[]',
+  tradeoffs_json TEXT NOT NULL DEFAULT '[]',
+  constraints_json TEXT NOT NULL DEFAULT '[]',
+  accepted_examples_json TEXT NOT NULL DEFAULT '[]',
+  rejected_examples_json TEXT NOT NULL DEFAULT '[]',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_goal_steward_reviews (
+  review_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  spec_id TEXT,
+  spec_ref TEXT,
+  status TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  rationale TEXT NOT NULL,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_goal_steward_findings (
+  finding_id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  spec_id TEXT,
+  candidate_id TEXT,
+  task_id TEXT,
+  finding_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  spec_refs_json TEXT NOT NULL DEFAULT '[]',
+  candidate_refs_json TEXT NOT NULL DEFAULT '[]',
+  rationale TEXT NOT NULL,
+  recommended_action TEXT NOT NULL,
+  artifact_ref TEXT,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_semantic_conflict_batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  status TEXT NOT NULL,
+  root_intent TEXT NOT NULL,
+  decision_ids_json TEXT NOT NULL DEFAULT '[]',
+  unresolved_decision_ids_json TEXT NOT NULL DEFAULT '[]',
+  provider_used INTEGER NOT NULL DEFAULT 0,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS factory_semantic_conflict_decisions (
+  decision_id TEXT PRIMARY KEY,
+  batch_id TEXT,
+  run_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  conflict TEXT NOT NULL,
+  source_a TEXT NOT NULL,
+  source_b TEXT NOT NULL,
+  root_intent TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  requires_user_approval INTEGER NOT NULL DEFAULT 0,
+  severity TEXT NOT NULL,
+  status TEXT NOT NULL,
+  question TEXT,
+  options_json TEXT NOT NULL DEFAULT '[]',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  intent_contract_ref TEXT,
+  project_goal_spec_ref TEXT,
+  artifact_ref TEXT,
+  summary_ref TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
 CREATE TABLE IF NOT EXISTS factory_integration_candidates (
   candidate_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -7915,6 +8324,12 @@ CREATE INDEX IF NOT EXISTS idx_factory_integration_lessons_run ON factory_integr
 CREATE INDEX IF NOT EXISTS idx_factory_integration_task_status_updates_run ON factory_integration_task_status_updates(run_id, target_type);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_finalization_batches_run ON factory_integration_finalization_batches(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_factory_approval_scope_constraints_run ON factory_approval_scope_constraints(run_id, source_type, status);
+CREATE INDEX IF NOT EXISTS idx_factory_project_goal_specs_status ON factory_project_goal_specs(status, version);
+CREATE INDEX IF NOT EXISTS idx_factory_goal_steward_reviews_run ON factory_goal_steward_reviews(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_factory_goal_steward_findings_run ON factory_goal_steward_findings(run_id, severity);
+CREATE INDEX IF NOT EXISTS idx_factory_semantic_conflict_batches_run ON factory_semantic_conflict_batches(run_id, phase, status);
+CREATE INDEX IF NOT EXISTS idx_factory_semantic_conflict_decisions_run ON factory_semantic_conflict_decisions(run_id, severity, status);
+CREATE INDEX IF NOT EXISTS idx_factory_semantic_conflict_decisions_batch ON factory_semantic_conflict_decisions(batch_id, status);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_candidates_run ON factory_integration_candidates(run_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_plans_run ON factory_integration_plans(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_factory_integration_conflicts_run ON factory_integration_conflicts(run_id, severity);

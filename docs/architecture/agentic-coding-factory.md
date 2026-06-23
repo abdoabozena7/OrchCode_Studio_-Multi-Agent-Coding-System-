@@ -10,12 +10,14 @@ Hivo is an orchestration-first coding system. It keeps small worker agents relia
    - `.agent_memory/symbol_index.json` stores heuristic imports, exports, classes, functions, and types.
    - `.agent_memory/command_inventory.json` stores detected test, lint, typecheck, build, smoke, and run commands.
    - `.agent_memory/project_intelligence.json` stores dependency graph, reverse dependencies, test-to-source mapping, command-to-area mapping, module map, entrypoint map, and risk map.
+   - `.agent_memory/project_specs/` stores active and historical `ProjectGoalSpec` artifacts. The active spec defines non-negotiable product intent, non-goals, tradeoffs, constraints, accepted examples, and rejected examples.
    - learning files store decisions, lessons learned, failed attempts, successful patterns, glossary terms, and architecture notes.
 
 2. Orchestrator and task graph
    - `CoreOrchestrator` turns a request into Scout, Planner, Executor, and Reporter tasks.
    - `TaskGraphManager` enforces status transitions, dependencies, and persisted task state.
    - Context packs include only relevant snippets, constraints, allowed edit scope, validation requirements, prior decisions, and warnings.
+   - When an active `ProjectGoalSpec` exists, every context pack includes it as `project_goal_spec` context plus the constraint: do not propose or accept changes that contradict the active spec without human approval.
    - When a task or read-only worker is assigned to an `AgentTeam`, context packs carry team scope metadata, inherited parent constraints, memory-scope refs, planning evidence links, durable lock context, and explicit fallback warnings without changing task execution order.
    - Medium and multi-plan runs can produce read-only `TeamSubPlan` artifacts after AgentTeam proposal. These scoped sub-plans summarize team assumptions, task drafts, risks, dependencies, evidence, memory refs, lock context, and validation strategy, then aggregate them into a recursive planning summary without creating executor tasks or changing scheduling.
    - Team sub-plan task drafts can pass through a task adoption gate that records `AdoptedTaskProposal` metadata and readiness decisions. These proposals can be represented in a separate proposed task graph, but proposed nodes are explicitly non-executable and do not schedule work or grant write authority.
@@ -28,6 +30,7 @@ Hivo is an orchestration-first coding system. It keeps small worker agents relia
    - Executor outputs must validate as structured data.
    - Patch proposals pass scope checks, forbidden-file checks, fingerprinting, review, approval gates, and validation.
    - File locks prevent overlapping edit scopes during a run.
+   - `GoalSteward` runs before integration conflict handling when an active `ProjectGoalSpec` exists. It asks the configured provider, through the `ReasoningKernel`, whether candidates align with the spec. Deterministic code only enforces the provider-authored result and records `goal_spec_conflict`, `goal_change_requires_approval`, `goal_spec_missing`, or `goal_steward_unavailable` conflicts.
    - Validation commands are selected from memory and blocked unless they pass command policy and allowlist checks.
    - Failed review or validation creates repair artifacts and bounded repair tasks.
 
@@ -58,11 +61,28 @@ Run artifacts:
   reviews/
   validation/
   integration/
+  goal_steward/
   repairs/
   locks/
   teams/
   metrics/
   reports/
+```
+
+Project goal specs live outside individual runs so future workers inherit the same guardrail:
+
+```text
+.agent_memory/project_specs/<spec_id>/
+  project_goal_spec.json
+  project_goal_spec.md
+```
+
+Goal Steward reviews are run artifacts:
+
+```text
+.agent_memory/runs/<run_id>/goal_steward/<review_id>/
+  goal_steward_review.json
+  goal_steward_review.md
 ```
 
 Team context artifacts live under the run `teams/` directory:

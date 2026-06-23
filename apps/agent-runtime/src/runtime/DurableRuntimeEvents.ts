@@ -62,6 +62,7 @@ export function mapRuntimeEventNameToDurableType(eventType: string): DurableRunt
     "branch_execution.blocked": "branch_execution.blocked",
     "branch_execution.failed": "branch_execution.failed",
     "branch_result.recorded": "branch_result.recorded",
+    "semantic_conflict_resolution.updated": "semantic_conflict_resolution.updated",
     "recursive_fan_in.updated": "recursive_fan_in.updated",
     "recursive_final_report.created": "recursive_final_report.created",
     "knowledge_tree.created": "knowledge_tree.created",

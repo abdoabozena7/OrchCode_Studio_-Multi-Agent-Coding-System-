@@ -26,6 +26,8 @@ import {
   createPostIntegrationValidationPlan,
   createRollbackRequirements,
   createSandboxValidatedIntegrationCandidate,
+  createSemanticConflictDecision,
+  createSemanticConflictResolutionBatch,
   createTaskStatusUpdateRef,
   createWorktreeSafetyCheck,
   createRollbackResult,
@@ -162,6 +164,46 @@ test("passed controlled apply finalizes metadata, memory, lessons, artifacts, tr
     ]) {
       assert.ok(trace.events.some((event) => event.event_type === eventType), `missing trace ${eventType}`);
     }
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("unresolved semantic decisions block finalization before memory success", async () => {
+  const workspace = await fixtureWorkspace("integration-finalization-semantic-block");
+  try {
+    await writeWorkspaceFile(workspace, "src/runtime.ts", "main\n");
+    const artifactStore = new OrchestrationArtifactStore(workspace);
+    const { result } = await appliedControlledResult(workspace, artifactStore, "run_final_semantic_block");
+    const decision = createSemanticConflictDecision({
+      run_id: result.run_id,
+      phase: "finalization",
+      conflict: "lowest_cost_vs_highest_reliability",
+      source_a: result.integration_candidate_id,
+      source_b: "ProjectGoalSpec",
+      root_intent: "ship a useful service within budget",
+      decision: "ask the user whether cost or reliability wins",
+      reason: "The active spec does not rank this tradeoff.",
+      requires_user_approval: true,
+      severity: "blocking",
+      status: "requires_user_approval",
+      source_refs: [result.integration_candidate_id],
+      evidence_refs: [result.artifact_ref ?? ""].filter(Boolean)
+    });
+    await artifactStore.saveSemanticConflictResolutionBatch(createSemanticConflictResolutionBatch({
+      run_id: result.run_id,
+      phase: "finalization",
+      root_intent: decision.root_intent,
+      decisions: [decision],
+      provider_used: true
+    }));
+
+    const finalization = await new IntegrationFinalizationManager({ workspacePath: workspace, config: config(), artifactStore })
+      .finalizeControlledApplyResult(result);
+    assert.equal(finalization.status, "blocked");
+    assert.equal(finalization.memory_entries_created.length, 0);
+    assert.equal(finalization.lessons_created.length, 0);
+    assert.ok(finalization.blockers.some((blocker) => blocker.blocker_type === "semantic_conflict_unresolved"));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

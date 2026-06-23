@@ -117,6 +117,7 @@ import type {
   WorktreeSafetyCheck
 } from "./IntegrationApplyApprovalModels.js";
 import type { ValidationPlanDraft } from "./ValidationPreflightChecker.js";
+import type { SemanticConflictResolutionBatch } from "./SemanticConflictResolverModels.js";
 
 export type RunArtifactPaths = {
   runDir: string;
@@ -134,6 +135,8 @@ export type RunArtifactPaths = {
   reviewsDir: string;
   validationDir: string;
   integrationDir: string;
+  goalStewardDir: string;
+  semanticConflictsDir: string;
   repairsDir: string;
   locksDir: string;
   checkpointsDir: string;
@@ -189,6 +192,8 @@ export class OrchestrationArtifactStore {
       reviewsDir: path.join(runDir, "reviews"),
       validationDir: path.join(runDir, "validation"),
       integrationDir: path.join(runDir, "integration"),
+      goalStewardDir: path.join(runDir, "goal_steward"),
+      semanticConflictsDir: path.join(runDir, "semantic_conflicts"),
       repairsDir: path.join(runDir, "repairs"),
       locksDir: path.join(runDir, "locks"),
       checkpointsDir: path.join(runDir, "checkpoints"),
@@ -227,6 +232,8 @@ export class OrchestrationArtifactStore {
     await mkdir(paths.reviewsDir, { recursive: true });
     await mkdir(paths.validationDir, { recursive: true });
     await mkdir(paths.integrationDir, { recursive: true });
+    await mkdir(paths.goalStewardDir, { recursive: true });
+    await mkdir(paths.semanticConflictsDir, { recursive: true });
     await mkdir(paths.repairsDir, { recursive: true });
     await mkdir(paths.locksDir, { recursive: true });
     await mkdir(paths.checkpointsDir, { recursive: true });
@@ -1031,6 +1038,66 @@ export class OrchestrationArtifactStore {
       metadata_json: metadata
     });
     return filePath;
+  }
+
+  async saveSemanticConflictResolutionBatch(batch: SemanticConflictResolutionBatch): Promise<SemanticConflictResolutionBatch> {
+    const paths = await this.ensureRunLayout(batch.run_id);
+    const batchDir = path.join(paths.semanticConflictsDir, sanitizeFilePart(batch.batch_id));
+    await mkdir(batchDir, { recursive: true });
+    const artifactRef = path.join(batchDir, "semantic_conflict_resolution.json");
+    const summaryRef = path.join(batchDir, "semantic_conflict_resolution.md");
+    const decisions = batch.decisions.map((decision) => ({
+      ...decision,
+      batch_id: decision.batch_id ?? batch.batch_id,
+      artifact_ref: artifactRef,
+      summary_ref: summaryRef
+    }));
+    const persisted: SemanticConflictResolutionBatch = {
+      ...batch,
+      decisions,
+      decision_ids: decisions.map((decision) => decision.decision_id),
+      unresolved_decision_ids: decisions
+        .filter((decision) => decision.requires_user_approval || decision.status === "requires_user_approval" || decision.status === "blocked")
+        .map((decision) => decision.decision_id),
+      artifact_ref: artifactRef,
+      summary_ref: summaryRef
+    };
+    await writeJson(artifactRef, sanitizeForArtifact(persisted));
+    await writeFile(summaryRef, semanticConflictResolutionSummary(persisted), "utf8");
+    await this.metadata.recordSemanticConflictBatchSaved({ batch: persisted, artifactRef, summaryRef });
+    await this.traceWriter.write({
+      run_id: batch.run_id,
+      event_type: "semantic_conflict_resolution_completed",
+      lifecycle_stage: persisted.status === "resolved" || persisted.status === "empty" ? "reviewing" : "blocked",
+      severity: persisted.unresolved_decision_ids.length ? "warning" : "info",
+      summary: `Semantic conflict resolution ${persisted.status}: ${persisted.decisions.length} decision(s).`,
+      artifact_refs: [artifactRef, summaryRef],
+      metadata_json: {
+        batch_id: persisted.batch_id,
+        phase: persisted.phase,
+        status: persisted.status,
+        decision_count: persisted.decisions.length,
+        unresolved_decision_count: persisted.unresolved_decision_ids.length
+      }
+    });
+    for (const decision of persisted.decisions) {
+      await this.traceWriter.write({
+        run_id: batch.run_id,
+        event_type: decision.requires_user_approval ? "semantic_conflict_user_approval_required" : "semantic_conflict_decision_recorded",
+        lifecycle_stage: decision.requires_user_approval || decision.status === "blocked" ? "blocked" : "reviewing",
+        severity: decision.severity === "blocking" ? "warning" : "info",
+        summary: `${decision.conflict}: ${decision.decision}`,
+        artifact_refs: [artifactRef, summaryRef, ...decision.evidence_refs],
+        metadata_json: {
+          batch_id: persisted.batch_id,
+          decision_id: decision.decision_id,
+          conflict: decision.conflict,
+          status: decision.status,
+          requires_user_approval: decision.requires_user_approval
+        }
+      });
+    }
+    return persisted;
   }
 
   async saveAgentTeamArtifact(team: AgentTeam) {
@@ -2763,6 +2830,30 @@ function isTeamContextItem(item: ContextPackInclusionRecord) {
 
 function sanitizeFilePart(value: string) {
   return value.replace(/[^a-zA-Z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "") || "team";
+}
+
+function semanticConflictResolutionSummary(batch: SemanticConflictResolutionBatch) {
+  return [
+    "# Semantic Conflict Resolution",
+    "",
+    `- batch_id: ${batch.batch_id}`,
+    `- run_id: ${batch.run_id}`,
+    `- phase: ${batch.phase}`,
+    `- status: ${batch.status}`,
+    `- provider_used: ${batch.provider_used}`,
+    `- decision_count: ${batch.decisions.length}`,
+    `- unresolved_decision_count: ${batch.unresolved_decision_ids.length}`,
+    "",
+    "## Root Intent",
+    batch.root_intent || "n/a",
+    "",
+    "## Decisions",
+    ...(batch.decisions.length
+      ? batch.decisions.map((decision) =>
+        `- ${decision.severity}/${decision.status}: ${decision.conflict} -> ${decision.decision}; approval=${decision.requires_user_approval}; ${decision.reason}`
+      )
+      : ["- none"])
+  ].join("\n");
 }
 
 function teamContextSummaryMarkdown(summary: TeamContextSummary) {

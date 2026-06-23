@@ -1,46 +1,45 @@
-import type { ProductBrief } from "@hivo/protocol";
+import type { IntentContract, ProductBrief } from "@hivo/protocol";
 
 export class ProductOrchestrator {
-  createBrief(userPrompt: string): ProductBrief {
-    const successCriteria = inferSuccessCriteria(userPrompt);
+  createBrief(intentContract: IntentContract): ProductBrief {
+    if (intentContract.status !== "ready") {
+      throw new Error(`ProductOrchestrator requires a ready IntentContract; received ${intentContract.status}.`);
+    }
     return {
-      goal: userPrompt.trim(),
-      userIntent: inferIntent(userPrompt),
-      scope: ["Clarify the requested outcome", "Keep the first implementation reviewable", "Preserve existing behavior"],
-      constraints: ["No direct workspace writes by agents", "Patch proposals require approval", "Use controlled tools only"],
-      successCriteria,
-      clarifyingQuestions: [],
-      assumptions: ["The request can proceed with the current workspace context", "A configured provider is available for semantic planning"]
+      goal: intentContract.precise_rewrite.trim(),
+      userIntent: productBriefIntentFromContract(intentContract),
+      scope: [
+        "Satisfy the compiled intent contract",
+        "Keep the first implementation reviewable",
+        "Preserve existing behavior unless the contract explicitly changes it"
+      ],
+      constraints: [
+        "No direct workspace writes by agents",
+        "Patch proposals require approval",
+        "Use controlled tools only",
+        ...intentContract.conflict_rules
+      ],
+      successCriteria: intentContract.definition_of_done.length
+        ? intentContract.definition_of_done
+        : ["A provider-authored ready intent contract is satisfied"],
+      clarifyingQuestions: intentContract.missing_questions
+        .filter((question) => !question.blocking)
+        .map((question) => question.question),
+      assumptions: intentContract.assumptions
     };
   }
 }
 
-function inferIntent(prompt: string): ProductBrief["userIntent"] {
-  const value = prompt.toLowerCase();
-  if (value.includes("test")) return "write_tests";
-  if (value.includes("bug") || value.includes("fix")) return "bug_fix";
-  if (value.includes("refactor")) return "refactor";
-  if (value.includes("new project")) return "new_project";
-  if (value.includes("explain")) return "explain_code";
-  return "add_feature";
+function productBriefIntentFromContract(intentContract: IntentContract): ProductBrief["userIntent"] {
+  const value = intentContract.metadata_json?.product_brief_user_intent;
+  return isProductBriefIntent(value) ? value : "add_feature";
 }
 
-function inferSuccessCriteria(prompt: string) {
-  const normalized = prompt.toLowerCase();
-  if (normalized.includes("snake") && normalized.includes("threejs")) {
-    return [
-      "Creates index.html, styles.css, and main.js",
-      "Renders a nonblank Three.js scene",
-      "Implements snake movement controlled by arrow keys",
-      "Implements food spawning and growth",
-      "Shows and updates score",
-      "Handles wall or self collision by resetting the game",
-      "Can be previewed locally without a build step"
-    ];
-  }
-  return [
-    "A technical plan is produced",
-    "Relevant workers contribute outputs",
-    "Patch proposals and reviews are visible before approval"
-  ];
+function isProductBriefIntent(value: unknown): value is ProductBrief["userIntent"] {
+  return value === "add_feature"
+    || value === "bug_fix"
+    || value === "refactor"
+    || value === "write_tests"
+    || value === "explain_code"
+    || value === "new_project";
 }

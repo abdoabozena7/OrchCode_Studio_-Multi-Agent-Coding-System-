@@ -12,7 +12,31 @@ export * from "./FactoryMetadataStore.js";
 export * from "./FactoryTraceEvents.js";
 export * from "./FactoryTraceReader.js";
 export * from "./FactoryTraceWriter.js";
+export * from "./GoalSteward.js";
+export {
+  GOAL_STEWARD_SCHEMA_VERSION,
+  PROJECT_GOAL_SPEC_SCHEMA_VERSION,
+  createGoalStewardFinding,
+  createGoalStewardReview,
+  createProjectGoalSpec
+} from "./GoalStewardModels.js";
+export type {
+  GoalStewardFinding,
+  GoalStewardFindingType,
+  GoalStewardRecommendedAction,
+  GoalStewardReview,
+  GoalStewardReviewStatus,
+  ProjectGoalSpec,
+  ProjectGoalSpecStatus,
+  ProjectGoalTradeoff
+} from "./GoalStewardModels.js";
 export * from "./IntegrationManager.js";
+export * from "./SemanticConflictResolver.js";
+export * from "./SemanticConflictResolverModels.js";
+export * from "./IntentLedgerModels.js";
+export * from "./IntentLedgerService.js";
+export * from "./IntentHandoffGate.js";
+export * from "./UserIntentCompiler.js";
 export {
   createIntegrationCandidate,
   createIntegrationPlan,

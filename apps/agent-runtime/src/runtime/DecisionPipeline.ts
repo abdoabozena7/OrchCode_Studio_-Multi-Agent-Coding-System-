@@ -15,7 +15,7 @@ import {
   conversationUnderstandingFromTurnUnderstanding,
   type ConversationUnderstanding
 } from "./ConversationUnderstanding.js";
-import { invokeReasoningProviderStructured, understandAndDirectTurn, type ReasoningKernelState } from "./ReasoningKernel.js";
+import { invokeReasoningProviderStructured, understandAndDirectTurn, type ReasoningConversationContext, type ReasoningKernelState } from "./ReasoningKernel.js";
 
 type AnswerVerificationModel = {
   verdict: "pass" | "fail" | "needs_more_evidence";
@@ -30,12 +30,14 @@ export async function beginDecisionPipeline(input: {
   message: string;
   provider: LlmProvider;
   routerProvider?: LlmProvider;
+  conversationContext?: ReasoningConversationContext;
 }): Promise<{ understanding: ConversationUnderstanding; state: DecisionPipelineState; reasoningState: ReasoningKernelState }> {
   const now = new Date().toISOString();
   const reasoning = await understandAndDirectTurn({
     provider: input.provider,
     routerProvider: input.routerProvider,
-    message: input.message
+    message: input.message,
+    conversationContext: input.conversationContext
   });
   const understanding = conversationUnderstandingFromTurnUnderstanding(reasoning.understanding);
   const query = createQueryUnderstanding(understanding);

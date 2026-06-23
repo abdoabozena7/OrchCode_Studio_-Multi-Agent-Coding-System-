@@ -7,6 +7,7 @@ import type {
   AgentRuntimeSession,
   ProviderAuthoredResult,
   ReasoningDirective,
+  ReasoningStep,
   SanitizedProviderConfig,
   TurnUnderstanding
 } from "@hivo/protocol";
@@ -92,6 +93,55 @@ test("unexpected Arabic general question is understood and answered entirely by 
     assert.equal(session.latestDecisionPipeline?.finalResponseSource, "provider");
     assert.equal(session.providerTelemetry?.finalResponseSource, "provider");
     assert.deepEqual(provider.schemas, ["initial-reasoning-decision", "answer-verification"]);
+  } finally {
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("same-session Arabic follow-up context reaches route and compose provider calls", async () => {
+  const storageDir = await temporaryStorage("same-chat-follow-up");
+  try {
+    const provider = new SameChatFollowUpProvider();
+    const runtime = await createRuntime(storageDir, () => provider);
+    const firstPrompt = "Explain the ReasoningKernel briefly.";
+    const created = await runtime.createSession({
+      workspacePath: path.join(os.tmpdir(), `missing-workspace-${Date.now()}`),
+      mode: "real_provider",
+      providerConfig,
+      userPrompt: firstPrompt
+    });
+
+    await runtime.runTurn(created.sessionId, firstPrompt);
+    await runtime.runTurn(created.sessionId, SameChatFollowUpProvider.followUpPrompt);
+
+    const session = requireSession(runtime.getSession(created.sessionId));
+    const assistantMessages = session.messages.filter((message) => message.role === "assistant");
+    const secondRouteContext = conversationContextFrom(provider.routeRequests.at(-1));
+    const composeContext = conversationContextFrom(provider.composeRequests.at(-1));
+
+    assert.equal(session.status, "completed");
+    assert.equal(assistantMessages.length, 2);
+    assert.equal(secondRouteContext?.source, "same_session_messages");
+    assert.equal(secondRouteContext?.maxMessages, 8);
+    assert.equal(secondRouteContext?.maxChars, 12_000);
+    assert.equal(secondRouteContext?.omittedMessageCount, 0);
+    assert.deepEqual(secondRouteContext?.messages.map((message) => message.role), ["user", "assistant"]);
+    assert.deepEqual(secondRouteContext?.messages.map((message) => message.content), [
+      firstPrompt,
+      SameChatFollowUpProvider.firstAnswer
+    ]);
+    assert.equal(secondRouteContext?.messages.some((message) => message.content === SameChatFollowUpProvider.followUpPrompt), false);
+    assert.deepEqual(composeContext?.messages.map((message) => message.content), [
+      firstPrompt,
+      SameChatFollowUpProvider.firstAnswer
+    ]);
+    assert.deepEqual(provider.schemas, [
+      "initial-reasoning-decision",
+      "answer-verification",
+      "initial-reasoning-decision",
+      "provider-authored-result",
+      "answer-verification"
+    ]);
   } finally {
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -289,6 +339,51 @@ class DirectAnswerProvider implements LlmProvider {
   }
 }
 
+class SameChatFollowUpProvider implements LlmProvider {
+  static readonly followUpPrompt = "\u0641\u0635\u0644";
+  static readonly firstAnswer = "The ReasoningKernel classifies the turn, chooses evidence steps, composes, and verifies the answer.";
+  readonly schemas: string[] = [];
+  readonly routeRequests: LlmRequest[] = [];
+  readonly composeRequests: LlmRequest[] = [];
+
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    const name = schemaName(schema);
+    this.schemas.push(name);
+    if (name === "initial-reasoning-decision") {
+      this.routeRequests.push(input);
+      return (input.userPrompt.includes(SameChatFollowUpProvider.followUpPrompt)
+        ? followUpInitialDecision()
+        : firstTurnInitialDecision()) as T;
+    }
+    if (name === "provider-authored-result") {
+      this.composeRequests.push(input);
+      return {
+        decision: "ANSWER",
+        answerMarkdown: "More detail: the previous answer can be expanded because the same-session context is present.",
+        claims: [],
+        evidenceRefs: [],
+        unknowns: [],
+        rationale: "Expanded the prior same-session answer."
+      } satisfies ProviderAuthoredResult as T;
+    }
+    if (name === "answer-verification") {
+      return {
+        verdict: "pass",
+        rationale: "The answer is relevant to the same-session follow-up and makes no workspace claims.",
+        supportedClaims: [],
+        unsupportedClaims: [],
+        missingFacts: [],
+        evidenceRefs: []
+      } as T;
+    }
+    throw new Error(`Unexpected schema: ${name}`);
+  }
+
+  async generateText(): Promise<string> {
+    throw new Error("Unexpected text request");
+  }
+}
+
 class CertifiedActionProvider implements LlmProvider {
   readonly schemas: string[] = [];
 
@@ -418,6 +513,68 @@ function directInitialDecision() {
   };
 }
 
+function firstTurnInitialDecision() {
+  return {
+    understanding: {
+      originalRequest: "Explain the ReasoningKernel briefly.",
+      cleanedRequest: "Explain the ReasoningKernel briefly.",
+      language: "english",
+      intentKind: "direct_conversation",
+      route: "chat",
+      needsWorkspace: false,
+      goal: "Briefly explain the ReasoningKernel.",
+      ambiguities: [],
+      requiredEvidence: [],
+      risk: "low",
+      confidence: "high",
+      rationale: "This fixture treats the first turn as a direct explanatory answer."
+    } satisfies TurnUnderstanding,
+    step: {
+      id: "answer_first_turn",
+      kind: "final",
+      rationale: "Answer the first turn directly.",
+      toolRequests: [],
+      missingFacts: [],
+      successCriteria: ["Give a brief answer."],
+      result: {
+        decision: "ANSWER",
+        answerMarkdown: SameChatFollowUpProvider.firstAnswer,
+        claims: [],
+        evidenceRefs: [],
+        unknowns: [],
+        rationale: "Answered the first turn."
+      } satisfies ProviderAuthoredResult
+    } satisfies ReasoningStep
+  };
+}
+
+function followUpInitialDecision() {
+  return {
+    understanding: {
+      originalRequest: SameChatFollowUpProvider.followUpPrompt,
+      cleanedRequest: "Expand the previous same-session answer.",
+      language: "arabic",
+      intentKind: "direct_conversation",
+      route: "chat",
+      needsWorkspace: false,
+      goal: "Expand the previous same-session explanation.",
+      ambiguities: [],
+      requiredEvidence: [],
+      risk: "low",
+      confidence: "high",
+      rationale: "The short Arabic follow-up is clear when same-session context is available."
+    } satisfies TurnUnderstanding,
+    step: {
+      id: "compose_follow_up",
+      kind: "final",
+      rationale: "Compose an expanded answer from the same-session context.",
+      toolRequests: [],
+      missingFacts: [],
+      successCriteria: ["Expand the previous answer without asking a redundant clarification."]
+    } satisfies ReasoningStep
+  };
+}
+
 function actionInitialDecision() {
   return {
     understanding: {
@@ -471,6 +628,20 @@ async function temporaryStorage(label: string) {
 
 function schemaName(schema: unknown) {
   return typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+}
+
+function conversationContextFrom(request: LlmRequest | undefined) {
+  const context = request?.context;
+  if (!context || typeof context !== "object" || !("conversationContext" in context)) return undefined;
+  return (context as {
+    conversationContext?: {
+      source: string;
+      maxMessages: number;
+      maxChars: number;
+      omittedMessageCount: number;
+      messages: Array<{ role: string; content: string }>;
+    };
+  }).conversationContext;
 }
 
 function requireSession(session: AgentRuntimeSession | undefined) {

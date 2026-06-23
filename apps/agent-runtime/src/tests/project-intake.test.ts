@@ -93,6 +93,36 @@ test("source plus config plus docs produces high-confidence existing project int
   }
 });
 
+test("package summary only reports npm test when a test script exists", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-intake-dev-only-${Date.now()}`);
+  await mkdir(path.join(workspace, "src"), { recursive: true });
+  await writeFile(path.join(workspace, "package.json"), JSON.stringify({ name: "snake-game", scripts: { dev: "vite" } }, null, 2), "utf8");
+  await writeFile(path.join(workspace, "src", "main.js"), "console.log('ready');\n", "utf8");
+
+  try {
+    const tools = new ToolRegistry(workspace);
+    const projectMap = tools.workspace.getProjectSummary();
+    const intake = buildProjectIntake({
+      workspacePath: workspace,
+      message: "run this project again",
+      projectMap: {
+        stack: ["JavaScript"],
+        packageManagers: projectMap.packageManagers,
+        testCommands: projectMap.testCommands,
+        entryPoints: ["src/main.js"],
+        importantFiles: ["package.json", "src/main.js"]
+      },
+      tools
+    });
+
+    assert.deepEqual(projectMap.testCommands, []);
+    assert.equal(intake.testCommands.includes("npm test"), false);
+    assert.equal(intake.knownCommands.includes("npm run dev"), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("git changes and todo markers produce mid-progress signals and warnings", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-intake-mid-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });

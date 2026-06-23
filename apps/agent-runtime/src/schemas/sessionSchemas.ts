@@ -28,7 +28,46 @@ export const runPatchSchema = {
 } as const;
 
 export const runPatchIntentSchema = {
-  name: "run-patch-intent"
+  name: "run-patch-intent",
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "summary", "intents"],
+  properties: {
+    title: { type: "string" },
+    summary: { type: "string" },
+    intents: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path", "operation", "replacementText", "reason", "risk"],
+        properties: {
+          path: { type: "string" },
+          operation: {
+            type: "string",
+            enum: ["create_file", "overwrite_file", "replace_range", "insert_after", "insert_before", "delete_range"]
+          },
+          anchorText: { type: "string" },
+          preimageText: { type: "string" },
+          replacementText: { type: "string" },
+          reason: { type: "string" },
+          risk: { type: "string", enum: ["low", "medium", "high"] }
+        }
+      }
+    },
+    suggestedCommands: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["command", "reason"],
+        properties: {
+          command: { type: "string" },
+          reason: { type: "string" }
+        }
+      }
+    }
+  }
 } as const;
 
 export const runVerificationSchema = {

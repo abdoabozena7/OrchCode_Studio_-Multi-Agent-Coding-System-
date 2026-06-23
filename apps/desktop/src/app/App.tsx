@@ -100,6 +100,7 @@ import {
 } from "../lib/tauri";
 import { canAutoRunRuntimeCommand, executeRuntimeCommandRequest } from "../lib/terminalOrchestrator";
 import { buildPrimaryActivityItems, describeCurrentStep, describeNextProgressStep, type ActivityStreamItem, type ActiveRuntimeCommand } from "./activityStream";
+import { SwarmDock } from "./SwarmDock";
 
 type ProviderPreset = {
   label: string;
@@ -527,8 +528,9 @@ export function App() {
   }, [sidebarWidth]);
 
   useEffect(() => {
+    if (!bootstrapped) return;
     localStorage.setItem(SESSION_TOKENS_KEY, JSON.stringify(pruneExpiredSessionTokens(sessionTokens)));
-  }, [sessionTokens]);
+  }, [bootstrapped, sessionTokens]);
 
   useEffect(() => {
     localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify(collapsedProjectPaths));
@@ -2061,7 +2063,19 @@ export function App() {
             </div>
 
             <div className="toolbar-group">
-              {hasAgentSidePanel ? (
+              {runtimeSession?.swarmState && runtimeSession.swarmState.nodes.length > 1 ? (
+                <SwarmDock
+                  session={runtimeSession}
+                  sessionToken={runtimeSessionToken || (getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token ?? "")}
+                  onSessionUpdate={applyCanonicalRuntimeSession}
+                  onSelectAgent={(agentId) => {
+                    if (agentPanel.agents.some((agent) => agent.id === agentId)) {
+                      setSelectedAgentId(agentId);
+                      setAgentPanelOpen(true);
+                    }
+                  }}
+                />
+              ) : hasAgentSidePanel ? (
                 <AgentIconRow
                   agents={agentPanel.agents}
                   selectedAgentId={selectedAgentId}

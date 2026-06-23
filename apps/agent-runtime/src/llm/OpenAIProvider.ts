@@ -1,5 +1,5 @@
 import { providerJsonSchema, providerJsonSchemaName, userPromptWithContext, type EmbeddingRequest, type EmbeddingResponse, type LlmProvider, type LlmRequest } from "./LlmProvider.js";
-import { validateStructuredOutput } from "../schemas/validators.js";
+import { normalizeStructuredOutputCandidate, validateStructuredOutput } from "../schemas/validators.js";
 
 export class OpenAIProvider implements LlmProvider {
   constructor(
@@ -21,9 +21,10 @@ export class OpenAIProvider implements LlmProvider {
       if (!candidate) continue;
       try {
         const parsed = JSON.parse(candidate) as T;
-        const validation = validateStructuredOutput(parsed, _schema);
+        const normalized = normalizeStructuredOutputCandidate(parsed, _schema);
+        const validation = validateStructuredOutput(normalized, _schema);
         if (!validation.valid) continue;
-        return parsed;
+        return normalized;
       } catch {
         // Try the next candidate before reporting the malformed response.
       }

@@ -28,6 +28,7 @@ export const DURABLE_RUNTIME_EVENT_TYPES = [
   "agent.updated",
   "decision.recorded",
   "evidence.recorded",
+  "intent_contract.compiled",
   "product_spec.proposed",
   "product_spec.approved",
   "technical_plan.proposed",
@@ -46,6 +47,7 @@ export const DURABLE_RUNTIME_EVENT_TYPES = [
   "branch_execution.blocked",
   "branch_execution.failed",
   "branch_result.recorded",
+  "semantic_conflict_resolution.updated",
   "recursive_fan_in.updated",
   "recursive_final_report.created",
   "knowledge_tree.created",
@@ -110,6 +112,7 @@ export type AppEvent =
   | { type: "runtime.tool_call.updated"; sessionId: string; toolCall: ToolCall }
   | { type: "runtime.tool_intent.updated"; sessionId: string; intent: ToolIntent }
   | { type: "runtime.artifact.created"; sessionId: string; artifact: Artifact }
+  | { type: "runtime.intent_contract.compiled"; sessionId: string; intentContract: import("./orchestration.js").IntentContract }
   | { type: "runtime.product_spec.proposed"; sessionId: string; productSpec: import("./orchestration.js").ProductSpecification }
   | { type: "runtime.product_spec.approved"; sessionId: string; productSpec: import("./orchestration.js").ProductSpecification }
   | { type: "runtime.technical_plan.proposed"; sessionId: string; technicalPlan: import("./orchestration.js").TechnicalPlan }
@@ -128,6 +131,7 @@ export type AppEvent =
   | { type: "runtime.branch_execution.blocked"; sessionId: string; branchExecution: import("./orchestration.js").RecursiveBranchExecutionRecord }
   | { type: "runtime.branch_execution.failed"; sessionId: string; branchExecution: import("./orchestration.js").RecursiveBranchExecutionRecord }
   | { type: "runtime.branch_result.recorded"; sessionId: string; branchResult: import("./orchestration.js").RecursiveBranchResultRecord }
+  | { type: "runtime.semantic_conflict_resolution.updated"; sessionId: string; batch: import("./orchestration.js").SemanticConflictResolutionBatch }
   | { type: "runtime.recursive_fan_in.updated"; sessionId: string; integrationSummary: import("./orchestration.js").RecursiveIntegrationSummary }
   | { type: "runtime.recursive_final_report.created"; sessionId: string; finalReport: import("./orchestration.js").RecursiveFinalReport }
   | { type: "runtime.knowledge_tree.created"; sessionId: string; tree: import("./models.js").ProjectKnowledgeTree }

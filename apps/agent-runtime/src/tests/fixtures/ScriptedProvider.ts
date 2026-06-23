@@ -2,6 +2,7 @@ import type { AgentPlan, PatchProposal } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../../llm/LlmProvider.js";
 import { createHash } from "node:crypto";
 import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../../mock/threeJsSnake.js";
+import { routeConversation } from "../../runtime/ConversationRouter.js";
 
 export class ScriptedProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
@@ -20,6 +21,38 @@ export class ScriptedProvider implements LlmProvider {
     }
     if (schemaName === "run-patch-intent") {
       return this.createRunPatchIntent(input.userPrompt) as T;
+    }
+    if (schemaName === "initial-reasoning-decision") {
+      return this.createInitialReasoningDecision(input.userPrompt) as T;
+    }
+    if (schemaName === "reasoning-step") {
+      return this.createReasoningStep(input.userPrompt) as T;
+    }
+    if (schemaName === "answer-verification") {
+      return {
+        verdict: "pass",
+        rationale: "Scripted fixture accepted the provider-authored answer.",
+        supportedClaims: [],
+        unsupportedClaims: [],
+        missingFacts: [],
+        evidenceRefs: []
+      } as T;
+    }
+    if (schemaName === "intent-contract") {
+      return this.createIntentContract(input) as T;
+    }
+    if (schemaName === "intent_review_result") {
+      return {
+        status: "aligned",
+        rationale: "Scripted fixture verified the candidate against the canonical original request.",
+        findings: []
+      } as T;
+    }
+    if (schemaName === "semantic_conflict_resolution") {
+      return { decisions: [] } as T;
+    }
+    if (schemaName === "parsed-agent-output") {
+      return this.createParsedAgentOutput(input) as T;
     }
     if (schemaName === "run-verification") {
       return {
@@ -220,6 +253,103 @@ export class ScriptedProvider implements LlmProvider {
       suggestedCommands: []
     };
   }
+
+  private createInitialReasoningDecision(userPrompt: string) {
+    const request = extractReasoningUserTurn(userPrompt);
+    const route = routeConversation(request);
+    const needsWorkspace = route.route !== "chat";
+    const intentKind = route.route === "chat"
+      ? "direct_conversation"
+      : route.route === "inspect_explain" || route.route === "swarm_readonly"
+        ? "workspace_question"
+        : route.route === "simple_run"
+          ? "run_request"
+          : "workspace_action";
+    return {
+      understanding: {
+        originalRequest: request,
+        cleanedRequest: route.workspacePrompt || request,
+        language: route.language,
+        intentKind,
+        route: route.route,
+        needsWorkspace,
+        goal: needsWorkspace ? route.rationale : "Answer the user directly.",
+        ambiguities: [],
+        requiredEvidence: needsWorkspace ? ["workspace context"] : [],
+        risk: route.route === "recursive_factory" || route.route === "swarm_readonly" ? "high" : needsWorkspace ? "medium" : "low",
+        confidence: route.confidence,
+        rationale: route.rationale
+      },
+      step: {
+        id: "scripted_initial_step",
+        kind: "final",
+        rationale: "Scripted provider selected the deterministic fixture route.",
+        toolRequests: [],
+        missingFacts: [],
+        successCriteria: ["Continue through the selected runtime path."]
+      }
+    };
+  }
+
+  private createReasoningStep(userPrompt: string) {
+    return {
+      id: "scripted_final_step",
+      kind: "final",
+      rationale: "Scripted provider produced a deterministic final step.",
+      toolRequests: [],
+      missingFacts: [],
+      successCriteria: ["Return a provider-authored fixture answer."],
+      result: {
+        decision: "ANSWER",
+        answerMarkdown: `Mock analysis complete for: ${extractReasoningUserTurn(userPrompt)}`,
+        claims: [],
+        evidenceRefs: [],
+        unknowns: [],
+        rationale: "Scripted fixture response."
+      }
+    };
+  }
+
+  private createIntentContract(input: LlmRequest) {
+    const context = asRecord(input.context);
+    const original = typeof context?.original_user_request === "string" ? context.original_user_request : input.userPrompt;
+    return {
+      original_user_request: original,
+      precise_rewrite: original,
+      assumptions: ["The scripted provider fixture should preserve the user request exactly."],
+      missing_questions: [],
+      tradeoffs: [{
+        name: "fixture_scope",
+        options: ["small deterministic response", "broad generated response"],
+        preferred: "small deterministic response",
+        rationale: "Tests need stable provider-authored structure."
+      }],
+      priorities: {
+        speed: { score: 70, rationale: "Keep fixture runs fast." },
+        quality: { score: 80, rationale: "Return schema-valid contracts." },
+        realism: { score: 60, rationale: "Model the provider boundary without external calls." },
+        fun: { score: 10, rationale: "Not relevant for this fixture." },
+        security: { score: 80, rationale: "Preserve gates and no-write defaults." },
+        cost: { score: 80, rationale: "Avoid external provider costs in tests." }
+      },
+      definition_of_done: ["The requested workflow completes through the configured gates."],
+      non_goals: ["Do not bypass provider-authored intent compilation."],
+      conflict_rules: ["Prefer the exact original request and existing safety gates over inferred shortcuts."]
+    };
+  }
+
+  private createParsedAgentOutput(input: LlmRequest) {
+    return {
+      summary: "Scripted provider completed this role from the supplied context.",
+      status: "succeeded",
+      files_changed: [],
+      validation_results: [],
+      artifacts: [],
+      limitations: [],
+      next_recommendations: ["Continue through the next gated orchestration step."],
+      intent_alignment: intentAlignmentFromContext(input.context)
+    };
+  }
 }
 
 function deterministicVector(text: string) {
@@ -232,6 +362,11 @@ function deterministicVector(text: string) {
 function extractUserRequest(prompt: string) {
   const match = prompt.match(/User request:\s*([\s\S]*?)(?:\n(?:Workspace snapshot|Plan):|$)/i);
   return (match?.[1] ?? prompt).trim();
+}
+
+function extractReasoningUserTurn(prompt: string) {
+  const match = prompt.match(/Understand this user turn and choose its first reasoning step:\s*([\s\S]*?)\n\nReturn \{ understanding, step \}\./i);
+  return (match?.[1] ?? extractUserRequest(prompt)).trim();
 }
 
 function getSchemaName(schema: unknown) {
@@ -251,6 +386,34 @@ function inferSummaryFile(context: unknown) {
     return (context as { summaryFile: string }).summaryFile;
   }
   return "AGENT_PROPOSAL.md";
+}
+
+function intentAlignmentFromContext(context: unknown) {
+  const record = asRecord(context);
+  const frame = asRecord(record?.intent_frame);
+  const taskSlice = asRecord(frame?.current_task_slice);
+  const contract = asRecord(frame?.intent_contract);
+  return {
+    schema_version: 1,
+    original_request_hash: typeof frame?.original_request_hash === "string" ? frame.original_request_hash : "missing_original_request_hash",
+    intent_contract_ref: typeof frame?.intent_contract_ref === "string" ? frame.intent_contract_ref : undefined,
+    intent_contract_revision: typeof contract?.revision === "number" ? contract.revision : undefined,
+    task_slice_id: typeof taskSlice?.task_slice_id === "string" ? taskSlice.task_slice_id : "missing_task_slice_id",
+    task_understanding: typeof taskSlice?.objective === "string" ? taskSlice.objective : "Complete the assigned role task.",
+    original_goal_contribution: typeof contract?.precise_rewrite === "string"
+      ? `This output contributes to the original goal: ${contract.precise_rewrite}`
+      : "This output contributes to the original scripted provider goal.",
+    possible_intent_conflicts: [],
+    assumptions_used: Array.isArray(contract?.assumptions) ? contract.assumptions.filter((item): item is string => typeof item === "string") : [],
+    evidence_refs: [
+      typeof frame?.original_request_ref === "string" ? frame.original_request_ref : "",
+      typeof frame?.intent_contract_ref === "string" ? frame.intent_contract_ref : ""
+    ].filter(Boolean)
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function extractJsonArrayAfterLabel(text: string, label: string): unknown[] {

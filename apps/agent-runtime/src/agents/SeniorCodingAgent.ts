@@ -798,8 +798,9 @@ export class SeniorCodingAgent {
     await this.sessionManager.setRunSummary(sessionId, runSummary);
     if (assistantMessage) {
       await this.sessionManager.addMessage(sessionId, {
-        role: "system",
-        content: assistantMessage
+        role: "assistant",
+        content: assistantMessage,
+        providerRequestRefs: [`senior_coding_agent:${sessionId}:provider_plan`]
       });
     }
   }

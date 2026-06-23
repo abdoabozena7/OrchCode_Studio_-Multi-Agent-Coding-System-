@@ -158,7 +158,8 @@ test("orchestrator creates a run, tasks, artifacts, executor invocation, and fin
     const result = await new CoreOrchestrator({
       workspacePath: workspace,
       maxContextFiles: 3,
-      maxContextChars: 2500
+      maxContextChars: 2500,
+      providerFactory: () => new ScriptedProvider()
     }).runAgenticTask("Explain src/index.ts and do not change files.");
 
     assert.equal(result.run.status, "succeeded");
@@ -189,7 +190,7 @@ test("provider-backed orchestrator executor is not reported as demo mock", async
 
     assert.equal(result.run.status, "succeeded");
     assert.equal(provider.structuredCalls > 0, true);
-    assert.ok(result.report.limitations.some((entry) => /provider-backed SeniorCodingAgent planner/i.test(entry)));
+    assert.ok(result.report.limitations.some((entry) => /SeniorCodingAgent path with a provider-backed planner/i.test(entry)));
     assert.equal(result.report.limitations.some((entry) => /ExecutorAgent uses mock provider mode unless/i.test(entry)), false);
     assert.equal(result.report.limitations.some((entry) => /legacy scan\/search orchestration remains deterministic/i.test(entry)), false);
     assert.ok((result.report.unresolved_risks ?? []).some((entry) => /provider-backed planner/i.test(entry)));
@@ -206,7 +207,7 @@ test("provider-backed orchestrator uses provider calls for read-only worker role
       workspacePath: workspace,
       maxContextFiles: 3,
       maxContextChars: 2500,
-      providerFactory: (role) => role === "ExecutorAgent" ? undefined as unknown as LlmProvider : provider
+      providerFactory: (role) => role === "ExecutorAgent" ? new ScriptedProvider() : provider
     }).runAgenticTask("Explain src/index.ts and do not change files.");
 
     assert.equal(result.run.status, "succeeded");
@@ -326,8 +327,18 @@ class FinalInspectProvider extends ScriptedProvider {
 class ProviderRoleOutputProvider implements LlmProvider {
   parsedAgentOutputCalls = 0;
 
-  async generateStructured<T>(_input: LlmRequest, schema: unknown): Promise<T> {
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
+    if (schemaName === "intent-contract") {
+      return readyIntentContractOutput(input) as T;
+    }
+    if (schemaName === "intent_review_result") {
+      return {
+        status: "aligned",
+        rationale: "ProviderRoleOutputProvider fixture verified the output against intent.",
+        findings: []
+      } as T;
+    }
     if (schemaName === "parsed-agent-output") {
       this.parsedAgentOutputCalls += 1;
       return {
@@ -337,7 +348,8 @@ class ProviderRoleOutputProvider implements LlmProvider {
         validation_results: [],
         artifacts: [],
         limitations: [],
-        next_recommendations: ["Continue through gated review and validation."]
+        next_recommendations: ["Continue through gated review and validation."],
+        intent_alignment: intentAlignmentFromContext(input.context)
       } as T;
     }
     return {} as T;
@@ -346,6 +358,62 @@ class ProviderRoleOutputProvider implements LlmProvider {
   async generateText(_input: LlmRequest): Promise<string> {
     return "Provider final inspect answer for src/index.ts. [src/index.ts:1](hivo-file:src%2Findex.ts:1)";
   }
+}
+
+function readyIntentContractOutput(input: LlmRequest) {
+  const context = asRecord(input.context);
+  const original = typeof context?.original_user_request === "string" ? context.original_user_request : input.userPrompt;
+  return {
+    original_user_request: original,
+    precise_rewrite: original,
+    assumptions: ["The orchestration fixture should preserve the original request."],
+    missing_questions: [],
+    tradeoffs: [{
+      name: "fixture_scope",
+      options: ["bounded orchestration fixture"],
+      preferred: "bounded orchestration fixture",
+      rationale: "Keep tests deterministic."
+    }],
+    priorities: {
+      speed: { score: 70, rationale: "Fixture runs should remain fast." },
+      quality: { score: 80, rationale: "Return schema-valid intent contracts." },
+      realism: { score: 60, rationale: "Exercise the provider boundary." },
+      fun: { score: 10, rationale: "Not relevant." },
+      security: { score: 80, rationale: "Keep safety gates active." },
+      cost: { score: 80, rationale: "Avoid external provider calls." }
+    },
+    definition_of_done: ["The orchestration run completes through intent-aware gates."],
+    non_goals: ["Do not bypass intent compilation."],
+    conflict_rules: ["Prefer the exact original request over inferred scope expansion."]
+  };
+}
+
+function intentAlignmentFromContext(context: unknown) {
+  const record = asRecord(context);
+  const frame = asRecord(record?.intent_frame);
+  const taskSlice = asRecord(frame?.current_task_slice);
+  const contract = asRecord(frame?.intent_contract);
+  return {
+    schema_version: 1,
+    original_request_hash: typeof frame?.original_request_hash === "string" ? frame.original_request_hash : "missing_original_request_hash",
+    intent_contract_ref: typeof frame?.intent_contract_ref === "string" ? frame.intent_contract_ref : undefined,
+    intent_contract_revision: typeof contract?.revision === "number" ? contract.revision : undefined,
+    task_slice_id: typeof taskSlice?.task_slice_id === "string" ? taskSlice.task_slice_id : "missing_task_slice_id",
+    task_understanding: typeof taskSlice?.objective === "string" ? taskSlice.objective : "Complete the read-only provider role.",
+    original_goal_contribution: typeof contract?.precise_rewrite === "string"
+      ? `This output contributes to the original goal: ${contract.precise_rewrite}`
+      : "This output contributes to the original orchestration fixture goal.",
+    possible_intent_conflicts: [],
+    assumptions_used: Array.isArray(contract?.assumptions) ? contract.assumptions.filter((item): item is string => typeof item === "string") : [],
+    evidence_refs: [
+      typeof frame?.original_request_ref === "string" ? frame.original_request_ref : "",
+      typeof frame?.intent_contract_ref === "string" ? frame.intent_contract_ref : ""
+    ].filter(Boolean)
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 async function createFixtureWorkspace(prefix: string) {

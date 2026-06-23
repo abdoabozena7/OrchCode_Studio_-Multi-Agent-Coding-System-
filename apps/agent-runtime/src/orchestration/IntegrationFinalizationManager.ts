@@ -138,6 +138,26 @@ export class IntegrationFinalizationManager {
       metadata_json: { integration_finalization_id: integrationFinalizationId }
     });
 
+    const semanticBlockers = await this.semanticConflictFinalizationBlockers(controlledApplyResult, integrationFinalizationId, eligibility);
+    if (semanticBlockers.length) {
+      result.status = "blocked";
+      result.blockers.push(...semanticBlockers);
+      result.completed_at = new Date().toISOString();
+      await this.assignFinalizationArtifactRefs(result);
+      await this.writeFinalizationArtifacts(result, controlledApplyResult);
+      await this.persistFinalizationResult(result);
+      await this.traceWriter.write({
+        run_id: result.run_id,
+        event_type: "integration_finalization_semantic_conflict_blocked",
+        lifecycle_stage: "blocked",
+        severity: "warning",
+        summary: "Integration finalization blocked by unresolved semantic conflicts.",
+        artifact_refs: [result.artifact_ref, result.report_summary_ref, ...semanticBlockers.flatMap((blocker) => blocker.refs)].filter((ref): ref is string => Boolean(ref)),
+        metadata_json: { integration_finalization_id: result.integration_finalization_id, blocker_count: semanticBlockers.length }
+      });
+      return result;
+    }
+
     result.status = "finalized";
     result.finalized_files = controlledApplyResult.applied_files.length ? controlledApplyResult.applied_files : controlledApplyResult.changed_files;
     await this.assignFinalizationArtifactRefs(result);
@@ -388,6 +408,76 @@ export class IntegrationFinalizationManager {
       });
     }
     return updates;
+  }
+
+  async semanticConflictFinalizationBlockers(
+    controlledApplyResult: ControlledIntegrationApplyResult,
+    integrationFinalizationId: string,
+    eligibility: FinalizationEligibility
+  ): Promise<IntegrationFinalizationBlocker[]> {
+    const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+    let rows: Array<{
+      decision_id: string;
+      batch_id?: string;
+      conflict: string;
+      decision: string;
+      reason: string;
+      severity: string;
+      status: string;
+      requires_user_approval: number;
+      source_refs_json?: string;
+      evidence_refs_json?: string;
+      artifact_ref?: string;
+      summary_ref?: string;
+    }> = [];
+    try {
+      rows = store.all(
+        `SELECT decision_id, batch_id, conflict, decision, reason, severity, status, requires_user_approval,
+                source_refs_json, evidence_refs_json, artifact_ref, summary_ref
+         FROM factory_semantic_conflict_decisions
+         WHERE run_id = ?
+           AND (
+             requires_user_approval != 0
+             OR status IN ('requires_user_approval', 'blocked')
+             OR (severity = 'blocking' AND status != 'resolved')
+           )
+         ORDER BY created_at ASC`,
+        controlledApplyResult.run_id
+      );
+    } catch {
+      rows = [];
+    } finally {
+      store.close();
+    }
+    return rows.map((row) => createIntegrationFinalizationBlocker({
+      integration_finalization_id: integrationFinalizationId,
+      run_id: controlledApplyResult.run_id,
+      controlled_apply_id: controlledApplyResult.controlled_apply_id,
+      integration_candidate_id: controlledApplyResult.integration_candidate_id,
+      blocker_type: "semantic_conflict_unresolved",
+      severity: "blocking",
+      reason: `Unresolved semantic conflict ${row.conflict}: ${row.reason}`,
+      refs: uniqueFinalizationRefs([
+        row.decision_id,
+        row.batch_id,
+        row.artifact_ref,
+        row.summary_ref,
+        ...jsonStringArray(row.source_refs_json),
+        ...jsonStringArray(row.evidence_refs_json)
+      ]),
+      metadata_json: {
+        semantic_conflict_decision_id: row.decision_id,
+        semantic_conflict_batch_id: row.batch_id,
+        semantic_conflict: row.conflict,
+        semantic_decision: row.decision,
+        semantic_status: row.status,
+        semantic_severity: row.severity,
+        requires_user_approval: Boolean(row.requires_user_approval),
+        proposed_node_id: eligibility.proposed_node_id,
+        task_id: eligibility.task_id,
+        team_id: eligibility.team_id
+      }
+    }));
   }
 
   async updateIntegrationMetadata(result: IntegrationFinalizationResult) {
@@ -680,6 +770,22 @@ function blockerFor(result: IntegrationFinalizationResult, blockerType: Integrat
     reason,
     refs
   });
+}
+
+function jsonStringArray(value: string | undefined) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function uniqueFinalizationRefs(values: Array<string | undefined>) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 function statusForBlockers(blockers: IntegrationFinalizationBlocker[], result: ControlledIntegrationApplyResult): IntegrationFinalizationStatus {

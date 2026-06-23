@@ -35,6 +35,10 @@ The user does not choose an agent count by default. A request such as "implement
 
 `300` is the maximum internal logical capacity. It is not the default and not a normal UX control. High counts are reserved for justified read-only exploration, review, validation, and whole-repo mapping. Write-capable workers are capped separately.
 
+## Runtime Visualization
+
+The desktop Swarm Dock renders the session-owned `swarmState` as a layered projection of real runtime records. The center is the session goal, first-ring nodes are role or runtime groups, second-ring nodes are real coordinator, worker, specialist, or aggregator agent instances, and outer nodes are work items or gates such as review, test, validation, conflict, and integration checks. Group, work-item, and gate nodes are visualization helpers only; they do not count toward `effectiveTotalLogicalAgents` and they do not accept scoped messages. A 300-agent run is therefore displayed across groups and work records instead of as 300 direct root children.
+
 ## StaffingPlan
 
 `SwarmStaffingPlanner` emits a structured `StaffingPlan` with:
@@ -83,9 +87,13 @@ Specialists do not edit files by default. A simple HTML text change does not cre
 - File-lock-aware: write work requests locks through `OrchestrationFileLockManager`.
 - Risk-aware: high and critical risk reduce executor concurrency.
 - Staffing-plan-aware: role counts, parallel limits, and executor limits are obeyed.
-- Backpressure-aware: failures and invalid structured outputs reduce executor concurrency and create retries or repair items.
+- Resource-aware: parallelism is adapted from the staffing plan, run scheduler config, local CPU availability, and scheduler health.
+- Backpressure-aware: failures, invalid structured outputs, and slow batches reduce parallelism or executor concurrency and create retries or repair items.
+- Aging-aware: repeatedly deferred ready work gains scheduling priority so lower-priority items are not starved by retry-heavy work.
 - Read/write separated: read-only work can fan out widely; write work stays narrow.
 - Explainable: scheduling decisions are written to `scheduler_trace.jsonl`.
+
+The adaptive scheduler is still a single-process worker pool. Logical agents are leased concurrently inside the TypeScript runtime when capacity allows, but they are not OS processes, threads, distributed workers, RabbitMQ consumers, or Kafka consumers. Distributed queues remain a future architecture option, not part of this runtime slice.
 
 ## Fan-Out And Fan-In
 
@@ -121,7 +129,7 @@ Write-capable agents are always a small subset of total logical agents. Dynamic 
 
 ## Current Limits
 
-The Phase 5 scheduler and stress tests use mock logical workers by default so scale tests do not perform expensive model calls. Logical agents are scheduling units; they do not map one-to-one to OS processes or external model sessions. Real provider-backed workers can be attached behind the same `SwarmWorker` interface in a later phase.
+The Phase 5 scheduler and stress tests use test-only scripted workers where needed so scale tests do not perform expensive model calls. Logical agents are scheduling units; they do not map one-to-one to OS processes or external model sessions. Real provider-backed workers can be attached behind the same `SwarmWorker` interface.
 
 ## Trial Lab
 

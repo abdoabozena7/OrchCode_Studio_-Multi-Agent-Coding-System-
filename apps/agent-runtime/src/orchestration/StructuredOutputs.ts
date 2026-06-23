@@ -331,7 +331,28 @@ function validateParsedAgentOutput(value: unknown): ValidationResult {
   requiredArray(object, "artifacts", errors);
   requiredArray(object, "limitations", errors);
   requiredArray(object, "next_recommendations", errors);
+  validateIntentAlignmentShape(object.intent_alignment, errors, "intent_alignment");
   return result(errors);
+}
+
+function validateIntentAlignmentShape(value: unknown, errors: string[], prefix: string) {
+  const object = asRecord(value, errors, prefix);
+  if (!object) return;
+  requiredString(object, "original_request_hash", errors, prefix);
+  requiredString(object, "task_understanding", errors, prefix);
+  requiredString(object, "original_goal_contribution", errors, prefix);
+  requiredArray(object, "possible_intent_conflicts", errors, prefix);
+  requiredArray(object, "assumptions_used", errors, prefix);
+  requiredArray(object, "evidence_refs", errors, prefix);
+  if ("intent_contract_ref" in object && typeof object.intent_contract_ref !== "string") {
+    errors.push(`${field(prefix, "intent_contract_ref")} must be a string`);
+  }
+  if ("intent_contract_revision" in object && typeof object.intent_contract_revision !== "number") {
+    errors.push(`${field(prefix, "intent_contract_revision")} must be a number`);
+  }
+  if ("task_slice_id" in object && typeof object.task_slice_id !== "string") {
+    errors.push(`${field(prefix, "task_slice_id")} must be a string`);
+  }
 }
 
 function repairValue(schema: MachineOutputSchemaName, raw: unknown): unknown {
@@ -411,7 +432,8 @@ function repairValue(schema: MachineOutputSchemaName, raw: unknown): unknown {
         validation_results: Array.isArray(object.validation_results) ? object.validation_results : [],
         artifacts: stringArray(object.artifacts),
         limitations: stringArray(object.limitations),
-        next_recommendations: stringArray(object.next_recommendations)
+        next_recommendations: stringArray(object.next_recommendations),
+        intent_alignment: object.intent_alignment as ParsedAgentOutput["intent_alignment"]
       } satisfies ParsedAgentOutput;
   }
 }

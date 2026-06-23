@@ -1,5 +1,7 @@
 import type {
   ArtifactHandoff,
+  AgentIntentAlignment,
+  AgentIntentInputFrame,
   CommandRequest,
   PatchProposal,
   PreviewRecommendation,
@@ -19,6 +21,7 @@ export type GenericWorkerContext = {
   projectMap: ProjectMap;
   tools: ToolRegistry;
   previousArtifacts: ArtifactHandoff[];
+  intentFrame?: AgentIntentInputFrame;
 };
 
 export class GenericWorkerAgent {
@@ -47,6 +50,11 @@ export class GenericWorkerAgent {
     ];
     const patch = maybeCreatePatch(spec, task, context);
     const commandRequest = maybeCreateCommand(spec, context);
+    const intentAlignment = context.intentFrame ? alignmentFromFrame(context.intentFrame, {
+      taskUnderstanding: `${role} handled ${spec.objective}`,
+      originalGoalContribution: `The worker output is scoped to ${spec.objective} and remains tied to the original user request through the provided intent frame.`,
+      evidenceRefs: [context.intentFrame.intent_contract_ref ?? "", ...context.previousArtifacts.map((artifact) => artifact.id)]
+    }) : undefined;
     const artifact: ArtifactHandoff = {
       id: `artifact_${randomUUID()}`,
       sessionId: context.sessionId,
@@ -57,6 +65,7 @@ export class GenericWorkerAgent {
       patchProposalIds: patch ? [patch.id] : [],
       commandRequestIds: commandRequest ? [commandRequest.id] : [],
       validationNotes: spec.acceptanceCriteria.map((criterion) => `Checked: ${criterion}`),
+      intentAlignment,
       createdAt: new Date().toISOString()
     };
     const output: WorkerOutput = {
@@ -69,6 +78,7 @@ export class GenericWorkerAgent {
       patchProposalIds: artifact.patchProposalIds,
       commandRequestIds: artifact.commandRequestIds,
       risks: [],
+      intentAlignment,
       selfCheck: {
         workOrderId: spec.id,
         passedCriteria: spec.acceptanceCriteria,
@@ -81,6 +91,27 @@ export class GenericWorkerAgent {
     };
     return { output, artifact, patch, commandRequest };
   }
+}
+
+function alignmentFromFrame(frame: AgentIntentInputFrame, input: {
+  taskUnderstanding: string;
+  originalGoalContribution: string;
+  evidenceRefs: string[];
+}): AgentIntentAlignment {
+  return {
+    schema_version: 1,
+    run_id: frame.run_id,
+    task_id: frame.current_task_slice.task_id,
+    original_request_hash: frame.original_request_hash,
+    intent_contract_ref: frame.intent_contract_ref,
+    intent_contract_revision: frame.intent_contract.revision,
+    task_slice_id: frame.current_task_slice.task_slice_id,
+    task_understanding: input.taskUnderstanding,
+    original_goal_contribution: input.originalGoalContribution,
+    possible_intent_conflicts: [],
+    assumptions_used: frame.intent_contract.assumptions,
+    evidence_refs: [...new Set(input.evidenceRefs.filter(Boolean))]
+  };
 }
 
 function maybeCreatePatch(spec: WorkerSpec, task: TaskNode, context: GenericWorkerContext) {

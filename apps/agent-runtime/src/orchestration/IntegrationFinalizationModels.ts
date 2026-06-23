@@ -33,6 +33,7 @@ export type IntegrationFinalizationBlocker = {
     | "locks_not_released"
     | "integration_candidate_missing"
     | "apply_approval_missing"
+    | "semantic_conflict_unresolved"
     | "rollback_failed"
     | "memory_update_failed"
     | "cancelled";

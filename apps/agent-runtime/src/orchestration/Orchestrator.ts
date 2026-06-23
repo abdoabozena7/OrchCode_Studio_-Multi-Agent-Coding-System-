@@ -34,7 +34,18 @@ import { FactoryMetadataStore, resolveFactoryMetadataDatabasePath } from "./Fact
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import { DurableLockManager } from "./DurableLockManager.js";
 import { IntegrationManager } from "./IntegrationManager.js";
+import { IntentLedgerService } from "./IntentLedgerService.js";
+import type { IntentReviewResult, IntentRewriteTarget } from "./IntentLedgerModels.js";
+import {
+  createAlignmentFromFrame,
+  IntentHandoffGate,
+  intentGateBlockedParsedOutput
+} from "./IntentHandoffGate.js";
+import { UserIntentCompiler, type UserIntentCompilationResult } from "./UserIntentCompiler.js";
+import { ProjectGoalSpecStore } from "./GoalSteward.js";
 import type { IntegrationResult as FactoryIntegrationResult } from "./IntegrationModels.js";
+import { SemanticConflictResolver } from "./SemanticConflictResolver.js";
+import { semanticBatchBlocks } from "./SemanticConflictResolverModels.js";
 import { MultiPlanFactory } from "./MultiPlanFactory.js";
 import type { MergedPlan, MultiPlanFactoryResult, MultiPlanSummary } from "./MultiPlanModels.js";
 import {
@@ -146,19 +157,26 @@ export class CoreOrchestrator {
     const run = await this.createRun(userRequest);
     await this.writeCheckpoint(run, [], "created", ["Plan-only run created."]);
     await this.transitionRun(run, "intake", "Plan-only intake started.", { mode: "plan_only" });
-    await this.transitionRun(run, "prompt_rewrite", "Prompt rewrite is not implemented in this step; using the request as provided.", { mode: "plan_only" });
-    await this.transitionRun(run, "clarification_check", "No clarification was required for plan-only orchestration.", { mode: "plan_only" });
+    const intentCompilation = await this.compileIntentContract(run);
+    await this.transitionRun(run, "prompt_rewrite", `Intent contract compiled with status ${intentCompilation.contract.status}.`, {
+      mode: "plan_only",
+      artifactRefs: [intentCompilation.contract.artifact_ref, intentCompilation.contract.summary_ref].filter((ref): ref is string => Boolean(ref))
+    });
+    if (!intentCompilation.ready) return this.blockBeforePlanning(run, intentCompilation, true);
+    const planningRequest = intentCompilation.contract.precise_rewrite;
+    await this.transitionRun(run, "clarification_check", "Ready intent contract is available for plan-only orchestration.", { mode: "plan_only" });
     await this.transitionRun(run, "repo_mapping", "Loading repository memory for planning.", { mode: "plan_only" });
     const memory = await this.loadOrRebuildIndex(run);
     await this.writeCheckpoint(run, [], "indexed", ["Repository memory loaded for plan-only mode."]);
     await this.transitionRun(run, "complexity_estimation", "Estimated complexity from repository memory and command inventory.", { mode: "plan_only" });
     await this.transitionRun(run, "planning", "Creating deterministic task graph.");
-    const multiPlan = await this.createMultiPlanIfNeeded(run, memory.repoIndex, memory.commandInventory, true);
-    const manager = await this.createTaskGraph(run, memory.repoIndex, memory.commandInventory, multiPlan.merged_plan);
+    const multiPlan = await this.createMultiPlanIfNeeded(run, memory.repoIndex, memory.commandInventory, true, planningRequest);
+    const manager = await this.createTaskGraph(run, memory.repoIndex, memory.commandInventory, multiPlan.merged_plan, planningRequest);
     run.root_task_ids = manager.listTasks().filter((task) => !task.parent_id).map((task) => task.id);
     run.summary = `Planned ${manager.listTasks().length} task(s) for: ${userRequest}`;
     await this.artifactStore.saveRun(assertValid("Run", run, validateRun));
     const teamHierarchy = await this.createAgentTeamsIfNeeded(run, multiPlan, manager.listTasks(), true);
+    await this.recordInitialIntentReview(run, manager.listTasks(), multiPlan.summary, teamHierarchy, true);
     await this.transitionRun(run, "task_graph_ready", "Plan-only task graph is ready.", { mode: "plan_only" });
     const integration = await this.integrationManager().integrate({
       run,
@@ -200,18 +218,24 @@ export class CoreOrchestrator {
     try {
       await this.writeCheckpoint(run, [], "created", ["Run created."]);
       await this.transitionRun(run, "intake", "Run intake started.");
-      await this.transitionRun(run, "prompt_rewrite", "Prompt rewrite is not implemented in this step; using the request as provided.");
-      await this.transitionRun(run, "clarification_check", "No clarification was required for this orchestration run.");
+      const intentCompilation = await this.compileIntentContract(run);
+      await this.transitionRun(run, "prompt_rewrite", `Intent contract compiled with status ${intentCompilation.contract.status}.`, {
+        artifactRefs: [intentCompilation.contract.artifact_ref, intentCompilation.contract.summary_ref].filter((ref): ref is string => Boolean(ref))
+      });
+      if (!intentCompilation.ready) return this.blockBeforePlanning(run, intentCompilation, false);
+      const planningRequest = intentCompilation.contract.precise_rewrite;
+      await this.transitionRun(run, "clarification_check", "Ready intent contract is available for orchestration.");
       await this.transitionRun(run, "repo_mapping", "Loading or rebuilding repository index.");
       const memory = await this.loadOrRebuildIndex(run);
       await this.writeCheckpoint(run, [], "indexed", ["Repository memory loaded."]);
       await this.transitionRun(run, "complexity_estimation", "Estimated run complexity from repository memory and command inventory.");
       await this.transitionRun(run, "planning", "Creating orchestration task graph.");
-      const multiPlan = await this.createMultiPlanIfNeeded(run, memory.repoIndex, memory.commandInventory, false);
-      manager = await this.createTaskGraph(run, memory.repoIndex, memory.commandInventory, multiPlan.merged_plan);
+      const multiPlan = await this.createMultiPlanIfNeeded(run, memory.repoIndex, memory.commandInventory, false, planningRequest);
+      manager = await this.createTaskGraph(run, memory.repoIndex, memory.commandInventory, multiPlan.merged_plan, planningRequest);
       run.root_task_ids = manager.listTasks().filter((task) => !task.parent_id).map((task) => task.id);
       await this.artifactStore.saveRun(assertValid("Run", run, validateRun));
       const teamHierarchy = await this.createAgentTeamsIfNeeded(run, multiPlan, manager.listTasks(), false);
+      await this.recordInitialIntentReview(run, manager.listTasks(), multiPlan.summary, teamHierarchy, false);
       await this.transitionRun(run, "task_graph_ready", "Task graph created and persisted.");
       await this.writeCheckpoint(run, manager.listTasks(), "planned", ["Task graph created."]);
 
@@ -594,10 +618,186 @@ export class CoreOrchestrator {
       },
       artifacts_path: paths.runDir
     };
+    const intent = await this.intentLedger().saveOriginalRequest({
+      runId,
+      runKind: "core",
+      artifactsPath: paths.runDir,
+      originalRequest: userRequest,
+      metadata: { source_component: "CoreOrchestrator" }
+    });
+    run.original_request_ref = intent.artifact_ref;
+    run.intent_ledger_ref = path.join(paths.runDir, "intent", "intent_ledger.json");
     await this.artifactStore.saveRun(assertValid("Run", run, validateRun));
     await this.recordRunTransition(run.id, undefined, "created", "Run created.", "CoreOrchestrator");
     await this.artifactStore.appendEvent(this.event(run.id, "run.created", `Run created for request: ${userRequest}`));
     return run;
+  }
+
+  private intentLedger(sourceComponent = "CoreOrchestrator") {
+    return new IntentLedgerService({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      sourceComponent
+    });
+  }
+
+  private async compileIntentContract(run: Run): Promise<UserIntentCompilationResult> {
+    const result = await new UserIntentCompiler().compile({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      runId: run.id,
+      runKind: "core",
+      artifactsPath: run.artifacts_path,
+      originalRequest: run.user_request,
+      provider: this.providerFactory?.("UserIntentCompiler"),
+      parentContext: {
+        parent_orchestrator: "CoreOrchestrator",
+        run_id: run.id,
+        memory_snapshot_ref: run.memory_snapshot_ref,
+        original_request_ref: run.original_request_ref,
+        intent_ledger_ref: run.intent_ledger_ref
+      },
+      sourceComponent: "CoreOrchestrator"
+    });
+    run.intent_contract_ref = result.contract.artifact_ref;
+    run.intent_contract_status = result.contract.status;
+    await this.artifactStore.saveRun(assertValid("Run", run, validateRun));
+    await this.artifactStore.appendEvent(this.event(run.id, "intent_contract.compiled", `Intent contract compiled with status ${result.contract.status}.`, {
+      intent_contract_ref: result.contract.artifact_ref,
+      intent_contract_status: result.contract.status,
+      blocking_questions: result.blockingQuestions
+    }));
+    return result;
+  }
+
+  private async blockBeforePlanning(
+    run: Run,
+    intentCompilation: UserIntentCompilationResult,
+    planOnly: boolean
+  ): Promise<AgenticRunResult> {
+    await this.transitionRun(run, "clarification_check", "Intent contract gate checked before planning.", { mode: planOnly ? "plan_only" : "normal" });
+    await this.transitionRun(run, "blocked", `Planning blocked by intent contract status ${intentCompilation.contract.status}.`, {
+      mode: planOnly ? "plan_only" : "normal",
+      artifactRefs: [intentCompilation.contract.artifact_ref, intentCompilation.contract.summary_ref].filter((ref): ref is string => Boolean(ref))
+    });
+    await this.writeCheckpoint(run, [], "intent_contract_blocked", [
+      `Intent contract status: ${intentCompilation.contract.status}.`,
+      ...intentCompilation.blockingQuestions.map((question) => `Blocking question: ${question}`)
+    ]);
+    const report = await this.createFinalReport(run, [], [], [
+      `Planning did not start because intent_contract.json status is ${intentCompilation.contract.status}.`,
+      ...intentCompilation.blockingQuestions.map((question) => `Blocking missing question: ${question}`),
+      ...intentCompilation.errors
+    ]);
+    await this.writeRunMetrics(run, [], report);
+    return { run, tasks: [], report };
+  }
+
+  private async recordInitialIntentReview(
+    run: Run,
+    tasks: Task[],
+    multiPlanSummary: MultiPlanSummary | undefined,
+    teamHierarchy: AgentTeamHierarchy | undefined,
+    planOnly: boolean
+  ) {
+    await this.reviewIntentReportOnly(run, "initial", {
+      mode: planOnly ? "plan_only" : "normal",
+      user_request: run.user_request,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      root_task_ids: run.root_task_ids,
+      task_graph: tasks.map((task) => ({
+        task_id: task.id,
+        title: task.title,
+        objective: task.objective,
+        role_required: task.role_required,
+        dependencies: task.dependencies,
+        relevant_files: task.relevant_files,
+        allowed_files_to_edit: task.allowed_files_to_edit,
+        forbidden_files: task.forbidden_files,
+        validation_commands: task.validation_commands
+      })),
+      multi_plan_summary: multiPlanSummary,
+      team_hierarchy: teamHierarchy ? {
+        root_team_id: teamHierarchy.root_team_id,
+        team_count: teamHierarchy.teams.length,
+        max_depth: teamHierarchy.max_depth,
+        teams: teamHierarchy.teams.map((team) => ({
+          team_id: team.team_id,
+          team_type: team.team_type,
+          domain: team.domain,
+          objective: team.objective,
+          status: team.status
+        }))
+      } : undefined
+    }, [
+      run.original_request_ref,
+      run.intent_contract_ref,
+      run.intent_ledger_ref,
+      multiPlanSummary?.merged_plan_ref,
+      teamHierarchy?.artifact_ref
+    ]);
+  }
+
+  private async reviewIntentReportOnly(
+    run: Run,
+    stage: "initial" | "final",
+    candidate: unknown,
+    reviewedArtifactRefs: Array<string | undefined>,
+    target: IntentRewriteTarget = stage === "initial" ? "plan" : "final_report"
+  ): Promise<IntentReviewResult | undefined> {
+    try {
+      const parentContext = await this.intentParentContext(run);
+      return await this.intentLedger().reviewIntent({
+        runId: run.id,
+        runKind: "core",
+        artifactsPath: run.artifacts_path,
+        stage,
+        target,
+        reviewedArtifactRefs: uniqueStrings(reviewedArtifactRefs.filter((ref): ref is string => Boolean(ref))),
+        parentContextRefs: uniqueStrings([
+          run.memory_snapshot_ref,
+          run.intent_ledger_ref ?? "",
+          parentContext.project_goal_spec_ref ?? ""
+        ]),
+        parentContext,
+        candidate,
+        provider: this.providerFactory?.("IntentReviewer")
+      });
+    } catch (error) {
+      await this.artifactStore.appendEvent(this.event(run.id, "review.completed", "Intent reviewer did not complete; run continues in report-only mode.", {
+        stage,
+        review_type: "intent",
+        status: "not_recorded",
+        error: error instanceof Error ? error.message : String(error)
+      }));
+      return undefined;
+    }
+  }
+
+  private async intentParentContext(run: Run) {
+    const activeGoalSpec = await new ProjectGoalSpecStore({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir
+    }).loadActiveProjectGoalSpec().catch(() => undefined);
+    return {
+      parent_orchestrator: "CoreOrchestrator",
+      run_id: run.id,
+      run_status: run.status,
+      memory_snapshot_ref: run.memory_snapshot_ref,
+      original_request_ref: run.original_request_ref,
+      intent_ledger_ref: run.intent_ledger_ref,
+      project_goal_spec_ref: activeGoalSpec?.artifact_ref,
+      project_goal_spec: activeGoalSpec ? {
+        spec_id: activeGoalSpec.spec_id,
+        title: activeGoalSpec.title,
+        primary_goal: activeGoalSpec.primary_goal,
+        non_goals: activeGoalSpec.non_goals,
+        constraints: activeGoalSpec.constraints,
+        status: activeGoalSpec.status,
+        version: activeGoalSpec.version
+      } : undefined
+    };
   }
 
   private async loadOrRebuildIndex(run: Run) {
@@ -627,12 +827,13 @@ export class CoreOrchestrator {
     run: Run,
     repoIndex: RepoIndex,
     commandInventory: CommandInventory,
-    planOnly: boolean
+    planOnly: boolean,
+    planningRequest = run.user_request
   ): Promise<MultiPlanFactoryResult> {
-    const relevantFiles = chooseHighSignalFiles(run.user_request, repoIndex);
+    const relevantFiles = chooseHighSignalFiles(planningRequest, repoIndex);
     const staffingPlan = new SwarmStaffingPlanner().createPlan({
       swarmRunId: `planning_${run.id}`,
-      userGoal: run.user_request,
+      userGoal: planningRequest,
       mode: this.config.execution_mode === "exhaustive" ? "exhaustive" : this.config.execution_mode === "fast" ? "fast" : "deep",
       repoIndex,
       commandInventory,
@@ -641,7 +842,7 @@ export class CoreOrchestrator {
     return new MultiPlanFactory(this.workspacePath, this.memoryDir).create({
       run,
       rawUserRequest: run.user_request,
-      taskObjective: run.user_request,
+      taskObjective: planningRequest,
       repoIndex,
       commandInventory,
       staffingPlan,
@@ -650,7 +851,7 @@ export class CoreOrchestrator {
     });
   }
 
-  private async createTaskGraph(run: Run, repoIndex: RepoIndex, commandInventory: CommandInventory, mergedPlan?: MergedPlan) {
+  private async createTaskGraph(run: Run, repoIndex: RepoIndex, commandInventory: CommandInventory, mergedPlan?: MergedPlan, planningRequest = run.user_request) {
     const manager = new TaskGraphManager(run.id, this.workspacePath, this.artifactStore, this.memoryDir);
     const validationCommands = [
       ...commandInventory.byKind.test.slice(0, 1),
@@ -666,12 +867,12 @@ export class CoreOrchestrator {
       ".git/",
       ".agent_memory/"
     ];
-    const highSignalFiles = chooseHighSignalFiles(run.user_request, repoIndex);
+    const highSignalFiles = chooseHighSignalFiles(planningRequest, repoIndex);
     const scout = manager.createTask({
       id: `task_scout_${shortId()}`,
       run_id: run.id,
       title: "Scout repository evidence",
-      objective: `Find relevant files, symbols, commands, and patterns for: ${run.user_request}`,
+      objective: `Find relevant files, symbols, commands, and patterns for: ${planningRequest}`,
       role_required: "ScoutAgent",
       dependencies: [],
       relevant_files: highSignalFiles,
@@ -689,7 +890,7 @@ export class CoreOrchestrator {
       run_id: run.id,
       parent_id: scout.id,
       title: "Create narrow execution plan",
-      objective: `Break the request into explicit, scoped work for: ${run.user_request}`,
+      objective: `Break the request into explicit, scoped work for: ${planningRequest}`,
       role_required: "PlannerAgent",
       dependencies: [scout.id],
       relevant_files: highSignalFiles,
@@ -702,7 +903,7 @@ export class CoreOrchestrator {
       validation_commands: validationCommands,
       max_attempts: this.maxTaskAttempts
     });
-    const executorObjectives = splitExecutorObjectives(run.user_request);
+    const executorObjectives = splitExecutorObjectives(planningRequest);
     const executorTasks = executorObjectives.map((objective, index) => manager.createTask({
       id: `task_executor_${index + 1}_${shortId()}`,
       run_id: run.id,
@@ -726,7 +927,7 @@ export class CoreOrchestrator {
       run_id: run.id,
       parent_id: planner.id,
       title: "Produce final run report",
-      objective: `Summarize Phase 4 orchestration artifacts for: ${run.user_request}`,
+      objective: `Summarize Phase 4 orchestration artifacts for: ${planningRequest}`,
       role_required: "ReporterAgent",
       dependencies: executorTasks.map((task) => task.id),
       relevant_files: [],
@@ -775,6 +976,7 @@ export class CoreOrchestrator {
       contextPackRef: packPath,
       sourceComponent: "CoreOrchestrator"
     });
+    const intentFrame = pack.intent_frame;
     const promptResult = renderRolePrompt(rolePromptInput);
     if (!promptResult.ok) {
       await this.artifactStore.recordPromptRenderFailure(promptResult.error, {
@@ -834,7 +1036,12 @@ export class CoreOrchestrator {
           .map((finding) => finding.message),
         next_recommendations: promptQuality.suggested_remediation.length
           ? promptQuality.suggested_remediation
-          : ["Inspect the prompt quality artifact before retrying invocation."]
+          : ["Inspect the prompt quality artifact before retrying invocation."],
+        intent_alignment: intentFrame ? createAlignmentFromFrame(intentFrame, {
+          taskUnderstanding: `Prompt quality gate evaluated ${task.title}.`,
+          originalGoalContribution: "The prompt was blocked before worker execution to preserve the canonical user intent and safety constraints.",
+          evidenceRefs: [promptMetadata.artifact_ref, promptQualityRef]
+        }) : undefined
       };
     }
     let activePromptMetadata = promptMetadata;
@@ -906,7 +1113,12 @@ export class CoreOrchestrator {
         validation_results: [],
         artifacts: [invocation.raw_output_ref],
         limitations: [invocation.error],
-        next_recommendations: ["Inspect the failed invocation artifact."]
+        next_recommendations: ["Inspect the failed invocation artifact."],
+        intent_alignment: intentFrame ? createAlignmentFromFrame(intentFrame, {
+          taskUnderstanding: `Invocation failed before ${task.role_required} could complete ${task.title}.`,
+          originalGoalContribution: "The failed output is recorded only as a blocked/failed artifact and does not advance the original goal.",
+          evidenceRefs: [invocation.raw_output_ref]
+        }) : undefined
       };
     }
   }
@@ -943,8 +1155,9 @@ export class CoreOrchestrator {
       systemPrompt: [
         `You are ${task.role_required}, a read-only worker inside Hivo Studio's CoreOrchestrator.`,
         "Return only strict JSON matching this TypeScript shape:",
-        "{ summary: string, status: 'succeeded' | 'failed' | 'blocked', files_changed: string[], validation_results: { command: string, status: 'passed' | 'failed' | 'blocked' | 'skipped' | 'timed_out' | 'not_run', summary?: string }[], artifacts: string[], limitations: string[], next_recommendations: string[] }",
+        "{ summary: string, status: 'succeeded' | 'failed' | 'blocked', files_changed: string[], validation_results: { command: string, status: 'passed' | 'failed' | 'blocked' | 'skipped' | 'timed_out' | 'not_run', summary?: string }[], artifacts: string[], limitations: string[], next_recommendations: string[], intent_alignment: { schema_version: 1, original_request_hash: string, intent_contract_ref?: string, intent_contract_revision?: number, task_slice_id: string, task_understanding: string, original_goal_contribution: string, possible_intent_conflicts: string[], assumptions_used: string[], evidence_refs: string[] } }",
         "You may inspect and reason from the provided context only.",
+        "You must use intent_frame.original_request_hash, intent_frame.intent_contract_ref, and intent_frame.current_task_slice.task_slice_id exactly in intent_alignment.",
         "Do not claim files were changed. Do not claim validation passed unless the context proves a command actually ran.",
         "If evidence is insufficient, set status to blocked or include the uncertainty in limitations."
       ].join("\n"),
@@ -959,7 +1172,10 @@ export class CoreOrchestrator {
         repo_index_refs: pack.repo_index_refs,
         validation_requirements: pack.validation_requirements,
         warnings: pack.warnings,
-        context_pack_ref: invocation.context_pack_ref
+        context_pack_ref: invocation.context_pack_ref,
+        original_user_request: pack.intent_frame?.original_user_request,
+        intent_contract: pack.intent_frame?.intent_contract,
+        intent_frame: pack.intent_frame
       }
     }, { name: "parsed-agent-output" });
     const output = normalizeProviderReadOnlyOutput(generated);
@@ -989,7 +1205,12 @@ export class CoreOrchestrator {
       })),
       artifacts: [],
       limitations: pack.warnings,
-      next_recommendations: deterministicRecommendations(task.role_required, pack)
+      next_recommendations: deterministicRecommendations(task.role_required, pack),
+      intent_alignment: pack.intent_frame ? createAlignmentFromFrame(pack.intent_frame, {
+        taskUnderstanding: `${task.role_required} deterministic output for ${task.title}: ${task.objective}`,
+        originalGoalContribution: "This output advances the current task slice while preserving the compiled intent contract and original request.",
+        evidenceRefs: [invocation.context_pack_ref, pack.intent_frame.intent_contract_ref ?? ""]
+      }) : undefined
     };
     invocation.raw_output_ref = await this.artifactStore.saveRawOutput(run.id, invocation.id, {
       role: task.role_required,
@@ -1009,6 +1230,32 @@ export class CoreOrchestrator {
     fingerprintTracker: PatchFingerprintTracker;
   }): Promise<ParsedAgentOutput> {
     const output = await this.validateParsedAgentOutput(input.run, input.task, input.output);
+    const intentGateService = new IntentHandoffGate({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      provider: this.providerFactory?.("IntentReviewer") ?? this.providerFactory?.(input.task.role_required),
+      sourceComponent: "CoreOrchestrator"
+    });
+    const intentFrame = await intentGateService.coreFrame(input.run, input.task);
+    const intentGate = await intentGateService.evaluate({
+      runId: input.run.id,
+      runKind: "core",
+      artifactsPath: input.run.artifacts_path,
+      layer: "core",
+      taskId: input.task.id,
+      frame: intentFrame,
+      alignment: output.intent_alignment,
+      candidate: output,
+      reviewedArtifactRefs: output.artifacts,
+      target: "output"
+    });
+    output.intent_handoff_gate_ref = intentGate.artifact_ref;
+    output.intent_handoff_gate_status = intentGate.status;
+    if (!intentGate.passed) {
+      return intentGateBlockedParsedOutput(output, intentGate);
+    }
+    const semanticGate = await this.applySemanticConflictGate(input.run, input.task, output);
+    if (semanticGate) return semanticGate;
     await this.recordRoleSpecificStructuredOutput(input.run, input.task, output);
     if (input.task.role_required !== "ExecutorAgent" && input.task.role_required !== "IntegratorAgent") {
       return output;
@@ -1117,6 +1364,49 @@ export class CoreOrchestrator {
         });
       }
     }
+    return output;
+  }
+
+  private async applySemanticConflictGate(run: Run, task: Task, output: ParsedAgentOutput): Promise<ParsedAgentOutput | undefined> {
+    const possibleConflicts = output.intent_alignment?.possible_intent_conflicts ?? [];
+    if (!possibleConflicts.length || this.config.enable_goal_steward === false) return undefined;
+    const activeSpec = await new ProjectGoalSpecStore({ workspacePath: this.workspacePath, memoryDir: this.memoryDir })
+      .loadActiveProjectGoalSpec()
+      .catch(() => undefined);
+    const batch = await new SemanticConflictResolver({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      artifactStore: this.artifactStore,
+      traceWriter: new FactoryTraceWriter({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, sourceComponent: "CoreOrchestrator.SemanticConflictGate" }),
+      provider: this.providerFactory?.("SemanticConflictResolver") ?? this.providerFactory?.("GoalSteward") ?? this.providerFactory?.("IntentReviewer") ?? this.providerFactory?.(task.role_required),
+      mode: this.config.goal_steward_mode ?? "strict"
+    }).resolve({
+      runId: run.id,
+      phase: "review",
+      rootIntent: run.user_request,
+      intentContractRef: run.intent_contract_ref,
+      projectGoalSpec: activeSpec,
+      sources: [{
+        source_id: task.id,
+        source_role: task.role_required,
+        summary: output.summary,
+        refs: uniqueStrings([task.id, ...output.artifacts]),
+        possible_conflicts: possibleConflicts,
+        metadata_json: {
+          task_title: task.title,
+          task_objective: task.objective,
+          files_changed: output.files_changed,
+          intent_handoff_gate_ref: output.intent_handoff_gate_ref
+        }
+      }],
+      metadata_json: { source_component: "CoreOrchestrator.applySemanticConflictGate" }
+    });
+    output.artifacts.push(...[batch.artifact_ref, batch.summary_ref].filter((ref): ref is string => Boolean(ref)));
+    if (!semanticBatchBlocks(batch)) return undefined;
+    output.status = "blocked";
+    output.limitations.push(`Semantic conflict resolution blocked ${task.id}: ${batch.status}.`);
+    output.limitations.push(...batch.decisions.map((decision) => `${decision.conflict}: ${decision.reason}`));
+    output.next_recommendations.push("Resolve the semantic conflict or update the intent contract before patch review and integration.");
     return output;
   }
 
@@ -1278,6 +1568,7 @@ export class CoreOrchestrator {
       traceWriter: new FactoryTraceWriter({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, sourceComponent: "IntegrationManager" }),
       lockManager,
       applyMode: "prepare_only",
+      providerFactory: this.providerFactory,
       config: this.config
     });
   }
@@ -1701,6 +1992,52 @@ export class CoreOrchestrator {
   ): Promise<FinalRunReport> {
     const promptWriterSummary = await this.promptWriterReportSummary(tasks);
     const lockSummary = await this.lockReportSummary(run, tasks);
+    const finalIntentReview = await this.reviewIntentReportOnly(run, "final", {
+      user_request: run.user_request,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      status: run.status,
+      task_results: tasks.map((task) => ({
+        task_id: task.id,
+        title: task.title,
+        objective: task.objective,
+        status: task.status,
+        role_required: task.role_required,
+        artifacts: task.artifacts
+      })),
+      outputs: outputs.map((output) => ({
+        summary: output.summary,
+        files_changed: output.files_changed,
+        validation_results: output.validation_results,
+        limitations: output.limitations,
+        next_recommendations: output.next_recommendations
+      })),
+      extra_limitations: extraLimitations,
+      multi_plan_summary: multiPlanSummary,
+      integration: integration ? {
+        status: integration.status,
+        applied_count: integration.applied_candidates.length,
+        rejected_count: integration.rejected_candidates.length,
+        blocked_count: integration.blocked_candidates.length,
+        conflicts_count: integration.conflicts.length,
+        validation_status: integration.validation_status,
+        artifact_ref: integration.artifact_ref
+      } : undefined,
+      team_hierarchy: teamHierarchy ? {
+        root_team_id: teamHierarchy.root_team_id,
+        team_count: teamHierarchy.teams.length,
+        max_depth: teamHierarchy.max_depth,
+        blocked_teams: teamHierarchy.teams.filter((team) => team.status === "blocked").map((team) => team.team_id)
+      } : undefined
+    }, [
+      run.original_request_ref,
+      run.intent_contract_ref,
+      run.intent_ledger_ref,
+      multiPlanSummary?.merged_plan_ref,
+      integration?.artifact_ref,
+      teamHierarchy?.artifact_ref,
+      ...tasks.flatMap((task) => task.artifacts)
+    ]);
     const report: FinalRunReport = {
       schema_version: ORCHESTRATION_SCHEMA_VERSION,
       run_id: run.id,
@@ -1792,6 +2129,15 @@ export class CoreOrchestrator {
       budget_warnings: teamHierarchy?.warnings,
       hierarchy_ref: teamHierarchy?.artifact_ref
     };
+    report.intent_review_used = Boolean(finalIntentReview);
+    report.intent_alignment_status = finalIntentReview?.status;
+    report.intent_drift_count = countIntentDriftFindings(finalIntentReview);
+    report.original_request_ref = run.original_request_ref;
+    report.intent_ledger_ref = run.intent_ledger_ref;
+    report.intent_contract_ref = run.intent_contract_ref;
+    report.intent_contract_status = run.intent_contract_status;
+    report.intent_review_ref = finalIntentReview?.artifact_ref;
+    report.intent_rewrite_suggestion_ref = finalIntentReview?.rewrite_suggestion_ref;
     const teamContextSummary = await this.teamContextReportSummary(run.id);
     report.team_context_used = teamContextSummary.team_context_used;
     report.team_context_scope_count = teamContextSummary.team_context_scope_count;
@@ -1954,12 +2300,60 @@ export class CoreOrchestrator {
     report.memory_entries_created_count = integrationFinalizationSummary.memory_entries_created_count;
     report.lessons_created_count = integrationFinalizationSummary.lessons_created_count;
     report.finalization_summary_ref = integrationFinalizationSummary.finalization_summary_ref;
+    const goalStewardSummary = await this.goalStewardReportSummary(run.id);
+    report.goal_steward_used = goalStewardSummary.goal_steward_used;
+    report.goal_alignment_status = goalStewardSummary.goal_alignment_status;
+    report.goal_conflict_count = goalStewardSummary.goal_conflict_count;
+    report.project_goal_spec_ref = goalStewardSummary.project_goal_spec_ref;
+    report.goal_steward_review_ref = goalStewardSummary.goal_steward_review_ref;
     assertValid("FinalRunReport", report, validateFinalRunReport);
     const reportPath = await this.artifactStore.saveFinalReport(report);
     await this.artifactStore.appendEvent(this.event(run.id, "run.reported", `Final report written: ${reportPath}`, {
       report: reportPath
     }));
     return report;
+  }
+
+  private async goalStewardReportSummary(runId: string) {
+    const empty = {
+      goal_steward_used: false,
+      goal_alignment_status: undefined as string | undefined,
+      goal_conflict_count: 0,
+      project_goal_spec_ref: undefined as string | undefined,
+      goal_steward_review_ref: undefined as string | undefined
+    };
+    try {
+      if (!existsSync(await resolveFactoryMetadataDatabasePath(this.workspacePath, this.memoryDir))) return empty;
+      const store = await FactoryMetadataStore.open({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, readOnly: true });
+      try {
+        const review = store.get<{
+          status?: string;
+          spec_ref?: string;
+          artifact_ref?: string;
+          review_id?: string;
+        }>(
+          "SELECT review_id, status, spec_ref, artifact_ref FROM factory_goal_steward_reviews WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+          runId
+        );
+        if (!review?.review_id) return empty;
+        const findingCount = store.get<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM factory_goal_steward_findings WHERE run_id = ? AND review_id = ? AND severity = 'blocking'",
+          runId,
+          review.review_id
+        )?.count ?? 0;
+        return {
+          goal_steward_used: true,
+          goal_alignment_status: review.status,
+          goal_conflict_count: findingCount,
+          project_goal_spec_ref: review.spec_ref,
+          goal_steward_review_ref: review.artifact_ref
+        };
+      } finally {
+        store.close();
+      }
+    } catch {
+      return empty;
+    }
   }
 
   private async teamIdForTask(runId: string, taskId: string) {
@@ -3139,6 +3533,7 @@ function executorProviderTruthLimitation(outputs: ParsedAgentOutput[]) {
 function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: ContextPack, rawOutputRef: string): ParsedAgentOutput {
   const patchFiles = uniqueStrings(session.patchProposals.flatMap((proposal) => proposal.filesChanged.map((file) => file.path)));
   const outsideScope = patchFiles.filter((file) => task.allowed_files_to_edit.length > 0 && !task.allowed_files_to_edit.includes(file));
+  const intentFrame = pack.intent_frame;
   return {
     summary: session.runSummary?.summary ?? session.reasoningSummaries.at(-1) ?? `SeniorCodingAgent finished ${task.id}.`,
     status: session.status === "failed" || outsideScope.length ? "failed" : "succeeded",
@@ -3163,7 +3558,13 @@ function summarizeSeniorSession(session: AgentRuntimeSession, task: Task, pack: 
     next_recommendations: [
       session.nextAction?.message ?? "Review executor output before applying any patch.",
       "Inspect Phase 4 review, validation, and patch safety artifacts before applying changes."
-    ]
+    ],
+    intent_alignment: intentFrame ? createAlignmentFromFrame(intentFrame, {
+      taskUnderstanding: `ExecutorAgent handled ${task.title}: ${task.objective}`,
+      originalGoalContribution: "Executor output is a gated implementation attempt for the current task slice under the compiled intent contract.",
+      possibleIntentConflicts: outsideScope.map((file) => `Proposed file outside allowed scope: ${file}`),
+      evidenceRefs: [rawOutputRef, intentFrame.intent_contract_ref ?? ""]
+    }) : undefined
   };
 }
 
@@ -3193,7 +3594,8 @@ function normalizeProviderReadOnlyOutput(value: unknown): ParsedAgentOutput {
     validation_results: Array.isArray(value.validation_results) ? value.validation_results as ParsedAgentOutput["validation_results"] : [],
     artifacts: Array.isArray(value.artifacts) ? value.artifacts.filter((entry): entry is string => typeof entry === "string") : [],
     limitations: Array.isArray(value.limitations) ? value.limitations.filter((entry): entry is string => typeof entry === "string") : [],
-    next_recommendations: Array.isArray(value.next_recommendations) ? value.next_recommendations.filter((entry): entry is string => typeof entry === "string") : []
+    next_recommendations: Array.isArray(value.next_recommendations) ? value.next_recommendations.filter((entry): entry is string => typeof entry === "string") : [],
+    intent_alignment: isRecord(value.intent_alignment) ? value.intent_alignment as ParsedAgentOutput["intent_alignment"] : undefined
   };
 }
 
@@ -3223,6 +3625,12 @@ function shortId() {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function countIntentDriftFindings(review: IntentReviewResult | undefined) {
+  return review?.findings.filter((finding) =>
+    finding.finding_type === "possible_drift" || finding.finding_type === "drift_detected"
+  ).length ?? 0;
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { providerJsonSchema, userPromptWithContext, type EmbeddingRequest, type EmbeddingResponse, type LlmProvider, type LlmRequest } from "./LlmProvider.js";
-import { validateStructuredOutput } from "../schemas/validators.js";
+import { normalizeStructuredOutputCandidate, validateStructuredOutput } from "../schemas/validators.js";
 
 type OllamaChatResponse = {
   message?: {
@@ -28,12 +28,13 @@ export class OllamaProvider implements LlmProvider {
       if (!candidate) continue;
       try {
         const parsed = JSON.parse(candidate) as T;
-        const validation = validateStructuredOutput(parsed, _schema);
+        const normalized = normalizeStructuredOutputCandidate(parsed, _schema);
+        const validation = validateStructuredOutput(normalized, _schema);
         if (!validation.valid) {
           lastError = `schema_validation_failed: ${validation.errors.join("; ")}`;
           continue;
         }
-        return parsed;
+        return normalized;
       } catch (error) {
         lastError = String(error);
       }

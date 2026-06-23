@@ -3,6 +3,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { readJson } from "../memory/ProjectMemory.js";
 import type { CommandInventory } from "../memory/types.js";
+import type { LlmProvider } from "../llm/LlmProvider.js";
 import { OrchestrationArtifactStore } from "./ArtifactStore.js";
 import { DurableLockManager } from "./DurableLockManager.js";
 import type { FactoryLockScope, LockAcquisitionResult } from "./FactoryLockModels.js";
@@ -18,6 +19,8 @@ import {
 import { ValidationRunner } from "./ValidationRunner.js";
 import { aggregateValidationStatus, normalizeValidationStatus, type OverallValidationStatus } from "./ValidationSemantics.js";
 import type { VerificationResult } from "./StructuredOutputs.js";
+import { GoalSteward } from "./GoalSteward.js";
+import type { GoalStewardFinding, GoalStewardReview } from "./GoalStewardModels.js";
 import {
   createIntegrationCandidate,
   createIntegrationPlan,
@@ -57,7 +60,9 @@ export type IntegrationManagerOptions = {
   validationRunner?: Pick<ValidationRunner, "runForTask">;
   adapter?: IntegrationApplyAdapter;
   applyMode?: IntegrationApplyMode;
-  config: Pick<OrchestrationSafetyConfig, "lock_ttl_ms" | "validation_timeout" | "max_validation_log_size" | "safe_commands_allowlist">;
+  providerFactory?: (role: string) => LlmProvider | undefined;
+  config: Pick<OrchestrationSafetyConfig, "lock_ttl_ms" | "validation_timeout" | "max_validation_log_size" | "safe_commands_allowlist"> &
+    Partial<Pick<OrchestrationSafetyConfig, "enable_goal_steward" | "goal_steward_mode" | "require_active_project_goal_spec">>;
 };
 
 export type IntegrationRunMode = "normal" | "plan_only" | "read_only";
@@ -72,6 +77,7 @@ export class IntegrationManager {
   private readonly validationRunner?: Pick<ValidationRunner, "runForTask">;
   private readonly adapter?: IntegrationApplyAdapter;
   private readonly applyMode: IntegrationApplyMode;
+  private readonly providerFactory?: (role: string) => LlmProvider | undefined;
   private readonly config: IntegrationManagerOptions["config"];
 
   constructor(options: IntegrationManagerOptions) {
@@ -90,6 +96,7 @@ export class IntegrationManager {
     this.validationRunner = options.validationRunner;
     this.adapter = options.adapter;
     this.applyMode = options.applyMode ?? "prepare_only";
+    this.providerFactory = options.providerFactory;
   }
 
   async integrate(input: {
@@ -117,9 +124,17 @@ export class IntegrationManager {
     }
 
     const ordered = this.orderCandidates(input.tasks, candidates);
-    const conflicts = this.detectConflicts(input.run.id, ordered);
+    const goalReview = await this.reviewGoalAlignment(input.run, input.tasks, ordered);
+    const goalReviewRefs = [goalReview?.artifact_ref, goalReview?.summary_ref, goalReview?.spec_ref].filter((ref): ref is string => Boolean(ref));
+    const conflicts = [
+      ...this.detectConflicts(input.run.id, ordered),
+      ...this.goalConflicts(input.run.id, goalReview, ordered)
+    ];
     const conflictRef = await this.artifactStore.saveIntegrationArtifact(input.run.id, `integration_conflicts_${started.trace_event_id}`, {
       run_id: input.run.id,
+      goal_steward_review_ref: goalReview?.artifact_ref,
+      goal_alignment_status: goalReview?.status,
+      project_goal_spec_ref: goalReview?.spec_ref,
       conflicts
     });
     await Promise.all(conflicts.map((conflict) => this.metadata.recordIntegrationConflictSaved({ conflict, artifactRef: conflictRef })));
@@ -170,6 +185,7 @@ export class IntegrationManager {
       batches: [this.createBatch(input.run.id, ordered)],
       artifact_ref: undefined,
       warnings: this.orderWarnings(input.tasks, ordered)
+        .concat(this.goalWarnings(goalReview))
     });
     const planRef = await this.artifactStore.saveIntegrationArtifact(input.run.id, `integration_plan_${started.trace_event_id}`, plan);
     plan.artifact_ref = planRef;
@@ -184,19 +200,22 @@ export class IntegrationManager {
         integration_plan_id: plan.integration_plan_id,
         candidate_count: ordered.length,
         conflicts_count: conflicts.length,
-        warnings: plan.warnings
+        warnings: plan.warnings,
+        goal_steward_review_ref: goalReview?.artifact_ref,
+        goal_alignment_status: goalReview?.status,
+        project_goal_spec_ref: goalReview?.spec_ref
       }
     });
 
     const blockingConflicts = conflicts.filter((conflict) => conflict.severity === "blocking");
     if (blockingConflicts.length) {
-      return this.finishBlocked(input.run, plan, blockingConflicts, "Integration blocked by candidate conflict checks.", [candidateRef, conflictRef, rollbackRef, planRef], started.trace_event_id);
+      return this.finishBlocked(input.run, plan, blockingConflicts, "Integration blocked by candidate conflict checks.", [candidateRef, conflictRef, rollbackRef, planRef, ...goalReviewRefs], started.trace_event_id, goalReview);
     }
 
     const lockResult = await this.acquireRequiredLocks(input.run.id, plan);
     if (!lockResult.acquired) {
       const lockConflict = this.conflict(input.run.id, ordered.map((candidate) => candidate.candidate_id), "lock_rejected", [], lockResult.artifact_refs, "Required durable integration locks could not be acquired.", "blocking");
-      const result = await this.finishBlocked(input.run, plan, [lockConflict], "Required durable integration locks could not be acquired.", [candidateRef, conflictRef, rollbackRef, planRef, ...lockResult.artifact_refs], started.trace_event_id);
+      const result = await this.finishBlocked(input.run, plan, [lockConflict], "Required durable integration locks could not be acquired.", [candidateRef, conflictRef, rollbackRef, planRef, ...goalReviewRefs, ...lockResult.artifact_refs], started.trace_event_id, goalReview);
       return result;
     }
 
@@ -204,7 +223,7 @@ export class IntegrationManager {
       const applyResult = await this.applyOrPrepare(plan);
       if (applyResult.status !== "applied") {
         const applyConflict = this.conflict(input.run.id, ordered.map((candidate) => candidate.candidate_id), "apply_failed", uniqueStrings(ordered.flatMap((candidate) => candidate.changed_files)), applyResult.artifact_refs ?? [], applyResult.message ?? "Integration could not safely apply in this runtime.", "blocking");
-        return this.finishBlocked(input.run, plan, [applyConflict], applyResult.message ?? "Integration could not safely apply in this runtime.", [candidateRef, conflictRef, rollbackRef, planRef, ...(applyResult.artifact_refs ?? [])], started.trace_event_id);
+        return this.finishBlocked(input.run, plan, [applyConflict], applyResult.message ?? "Integration could not safely apply in this runtime.", [candidateRef, conflictRef, rollbackRef, planRef, ...goalReviewRefs, ...(applyResult.artifact_refs ?? [])], started.trace_event_id, goalReview);
       }
 
       const validation = await this.validateAfterApply(input.run, input.tasks, ordered, input.commandInventory, applyResult);
@@ -241,10 +260,13 @@ export class IntegrationManager {
         metadata_json: {
           integration_plan_id: plan.integration_plan_id,
           apply_artifact_refs: applyResult.artifact_refs ?? [],
-          lock_artifact_refs: lockResult.artifact_refs
+          lock_artifact_refs: lockResult.artifact_refs,
+          goal_steward_review_ref: goalReview?.artifact_ref,
+          goal_alignment_status: goalReview?.status,
+          project_goal_spec_ref: goalReview?.spec_ref
         }
       });
-      return this.persistResult(result, started.trace_event_id, [candidateRef, conflictRef, rollbackRef, planRef, validationRef]);
+      return this.persistResult(result, started.trace_event_id, [candidateRef, conflictRef, rollbackRef, planRef, validationRef, ...goalReviewRefs]);
     } finally {
       await this.lockManager.releaseLocks({
         runId: input.run.id,
@@ -338,9 +360,11 @@ export class IntegrationManager {
       const validationRef = findArtifact(artifacts, "validation") ?? findArtifact(artifacts, "verification");
       const reviewDecision = await readReviewDecision(reviewRef);
       const validationStatus = await readValidationStatus(validationRef);
+      const intentGatePassed = output?.intent_handoff_gate_status === "passed";
       const moduleLocks = moduleLocksForTask({ ...task, allowed_files_to_edit: changedFiles.length ? changedFiles : task.allowed_files_to_edit }).map((scope) => scope.normalized_scope_key);
       const semanticLocks = semanticLocksForTask({ ...task, allowed_files_to_edit: changedFiles.length ? changedFiles : task.allowed_files_to_edit }).filter((scope) => scope.type === "semantic").map((scope) => scope.normalized_scope_key);
       const rejectionReasons = [
+        ...(!intentGatePassed ? [`Intent handoff gate did not pass (${output?.intent_handoff_gate_status ?? "missing"}).`] : []),
         ...(!reviewRef || reviewDecision !== "accept" ? [`Missing accepted review${reviewDecision ? ` (${reviewDecision})` : ""}.`] : []),
         ...(!validationRef ? ["Missing validation result."] : []),
         ...(validationRef && validationStatus !== "passed" ? [`Validation was not fully passed (${validationStatus ?? "unknown"}).`] : [])
@@ -364,7 +388,11 @@ export class IntegrationManager {
         rejection_reasons: rejectionReasons,
         metadata_json: {
           artifact_count: artifacts.length,
+          output_summary: output?.summary,
+          task_objective: task.objective,
           output_status: output?.status,
+          intent_handoff_gate_status: output?.intent_handoff_gate_status,
+          intent_handoff_gate_ref: output?.intent_handoff_gate_ref,
           task_status: task.status
         }
       });
@@ -460,6 +488,63 @@ export class IntegrationManager {
     return dedupeConflicts(conflicts);
   }
 
+  private async reviewGoalAlignment(run: Run, tasks: Task[], candidates: IntegrationCandidate[]): Promise<GoalStewardReview | undefined> {
+    if (this.config.enable_goal_steward === false) return undefined;
+    const steward = new GoalSteward({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      artifactStore: this.artifactStore,
+      traceWriter: new FactoryTraceWriter({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, sourceComponent: "GoalSteward" }),
+      provider: this.providerFactory?.("GoalSteward"),
+      mode: this.config.goal_steward_mode ?? "strict",
+      requireActiveProjectGoalSpec: this.config.require_active_project_goal_spec ?? false
+    });
+    return steward.reviewIntegration({ run, tasks, candidates });
+  }
+
+  private goalConflicts(runId: string, review: GoalStewardReview | undefined, candidates: IntegrationCandidate[]): IntegrationConflict[] {
+    if (!review) return [];
+    const byId = new Map(candidates.map((candidate) => [candidate.candidate_id, candidate]));
+    const allCandidateIds = candidates.map((candidate) => candidate.candidate_id);
+    return review.findings
+      .filter((finding) => finding.severity === "blocking")
+      .map((finding) => {
+        const candidateIds = finding.candidate_id ? [finding.candidate_id] : allCandidateIds;
+        const changedFiles = finding.candidate_id && byId.has(finding.candidate_id)
+          ? byId.get(finding.candidate_id)!.changed_files
+          : uniqueStrings(candidates.flatMap((candidate) => candidate.changed_files));
+        const conflict = this.conflict(
+          runId,
+          candidateIds,
+          goalConflictType(finding),
+          changedFiles,
+          uniqueStrings([review.artifact_ref, review.summary_ref, review.spec_ref, ...finding.spec_refs, ...finding.candidate_refs]),
+          finding.rationale,
+          "blocking"
+        );
+        conflict.metadata_json = {
+          goal_steward_review_id: review.review_id,
+          goal_steward_status: review.status,
+          recommended_action: finding.recommended_action,
+          finding_id: finding.finding_id,
+          finding_type: finding.finding_type,
+          task_id: finding.task_id,
+          spec_refs: finding.spec_refs,
+          candidate_refs: finding.candidate_refs,
+          ...finding.metadata_json
+        };
+        return conflict;
+      });
+  }
+
+  private goalWarnings(review: GoalStewardReview | undefined): string[] {
+    if (!review) return [];
+    return review.findings
+      .filter((finding) => finding.severity !== "blocking")
+      .map((finding) => `Goal Steward ${finding.finding_type}: ${finding.rationale}`)
+      .slice(0, 8);
+  }
+
   private async finishNotRequired(run: Run, parentTraceId: string, candidateRef: string, mode: IntegrationRunMode): Promise<IntegrationResult> {
     const result = createIntegrationResult({
       run_id: run.id,
@@ -479,7 +564,7 @@ export class IntegrationManager {
     return this.persistResult(result, parentTraceId, [candidateRef]);
   }
 
-  private async finishBlocked(run: Run, plan: IntegrationPlan, conflicts: IntegrationConflict[], reason: string, artifactRefs: string[], parentTraceId: string): Promise<IntegrationResult> {
+  private async finishBlocked(run: Run, plan: IntegrationPlan, conflicts: IntegrationConflict[], reason: string, artifactRefs: string[], parentTraceId: string, goalReview?: GoalStewardReview): Promise<IntegrationResult> {
     const result = createIntegrationResult({
       run_id: run.id,
       status: "blocked",
@@ -494,7 +579,13 @@ export class IntegrationManager {
       apply_mode: this.applyMode,
       rollback_available: plan.rollback_plan.status === "automatic_available",
       blocked_reason: reason,
-      metadata_json: { integration_plan_id: plan.integration_plan_id, reason }
+      metadata_json: {
+        integration_plan_id: plan.integration_plan_id,
+        reason,
+        goal_steward_review_ref: goalReview?.artifact_ref,
+        goal_alignment_status: goalReview?.status,
+        project_goal_spec_ref: goalReview?.spec_ref
+      }
     });
     return this.persistResult(result, parentTraceId, artifactRefs);
   }
@@ -830,6 +921,13 @@ function dedupeConflicts(conflicts: IntegrationConflict[]) {
     seen.add(key);
     return true;
   });
+}
+
+function goalConflictType(finding: GoalStewardFinding): IntegrationConflict["conflict_type"] {
+  if (finding.finding_type === "provider_unavailable") return "goal_steward_unavailable";
+  if (finding.finding_type === "insufficient_spec") return "goal_spec_missing";
+  if (finding.finding_type === "requires_human_approval" || finding.recommended_action === "require_human_approval") return "goal_change_requires_approval";
+  return "goal_spec_conflict";
 }
 
 function integrationSummary(result: IntegrationResult) {

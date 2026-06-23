@@ -63,6 +63,7 @@ Legacy import/backup files:
 - JSON and JSONL files at the memory root are legacy migration inputs or backup exports, not normal runtime read sources.
 - \`backups/\`: checkpointed SQLite backup exports and manifests.
 - \`runs/\`: volatile run-specific artifacts.
+- \`project_specs/\`: active and historical ProjectGoalSpec artifacts that define non-negotiable project goals for future workers.
 - \`swarm_runs/\`: internal Swarm Autopilot run artifacts, staffing plans, scheduler traces, metrics, and reports.
 - \`campaigns/\`: long-running campaign artifacts.
 - \`evals/\`: local eval and benchmark artifacts.
@@ -104,6 +105,7 @@ export function resolveMemoryPaths(
     database: path.join(rootDir, MEMORY_DATABASE_FILENAME),
     backupsDir: path.join(rootDir, "backups"),
     runsDir: path.join(rootDir, "runs"),
+    projectSpecsDir: path.join(rootDir, "project_specs"),
     campaignsDir: path.join(rootDir, "campaigns"),
     evalsDir: path.join(rootDir, "evals")
   };
@@ -113,6 +115,7 @@ export async function ensureMemoryLayout(workspacePath: string, memoryDir?: stri
   const paths = resolveMemoryPaths(workspacePath, memoryDir);
   await mkdir(paths.rootDir, { recursive: true });
   await mkdir(paths.runsDir, { recursive: true });
+  await mkdir(paths.projectSpecsDir, { recursive: true });
   await mkdir(paths.campaignsDir, { recursive: true });
   await mkdir(paths.evalsDir, { recursive: true });
   await mkdir(paths.backupsDir, { recursive: true });

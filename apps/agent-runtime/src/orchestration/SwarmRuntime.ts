@@ -10,6 +10,9 @@ import { OpenAIProvider } from "../llm/OpenAIProvider.js";
 import { DurableLockManager } from "./DurableLockManager.js";
 import { FactoryMetadataStore, resolveFactoryMetadataDatabasePath } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
+import { IntentLedgerService } from "./IntentLedgerService.js";
+import type { IntentReviewResult, IntentRewriteTarget } from "./IntentLedgerModels.js";
+import { ProjectGoalSpecStore } from "./GoalSteward.js";
 import { ProviderBackedSwarmWorker, type SwarmProviderWorkerMode } from "./ProviderBackedSwarmWorker.js";
 import { createSwarmAgentTemplates } from "./SwarmAgentTemplates.js";
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
@@ -17,6 +20,7 @@ import { createConsensusGroup, createInitialSwarmWorkItems } from "./SwarmFanInO
 import { SwarmScheduler, createAgentInstancesForPlan, type SwarmWorker } from "./SwarmScheduler.js";
 import { SwarmStaffingPlanner } from "./SwarmStaffingPlanner.js";
 import { transitionRun as createRunTransition, type RunTransitionTrigger } from "./RunStateMachine.js";
+import { UserIntentCompiler, type UserIntentCompilationResult } from "./UserIntentCompiler.js";
 import type {
   AgentInstance,
   AgentTemplate,
@@ -83,15 +87,22 @@ export class SwarmAutopilotRuntime {
   async plan(userGoal: string): Promise<SwarmPlanResult> {
     const run = await this.createRun(userGoal);
     await this.transition(run, "intake", "Internal swarm intake started.");
-    await this.transition(run, "prompt_rewrite", "Prompt rewrite is not implemented in this step; using the goal as provided.");
-    await this.transition(run, "clarification_check", "No clarification was required for swarm planning.");
-    await this.transition(run, "repo_mapping", "Analyzing repository and task request for internal swarm staffing.");
+    const intentCompilation = await this.compileIntentContract(run);
+    await this.transition(run, "prompt_rewrite", `Intent contract compiled with status ${intentCompilation.contract.status}.`, {
+      validationStatus: intentCompilation.ready ? "passed" : "blocked"
+    });
+    if (!intentCompilation.ready) {
+      return this.blockBeforePlanning(run, intentCompilation);
+    }
+    const planningGoal = intentCompilation.contract.precise_rewrite;
+    await this.transition(run, "clarification_check", "Ready intent contract satisfied clarification gate for swarm planning.");
+    await this.transition(run, "repo_mapping", "Analyzing repository and compiled intent contract for internal swarm staffing.");
     const memory = await this.loadOrRebuildIndex(run);
     const previousFailures = await getFailedAttempts(this.workspacePath, this.memoryDir);
     await this.transition(run, "complexity_estimation", "Estimating complexity and repository scope for internal swarm staffing.");
     const staffingPlan = new SwarmStaffingPlanner().createPlan({
       swarmRunId: run.id,
-      userGoal,
+      userGoal: planningGoal,
       mode: this.mode,
       repoIndex: memory.repoIndex,
       commandInventory: memory.commandInventory,
@@ -140,7 +151,7 @@ export class SwarmAutopilotRuntime {
     const instances = createAgentInstancesForPlan({ runId: run.id, staffingPlan, templates });
     const workItems = createInitialSwarmWorkItems({
       swarmRunId: run.id,
-      userGoal,
+      userGoal: planningGoal,
       staffingPlan,
       repoIndex: memory.repoIndex,
       validationCommands: chooseValidationCommands(memory.commandInventory)
@@ -150,6 +161,7 @@ export class SwarmAutopilotRuntime {
     await this.artifactStore.saveAgentInstances(run.id, instances);
     await this.artifactStore.saveWorkItems(run.id, workItems);
     await this.artifactStore.saveLeases(run.id, []);
+    await this.recordInitialIntentReview(run, staffingPlan, workItems);
     await this.transition(run, "task_graph_ready", "Swarm work-item graph created and persisted.");
     for (const item of workItems) {
       await this.event(run.id, "swarm.work_item.queued", `Queued ${item.type} work item ${item.id}.`, {
@@ -165,6 +177,24 @@ export class SwarmAutopilotRuntime {
   async run(userGoal: string): Promise<SwarmRunResult> {
     const planned = await this.plan(userGoal);
     const run = planned.run;
+    if (run.status === "blocked" || run.status === "failed") {
+      const metrics = emptySwarmMetrics(run, planned.staffingPlan);
+      const finalReport = buildBlockedFinalReport({
+        run,
+        staffingPlan: planned.staffingPlan,
+        metrics,
+        workerMode: this.workerMode
+      });
+      return {
+        run,
+        staffingPlan: planned.staffingPlan,
+        agentTemplates: planned.agentTemplates,
+        agentInstances: planned.agentInstances,
+        workItems: planned.workItems,
+        metrics,
+        finalReport
+      };
+    }
     await this.transition(run, "executing", "Starting dependency-aware swarm scheduler.");
     const scheduler = new SwarmScheduler(
       this.workspacePath,
@@ -228,13 +258,40 @@ export class SwarmAutopilotRuntime {
         final_status: finalStatus
       }
     });
+    const finalIntentReview = await this.reviewIntentReportOnly(run, "final", {
+      user_goal: run.user_goal,
+      status: run.status,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      staffing_plan: planned.staffingPlan,
+      work_items: scheduled.workItems.map((item) => ({
+        id: item.id,
+        type: item.type,
+        status: item.status,
+        required_role: item.required_role,
+        read_files: item.read_files,
+        write_files: item.write_files,
+        dependencies: item.dependencies,
+        result_ref: item.result_ref
+      })),
+      metrics: scheduled.metrics,
+      consensus_decision: consensus.decision
+    }, [
+      run.original_request_ref,
+      run.intent_ledger_ref,
+      run.intent_contract_ref,
+      run.staffing_plan_ref,
+      "work_items.json",
+      "metrics.json"
+    ]);
     const finalReport = buildFinalReport({
       run,
       staffingPlan: planned.staffingPlan,
       workItems: scheduled.workItems,
       metrics: scheduled.metrics,
       consensusDecision: consensus.decision,
-      workerMode: this.workerMode
+      workerMode: this.workerMode,
+      intentReview: finalIntentReview
     });
     const finalReportRef = await this.artifactStore.saveFinalReport(run.id, finalReport);
     run.final_report_ref = path.relative(run.artifacts_path, finalReportRef).replaceAll("\\", "/");
@@ -388,6 +445,15 @@ export class SwarmAutopilotRuntime {
       updated_at: now,
       artifacts_path: paths.runDir
     };
+    const intent = await this.intentLedger().saveOriginalRequest({
+      runId,
+      runKind: "swarm",
+      artifactsPath: paths.runDir,
+      originalRequest: userGoal,
+      metadata: { source_component: "SwarmAutopilotRuntime" }
+    });
+    run.original_request_ref = intent.artifact_ref;
+    run.intent_ledger_ref = path.join(paths.runDir, "intent", "intent_ledger.json");
     await this.artifactStore.saveSwarmRun(run);
     await this.recordRunTransition(run.id, undefined, "created", "Internal swarm run created.");
     await this.event(run.id, "swarm.run.created", `Internal swarm run created for goal: ${userGoal}`, {
@@ -395,6 +461,157 @@ export class SwarmAutopilotRuntime {
       mode: this.mode
     });
     return run;
+  }
+
+  private intentLedger(sourceComponent = "SwarmAutopilotRuntime") {
+    return new IntentLedgerService({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      sourceComponent
+    });
+  }
+
+  private async compileIntentContract(run: SwarmRun): Promise<UserIntentCompilationResult> {
+    const parentContext = await this.intentParentContext(run);
+    const compilation = await new UserIntentCompiler().compile({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir,
+      runId: run.id,
+      runKind: "swarm",
+      artifactsPath: run.artifacts_path,
+      originalRequest: run.user_goal,
+      provider: this.providerFactory?.("UserIntentCompiler"),
+      parentContext,
+      sourceComponent: "SwarmAutopilotRuntime"
+    });
+    run.intent_contract_ref = path.relative(run.artifacts_path, compilation.contract.artifact_ref ?? path.join(run.artifacts_path, "intent", "intent_contract.json")).replaceAll("\\", "/");
+    run.intent_contract_status = compilation.contract.status;
+    await this.artifactStore.saveSwarmRun(run);
+    await this.event(run.id, "swarm.intent_contract.compiled", `Intent contract compiled with status ${compilation.contract.status}.`, {
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      blocking_question_count: compilation.blockingQuestions.length,
+      validation_errors: compilation.validationErrors
+    });
+    return compilation;
+  }
+
+  private async blockBeforePlanning(run: SwarmRun, intentCompilation: UserIntentCompilationResult): Promise<SwarmPlanResult> {
+    await this.transition(run, "clarification_check", `Swarm planning blocked by intent contract status ${intentCompilation.contract.status}.`, {
+      validationStatus: "blocked"
+    });
+    await this.transition(run, "blocked", "Swarm planning did not start because a ready intent_contract.json is required.", {
+      validationStatus: "blocked"
+    });
+    const staffingPlan = blockedStaffingPlan(run, intentCompilation);
+    const metrics = emptySwarmMetrics(run, staffingPlan);
+    const finalReport = buildBlockedFinalReport({
+      run,
+      staffingPlan,
+      metrics,
+      workerMode: this.workerMode
+    });
+    const metricsRef = await this.artifactStore.saveMetrics(run.id, metrics);
+    const finalReportRef = await this.artifactStore.saveFinalReport(run.id, finalReport);
+    run.metrics_ref = path.relative(run.artifacts_path, metricsRef).replaceAll("\\", "/");
+    run.final_report_ref = path.relative(run.artifacts_path, finalReportRef).replaceAll("\\", "/");
+    await this.artifactStore.saveSwarmRun(run);
+    await this.event(run.id, "swarm.run.completed", "Swarm run blocked before staffing/work-item creation by intent contract gate.", {
+      metrics_ref: run.metrics_ref,
+      final_report_ref: run.final_report_ref,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status
+    });
+    return { run, staffingPlan, agentTemplates: [], agentInstances: [], workItems: [] };
+  }
+
+  private async recordInitialIntentReview(run: SwarmRun, staffingPlan: StaffingPlan, workItems: WorkItem[]) {
+    await this.reviewIntentReportOnly(run, "initial", {
+      user_goal: run.user_goal,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      staffing_plan: staffingPlan,
+      work_items: workItems.map((item) => ({
+        id: item.id,
+        type: item.type,
+        required_role: item.required_role,
+        read_files: item.read_files,
+        write_files: item.write_files,
+        dependencies: item.dependencies,
+        expected_output_schema: item.expected_output_schema
+      }))
+    }, [
+      run.original_request_ref,
+      run.intent_ledger_ref,
+      run.intent_contract_ref,
+      run.staffing_plan_ref,
+      "work_items.json"
+    ]);
+  }
+
+  private async reviewIntentReportOnly(
+    run: SwarmRun,
+    stage: "initial" | "final",
+    candidate: unknown,
+    reviewedArtifactRefs: Array<string | undefined>,
+    target: IntentRewriteTarget = stage === "initial" ? "plan" : "final_report"
+  ): Promise<IntentReviewResult | undefined> {
+    try {
+      const parentContext = await this.intentParentContext(run);
+      return await this.intentLedger().reviewIntent({
+        runId: run.id,
+        runKind: "swarm",
+        artifactsPath: run.artifacts_path,
+        stage,
+        target,
+        reviewedArtifactRefs: uniqueStrings(reviewedArtifactRefs.filter((ref): ref is string => Boolean(ref))),
+        parentContextRefs: uniqueStrings([
+          run.staffing_plan_ref,
+          run.metrics_ref ?? "",
+          run.intent_ledger_ref ?? "",
+          run.intent_contract_ref ?? "",
+          parentContext.project_goal_spec_ref ?? ""
+        ]),
+        parentContext,
+        candidate,
+        provider: this.providerFactory?.("IntentReviewer")
+      });
+    } catch (error) {
+      await this.event(run.id, "swarm.task.analyzed", "Intent reviewer did not complete; swarm continues in report-only mode.", {
+        stage,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
+    }
+  }
+
+  private async intentParentContext(run: SwarmRun) {
+    const activeGoalSpec = await new ProjectGoalSpecStore({
+      workspacePath: this.workspacePath,
+      memoryDir: this.memoryDir
+    }).loadActiveProjectGoalSpec().catch(() => undefined);
+    return {
+      parent_orchestrator: "SwarmAutopilotRuntime",
+      run_id: run.id,
+      run_status: run.status,
+      mode: run.mode,
+      staffing_plan_ref: run.staffing_plan_ref,
+      metrics_ref: run.metrics_ref,
+      original_request_ref: run.original_request_ref,
+      intent_ledger_ref: run.intent_ledger_ref,
+      intent_contract_ref: run.intent_contract_ref,
+      intent_contract_status: run.intent_contract_status,
+      project_goal_spec_ref: activeGoalSpec?.artifact_ref,
+      project_goal_spec: activeGoalSpec ? {
+        spec_id: activeGoalSpec.spec_id,
+        title: activeGoalSpec.title,
+        primary_goal: activeGoalSpec.primary_goal,
+        non_goals: activeGoalSpec.non_goals,
+        constraints: activeGoalSpec.constraints,
+        status: activeGoalSpec.status,
+        version: activeGoalSpec.version
+      } : undefined
+    };
   }
 
   private async loadOrRebuildIndex(run: SwarmRun): Promise<{ repoIndex: RepoIndex; commandInventory: CommandInventory }> {
@@ -598,6 +815,100 @@ function validationStatusFromSwarmMetrics(metrics: SwarmMetrics): "passed" | "fa
   return "partial";
 }
 
+function blockedStaffingPlan(run: SwarmRun, intentCompilation: UserIntentCompilationResult): StaffingPlan {
+  const now = new Date().toISOString();
+  return {
+    schema_version: SWARM_SCHEMA_VERSION,
+    id: `staffing_blocked_${run.id}`,
+    swarm_run_id: run.id,
+    task_complexity: "tiny",
+    repo_scope: "single_file",
+    risk_level: "high",
+    recommended_total_logical_agents: 0,
+    max_parallel_agents: 0,
+    scout_count: 0,
+    planner_count: 0,
+    architect_count: 0,
+    executor_count: 0,
+    reviewer_count: 0,
+    tester_count: 0,
+    integrator_count: 0,
+    specialist_agents: [],
+    role_counts: {
+      ScoutAgent: 0,
+      PlannerAgent: 0,
+      ArchitectAgent: 0,
+      ExecutorAgent: 0,
+      ReviewerAgent: 0,
+      TesterAgent: 0,
+      IntegratorAgent: 0,
+      ReporterAgent: 0,
+      RiskAnalyzerAgent: 0,
+      MemoryUpdaterAgent: 0,
+      ContextBuilderAgent: 0
+    },
+    executor_limit: 0,
+    reviewer_limit: 0,
+    tester_limit: 0,
+    read_only_ratio: 1,
+    write_agent_limit: 0,
+    validation_level: "none",
+    requires_human_approval: false,
+    reasoning: [
+      `Planning blocked because intent contract status is ${intentCompilation.contract.status}.`,
+      ...intentCompilation.blockingQuestions.map((question) => `Blocking missing question: ${question}`),
+      ...intentCompilation.validationErrors.map((error) => `Intent contract validation error: ${error}`)
+    ],
+    confidence: 1,
+    downgrade_conditions: ["A ready intent_contract.json is required before staffing."],
+    escalation_conditions: ["Compile a ready contract or answer blocking missing questions."],
+    created_at: now
+  };
+}
+
+function emptySwarmMetrics(run: SwarmRun, staffingPlan: StaffingPlan): SwarmMetrics {
+  return {
+    schema_version: SWARM_SCHEMA_VERSION,
+    swarm_run_id: run.id,
+    staffing_plan_ref: run.staffing_plan_ref,
+    effective_total_logical_agents: staffingPlan.recommended_total_logical_agents,
+    peak_active_agents: 0,
+    role_distribution: {},
+    executor_peak_count: 0,
+    reviewer_peak_count: 0,
+    scout_peak_count: 0,
+    work_items_created: 0,
+    work_items_completed: 0,
+    work_items_failed: 0,
+    read_only_items: 0,
+    edit_items: 0,
+    review_items: 0,
+    validation_items: 0,
+    lock_wait_count: 0,
+    retries: 0,
+    repair_tasks: 0,
+    invalid_structured_outputs: 0,
+    consensus_groups: 0,
+    validation_pass_rate: 0,
+    conflicts_detected: 0,
+    approval_gates_triggered: 0,
+    generated_at: new Date().toISOString()
+  };
+}
+
+function buildBlockedFinalReport(input: {
+  run: SwarmRun;
+  staffingPlan: StaffingPlan;
+  metrics: SwarmMetrics;
+  workerMode: SwarmProviderWorkerMode;
+}) {
+  return buildFinalReport({
+    ...input,
+    workItems: [],
+    consensusDecision: "blocked_before_planning"
+  });
+}
+
 function buildFinalReport(input: {
   run: SwarmRun;
   staffingPlan: StaffingPlan;
@@ -605,6 +916,7 @@ function buildFinalReport(input: {
   metrics: SwarmMetrics;
   consensusDecision: string;
   workerMode: SwarmProviderWorkerMode;
+  intentReview?: IntentReviewResult;
 }) {
   const plannedWriteTargets = uniqueStrings(input.workItems.flatMap((item) => item.write_files));
   const actualChangedFiles: string[] = [];
@@ -622,6 +934,8 @@ function buildFinalReport(input: {
   const validationSummary = input.metrics.validation_items
     ? `${input.metrics.validation_items} validation item(s), pass rate ${input.metrics.validation_pass_rate}`
     : "No validation work items were required.";
+  const intentReview = input.intentReview;
+  const intentDriftCount = countIntentDriftFindings(intentReview);
   return [
     `# Internal Swarm Autopilot Report`,
     "",
@@ -670,6 +984,17 @@ function buildFinalReport(input: {
     `- Executor peak count: ${input.metrics.executor_peak_count}`,
     `- ${validationSummary}`,
     "",
+    `## Intent Review`,
+    `- intent_review_used: ${Boolean(intentReview)}`,
+    `- intent_alignment_status: ${intentReview?.status ?? "not_run"}`,
+    `- intent_drift_count: ${intentDriftCount}`,
+    `- original_request_ref: ${input.run.original_request_ref ?? "missing"}`,
+    `- intent_ledger_ref: ${input.run.intent_ledger_ref ?? "missing"}`,
+    `- intent_contract_ref: ${input.run.intent_contract_ref ?? "missing"}`,
+    `- intent_contract_status: ${input.run.intent_contract_status ?? "missing"}`,
+    `- intent_review_ref: ${intentReview?.artifact_ref ?? "missing"}`,
+    `- intent_rewrite_suggestion_ref: ${intentReview?.rewrite_suggestion_ref ?? "missing"}`,
+    "",
     `## File-Lock And Write Safety`,
     `- Write-capable agents were capped at ${input.staffingPlan.write_agent_limit}.`,
     `- Lock waits: ${input.metrics.lock_wait_count}`,
@@ -698,4 +1023,10 @@ async function optional<T>(loader: () => Promise<T>): Promise<T | undefined> {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function countIntentDriftFindings(review: IntentReviewResult | undefined) {
+  return review?.findings.filter((finding) =>
+    finding.finding_type === "possible_drift" || finding.finding_type === "drift_detected"
+  ).length ?? 0;
 }

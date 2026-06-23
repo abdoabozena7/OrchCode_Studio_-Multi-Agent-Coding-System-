@@ -27,6 +27,7 @@ export type MemoryPaths = {
   database: string;
   backupsDir: string;
   runsDir: string;
+  projectSpecsDir: string;
   campaignsDir: string;
   evalsDir: string;
 };

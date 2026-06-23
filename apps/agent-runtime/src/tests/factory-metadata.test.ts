@@ -7,6 +7,7 @@ import test from "node:test";
 import { writeJson } from "../memory/ProjectMemory.js";
 import { OrchestrationArtifactStore } from "../orchestration/ArtifactStore.js";
 import { FactoryMetadataStore } from "../orchestration/FactoryMetadataStore.js";
+import { ProjectGoalSpecStore, createProjectGoalSpec } from "../orchestration/index.js";
 import {
   ORCHESTRATION_SCHEMA_VERSION,
   type AgentInvocation,
@@ -36,6 +37,11 @@ const REQUIRED_TABLES = [
   "factory_memory_chunks",
   "factory_context_items",
   "factory_locks",
+  "factory_project_goal_specs",
+  "factory_goal_steward_reviews",
+  "factory_goal_steward_findings",
+  "factory_semantic_conflict_batches",
+  "factory_semantic_conflict_decisions",
   "factory_metrics",
   "factory_campaigns"
 ];
@@ -172,6 +178,38 @@ test("factory metadata links prompts outputs reviews and validations to a task",
       task.id
     );
     assert.deepEqual(validation, { task_id: task.id, status: "passed", artifact_ref: validationRef });
+  } finally {
+    metadata.close();
+  }
+});
+
+test("factory metadata records ProjectGoalSpec artifacts in SQLite", async () => {
+  const workspace = await fixtureWorkspace();
+  const spec = await new ProjectGoalSpecStore({ workspacePath: workspace }).saveProjectGoalSpec(createProjectGoalSpec({
+    title: "Arcade Physics Goal",
+    primary_goal: "The game should feel playful and arcade-like, not physically realistic.",
+    non_goals: ["Do not optimize physics for real-world accuracy."],
+    tradeoffs: [{ name: "physics feel", prefer: "fun low gravity", over: "realistic gravity" }],
+    constraints: ["Favor playful gravity over realism."],
+    accepted_examples: ["Reduce gravity to make jumps feel fun."],
+    rejected_examples: ["Increase gravity to match real-world physics."],
+    source_refs: [],
+    version: 1,
+    status: "active"
+  }));
+
+  const metadata = await FactoryMetadataStore.open({ workspacePath: workspace, readOnly: true });
+  try {
+    const row = metadata.get<{ spec_id: string; status: string; artifact_ref: string; summary_ref: string }>(
+      "SELECT spec_id, status, artifact_ref, summary_ref FROM factory_project_goal_specs WHERE spec_id = ?",
+      spec.spec_id
+    );
+    assert.equal(row?.spec_id, spec.spec_id);
+    assert.equal(row?.status, "active");
+    assert.equal(row?.artifact_ref, spec.artifact_ref);
+    assert.equal(row?.summary_ref, spec.summary_ref);
+    assert.equal(existsSync(row?.artifact_ref ?? ""), true);
+    assert.equal(existsSync(row?.summary_ref ?? ""), true);
   } finally {
     metadata.close();
   }

@@ -132,9 +132,10 @@ export class WorkspaceTools {
       importantFiles.includes("package-lock.json") || importantFiles.includes("package.json") ? "npm" : undefined,
       importantFiles.includes("Cargo.toml") ? "cargo" : undefined
     ].filter(Boolean) as string[];
+    const packageScripts = readPackageScripts(this.workspacePath);
     const testCommands = [
-      packageManagers.includes("pnpm") ? "pnpm test" : undefined,
-      packageManagers.includes("npm") && !packageManagers.includes("pnpm") ? "npm test" : undefined,
+      packageManagers.includes("pnpm") && packageScripts.has("test") ? "pnpm test" : undefined,
+      packageManagers.includes("npm") && !packageManagers.includes("pnpm") && packageScripts.has("test") ? "npm test" : undefined,
       packageManagers.includes("cargo") ? "cargo test" : undefined,
       languages.Python ? "pytest" : undefined
     ].filter(Boolean) as string[];
@@ -202,6 +203,16 @@ function isImportant(filePath: string) {
     "vite.config.ts",
     "tauri.conf.json"
   ].includes(path.basename(filePath));
+}
+
+function readPackageScripts(workspacePath: string) {
+  try {
+    const manifestPath = resolveInsideWorkspace(workspacePath, "package.json");
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { scripts?: Record<string, unknown> };
+    return new Set(Object.entries(parsed.scripts ?? {}).filter(([, value]) => typeof value === "string").map(([name]) => name));
+  } catch {
+    return new Set<string>();
+  }
 }
 
 function languageForPath(filePath: string) {

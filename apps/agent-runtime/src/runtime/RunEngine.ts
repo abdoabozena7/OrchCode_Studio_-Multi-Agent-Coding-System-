@@ -26,6 +26,7 @@ import type {
 } from "@hivo/protocol";
 import { accessProfileDefaults } from "@hivo/protocol";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import type { ProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { runPatchIntentSchema, runPlanSchema, runVerificationSchema } from "../schemas/sessionSchemas.js";
@@ -303,7 +304,7 @@ export class RunEngine {
       return this.runInspectExplainTurn(sessionId, message, options.projectMap, intake, conversationUnderstanding);
     }
 
-    if (snapshot.runIntent === "run_to_green") {
+    if (snapshot.runIntent === "run_to_green" && !shouldCreateProjectBeforeRunToGreen(executionMessage, intake.projectKind)) {
       const runToGreenPlan = await this.createPlan(session, executionMessage, snapshot, options.resolvedMode);
       const modulePlan = shouldTreatProjectAsExisting(intake.projectKind)
         ? buildModuleExecutionPlan({
@@ -1391,6 +1392,9 @@ export class RunEngine {
   }
 
   private async createPlan(session: AgentRuntimeSession, message: string, snapshot: RepoSnapshot, resolvedMode: Exclude<RuntimeExecutionMode, "auto_mode">): Promise<RunPlanModel> {
+    const operatorSuppliedPlan = createOperatorSuppliedPlanIfPresent(message, snapshot);
+    if (operatorSuppliedPlan) return operatorSuppliedPlan;
+
     const prompt = [
       "Create a concise JSON plan for a local coding agent.",
       "Do not include hidden chain-of-thought. Use reasoningSummary for a short user-visible rationale.",
@@ -1409,7 +1413,8 @@ export class RunEngine {
         userPrompt: prompt
       },
       runPlanSchema,
-      "implementation plan"
+      "implementation plan",
+      (candidate) => normalizeProviderRunPlanCandidate(candidate, message, snapshot)
     );
     return normalizePlan(generated, message, snapshot);
   }
@@ -1462,19 +1467,102 @@ export class RunEngine {
       `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`,
       `Relevant file excerpts: ${JSON.stringify(relevantFiles)}`
     ].join("\n");
-    const generated = await this.generateStructuredWithRepair<Partial<RunPatchIntentModel>>(
-      {
-        purpose: "reason",
-        systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only. Any title field you return must be at most four words.",
-        userPrompt: prompt
-      },
-      runPatchIntentSchema,
-      "patch intent"
-    );
-    return normalizePatchIntent(generated, message);
+    try {
+      const generated = await this.generateStructuredWithRepair<Partial<RunPatchIntentModel>>(
+        {
+          purpose: "reason",
+          systemPrompt: "You produce structured patch intents for unified diff proposals. Return strict JSON only. Any title field you return must be at most four words.",
+          userPrompt: prompt,
+          maxOutputTokens: 8_192,
+          timeoutMs: 180_000
+        },
+        runPatchIntentSchema,
+        "patch intent"
+      );
+      return normalizePatchIntent(generated, message);
+    } catch (error) {
+      if (shouldUseSegmentedCreateProjectPatchIntent(error, snapshot, plan)) {
+        return this.createSegmentedCreateProjectPatchIntent(session, message, snapshot, plan, error);
+      }
+      const detail = formatProviderError(error);
+      return {
+        title: "Patch unavailable",
+        summary: `Provider could not produce a valid patch intent: ${detail}`,
+        intents: [],
+        suggestedCommands: plan.suggestedCommands,
+        fallbackWarning: `Provider patch intent failed validation: ${detail}`,
+        fallbackKind: "generic"
+      };
+    }
   }
 
-  private async generateStructuredWithRepair<T>(request: LlmRequest, schema: unknown, label: string): Promise<T> {
+  private async createSegmentedCreateProjectPatchIntent(
+    session: AgentRuntimeSession,
+    message: string,
+    snapshot: RepoSnapshot,
+    plan: RunPlanModel,
+    priorError: unknown
+  ): Promise<RunPatchIntentModel> {
+    const targetFiles = segmentedCreateProjectFiles(message, snapshot, plan);
+    const intents: RunPatchIntent[] = [];
+    for (const targetFile of targetFiles) {
+      const prompt = [
+        "Create a reviewable patch intent JSON for exactly one new file in an empty project.",
+        "Return exactly one intent and it must use operation create_file.",
+        `The only allowed path is: ${targetFile}`,
+        "Do not include any other file in this response.",
+        "The replacementText must be the complete file content for that path.",
+        "Keep imports consistent with the planned file list.",
+        "For package.json include runnable scripts for dev, build, and test when tests are requested.",
+        "For tests, prefer Vitest unless the user explicitly asked for a different framework.",
+        "For browser games, keep gameplay logic testable by exporting pure helpers from src/gameLogic.js.",
+        `User request: ${message}`,
+        `Whole project plan: ${JSON.stringify(plan)}`,
+        `All planned files: ${JSON.stringify(targetFiles)}`,
+        `Workspace snapshot: ${JSON.stringify(snapshot)}`,
+        `Module plan: ${JSON.stringify(session.moduleExecutionPlan)}`
+      ].join("\n");
+      const generated = await this.generateStructuredWithRepair<Partial<RunPatchIntentModel>>(
+        {
+          purpose: "repair",
+          systemPrompt: "You produce one structured patch intent for one file. Return strict JSON only. Any title field you return must be at most four words.",
+          userPrompt: prompt,
+          context: {
+            segmented_patch_intent: true,
+            targetFile,
+            priorPatchIntentError: formatProviderError(priorError)
+          },
+          maxContextChars: 48_000,
+          maxOutputTokens: targetFile === "src/main.js" ? 8_192 : 4_096,
+          timeoutMs: 180_000
+        },
+        runPatchIntentSchema,
+        `patch intent for ${targetFile}`,
+        (candidate) => normalizeSingleFilePatchIntentCandidate(candidate, targetFile)
+      );
+      const normalized = normalizePatchIntent(generated, message);
+      if (normalized.intents.length !== 1) {
+        throw new Error(`provider_segmented_patch_intent_invalid: ${targetFile} returned ${normalized.intents.length} intents`);
+      }
+      const [intent] = normalized.intents;
+      if (!intent || intent.path.replaceAll("\\", "/") !== targetFile || intent.operation !== "create_file") {
+        throw new Error(`provider_segmented_patch_intent_invalid: ${targetFile} did not return a matching create_file intent`);
+      }
+      intents.push({
+        ...intent,
+        path: targetFile,
+        operation: "create_file"
+      });
+    }
+    return {
+      title: "Create project",
+      summary: `Provider-authored segmented patch intent for ${targetFiles.length} file(s) after the combined patch intent exceeded reliable JSON limits.`,
+      intents,
+      suggestedCommands: createSegmentedCreateProjectCommands(plan, message)
+    };
+  }
+
+  private async generateStructuredWithRepair<T>(request: LlmRequest, schema: unknown, label: string, normalize?: (value: T) => T): Promise<T> {
     let currentRequest = request;
     let errors: string[] = [];
     let lastProviderError: unknown;
@@ -1493,8 +1581,9 @@ export class RunEngine {
         };
         continue;
       }
-      const validation = validateStructuredOutput(generated, schema);
-      if (validation.valid) return generated;
+      const candidate = normalize ? normalize(generated) : generated;
+      const validation = validateStructuredOutput(candidate, schema);
+      if (validation.valid) return candidate;
       errors = validation.errors;
       if (attempt === 3) break;
       currentRequest = {
@@ -1503,7 +1592,7 @@ export class RunEngine {
         userPrompt: `Repair the ${label} using the validation errors.`,
         context: {
           originalRequest: request,
-          invalidResult: generated,
+          invalidResult: candidate,
           validationErrors: validation.errors
         }
       };
@@ -1810,6 +1899,114 @@ function normalizePlan(input: Partial<RunPlanModel>, message: string, snapshot: 
   };
 }
 
+function normalizeProviderRunPlanCandidate<T>(value: T, message: string, snapshot: RepoSnapshot): T {
+  const record = recordValue(value);
+  if (!record) return value;
+  const normalized: Record<string, unknown> = { ...record };
+  const summary = firstString(record, ["summary", "title", "goal"]);
+  const reasoningSummary = firstString(record, ["reasoningSummary", "reasoning_summary", "rationale", "reasoning", "why"]);
+  if (summary) normalized.summary = summary;
+  if (reasoningSummary) normalized.reasoningSummary = reasoningSummary;
+  const mode = normalizePlanMode(firstString(record, ["mode", "runMode", "run_mode", "planMode", "plan_mode"])) ?? inferRunMode(message, snapshot);
+  normalized.mode = mode;
+  const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+  normalized.tasks = tasks.map((task, index) => normalizeProviderRunPlanTask(task, index));
+  normalized.acceptanceCriteria = firstStringArray(record, ["acceptanceCriteria", "acceptance_criteria", "acceptance", "definitionOfDone", "definition_of_done"]) ?? [];
+  normalized.risks = firstStringArray(record, ["risks", "knownRisks", "known_risks", "riskItems", "risk_items"]) ?? [];
+  const suggestedCommands = firstValue(record, ["suggestedCommands", "suggested_commands", "commands", "validationCommands", "validation_commands"]);
+  if (Array.isArray(suggestedCommands)) {
+    normalized.suggestedCommands = suggestedCommands.flatMap((item, index) => {
+      if (typeof item === "string" && item.trim()) return [{ command: item.trim(), reason: "Provider-suggested command." }];
+      const commandRecord = recordValue(item);
+      if (!commandRecord) return [];
+      const command = firstString(commandRecord, ["command", "cmd", "script"]);
+      if (!command) return [];
+      return [{
+        command,
+        reason: firstString(commandRecord, ["reason", "why", "rationale", "description"]) ?? `Provider-suggested command ${index + 1}.`
+      }];
+    });
+  }
+  return normalized as T;
+}
+
+function normalizeProviderRunPlanTask(task: unknown, index: number) {
+  const record = recordValue(task);
+  if (!record) return task;
+  const normalized: Record<string, unknown> = { ...record };
+  const title = firstString(record, ["title", "name", "label", "task", "summary"]);
+  const objective = firstString(record, ["objective", "goal", "description", "summary", "details", "task"]);
+  const roleTitle = firstString(record, ["roleTitle", "role_title", "role", "roleRequired", "role_required", "agentRole", "agent_role", "owner"]);
+  if (title || objective) {
+    normalized.id = firstString(record, ["id", "taskId", "task_id"]) ?? `task_${index + 1}`;
+  }
+  if (title) {
+    normalized.title = title;
+  } else if (objective) {
+    normalized.title = compactTitle(objective);
+  }
+  if (objective) {
+    normalized.objective = objective;
+  } else if (title) {
+    normalized.objective = title;
+  }
+  if (roleTitle) {
+    normalized.roleTitle = roleTitle;
+  } else if (title || objective) {
+    normalized.roleTitle = "Implementation Worker";
+  }
+  const targetFiles = firstStringArray(record, ["targetFiles", "target_files", "files", "paths", "allowedFiles", "allowed_files", "allowed_files_to_edit"]);
+  if (targetFiles) normalized.targetFiles = targetFiles;
+  const expectedArtifact = firstString(record, ["expectedArtifact", "expected_artifact", "artifact", "output"]);
+  if (expectedArtifact) normalized.expectedArtifact = expectedArtifact;
+  const verification = firstString(record, ["verification", "validation", "validationCommand", "validation_command", "command"]);
+  if (verification) normalized.verification = verification;
+  return normalized;
+}
+
+function normalizePlanMode(value?: string): RunPlanModel["mode"] | undefined {
+  const normalized = value?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "create_project" || normalized === "create" || normalized === "scaffold") return "create_project";
+  if (normalized === "edit_project" || normalized === "edit" || normalized === "modify") return "edit_project";
+  if (normalized === "inspect_only" || normalized === "inspect" || normalized === "read_only" || normalized === "readonly") return "inspect_only";
+  return undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function firstValue(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (key in record) return record[key];
+  }
+  return undefined;
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstStringArray(record: Record<string, unknown>, keys: string[]) {
+  const value = firstValue(record, keys);
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+  }
+  return undefined;
+}
+
+function compactTitle(value: string) {
+  const words = value.trim().split(/\s+/).slice(0, 4);
+  return words.join(" ") || "Task";
+}
+
 function createOperatorSuppliedPlanIfPresent(
   message: string,
   snapshot: RepoSnapshot
@@ -1961,6 +2158,81 @@ function normalizePatchIntent(input: Partial<RunPatchIntentModel>, message: stri
     };
   }
   throw new Error("provider_patch_intent_empty_after_repairs");
+}
+
+function shouldUseSegmentedCreateProjectPatchIntent(error: unknown, snapshot: RepoSnapshot, plan: RunPlanModel) {
+  if (plan.mode !== "create_project") return false;
+  if (snapshot.candidateFiles.length || snapshot.fileSamples.length) return false;
+  return /provider_patch_intent_failed_after_retries|real_provider\.invalid_json|malformed structured JSON|provider_patch_intent_invalid_after_repairs/i.test(formatProviderError(error));
+}
+
+function segmentedCreateProjectFiles(message: string, snapshot: RepoSnapshot, plan: RunPlanModel) {
+  const planned = uniqueStrings(plan.tasks.flatMap((task) => task.targetFiles ?? []));
+  const inferred = inferTargetFiles(message, snapshot, "create_project");
+  const files = uniqueStrings([...planned, ...inferred]);
+  const normalizedMessage = message.toLowerCase();
+  const wantsBrowserGame = /\b(game|crossy|snake|three\.?js|webgl|browser)\b/i.test(normalizedMessage);
+  const wantsTests = /\btests?|testing|vitest|jest|mocha\b/i.test(normalizedMessage);
+  if (wantsBrowserGame) {
+    files.push("src/gameLogic.js", "src/styles.css");
+  }
+  if (wantsTests) {
+    files.push("src/gameLogic.test.js");
+  }
+  return uniqueStrings(files)
+    .map((file) => file.replaceAll("\\", "/"))
+    .filter((file) => file && !file.startsWith("../") && !path.isAbsolute(file))
+    .slice(0, 8);
+}
+
+function normalizeSingleFilePatchIntentCandidate<T>(value: T, targetFile: string): T {
+  const record = recordValue(value);
+  if (!record) return value;
+  const normalized: Record<string, unknown> = { ...record };
+  const intents = Array.isArray(record.intents) ? record.intents : [];
+  normalized.intents = intents.slice(0, 1).map((intent) => {
+    const intentRecord = recordValue(intent);
+    if (!intentRecord) return intent;
+    return {
+      ...intentRecord,
+      path: firstString(intentRecord, ["path", "file", "targetFile", "target_file"]) ?? targetFile,
+      operation: firstString(intentRecord, ["operation", "op"]) ?? "create_file",
+      risk: firstString(intentRecord, ["risk", "riskLevel", "risk_level"]) ?? "low",
+      reason: firstString(intentRecord, ["reason", "why", "rationale", "summary"]) ?? `Create ${targetFile}.`,
+      replacementText: typeof intentRecord.replacementText === "string"
+        ? intentRecord.replacementText
+        : typeof intentRecord.content === "string"
+          ? intentRecord.content
+          : typeof intentRecord.text === "string"
+            ? intentRecord.text
+            : ""
+    };
+  });
+  normalized.title = firstString(record, ["title", "name"]) ?? compactTitle(`Create ${targetFile}`);
+  normalized.summary = firstString(record, ["summary", "reason", "rationale"]) ?? `Create ${targetFile}.`;
+  return normalized as T;
+}
+
+function createSegmentedCreateProjectCommands(plan: RunPlanModel, message: string) {
+  const commands = [...(plan.suggestedCommands ?? [])];
+  const normalizedMessage = message.toLowerCase();
+  const wantsTests = /\btests?|testing|vitest|jest|mocha\b/i.test(normalizedMessage);
+  if (!commands.length) {
+    commands.push(
+      { command: "npm install", reason: "Install project dependencies." },
+      { command: "npm run build", reason: "Verify the production build." }
+    );
+    if (wantsTests) {
+      commands.push({ command: "npm test", reason: "Run focused gameplay logic tests." });
+    }
+  }
+  const seen = new Set<string>();
+  return commands.filter((item) => {
+    const key = item.command.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 5);
 }
 
 function inferExplicitAgentCount(message: string): number | null {
@@ -2830,8 +3102,17 @@ function isLaunchRequest(message: string): boolean {
     || /(شغل|ثبت|نزل|افتح).*(المشروع|التطبيق|اللعبة|السيرفر|البروجكت|الأبلكيشن|الابلكيشن)/i.test(message);
 }
 
+function shouldCreateProjectBeforeRunToGreen(message: string, projectKind: string) {
+  if (projectKind !== "empty_project") return false;
+  return /\b(if no runnable app exists|if no runnable app is found|no runnable app|create|new|scaffold|generate|minimal vite|make a new)\b/i.test(message)
+    || /(ط£ظ†ط´ط¦|ط§ظ†ط´ط¦|ط§ط¹ظ…ظ„|ط§ظƒطھط¨).*(ظ…ط´ط±ظˆط¹|طھط·ط¨ظٹظ‚|app|project)/.test(message);
+}
+
 function inferTargetFiles(message: string, snapshot: RepoSnapshot, mode: RunPlanModel["mode"]) {
   if (mode === "create_project") {
+    if (snapshot.intake?.projectKind === "empty_project") {
+      return ["README.md", "package.json", "index.html", "src/main.js"];
+    }
     const base = inferProjectBaseName(message);
     return [`${base}/README.md`, `${base}/package.json`, `${base}/index.html`, `${base}/src/main.js`];
   }

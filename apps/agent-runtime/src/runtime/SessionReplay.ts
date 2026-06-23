@@ -187,6 +187,19 @@ function applyEventToSession(session: AgentRuntimeSession, event: DurableRuntime
       session.status = "restored";
       session.taskState.phase = "restored";
       break;
+    case "intent_contract.compiled": {
+      const intentContract = payload.intentContract;
+      if (isObject(intentContract) && typeof intentContract.contract_id === "string") {
+        const typedContract = intentContract as import("@hivo/protocol").IntentContract;
+        session.intentContract = typedContract;
+        session.intent_contract_ref = typedContract.artifact_ref;
+        session.intent_contract_status = typedContract.status;
+        session.reasoningSummaries.push(`Restored intent contract ${typedContract.contract_id} with status ${typedContract.status}.`);
+      } else {
+        warnings.push(`intent_contract.compiled at sequence ${event.sequence} did not include a canonical IntentContract.`);
+      }
+      break;
+    }
     case "session.expired":
       session.status = "expired";
       session.lifecycleStage = "BLOCKED";
@@ -303,6 +316,27 @@ function applyEventToSession(session: AgentRuntimeSession, event: DurableRuntime
         session.recursiveFactory.updatedAt = event.createdAt;
       } else {
         warnings.push(`branch_result.recorded at sequence ${event.sequence} did not include a canonical branch result.`);
+      }
+      break;
+    }
+    case "semantic_conflict_resolution.updated": {
+      const batch = payload.batch;
+      if (isObject(batch) && typeof batch.batch_id === "string") {
+        session.recursiveFactory ??= { phase: "branch_execution_running", executionStarted: true, updatedAt: event.createdAt };
+        session.recursiveFactory.semanticConflictBatches ??= [];
+        session.recursiveFactory.semanticConflictDecisions ??= [];
+        upsertById(session.recursiveFactory.semanticConflictBatches, batch as import("@hivo/protocol").SemanticConflictResolutionBatch);
+        const decisions = Array.isArray((batch as { decisions?: unknown }).decisions)
+          ? (batch as { decisions: unknown[] }).decisions
+          : [];
+        for (const decision of decisions) {
+          if (isObject(decision) && typeof decision.decision_id === "string") {
+            upsertById(session.recursiveFactory.semanticConflictDecisions, decision as import("@hivo/protocol").SemanticConflictDecision);
+          }
+        }
+        session.recursiveFactory.updatedAt = event.createdAt;
+      } else {
+        warnings.push(`semantic_conflict_resolution.updated at sequence ${event.sequence} did not include a canonical batch.`);
       }
       break;
     }
@@ -858,8 +892,9 @@ function createEmptyOrchestration(): NonNullable<AgentRuntimeSession["orchestrat
   };
 }
 
-function upsertById<T extends { id: string }>(collection: T[], value: T) {
-  const index = collection.findIndex((candidate) => candidate.id === value.id);
+function upsertById<T extends { id?: string; batch_id?: string; decision_id?: string }>(collection: T[], value: T) {
+  const key = value.id ?? value.batch_id ?? value.decision_id;
+  const index = collection.findIndex((candidate) => (candidate.id ?? candidate.batch_id ?? candidate.decision_id) === key);
   if (index >= 0) {
     collection[index] = value;
     return;

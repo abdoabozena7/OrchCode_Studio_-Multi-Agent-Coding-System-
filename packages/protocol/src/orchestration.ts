@@ -43,6 +43,7 @@ export type WorkOrder = {
   requiredArtifacts: string[];
   allowedTools: string[];
   dependsOn: string[];
+  intentFrame?: AgentIntentInputFrame;
 };
 
 export type WorkerCapabilityGrant = {
@@ -70,6 +71,7 @@ export type WorkerSpec = {
   dependsOn: string[];
   targetFiles: string[];
   capabilityGrant: WorkerCapabilityGrant;
+  intentFrame?: AgentIntentInputFrame;
 };
 
 export type ArtifactHandoff = {
@@ -82,6 +84,8 @@ export type ArtifactHandoff = {
   patchProposalIds: string[];
   commandRequestIds: string[];
   validationNotes: string[];
+  intentAlignment?: AgentIntentAlignment;
+  intentHandoffGate?: IntentHandoffGateResult;
   createdAt: string;
 };
 
@@ -207,6 +211,220 @@ export type ProductBrief = {
   successCriteria: string[];
   clarifyingQuestions: string[];
   assumptions: string[];
+};
+
+export type IntentContractStatus =
+  | "ready"
+  | "needs_clarification"
+  | "provider_unavailable"
+  | "invalid";
+
+export type IntentContractRunKind = "core" | "swarm" | "runtime_session";
+
+export type IntentContractPriorityKey =
+  | "speed"
+  | "quality"
+  | "realism"
+  | "fun"
+  | "security"
+  | "cost";
+
+export type IntentContractPriority = {
+  score: number;
+  rationale: string;
+};
+
+export type IntentContractQuestion = {
+  question: string;
+  reason: string;
+  blocking: boolean;
+};
+
+export type IntentContractTradeoff = {
+  name: string;
+  options: string[];
+  preferred?: string;
+  rationale?: string;
+};
+
+export type IntentContract = {
+  schema_version: number;
+  contract_id: string;
+  run_id: string;
+  run_kind: IntentContractRunKind;
+  revision: number;
+  original_user_request: string;
+  precise_rewrite: string;
+  assumptions: string[];
+  missing_questions: IntentContractQuestion[];
+  tradeoffs: IntentContractTradeoff[];
+  priorities: Record<IntentContractPriorityKey, IntentContractPriority>;
+  definition_of_done: string[];
+  non_goals: string[];
+  conflict_rules: string[];
+  status: IntentContractStatus;
+  created_at: string;
+  artifact_ref?: string;
+  summary_ref?: string;
+  metadata_json: Record<string, unknown>;
+};
+
+export type AgentIntentLayer =
+  | "core"
+  | "swarm"
+  | "legacy_orchestrated"
+  | "runtime_delegation";
+
+export type AgentIntentLockedDefinition = {
+  term: string;
+  definition: string;
+  revision?: number;
+  source?: string;
+  artifact_ref?: string;
+};
+
+export type AgentIntentTaskSlice = {
+  task_slice_id: string;
+  task_id: string;
+  parent_task_id?: string;
+  layer: AgentIntentLayer;
+  role: string;
+  objective: string;
+  task_title?: string;
+  task_type?: string;
+  slice_summary: string;
+  read_files: string[];
+  write_files: string[];
+  allowed_files: string[];
+  forbidden_files: string[];
+  dependencies: string[];
+  expected_output_schema: string;
+  validation_requirements: string[];
+  context_refs: string[];
+  risk_level?: string;
+  metadata_json: Record<string, unknown>;
+};
+
+export type AgentIntentInputFrame = {
+  schema_version: number;
+  frame_id: string;
+  run_id: string;
+  run_kind: IntentContractRunKind;
+  layer: AgentIntentLayer;
+  original_user_request: string;
+  original_request_hash: string;
+  original_request_ref?: string;
+  intent_contract: IntentContract;
+  intent_contract_ref?: string;
+  intent_contract_status: IntentContractStatus;
+  intent_ledger_refs: string[];
+  locked_intent_definitions: AgentIntentLockedDefinition[];
+  current_task_slice: AgentIntentTaskSlice;
+  created_at: string;
+  metadata_json: Record<string, unknown>;
+};
+
+export type AgentIntentAlignment = {
+  schema_version: number;
+  alignment_id?: string;
+  run_id?: string;
+  task_id?: string;
+  original_request_hash: string;
+  intent_contract_ref?: string;
+  intent_contract_revision?: number;
+  task_slice_id?: string;
+  task_understanding: string;
+  original_goal_contribution: string;
+  possible_intent_conflicts: string[];
+  assumptions_used: string[];
+  evidence_refs: string[];
+};
+
+export type IntentHandoffGateResult = {
+  schema_version: number;
+  gate_id: string;
+  run_id: string;
+  task_id: string;
+  layer: AgentIntentLayer;
+  passed: boolean;
+  status: "passed" | "blocked";
+  deterministic_errors: string[];
+  provider_used: boolean;
+  provider_status?: "aligned" | "possible_drift" | "drift_detected" | "insufficient_context";
+  reviewed_artifact_refs: string[];
+  frame_ref?: string;
+  output_ref?: string;
+  artifact_ref?: string;
+  alignment?: AgentIntentAlignment;
+  created_at: string;
+  metadata_json: Record<string, unknown>;
+};
+
+export type SemanticConflictPhase =
+  | "planning"
+  | "review"
+  | "integration"
+  | "post_integration"
+  | "finalization";
+
+export type SemanticConflictSeverity = "info" | "warning" | "blocking";
+
+export type SemanticConflictDecisionStatus =
+  | "resolved"
+  | "requires_user_approval"
+  | "blocked"
+  | "provider_unavailable";
+
+export type SemanticConflictDecision = {
+  schema_version: number;
+  decision_id: string;
+  batch_id?: string;
+  run_id: string;
+  phase: SemanticConflictPhase;
+  conflict: string;
+  source_a: string;
+  source_b: string;
+  root_intent: string;
+  decision: string;
+  reason: string;
+  requires_user_approval: boolean;
+  severity: SemanticConflictSeverity;
+  status: SemanticConflictDecisionStatus;
+  question?: string;
+  options: string[];
+  source_refs: string[];
+  evidence_refs: string[];
+  intent_contract_ref?: string;
+  project_goal_spec_ref?: string;
+  artifact_ref?: string;
+  summary_ref?: string;
+  created_at: string;
+  resolved_at?: string;
+  metadata_json: Record<string, unknown>;
+};
+
+export type SemanticConflictResolutionBatchStatus =
+  | "resolved"
+  | "requires_user_approval"
+  | "blocked"
+  | "provider_unavailable"
+  | "empty";
+
+export type SemanticConflictResolutionBatch = {
+  schema_version: number;
+  batch_id: string;
+  run_id: string;
+  phase: SemanticConflictPhase;
+  status: SemanticConflictResolutionBatchStatus;
+  root_intent: string;
+  decision_ids: string[];
+  decisions: SemanticConflictDecision[];
+  unresolved_decision_ids: string[];
+  provider_used: boolean;
+  artifact_ref?: string;
+  summary_ref?: string;
+  created_at: string;
+  metadata_json: Record<string, unknown>;
 };
 
 export type FactoryArtifactStatus = "proposed" | "approved" | "rejected" | "changes_requested";
@@ -624,6 +842,30 @@ export type RecursiveBranchResultRecord = {
   updatedAt: string;
 };
 
+export type RecursiveIntegrationNodeLevel = "local_team" | "area" | "domain" | "root";
+
+export type RecursiveIntegrationNodeSummary = {
+  id: string;
+  sessionId: string;
+  level: RecursiveIntegrationNodeLevel;
+  title: string;
+  parentNodeId?: string;
+  childNodeIds: string[];
+  branchIds: string[];
+  integratedResultRefs: string[];
+  conflictReportRefs: string[];
+  validation: RecursiveValidationRecord;
+  intentAlignmentScore: number;
+  unresolvedDecisions: string[];
+  conflictsResolved: string[];
+  conflictsUnresolved: string[];
+  integrationRisks: string[];
+  remainingManualSteps: string[];
+  createdAt: string;
+  updatedAt: string;
+  metadata_json: Record<string, unknown>;
+};
+
 export type RecursiveIntegrationSummary = {
   id: string;
   sessionId: string;
@@ -636,6 +878,7 @@ export type RecursiveIntegrationSummary = {
   integrationRisks: string[];
   remainingManualSteps: string[];
   validation: RecursiveValidationRecord;
+  integrationHierarchy?: RecursiveIntegrationNodeSummary[];
   createdAt: string;
   updatedAt: string;
 };
@@ -722,6 +965,8 @@ export type RecursiveFactoryState = {
   finalReport?: RecursiveFinalReport;
   repair?: RecursiveRepairRecord;
   branchScopeConflicts?: BranchScopeConflict[];
+  semanticConflictBatches?: SemanticConflictResolutionBatch[];
+  semanticConflictDecisions?: SemanticConflictDecision[];
   graphReadiness?: RecursiveGraphReadiness;
   activeBranchId?: string;
   executionStarted: boolean;
@@ -869,6 +1114,14 @@ export type SessionNextAction =
   | {
       kind: "approve_commands";
       message: string;
+    }
+  | {
+      kind: "resolve_semantic_conflict";
+      message: string;
+      decisionId: string;
+      question: string;
+      options: string[];
+      evidenceRefs: string[];
     }
   | {
       kind: "preview_ready";

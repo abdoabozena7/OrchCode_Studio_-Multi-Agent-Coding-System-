@@ -1,10 +1,14 @@
 import type {
   AgentRuntimeSession,
+  AgentRuntimeSwarmMessage,
+  AgentRuntimeSwarmNode,
   BranchOrchestratorRecord,
   CommandExecutionRecord,
   CreateRuntimeSessionRequest,
   CreateRuntimeSessionResponse,
+  AgentScopedMessageResponse,
   FactoryApprovalDecisionRequest,
+  IntentContract,
   PatchProposal,
   ProviderAuthoredResult,
   RecursiveBranchExecutionRecord,
@@ -14,11 +18,15 @@ import type {
   RecursiveFinalReport,
   RecursiveFailurePatchAttribution,
   RecursiveIntegrationSummary,
+  RecursiveIntegrationNodeLevel,
+  RecursiveIntegrationNodeSummary,
   RecursiveNestedSubtaskRecord,
   RecursiveNestedSubtaskRollup,
   RecursivePatchProvenance,
   RecursiveRepairEligibility,
   RecursiveRepairRecord,
+  SemanticConflictDecision,
+  SemanticConflictResolutionBatch,
   RecursiveValidationAttempt,
   RecursiveValidationEvidence,
   RecursiveValidationFailureDiagnosis,
@@ -28,6 +36,7 @@ import type {
   ReportCommandResultRequest,
   ReportPatchApplyResultRequest,
   ReasoningEvidenceRef,
+  ProjectMap,
   RunToGreenDiagnosis,
   RunSummary,
   RuntimeSessionStatus,
@@ -53,6 +62,7 @@ import {
 import { runPatchIntentSchema } from "../schemas/sessionSchemas.js";
 import { validateStructuredOutput } from "../schemas/validators.js";
 import { readMemorySnapshotSync } from "../memory/SqliteMemoryStore.js";
+import { resolveMemoryPaths } from "../memory/ProjectMemory.js";
 import { resolveModelCertification } from "../evals/ReasoningCertificationRegistry.js";
 import { SessionManager } from "./SessionManager.js";
 import { appendProviderEvidenceLinks } from "./ProviderEvidenceLinks.js";
@@ -61,6 +71,12 @@ import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { resolveInsideWorkspace } from "../tools/security.js";
 import { classifyCommandRisk, looksLikeBackgroundCommand, looksLikeNetworkCommand } from "../tools/CommandPolicy.js";
 import { isExplicitOperatorSuppliedImplementationPlan, RunEngine } from "./RunEngine.js";
+import { IntentLedgerService } from "../orchestration/IntentLedgerService.js";
+import { UserIntentCompiler, type UserIntentCompilationResult } from "../orchestration/UserIntentCompiler.js";
+import { ProjectGoalSpecStore } from "../orchestration/GoalSteward.js";
+import { OrchestrationArtifactStore } from "../orchestration/ArtifactStore.js";
+import { SemanticConflictResolver } from "../orchestration/SemanticConflictResolver.js";
+import { semanticBatchBlocks } from "../orchestration/SemanticConflictResolverModels.js";
 import { SwarmAutopilotRuntime } from "../orchestration/SwarmRuntime.js";
 import { buildProjectIntake, classifyRunIntent, createProjectIntakeEvidenceRefs } from "./ProjectIntake.js";
 import {
@@ -90,9 +106,18 @@ import type { IntentDecision } from "./IntentDecisionEngine.js";
 import { createConversationUnderstanding, type ConversationUnderstanding } from "./ConversationUnderstanding.js";
 import { executionModeForConversationRoute } from "./ConversationRouter.js";
 import { beginDecisionPipeline, finalizeAdaptiveReasoningDecisionPipeline } from "./DecisionPipeline.js";
-import { continueAdaptiveReasoningTurn, invokeReasoningProviderStructured, ReasoningKernelFailure } from "./ReasoningKernel.js";
+import {
+  continueAdaptiveReasoningTurn,
+  invokeReasoningProviderText,
+  invokeReasoningProviderStructured,
+  REASONING_CONVERSATION_CONTEXT_MAX_CHARS,
+  REASONING_CONVERSATION_CONTEXT_MAX_MESSAGES,
+  ReasoningKernelFailure,
+  type ReasoningConversationContext
+} from "./ReasoningKernel.js";
 import { EvidenceStore } from "./EvidenceStore.js";
 import { runReadOnlyUnderstandingEscalation } from "./ProjectUnderstandingEscalation.js";
+import { buildAgentRuntimeSwarmState } from "./SwarmSessionState.js";
 import {
   buildProductSpecification,
   buildHierarchicalRecursiveGraph,
@@ -169,6 +194,7 @@ export class AgentRuntime {
       return { sessionId, status: this.requireSession(sessionId).status };
     }
     const promptForExecution = pendingAction.resumePrompt ?? message;
+    const conversationContext = buildSameSessionConversationContext(session, promptForExecution);
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.status = "running";
       draft.lifecycleStage = "INTAKE";
@@ -209,7 +235,8 @@ export class AgentRuntime {
       const decisionPipeline = await beginDecisionPipeline({
         message: promptForExecution,
         provider,
-        routerProvider
+        routerProvider,
+        conversationContext
       });
       conversationUnderstanding = decisionPipeline.understanding;
       await this.recordInitialDecisionPipeline(sessionId, decisionPipeline.state);
@@ -287,7 +314,8 @@ export class AgentRuntime {
             };
           },
           onCommandRequest: (request) => this.sessionManager.addCommandRequest(sessionId, request).then(() => undefined),
-          onPatchProposal: (proposal) => this.sessionManager.addPatchProposal(sessionId, proposal).then(() => undefined)
+          onPatchProposal: (proposal) => this.sessionManager.addPatchProposal(sessionId, proposal).then(() => undefined),
+          conversationContext
         });
         const result = adaptive.result;
         providerTelemetry.markProviderAuthoredResponse();
@@ -314,6 +342,15 @@ export class AgentRuntime {
         }
         return this.completeDirectConversationTurn(sessionId, promptForExecution, conversationUnderstanding.intentDecision, result, adaptive.trace.evidenceRefs);
       }
+      const intentCompilation = await this.compileRuntimeIntentContract(sessionId, promptForExecution, provider, {
+        route: conversationUnderstanding?.routeDecision.route,
+        intent_kind: conversationUnderstanding?.intentDecision.kind,
+        decision_pipeline_id: decisionPipeline.state.id
+      });
+      if (!intentCompilation.ready) {
+        return this.blockRuntimePlanningForIntentContract(sessionId, promptForExecution, intentCompilation, providerTelemetry);
+      }
+      const planningPrompt = intentCompilation.contract.precise_rewrite;
       const tools = new ToolRegistry(session.workspacePath);
       const projectSummary = tools.workspace.getProjectSummary();
       const projectMap = {
@@ -325,12 +362,12 @@ export class AgentRuntime {
       };
       const intake = buildProjectIntake({
         workspacePath: session.workspacePath,
-        message: promptForExecution,
+        message: planningPrompt,
         projectMap,
         tools,
         conversationUnderstanding
       });
-      const parsedDirective = parsePromptDirective(promptForExecution);
+      const parsedDirective = parsePromptDirective(planningPrompt);
       const routedExecutionMode = conversationUnderstanding
         ? executionModeForConversationRoute(conversationUnderstanding.routeDecision.route)
         : undefined;
@@ -340,22 +377,24 @@ export class AgentRuntime {
             ? {
                 mode: parsedDirective.explicitMode ?? routedExecutionMode!,
                 directive: parsedDirective,
-                complexity: createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }).estimatedComplexity
+                complexity: createSimpleDelegationDecision({ prompt: planningPrompt, projectMap }).estimatedComplexity
               }
-            : resolveExecutionMode(promptForExecution, projectMap)
+            : resolveExecutionMode(planningPrompt, projectMap)
           : {
               mode: session.executionMode,
               directive: parsedDirective,
-              complexity: createSimpleDelegationDecision({ prompt: promptForExecution, projectMap }).estimatedComplexity
+              complexity: createSimpleDelegationDecision({ prompt: planningPrompt, projectMap }).estimatedComplexity
             };
 
       const requestedAgentCount = modeResolution.directive.requestedAgentCount ?? 0;
       const thinkFirst = session.thinkFirst || modeResolution.directive.thinkFirstRequested;
       let updated: AgentRuntimeSession;
-      if (modeResolution.mode === "orchestrated_mode") {
-        updated = await this.runProviderBackedSwarmTurn(sessionId, promptForExecution, provider, providerTelemetry, conversationUnderstanding);
+      if (modeResolution.mode === "recursive_factory") {
+        updated = await this.startRecursiveFactory(sessionId, planningPrompt, projectMap);
+      } else if (modeResolution.mode === "orchestrated_mode") {
+        updated = await this.runProviderBackedSwarmTurn(sessionId, planningPrompt, provider, providerTelemetry, projectMap, conversationUnderstanding);
       } else {
-        updated = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, promptForExecution, {
+        updated = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, planningPrompt, {
           resolvedMode: modeResolution.mode,
           projectMap,
           thinkFirst,
@@ -369,7 +408,8 @@ export class AgentRuntime {
     } catch (error) {
       providerTelemetry.markProviderError(error);
       providerTelemetry.markTerminalFailure(error);
-      const providerGateFailure = isProviderGateFailure(error, session);
+      const latestSessionForFailure = this.sessionManager.getSession(sessionId) ?? session;
+      const providerGateFailure = isProviderGateFailure(error, latestSessionForFailure);
       const failureMessage = formatRuntimeError(error);
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.status = providerGateFailure ? "failed_provider" : "failed";
@@ -409,8 +449,147 @@ export class AgentRuntime {
           createdAt: new Date().toISOString()
         };
       });
+      const failureSession = this.sessionManager.getSession(sessionId) ?? latestSessionForFailure;
+      if (failureSession.messages.at(-1)?.role === "user") {
+        await this.sessionManager.addMessage(sessionId, {
+          role: "system",
+          content: formatRuntimeFailureSystemMessage(error, Boolean(providerGateFailure), failureSession)
+        });
+      }
       return { sessionId, status: providerGateFailure ? "failed_provider" : "failed" };
     }
+  }
+
+  private async compileRuntimeIntentContract(
+    sessionId: string,
+    originalRequest: string,
+    provider: LlmProvider,
+    parentContext: Record<string, unknown>
+  ): Promise<UserIntentCompilationResult> {
+    const session = this.requireSession(sessionId);
+    const artifactsPath = path.join(resolveMemoryPaths(session.workspacePath).rootDir, "runtime_intents", sessionId);
+    const ledger = new IntentLedgerService({
+      workspacePath: session.workspacePath,
+      sourceComponent: "AgentRuntime"
+    });
+    const original = await ledger.saveOriginalRequest({
+      runId: sessionId,
+      runKind: "runtime_session",
+      artifactsPath,
+      originalRequest,
+      metadata: {
+        source_component: "AgentRuntime",
+        session_id: sessionId
+      }
+    });
+    const compilation = await new UserIntentCompiler().compile({
+      workspacePath: session.workspacePath,
+      runId: sessionId,
+      runKind: "runtime_session",
+      artifactsPath,
+      originalRequest,
+      provider,
+      parentContext: {
+        ...parentContext,
+        session_id: sessionId,
+        original_request_ref: original.artifact_ref,
+        intent_ledger_ref: path.join(artifactsPath, "intent", "intent_ledger.json"),
+        execution_mode: session.executionMode,
+        trust_profile: session.trustProfile
+      },
+      sourceComponent: "AgentRuntime"
+    });
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.intentContract = compilation.contract;
+      draft.intent_contract_ref = compilation.contract.artifact_ref;
+      draft.intent_contract_status = compilation.contract.status;
+      draft.reasoningSummaries.push(`Intent contract compiled with status ${compilation.contract.status}.`);
+    });
+    await this.sessionManager.addArtifact(sessionId, {
+      id: `artifact_intent_contract_${randomUUID()}`,
+      sessionId,
+      type: "intent_contract",
+      title: "Intent Contract",
+      summary: `Intent contract status: ${compilation.contract.status}.`,
+      payload: { intentContract: compilation.contract },
+      createdAt: new Date().toISOString()
+    });
+    this.sessionManager.publishIntentContractEvent({
+      type: "runtime.intent_contract.compiled",
+      sessionId,
+      intentContract: compilation.contract
+    });
+    return compilation;
+  }
+
+  private async blockRuntimePlanningForIntentContract(
+    sessionId: string,
+    originalRequest: string,
+    compilation: UserIntentCompilationResult,
+    providerTelemetry: ReturnType<typeof createProviderTelemetryRecorder>
+  ): Promise<RuntimeTurnResponse> {
+    const contract = compilation.contract;
+    const blockingQuestions = compilation.blockingQuestions;
+    const status: RuntimeSessionStatus =
+      contract.status === "provider_unavailable"
+        ? "failed_provider"
+        : contract.status === "needs_clarification"
+          ? "needs_approval"
+          : "blocked";
+    const summary = contract.status === "needs_clarification"
+      ? "Planning is waiting for blocking intent clarification."
+      : `Planning blocked by intent contract status ${contract.status}.`;
+    await this.sessionManager.addMessage(sessionId, {
+      role: "system",
+      content: formatIntentContractBlockMessage(contract, blockingQuestions, compilation.validationErrors)
+    });
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = status;
+      draft.lifecycleStage = contract.status === "provider_unavailable"
+        ? "FAILED"
+        : contract.status === "needs_clarification"
+          ? "PLAN"
+          : "BLOCKED";
+      draft.intentContract = contract;
+      draft.intent_contract_ref = contract.artifact_ref;
+      draft.intent_contract_status = contract.status;
+      draft.providerTelemetry = providerTelemetry.snapshot();
+      draft.nextAction = contract.status === "needs_clarification"
+        ? {
+            kind: "clarify_request",
+            message: "Answer the blocking intent questions before planning can start.",
+            originalRequest,
+            missingFacts: blockingQuestions
+          }
+        : undefined;
+      draft.taskState.phase = contract.status === "provider_unavailable" ? "failed" : "verification_pending";
+      draft.taskState.finalStatus =
+        status === "failed_provider" ? "failed" : status === "blocked" ? "blocked" : undefined;
+      draft.runSummary = {
+        status: contract.status === "needs_clarification" ? "pending" : status === "failed_provider" ? "failed" : "blocked",
+        summary,
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: [{
+          name: "Intent contract gate",
+          status: contract.status === "provider_unavailable" ? "failed" : "blocked",
+          notes: [
+            `intent_contract_status=${contract.status}`,
+            `intent_contract_ref=${contract.artifact_ref ?? "missing"}`,
+            ...blockingQuestions.map((question) => `blocking_question=${question}`),
+            ...compilation.validationErrors.map((error) => `validation_error=${error}`)
+          ]
+        }],
+        nextAction: contract.status === "needs_clarification"
+          ? "Answer the blocking intent questions; planning has not started."
+          : "Restore a ready provider-authored intent contract before planning.",
+        createdAt: new Date().toISOString()
+      };
+      draft.reasoningSummaries.push(summary);
+    });
+    return { sessionId, status };
   }
 
   private async completeKnowledgeRoutedEdit(
@@ -795,6 +974,11 @@ export class AgentRuntime {
     if (factory.executionStarted) {
       throw new Error("Recursive branch execution has already started for this session.");
     }
+    const semanticBatch = await this.reviewRecursiveGraphSemanticConflicts(current);
+    if (semanticBatch && semanticBatchBlocks(semanticBatch)) {
+      await this.blockRecursiveBranchExecutionForSemanticConflict(sessionId, semanticBatch);
+      throw new Error(`Branch execution blocked by semantic conflict resolution: ${semanticBatch.status}`);
+    }
 
     const now = new Date().toISOString();
     const branches = factory.branchOrchestrators?.length ? factory.branchOrchestrators : factory.recursiveGraph.branches;
@@ -1172,6 +1356,86 @@ export class AgentRuntime {
       draft.lifecycleStage = "BLOCKED";
       draft.nextAction = undefined;
       draft.reasoningSummaries.push(`Recursive branch execution blocked: ${reason}`);
+    });
+  }
+
+  private async reviewRecursiveGraphSemanticConflicts(session: AgentRuntimeSession) {
+    const factory = session.recursiveFactory;
+    const graph = factory?.recursiveGraph;
+    const branches = factory?.branchOrchestrators?.length ? factory.branchOrchestrators : graph?.branches;
+    if (!factory?.productSpec || !graph || !branches?.length) return undefined;
+    const projectGoalSpec = await new ProjectGoalSpecStore({ workspacePath: session.workspacePath })
+      .loadActiveProjectGoalSpec()
+      .catch(() => undefined);
+    const batch = await new SemanticConflictResolver({
+      workspacePath: session.workspacePath,
+      artifactStore: new OrchestrationArtifactStore(session.workspacePath),
+      provider: this.getProvider(session),
+      mode: "strict"
+    }).resolve({
+      runId: session.id,
+      phase: "planning",
+      rootIntent: factory.productSpec.userGoal,
+      projectGoalSpec,
+      sources: branches.map((branch) => ({
+        source_id: branch.branchId,
+        source_role: branch.ownerRole,
+        summary: [
+          branch.title,
+          branch.objective,
+          branch.semanticScopes.length ? `semantic_scopes=${branch.semanticScopes.join(", ")}` : undefined,
+          branch.expectedIntegrationPoints.length ? `integration_points=${branch.expectedIntegrationPoints.join(", ")}` : undefined,
+          branch.risks.length ? `risks=${branch.risks.join(", ")}` : undefined
+        ].filter(Boolean).join("; "),
+        refs: [branch.branchId, graph.id, ...branch.fileScopes, ...branch.semanticScopes],
+        possible_conflicts: branch.risks.filter((risk) => /conflict|tradeoff|intent|goal|realism|fun|cost|reliability|speed|quality/i.test(risk)),
+        metadata_json: {
+          graph_id: graph.id,
+          file_scopes: branch.fileScopes,
+          lock_scopes: branch.lockScopes,
+          dependencies: branch.dependencies
+        }
+      })),
+      metadata_json: { source_component: "AgentRuntime.reviewRecursiveGraphSemanticConflicts" }
+    });
+    if (!batch.decisions.length) return batch;
+    await this.sessionManager.updateSession(session.id, (draft) => {
+      draft.recursiveFactory ??= { phase: "recursive_graph_ready", executionStarted: false, updatedAt: new Date().toISOString() };
+      draft.recursiveFactory.semanticConflictBatches ??= [];
+      draft.recursiveFactory.semanticConflictDecisions ??= [];
+      upsertById(draft.recursiveFactory.semanticConflictBatches, batch);
+      for (const decision of batch.decisions) upsertById(draft.recursiveFactory.semanticConflictDecisions, decision);
+      draft.recursiveFactory.updatedAt = new Date().toISOString();
+    });
+    this.sessionManager.publishFactoryEvent({ type: "runtime.semantic_conflict_resolution.updated", sessionId: session.id, batch });
+    return batch;
+  }
+
+  private async blockRecursiveBranchExecutionForSemanticConflict(sessionId: string, batch: SemanticConflictResolutionBatch) {
+    const decision = batch.decisions.find((entry) => entry.requires_user_approval || entry.status === "requires_user_approval")
+      ?? batch.decisions.find((entry) => entry.severity === "blocking")
+      ?? batch.decisions[0];
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.recursiveFactory ??= { phase: "branch_execution_blocked", executionStarted: false, updatedAt: new Date().toISOString() };
+      draft.recursiveFactory.phase = "branch_execution_blocked";
+      draft.recursiveFactory.semanticConflictBatches ??= [];
+      draft.recursiveFactory.semanticConflictDecisions ??= [];
+      upsertById(draft.recursiveFactory.semanticConflictBatches, batch);
+      for (const item of batch.decisions) upsertById(draft.recursiveFactory.semanticConflictDecisions, item);
+      draft.recursiveFactory.updatedAt = new Date().toISOString();
+      draft.status = decision?.requires_user_approval ? "needs_approval" : "blocked";
+      draft.lifecycleStage = decision?.requires_user_approval ? "APPROVAL" : "BLOCKED";
+      draft.nextAction = decision?.requires_user_approval
+        ? {
+            kind: "resolve_semantic_conflict",
+            message: "Resolve the semantic conflict before recursive branch execution can start.",
+            decisionId: decision.decision_id,
+            question: decision.question ?? decision.reason,
+            options: decision.options,
+            evidenceRefs: decision.evidence_refs
+          }
+        : undefined;
+      draft.reasoningSummaries.push(`Recursive branch execution blocked by semantic conflict resolution: ${batch.status}.`);
     });
   }
 
@@ -2070,6 +2334,124 @@ export class AgentRuntime {
     return createRealProvider(session.providerConfig, this.config.providerRequestTimeoutMs);
   }
 
+  async sendAgentScopedMessage(sessionId: string, agentId: string, message: string): Promise<AgentScopedMessageResponse> {
+    const content = message.trim();
+    if (!content) throw new Error("agent_message_empty");
+    const session = this.requireSession(sessionId);
+    const swarmState = session.swarmState ?? buildAgentRuntimeSwarmState(session);
+    const node = swarmState.nodes.find((candidate) => candidate.id === agentId);
+    if (!node) throw new Error("agent_not_found");
+    if (!isMessageableSwarmNode(node)) throw new Error("agent_not_messageable");
+
+    const userMessage: AgentRuntimeSwarmMessage = {
+      id: `agent_msg_${randomUUID()}`,
+      agentId,
+      role: "user",
+      content,
+      status: "recorded",
+      createdAt: new Date().toISOString()
+    };
+    await this.recordAgentScopedMessage(sessionId, userMessage, {
+      journalTitle: "Scoped steer received",
+      journalStatus: node.status === "running" || node.status === "queued" ? "queued" : "completed"
+    });
+
+    if (node.status === "running" || node.status === "queued" || node.status === "idle") {
+      const updated = this.requireSession(sessionId);
+      return {
+        sessionId,
+        agentId,
+        status: "recorded",
+        message: userMessage,
+        session: updated
+      };
+    }
+
+    const afterRecord = this.requireSession(sessionId);
+    const modelCertification = resolveModelCertification(afterRecord.workspacePath, afterRecord.providerConfig);
+    const providerTelemetry = createProviderTelemetryRecorder({
+      mode: afterRecord.mode,
+      providerConfig: afterRecord.providerConfig,
+      activeProviderSource: afterRecord.activeProviderSource,
+      modelCertification
+    });
+    const provider = new TelemetryLlmProvider(this.getProvider(afterRecord), providerTelemetry);
+    const answer = await invokeReasoningProviderText(provider, {
+      purpose: "compose",
+      maxOutputTokens: 700,
+      maxContextChars: 32_000,
+      systemPrompt: [
+        "You are answering as a real Hivo runtime agent from persisted agent context.",
+        "Answer only from the supplied agent/session records.",
+        "If the records do not contain enough information, say that the agent does not have that information recorded.",
+        "Do not invent work, files, commands, or outcomes."
+      ].join("\n"),
+      userPrompt: content,
+      context: {
+        agent: node,
+        recent_agent_messages: afterRecord.swarmState?.messages.filter((entry) => entry.agentId === agentId).slice(-12) ?? [],
+        session: {
+          id: afterRecord.id,
+          status: afterRecord.status,
+          lifecycleStage: afterRecord.lifecycleStage,
+          runSummary: afterRecord.runSummary,
+          verificationResult: afterRecord.verificationResult,
+          tasks: afterRecord.tasks.filter((task) => node.workItemRefs.includes(task.id)),
+          workerOutputs: afterRecord.orchestration?.workerOutputs.filter((output) => node.workItemRefs.includes(output.taskId) || output.agentName === node.name)
+        }
+      }
+    });
+    const responseMessage: AgentRuntimeSwarmMessage = {
+      id: `agent_msg_${randomUUID()}`,
+      agentId,
+      role: "agent",
+      content: answer.trim(),
+      status: "answered",
+      providerRequestRefs: providerTelemetry.snapshot().providerRequestRefs,
+      createdAt: new Date().toISOString()
+    };
+    await this.recordAgentScopedMessage(sessionId, responseMessage, {
+      journalTitle: "Scoped read-only answer recorded",
+      journalStatus: "completed",
+      providerTelemetry: providerTelemetry.snapshot()
+    });
+    return {
+      sessionId,
+      agentId,
+      status: "answered",
+      message: userMessage,
+      response: responseMessage,
+      session: this.requireSession(sessionId)
+    };
+  }
+
+  private async recordAgentScopedMessage(
+    sessionId: string,
+    message: AgentRuntimeSwarmMessage,
+    options: {
+      journalTitle: string;
+      journalStatus: import("@hivo/protocol").AgentWorkJournalStatus;
+      providerTelemetry?: AgentRuntimeSession["providerTelemetry"];
+    }
+  ) {
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      const previousMessages = draft.swarmState?.messages ?? [];
+      draft.swarmState = buildAgentRuntimeSwarmState(draft, [...previousMessages, message]);
+      if (options.providerTelemetry) {
+        draft.providerTelemetry = options.providerTelemetry;
+      }
+      const agent = draft.orchestration?.agentRuns.find((candidate) => candidate.id === message.agentId);
+      if (agent) {
+        appendAgentJournalEntry(agent, {
+          kind: message.role === "user" ? "decision" : "completed",
+          title: options.journalTitle,
+          summary: message.content,
+          status: options.journalStatus
+        });
+      }
+    });
+  }
+
   private async advanceRunToGreenFromCommandResult(sessionId: string, record: CommandExecutionRecord) {
     const session = this.requireSession(sessionId);
     const runToGreen = session.runToGreen;
@@ -2461,6 +2843,7 @@ export class AgentRuntime {
     const maybeClarify = session.nextAction as typeof session.nextAction | PlanClarifyAction;
     if (session.nextAction.kind === "clarify_request") {
       const resumePrompt = `${session.nextAction.originalRequest}\n\nClarification: ${message.trim()}`;
+      await this.recordLockedClarification(session, "request_clarification", message.trim(), "user_clarification");
       await this.sessionManager.updateSession(session.id, (draft) => {
         draft.userPrompt = resumePrompt;
         draft.nextAction = undefined;
@@ -2469,6 +2852,7 @@ export class AgentRuntime {
     }
     if (session.nextAction.kind === "clarify_product_spec") {
       const resumePrompt = `${session.userPrompt}\n\nProduct clarification: ${message.trim()}`;
+      await this.recordLockedClarification(session, "product_spec_clarification", message.trim(), "user_clarification");
       await this.sessionManager.updateSession(session.id, (draft) => {
         draft.userPrompt = resumePrompt;
         draft.nextAction = undefined;
@@ -2480,6 +2864,7 @@ export class AgentRuntime {
         maybeClarify.options.find((option) => option.id === normalized || option.label.toLowerCase() === normalized)
         ?? maybeClarify.options.find((option) => option.prompt.toLowerCase() === normalized);
       const clarification = (selected?.prompt ?? message).trim();
+      await this.recordLockedClarification(session, "plan_mode_clarification", clarification, "plan_clarification");
       await this.sessionManager.updateSession(session.id, (draft) => {
         draft.nextAction = undefined as AgentRuntimeSession["nextAction"];
         draft.thinkFirst = true;
@@ -2498,6 +2883,39 @@ export class AgentRuntime {
       await this.sessionManager.addMessage(session.id, {
         role: "system",
         content: "Okay. Review the plan and tell me when to proceed with implementation."
+      });
+      return { handled: true };
+    }
+
+    if (session.nextAction.kind === "resolve_semantic_conflict") {
+      const action = session.nextAction;
+      const resolution = message.trim();
+      await this.sessionManager.updateSession(session.id, (draft) => {
+        const decision = draft.recursiveFactory?.semanticConflictDecisions?.find((candidate) => candidate.decision_id === action.decisionId);
+        if (decision) {
+          decision.decision = resolution;
+          decision.reason = `User resolved semantic conflict: ${resolution}`;
+          decision.requires_user_approval = false;
+          decision.status = "resolved";
+          decision.severity = "warning";
+          decision.resolved_at = new Date().toISOString();
+          decision.metadata_json = { ...decision.metadata_json, user_resolution: resolution };
+        }
+        for (const batch of draft.recursiveFactory?.semanticConflictBatches ?? []) {
+          batch.decisions = batch.decisions.map((item) => item.decision_id === decision?.decision_id ? decision : item);
+          batch.unresolved_decision_ids = batch.decisions
+            .filter((item) => item.requires_user_approval || item.status === "requires_user_approval" || item.status === "blocked")
+            .map((item) => item.decision_id);
+          batch.status = batch.unresolved_decision_ids.length ? "requires_user_approval" : "resolved";
+        }
+        draft.status = "needs_approval";
+        draft.lifecycleStage = "APPROVAL";
+        draft.nextAction = undefined;
+        draft.reasoningSummaries.push(`Semantic conflict resolved by user: ${resolution}`);
+      });
+      await this.sessionManager.addMessage(session.id, {
+        role: "system",
+        content: "Semantic conflict resolution recorded. You can retry the blocked action."
       });
       return { handled: true };
     }
@@ -2549,6 +2967,26 @@ export class AgentRuntime {
     }
 
     return { handled: false };
+  }
+
+  private async recordLockedClarification(
+    session: AgentRuntimeSession,
+    term: string,
+    definition: string,
+    source: "user_clarification" | "plan_clarification"
+  ) {
+    if (!definition.trim()) return;
+    await new IntentLedgerService({
+      workspacePath: session.workspacePath,
+      sourceComponent: "AgentRuntime"
+    }).saveRuntimeLockedDefinition({
+      sessionId: session.id,
+      workspacePath: session.workspacePath,
+      term,
+      definition,
+      source,
+      approvalRef: `session:${session.id}:${term}`
+    }).catch(() => undefined);
   }
 
   private async startRecursiveFactory(sessionId: string, prompt: string, projectMap: import("@hivo/protocol").ProjectMap) {
@@ -2658,6 +3096,7 @@ export class AgentRuntime {
     message: string,
     provider: LlmProvider,
     providerTelemetry: ReturnType<typeof createProviderTelemetryRecorder>,
+    projectMap: ProjectMap,
     conversationUnderstanding?: ConversationUnderstanding
   ) {
     const session = this.sessionManager.getSession(sessionId)!;
@@ -2689,6 +3128,13 @@ export class AgentRuntime {
     const result = await swarm.run(swarmGoal);
     const workResults = await loadSwarmWorkResults(result.workItems);
     const terminalStatus = mapSwarmRunStatus(result.run.status, providerTelemetry.snapshot().lastError);
+    const shouldHandoffToLocalRun = shouldHandoffProviderReadOnlySwarmToLocalRun({
+      prompt: swarmGoal,
+      terminalStatus,
+      workItems: result.workItems,
+      workResults,
+      conversationUnderstanding
+    });
     const completedAt = new Date().toISOString();
     const summary = formatProviderBackedSwarmAnswer({
       prompt: swarmGoal,
@@ -2794,6 +3240,49 @@ export class AgentRuntime {
       };
       draft.responseLanguage = responseLanguage;
     });
+    if (shouldHandoffToLocalRun) {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.status = "running";
+        draft.lifecycleStage = "EXECUTION_DRAFT";
+        draft.agentName = "Provider-Backed Swarm + Local Run";
+        draft.reasoningSummaries.push(
+          "Provider-backed read-only swarm completed the multi-agent preflight, then handed write-capable execution to the gated local run path because provider-backed swarm workers cannot edit files."
+        );
+        if (draft.runSummary) {
+          draft.runSummary.nextAction = "Continue through the gated local RunEngine patch proposal path.";
+          draft.runSummary.gates.push({
+            name: "Read-only swarm handoff",
+            status: "passed",
+            notes: [
+              "Provider-backed swarm is read-only by design.",
+              "Write-capable execution is continuing through RunEngine, patch approval, and validation gates."
+            ]
+          });
+        }
+      });
+      const localRun = await new RunEngine(provider, this.sessionManager, { providerTelemetry }).runTurn(sessionId, swarmGoal, {
+        resolvedMode: "orchestrated_mode",
+        projectMap,
+        thinkFirst: false,
+        conversationUnderstanding
+      });
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.resolvedExecutionMode = "orchestrated_mode";
+        draft.agentName = "Provider-Backed Swarm + Local Run";
+        draft.reasoningSummaries.push("Read-only swarm staffing artifacts remain available while RunEngine owns the reviewable write proposal.");
+        if (draft.runSummary && !draft.runSummary.gates.some((gate) => gate.name === "Read-only swarm handoff")) {
+          draft.runSummary.gates.unshift({
+            name: "Read-only swarm handoff",
+            status: "passed",
+            notes: [
+              "Provider-backed swarm is read-only by design.",
+              "Write-capable execution continued through RunEngine, patch approval, and validation gates."
+            ]
+          });
+        }
+      });
+      return this.sessionManager.getSession(localRun.id) ?? localRun;
+    }
     await this.sessionManager.addMessage(sessionId, {
       role: "system",
       content: summary
@@ -3490,6 +3979,43 @@ function mapSwarmRunStatus(status: string, providerError?: string): RuntimeSessi
   return "failed";
 }
 
+function shouldHandoffProviderReadOnlySwarmToLocalRun(input: {
+  prompt: string;
+  terminalStatus: RuntimeSessionStatus;
+  workItems: Array<{ type?: string; status?: string; required_role?: string }>;
+  workResults: Array<{ status: string; summary: string; findings: string[]; risks: string[]; unknowns: string[] }>;
+  conversationUnderstanding?: ConversationUnderstanding;
+}) {
+  if (input.terminalStatus !== "blocked") return false;
+  const runIntent = classifyRunIntent(input.prompt, input.conversationUnderstanding);
+  const actionKind = input.conversationUnderstanding?.intentDecision.kind;
+  const wantsWriteOrRun =
+    actionKind === "workspace_action" ||
+    actionKind === "run_request" ||
+    runIntent === "implement_module" ||
+    runIntent === "run_to_green" ||
+    runIntent === "run_once" ||
+    /\b(build|create|implement|add|make|write|scaffold|generate|run|start|launch|serve)\b/i.test(input.prompt) ||
+    /(?:\u0627\u0628\u0646|\u0627\u0628\u0646\u064a|\u0627\u0639\u0645\u0644|\u0627\u0646\u0634\u0626|\u0623\u0646\u0634\u0626|\u0646\u0641\u0630|\u0634\u063a\u0644|\u0627\u0628\u062f\u0623|\u0636\u064a\u0641|\u0627\u0643\u062a\u0628)/.test(input.prompt);
+  if (!wantsWriteOrRun) return false;
+
+  const blockedWriteWorkItem = input.workItems.some((item) =>
+    item.status === "blocked" &&
+    (item.type === "execute" || item.type === "integrate" || /Executor|Integrator/i.test(item.required_role ?? ""))
+  );
+  const readOnlyWorkerBlock = input.workResults.some((result) => {
+    const text = [
+      result.summary,
+      ...result.findings,
+      ...result.risks,
+      ...result.unknowns
+    ].join("\n");
+    return /provider-backed read-only worker (?:rejects|cannot handle)|provider-backed worker rejects write-capable|cannot handle work items with write files/i.test(text);
+  });
+
+  return blockedWriteWorkItem && readOnlyWorkerBlock;
+}
+
 function mapSwarmWorkStatus(status: string): "todo" | "in_progress" | "done" | "blocked" {
   if (status === "succeeded") return "done";
   if (status === "running" || status === "leased" || status === "ready") return "in_progress";
@@ -3968,10 +4494,35 @@ function formatProviderFailureMessage(_prompt: string, error: unknown) {
   ].join("\n");
 }
 
+function formatRuntimeFailureSystemMessage(error: unknown, providerGateFailure: boolean, session: AgentRuntimeSession) {
+  const detail = formatRuntimeError(error);
+  if (!providerGateFailure && session.plan && /patch|schema_validation|structured output|invalid_provider_output/i.test(detail)) {
+    return [
+      "I could not produce a file change for that request.",
+      "",
+      `Reason: ${detail}`,
+      "",
+      "No files were changed. Retry with a smaller edit, name the exact target file, or switch to a stronger configured provider."
+    ].join("\n");
+  }
+  if (providerGateFailure) return formatProviderFailureMessage(session.userPrompt, error);
+  return [
+    "The runtime failed before it could complete the turn.",
+    "",
+    `Reason: ${detail}`,
+    "",
+    "No successful result was claimed."
+  ].join("\n");
+}
+
 function isProviderGateFailure(error: unknown, session: AgentRuntimeSession) {
   if (session.mode !== "real_provider") return undefined;
   const detail = formatRuntimeError(error);
   if (error instanceof ProviderConfigurationError) return `provider_gate_failed:${error.code}`;
+  if (/provider_patch_intent_/i.test(detail)) return undefined;
+  if (session.plan && /reasoning_kernel\.invalid_provider_output|schema_validation_failed|structured output validation|failed schema validation/i.test(detail)) {
+    return undefined;
+  }
   if (/provider_mock_forbidden|provider_missing|provider_validation|provider_api_key|real_provider requires|Unsupported provider type|reasoning_kernel\.(?:provider_failed|invalid_provider_output|turn_timeout|provider_call_budget_exhausted)|project_explain_provider/i.test(detail)) {
     return "provider_gate_failed";
   }
@@ -4189,6 +4740,15 @@ function buildRecursiveIntegrationSummary(
     createdAt: branchResults[0]?.createdAt ?? now,
     updatedAt: now
   };
+  const integrationHierarchy = buildRecursiveIntegrationHierarchy(
+    session,
+    branchResults,
+    branchValidations,
+    validation,
+    conflictsResolved,
+    conflictsUnresolved,
+    now
+  );
   return {
     id: `recursive_fan_in_${session.id}`,
     sessionId: session.id,
@@ -4204,9 +4764,268 @@ function buildRecursiveIntegrationSummary(
     ]),
     remainingManualSteps: remainingRecursiveManualSteps(validation, branchResults),
     validation,
+    integrationHierarchy,
     createdAt: branchResults[0]?.createdAt ?? now,
     updatedAt: now
   };
+}
+
+export function buildRecursiveIntegrationHierarchy(
+  session: AgentRuntimeSession,
+  branchResults: RecursiveBranchResultRecord[],
+  branchValidations: RecursiveValidationRecord[],
+  rootValidation: RecursiveValidationRecord,
+  conflictsResolved: string[],
+  conflictsUnresolved: string[],
+  now: string
+): RecursiveIntegrationNodeSummary[] {
+  const branchById = new Map((session.recursiveFactory?.branchOrchestrators ?? []).map((branch) => [branch.branchId, branch]));
+  const semanticDecisions = session.recursiveFactory?.semanticConflictDecisions ?? [];
+  const localNodes = chunk(branchResults, 5).map((group, index) => integrationNode({
+    session,
+    level: "local_team",
+    title: `Local Integration ${index + 1}`,
+    branchIds: group.map((result) => result.branchId),
+    branchResults: group,
+    validations: branchValidations.filter((validation) => validation.branchId && group.some((result) => result.branchId === validation.branchId)),
+    conflictsResolved,
+    conflictsUnresolved,
+    semanticDecisionIds: semanticDecisionsForBranches(semanticDecisions, group.map((result) => result.branchId)),
+    now
+  }));
+  const areaNodes = groupedNodes(localNodes, (node) => areaKeyForBranches(node.branchIds, branchById)).map(([area, nodes]) => integrationNode({
+    session,
+    level: "area",
+    title: `Area Integration: ${area}`,
+    childNodeIds: nodes.map((node) => node.id),
+    branchIds: uniqueRuntimeStrings(nodes.flatMap((node) => node.branchIds)),
+    childNodes: nodes,
+    validations: nodes.map((node) => node.validation),
+    conflictsResolved,
+    conflictsUnresolved,
+    semanticDecisionIds: uniqueRuntimeStrings(nodes.flatMap((node) => node.unresolvedDecisions)),
+    now
+  }));
+  const domainNodes = groupedNodes(areaNodes, (node) => domainForArea(node.title)).map(([domain, nodes]) => integrationNode({
+    session,
+    level: "domain",
+    title: `Domain Integration: ${domain}`,
+    childNodeIds: nodes.map((node) => node.id),
+    branchIds: uniqueRuntimeStrings(nodes.flatMap((node) => node.branchIds)),
+    childNodes: nodes,
+    validations: nodes.map((node) => node.validation),
+    conflictsResolved,
+    conflictsUnresolved,
+    semanticDecisionIds: uniqueRuntimeStrings(nodes.flatMap((node) => node.unresolvedDecisions)),
+    now
+  }));
+  const rootNode = integrationNode({
+    session,
+    level: "root",
+    title: "Root Integration",
+    childNodeIds: domainNodes.map((node) => node.id),
+    branchIds: branchResults.map((result) => result.branchId),
+    childNodes: domainNodes,
+    validations: [rootValidation],
+    rootValidation,
+    conflictsResolved,
+    conflictsUnresolved,
+    semanticDecisionIds: semanticDecisions
+      .filter((decision) => decision.requires_user_approval || decision.status === "requires_user_approval" || decision.status === "blocked")
+      .map((decision) => decision.decision_id),
+    now
+  });
+  const withParents = [...localNodes, ...areaNodes, ...domainNodes, rootNode];
+  const parentByChild = new Map<string, string>();
+  for (const node of withParents) for (const child of node.childNodeIds) parentByChild.set(child, node.id);
+  return withParents.map((node) => ({ ...node, parentNodeId: parentByChild.get(node.id) }));
+}
+
+function integrationNode(input: {
+  session: AgentRuntimeSession;
+  level: RecursiveIntegrationNodeLevel;
+  title: string;
+  childNodeIds?: string[];
+  branchIds: string[];
+  branchResults?: RecursiveBranchResultRecord[];
+  childNodes?: RecursiveIntegrationNodeSummary[];
+  validations: RecursiveValidationRecord[];
+  rootValidation?: RecursiveValidationRecord;
+  conflictsResolved: string[];
+  conflictsUnresolved: string[];
+  semanticDecisionIds: string[];
+  now: string;
+}): RecursiveIntegrationNodeSummary {
+  const validation = input.rootValidation ?? integrationNodeValidation(input.session.id, input.level, input.title, input.branchIds, input.validations, input.now);
+  const branchResults = input.branchResults ?? [];
+  const childNodes = input.childNodes ?? [];
+  const unresolved = uniqueRuntimeStrings([
+    ...input.semanticDecisionIds,
+    ...childNodes.flatMap((node) => node.unresolvedDecisions)
+  ]);
+  const branchConflictRefs = (input.session.recursiveFactory?.branchScopeConflicts ?? [])
+    .filter((conflict) => conflict.branchIds.some((branchId) => input.branchIds.includes(branchId)))
+    .map((conflict) => conflict.id);
+  return {
+    id: `recursive_integration_${input.level}_${input.session.id}_${slug(input.title)}`,
+    sessionId: input.session.id,
+    level: input.level,
+    title: input.title,
+    childNodeIds: uniqueRuntimeStrings(input.childNodeIds ?? []),
+    branchIds: uniqueRuntimeStrings(input.branchIds),
+    integratedResultRefs: uniqueRuntimeStrings([
+      ...branchResults.map((result) => result.id),
+      ...branchResults.flatMap((result) => result.patchIds.map((patchId) => `patch:${patchId}`)),
+      ...childNodes.map((node) => node.id)
+    ]),
+    conflictReportRefs: uniqueRuntimeStrings([...branchConflictRefs, ...unresolved]),
+    validation,
+    intentAlignmentScore: intentAlignmentScore(validation, unresolved),
+    unresolvedDecisions: unresolved,
+    conflictsResolved: input.conflictsResolved.filter((conflict) => conflictMatchesBranches(conflict, input.branchIds)),
+    conflictsUnresolved: input.conflictsUnresolved.filter((conflict) => conflictMatchesBranches(conflict, input.branchIds)),
+    integrationRisks: uniqueRuntimeStrings([
+      ...branchResults.flatMap((result) => result.risksAndLimitations),
+      ...childNodes.flatMap((node) => node.integrationRisks),
+      ...validation.blockingReasons
+    ]),
+    remainingManualSteps: uniqueRuntimeStrings([
+      ...childNodes.flatMap((node) => node.remainingManualSteps),
+      ...(validation.status === "passed" ? [] : validation.blockingReasons)
+    ]),
+    createdAt: branchResults[0]?.createdAt ?? input.now,
+    updatedAt: input.now,
+    metadata_json: {
+      max_local_branch_group_size: input.level === "local_team" ? 5 : undefined,
+      child_count: input.childNodeIds?.length ?? 0,
+      validation_status: validation.status
+    }
+  };
+}
+
+function integrationNodeValidation(
+  sessionId: string,
+  level: RecursiveIntegrationNodeLevel,
+  title: string,
+  branchIds: string[],
+  validations: RecursiveValidationRecord[],
+  now: string
+): RecursiveValidationRecord {
+  const statuses = validations.map((validation) => validation.status);
+  const status: RecursiveValidationRecord["status"] = statuses.includes("failed")
+    ? "failed"
+    : statuses.length && statuses.every((entry) => entry === "passed")
+      ? "passed"
+      : "unverified";
+  const truthStatus = status === "passed"
+    ? "verified_passed"
+    : status === "failed"
+      ? worstRecursiveTruth(validations.map((validation) => validation.truthStatus), "verified_failed")
+      : worstRecursiveTruth(validations.map((validation) => validation.truthStatus), "unverified");
+  return {
+    id: `recursive_validation_${level}_${sessionId}_${slug(title)}`,
+    sessionId,
+    level: "integration_validation",
+    truthStatus,
+    status,
+    summary: `${title} ${status} for ${branchIds.length} branch(es).`,
+    blockingReasons: status === "passed" ? [] : uniqueRuntimeStrings(validations.flatMap((validation) => validation.blockingReasons)),
+    evidenceRefs: uniqueRuntimeStrings(validations.flatMap((validation) => validation.evidenceRefs)),
+    discoveredCommands: validations.flatMap((validation) => validation.discoveredCommands ?? []),
+    selectedStrategy: selectIntegrationStrategy(validations),
+    evidence: validations.flatMap((validation) => validation.evidence ?? []),
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function chunk<T>(values: T[], size: number): T[][] {
+  const groups: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    groups.push(values.slice(index, index + size));
+  }
+  return groups;
+}
+
+function groupedNodes<T>(values: T[], keyFor: (value: T) => string): Array<[string, T[]]> {
+  const groups = new Map<string, T[]>();
+  for (const value of values) {
+    const key = keyFor(value);
+    groups.set(key, [...(groups.get(key) ?? []), value]);
+  }
+  return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+}
+
+function areaKeyForBranches(branchIds: string[], branchById: Map<string, BranchOrchestratorRecord>) {
+  const branches = branchIds
+    .map((branchId) => branchById.get(branchId))
+    .filter((branch): branch is BranchOrchestratorRecord => Boolean(branch));
+  const owners = uniqueRuntimeStrings(branches.map((branch) => branch.ownerRole)).sort();
+  const semanticScopes = uniqueRuntimeStrings(branches.flatMap((branch) => branch.semanticScopes)).sort();
+  if (owners.length === 1 && semanticScopes.length) return `${owners[0]} / ${friendlyScopeName(semanticScopes[0])}`;
+  if (owners.length === 1) return owners[0];
+  if (semanticScopes.length) return friendlyScopeName(semanticScopes[0]);
+  return "project/general";
+}
+
+function domainForArea(areaTitle: string) {
+  const text = areaTitle.toLowerCase();
+  if (/\b(ui|ux|frontend|front-end|design|component|css|html|accessibility|a11y|screen|view)\b/.test(text)) return "UI";
+  if (/\b(protocol|schema|model|contract|type|json|event|api surface)\b/.test(text)) return "protocol/schema";
+  if (/\b(test|validation|verification|lint|typecheck|build|qa|replay|eval)\b/.test(text)) return "validation";
+  if (/\b(runtime|backend|server|worker|orchestrat|agent|provider|llm|tauri|rust|command|memory|sqlite|index)\b/.test(text)) return "runtime/backend";
+  return "project/general";
+}
+
+function semanticDecisionsForBranches(decisions: SemanticConflictDecision[], branchIds: string[]) {
+  return decisions
+    .filter((decision) => isUnresolvedSemanticDecision(decision))
+    .filter((decision) => {
+      const haystack = [
+        decision.source_a,
+        decision.source_b,
+        ...decision.source_refs,
+        ...decision.evidence_refs
+      ].join("\n");
+      return branchIds.some((branchId) => haystack.includes(branchId));
+    })
+    .map((decision) => decision.decision_id);
+}
+
+function isUnresolvedSemanticDecision(decision: SemanticConflictDecision) {
+  return decision.requires_user_approval
+    || decision.status === "requires_user_approval"
+    || decision.status === "blocked"
+    || decision.severity === "blocking";
+}
+
+function intentAlignmentScore(validation: RecursiveValidationRecord, unresolvedDecisionIds: string[]) {
+  const validationScore = validation.status === "passed" ? 100 : validation.status === "unverified" ? 70 : 35;
+  const unresolvedPenalty = Math.min(50, unresolvedDecisionIds.length * 20);
+  return Math.max(0, validationScore - unresolvedPenalty);
+}
+
+function conflictMatchesBranches(conflict: string, branchIds: string[]) {
+  if (!branchIds.length) return true;
+  if (branchIds.some((branchId) => conflict.includes(branchId))) return true;
+  return !/\b(?:branch|recursive_branch)[_-][a-z0-9_-]+\b/i.test(conflict);
+}
+
+function friendlyScopeName(scope: string) {
+  return scope
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    || "project/general";
+}
+
+function slug(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80)
+    || "node";
 }
 
 function buildRecursiveFinalReport(
@@ -5047,6 +5866,13 @@ function normalizeWorkspaceRelativePath(filePath: string) {
   return filePath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
+function upsertById<T extends { id?: string; batch_id?: string; decision_id?: string }>(collection: T[], value: T) {
+  const key = value.id ?? value.batch_id ?? value.decision_id;
+  const index = collection.findIndex((candidate) => (candidate.id ?? candidate.batch_id ?? candidate.decision_id) === key);
+  if (index >= 0) collection[index] = value;
+  else collection.push(value);
+}
+
 function upsertRuntimeArtifact(session: AgentRuntimeSession, artifact: AgentRuntimeSession["artifacts"][number]) {
   const index = session.artifacts.findIndex((candidate) => candidate.id === artifact.id);
   if (index >= 0) {
@@ -5488,6 +6314,23 @@ function waitingForProviderSummary(session: AgentRuntimeSession, language: "ar" 
   return `Waiting for ${model} to classify the request and choose the evidence plan.`;
 }
 
+function formatIntentContractBlockMessage(contract: IntentContract, blockingQuestions: string[], validationErrors: string[]) {
+  const lines = [
+    "Planning is blocked until a ready provider-authored intent_contract.json exists.",
+    `Intent contract status: ${contract.status}.`,
+    `Intent contract ref: ${contract.artifact_ref ?? "missing"}.`
+  ];
+  if (blockingQuestions.length) {
+    lines.push("", "Blocking questions:");
+    lines.push(...blockingQuestions.map((question) => `- ${question}`));
+  }
+  if (validationErrors.length) {
+    lines.push("", "Validation errors:");
+    lines.push(...validationErrors.map((error) => `- ${error}`));
+  }
+  return lines.join("\n");
+}
+
 function isArabicRuntimeLanguage(language: "ar" | "en" | "arabic" | "english" | string | undefined) {
   return language === "ar" || language === "arabic";
 }
@@ -5522,6 +6365,100 @@ function mergeRuntimeEvidenceRefs(
     }
   }
   return merged.slice(-12);
+}
+
+function buildSameSessionConversationContext(session: AgentRuntimeSession, currentMessage: string): ReasoningConversationContext {
+  const priorMessages = previousMessagesForCurrentTurn(session.messages, currentMessage);
+  const scopedAgentMessages = buildScopedAgentContextMessages(session);
+  const candidates = [...priorMessages, ...scopedAgentMessages]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(-REASONING_CONVERSATION_CONTEXT_MAX_MESSAGES);
+  const messages = selectConversationContextMessages(candidates, REASONING_CONVERSATION_CONTEXT_MAX_CHARS);
+  const totalOriginalChars = candidates.reduce((sum, message) => sum + message.content.length, 0);
+  const totalIncludedChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  return {
+    source: "same_session_messages",
+    sessionId: session.id,
+    currentMessage,
+    maxMessages: REASONING_CONVERSATION_CONTEXT_MAX_MESSAGES,
+    maxChars: REASONING_CONVERSATION_CONTEXT_MAX_CHARS,
+    omittedMessageCount: Math.max(0, candidates.length - messages.length),
+    truncatedMessageCount: messages.filter((message) => message.truncated).length,
+    totalOriginalChars,
+    totalIncludedChars,
+    createdAt: new Date().toISOString(),
+    messages
+  };
+}
+
+function buildScopedAgentContextMessages(session: AgentRuntimeSession): AgentRuntimeSession["messages"] {
+  const state = session.swarmState;
+  if (!state?.messages.length) return [];
+  const nodesById = new Map(state.nodes.map((node) => [node.id, node]));
+  return state.messages.slice(-12).map((message) => {
+    const node = nodesById.get(message.agentId);
+    const label = node ? `${node.name} (${node.role})` : message.agentId;
+    return {
+      id: message.id,
+      role: message.role === "agent" ? "assistant" : message.role,
+      content: `[Scoped agent message for ${label}]\n${message.content}`,
+      providerRequestRefs: message.providerRequestRefs,
+      createdAt: message.createdAt
+    };
+  });
+}
+
+function isMessageableSwarmNode(node: AgentRuntimeSwarmNode) {
+  return node.kind === "worker" || node.kind === "specialist" || node.kind === "coordinator" || node.kind === "aggregator";
+}
+
+function previousMessagesForCurrentTurn(
+  messages: AgentRuntimeSession["messages"],
+  currentMessage: string
+): AgentRuntimeSession["messages"] {
+  const lastMessage = messages.at(-1);
+  if (lastMessage?.role === "user" && normalizeConversationContent(lastMessage.content) === normalizeConversationContent(currentMessage)) {
+    return messages.slice(0, -1);
+  }
+  return messages;
+}
+
+function selectConversationContextMessages(
+  messages: AgentRuntimeSession["messages"],
+  maxChars: number
+): ReasoningConversationContext["messages"] {
+  const selected: ReasoningConversationContext["messages"] = [];
+  let remainingChars = maxChars;
+  const minReservedCharsPerOlderMessage = 200;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message?.content) continue;
+    const reserveForOlderMessages = Math.min(remainingChars, index * minReservedCharsPerOlderMessage);
+    const allowedChars = Math.max(0, remainingChars - reserveForOlderMessages);
+    if (allowedChars <= 0) continue;
+    const content = truncateConversationContent(message.content, allowedChars);
+    if (!content) continue;
+    selected.push({
+      role: message.role,
+      content,
+      createdAt: message.createdAt,
+      originalChars: message.content.length,
+      truncated: content.length < message.content.length
+    });
+    remainingChars -= content.length;
+    if (remainingChars <= 0) break;
+  }
+  return selected.reverse();
+}
+
+function truncateConversationContent(content: string, maxChars: number) {
+  if (content.length <= maxChars) return content;
+  if (maxChars <= 3) return content.slice(0, Math.max(0, maxChars));
+  return `${content.slice(0, maxChars - 3)}...`;
+}
+
+function normalizeConversationContent(value: string) {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function buildRuntimeCommandRequest(sessionId: string, command: string, cwd: string, reason: string) {

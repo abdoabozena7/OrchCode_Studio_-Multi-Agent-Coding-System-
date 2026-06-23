@@ -77,6 +77,8 @@ const REASONING_VERIFY_EVIDENCE_CONTEXT_MAX_CHARS = 6_000;
 const REASONING_DETERMINISTIC_CURATION_MIN_SELECTED_EVIDENCE = 8;
 const REASONING_DIRECT_COMPOSE_MIN_INFORMATION_GAIN = 8;
 const REASONING_DIRECT_COMPOSE_LOW_TIME_MS = 70_000;
+export const REASONING_CONVERSATION_CONTEXT_MAX_MESSAGES = 8;
+export const REASONING_CONVERSATION_CONTEXT_MAX_CHARS = 12_000;
 
 export type ReasoningKernelState = {
   id: string;
@@ -114,6 +116,30 @@ export type ReasoningReadonlyDelegation = (
   budget: { remainingProviderCalls: number; remainingMs: number }
 ) => Promise<{ result: ReasoningToolResult; providerCallsUsed: number }>;
 
+export type ReasoningConversationContext = {
+  source: "same_session_messages";
+  sessionId: string;
+  currentMessage: string;
+  maxMessages: number;
+  maxChars: number;
+  omittedMessageCount: number;
+  truncatedMessageCount: number;
+  totalOriginalChars: number;
+  totalIncludedChars: number;
+  createdAt: string;
+  messages: Array<{
+    role: "user" | "assistant" | "system";
+    content: string;
+    createdAt?: string;
+    originalChars: number;
+    truncated: boolean;
+  }>;
+};
+
+function providerConversationContext(context: ReasoningConversationContext | undefined) {
+  return context?.messages.length ? context : undefined;
+}
+
 export function createReasoningKernelState(budget: ReasoningBudget = REASONING_BUDGETS.conversation): ReasoningKernelState {
   return {
     id: `reasoning_turn_${randomUUID()}`,
@@ -141,9 +167,11 @@ export async function understandAndDirectTurn(input: {
   routerProvider?: LlmProvider;
   verifierProvider?: LlmProvider;
   message: string;
+  conversationContext?: ReasoningConversationContext;
   state?: ReasoningKernelState;
 }) {
   const state = input.state ?? createReasoningKernelState();
+  const conversationContext = providerConversationContext(input.conversationContext);
   const initial = await generateWithProviderRepair<InitialReasoningDecision>({
     provider: input.routerProvider ?? input.provider,
     state,
@@ -205,7 +233,8 @@ export async function understandAndDirectTurn(input: {
         "  }",
         "}",
         "Do not copy placeholder values wrapped in angle brackets; replace every placeholder with one allowed value."
-      ].join("\n")
+      ].join("\n"),
+      context: conversationContext ? { conversationContext } : undefined
     }
   });
   const understanding = initial.understanding;
@@ -227,12 +256,18 @@ export async function runAdaptiveReasoningTurn(input: {
   onPatchProposal?: ReasoningToolDispatcherOptions["onPatchProposal"];
   embeddingModel?: string;
   delegateReadonly?: ReasoningReadonlyDelegation;
+  conversationContext?: ReasoningConversationContext;
 }): Promise<{
   understanding: TurnUnderstanding;
   result: ProviderAuthoredResult;
   trace: ReasoningTurnTrace;
 }> {
-  const reasoning = await understandAndDirectTurn({ provider: input.provider, routerProvider: input.routerProvider, message: input.message });
+  const reasoning = await understandAndDirectTurn({
+    provider: input.provider,
+    routerProvider: input.routerProvider,
+    message: input.message,
+    conversationContext: input.conversationContext
+  });
   return continueAdaptiveReasoningTurn({ ...input, ...reasoning });
 }
 
@@ -252,6 +287,7 @@ export async function continueAdaptiveReasoningTurn(input: {
   onPatchProposal?: ReasoningToolDispatcherOptions["onPatchProposal"];
   embeddingModel?: string;
   delegateReadonly?: ReasoningReadonlyDelegation;
+  conversationContext?: ReasoningConversationContext;
 }): Promise<{
   understanding: TurnUnderstanding;
   result: ProviderAuthoredResult;
@@ -294,7 +330,8 @@ export async function continueAdaptiveReasoningTurn(input: {
       const auditedUnderstanding = await auditTurnUnderstanding({
         provider: input.routerProvider ?? input.verifierProvider ?? input.provider,
         understanding,
-        state
+        state,
+        conversationContext: input.conversationContext
       });
       if (auditedUnderstanding.needsWorkspace) {
         recordRepairError(state, "wrong_route", "audit", "Independent provider route audit reclassified the request as requiring workspace evidence.");
@@ -308,6 +345,7 @@ export async function continueAdaptiveReasoningTurn(input: {
           understanding,
           state,
           evidenceStore,
+          conversationContext: input.conversationContext,
           validationErrors: ["Independent provider route audit reclassified the request as requiring workspace evidence. Choose the first safe read-tool batch."]
         });
       }
@@ -332,6 +370,7 @@ export async function continueAdaptiveReasoningTurn(input: {
             evidence: evidenceContext.selected,
             evidenceOmitted: evidenceContext.omitted,
             evidenceRefs: evidenceContext.selectedEvidenceIds,
+            conversationContext: input.conversationContext,
             toolResultMaxChars: REASONING_COMPOSE_TOOL_RESULT_CONTEXT_MAX_CHARS
           });
           resultCameFromCompose = true;
@@ -357,6 +396,7 @@ export async function continueAdaptiveReasoningTurn(input: {
             evidenceOmitted: evidenceContext.omitted,
             evidenceRefs: evidenceContext.selectedEvidenceIds,
             validationErrors,
+            conversationContext: input.conversationContext,
             toolResultMaxChars: REASONING_COMPOSE_REPAIR_TOOL_RESULT_CONTEXT_MAX_CHARS
           });
           providerResultValidationErrors = validateProviderResult(result, understanding, evidenceStore.all());
@@ -369,7 +409,8 @@ export async function continueAdaptiveReasoningTurn(input: {
             understanding,
             result,
             state,
-            evidenceStore
+            evidenceStore,
+            conversationContext: input.conversationContext
           });
         state.verificationResults.push(verification);
         if (verification.workspaceEvidenceRequired && !understanding.needsWorkspace) {
@@ -412,6 +453,7 @@ export async function continueAdaptiveReasoningTurn(input: {
           evidenceOmitted: evidenceContext.omitted,
           evidenceRefs: evidenceContext.selectedEvidenceIds,
           validationErrors,
+          conversationContext: input.conversationContext,
           toolResultMaxChars: REASONING_COMPOSE_REPAIR_TOOL_RESULT_CONTEXT_MAX_CHARS
         });
         currentStep = { ...repairStep, result: repairedResult };
@@ -423,6 +465,7 @@ export async function continueAdaptiveReasoningTurn(input: {
           understanding,
           state,
           evidenceStore,
+          conversationContext: input.conversationContext,
           validationErrors
         });
         continue;
@@ -471,6 +514,7 @@ export async function continueAdaptiveReasoningTurn(input: {
           understanding,
           state,
           evidenceStore,
+          conversationContext: input.conversationContext,
           validationErrors: [
             "The requested tool batch is identical to a batch that already ran. Choose different retrieval tools, read specific discovered sources, narrow the claim, or explicitly state what remains unknown."
           ]
@@ -521,6 +565,7 @@ export async function continueAdaptiveReasoningTurn(input: {
           understanding,
           state,
           evidenceStore,
+          conversationContext: input.conversationContext,
           validationErrors: [
             "Two consecutive tool rounds produced no new evidence, files, or relationships. Choose a materially different investigation, narrow the claim, or explicitly state what remains unknown."
           ]
@@ -531,7 +576,8 @@ export async function continueAdaptiveReasoningTurn(input: {
         provider: input.provider,
         understanding,
         state,
-        evidenceStore
+        evidenceStore,
+        conversationContext: input.conversationContext
       });
     }
   } catch (error) {
@@ -549,6 +595,7 @@ async function auditTurnUnderstanding(input: {
   provider: LlmProvider;
   understanding: TurnUnderstanding;
   state: ReasoningKernelState;
+  conversationContext?: ReasoningConversationContext;
 }) {
   const audited = await generateWithProviderRepair<TurnUnderstanding>({
     provider: input.provider,
@@ -569,7 +616,8 @@ async function auditTurnUnderstanding(input: {
       ].join("\n"),
       userPrompt: input.understanding.originalRequest,
       context: {
-        priorClassification: input.understanding
+        priorClassification: input.understanding,
+        conversationContext: providerConversationContext(input.conversationContext)
       }
     }
   });
@@ -588,6 +636,7 @@ export async function composeProviderAuthoredResult(input: {
   evidenceRefs?: string[];
   validationErrors?: string[];
   toolResultMaxChars?: number;
+  conversationContext?: ReasoningConversationContext;
 }): Promise<ProviderAuthoredResult> {
   const request: LlmRequest = {
       purpose: "compose",
@@ -613,7 +662,8 @@ export async function composeProviderAuthoredResult(input: {
         evidence: input.evidence ?? [],
         evidenceOmitted: input.evidenceOmitted ?? 0,
         allowedEvidenceRefs: input.evidenceRefs ?? [],
-        validationErrors: input.validationErrors ?? []
+        validationErrors: input.validationErrors ?? [],
+        conversationContext: providerConversationContext(input.conversationContext)
       }
     };
   try {
@@ -650,7 +700,8 @@ export async function composeProviderAuthoredResult(input: {
           evidence: input.evidence ?? [],
           evidenceOmitted: input.evidenceOmitted ?? 0,
           allowedEvidenceRefs: input.evidenceRefs,
-          validationErrors: input.validationErrors ?? []
+          validationErrors: input.validationErrors ?? [],
+          conversationContext: providerConversationContext(input.conversationContext)
         }
       }
     });
@@ -671,6 +722,7 @@ async function requestNextStep(input: {
   state: ReasoningKernelState;
   evidenceStore: EvidenceStore;
   validationErrors?: string[];
+  conversationContext?: ReasoningConversationContext;
 }) {
   const isRepair = Boolean(input.validationErrors?.length);
   const evidenceContext = isRepair ? repairEvidenceContext(input) : await curatedEvidenceContext(input);
@@ -715,6 +767,7 @@ async function requestNextStep(input: {
         validationErrors: input.validationErrors ?? [],
         progress: input.state.progress.slice(-6),
         repairErrors: input.state.repairErrors.slice(-6),
+        conversationContext: providerConversationContext(input.conversationContext),
         remainingBudget: {
           providerCalls: input.state.budget.maxProviderCalls - input.state.providerCalls,
           toolRounds: input.state.budget.maxToolRounds - input.state.toolRounds,
@@ -733,6 +786,7 @@ async function verifyProviderAuthoredResult(input: {
   result: ProviderAuthoredResult;
   state: ReasoningKernelState;
   evidenceStore: EvidenceStore;
+  conversationContext?: ReasoningConversationContext;
 }): Promise<ReasoningVerificationResult> {
   const evidence = input.evidenceStore.context(REASONING_VERIFY_EVIDENCE_CONTEXT_MAX_CHARS, input.result.evidenceRefs);
   recordContextOmission(input.state, "verify", evidence);
@@ -759,7 +813,8 @@ async function verifyProviderAuthoredResult(input: {
         result: input.result,
         evidence: evidence.selected,
         evidenceOmitted: evidence.omitted,
-        allowedEvidenceIds: evidence.selectedEvidenceIds
+        allowedEvidenceIds: evidence.selectedEvidenceIds,
+        conversationContext: providerConversationContext(input.conversationContext)
       }
     };
   let generated: Omit<ReasoningVerificationResult, "createdAt">;
@@ -780,7 +835,8 @@ async function verifyProviderAuthoredResult(input: {
       state: input.state,
       evidence: evidence.selected,
       evidenceOmitted: evidence.omitted,
-      allowedEvidenceIds: evidence.selectedEvidenceIds
+      allowedEvidenceIds: evidence.selectedEvidenceIds,
+      conversationContext: input.conversationContext
     });
   }
   const allowed = new Set(input.evidenceStore.ids());
@@ -804,6 +860,7 @@ async function verifyProviderAuthoredResultText(input: {
   evidence: ReasoningEvidenceRef[];
   evidenceOmitted: number;
   allowedEvidenceIds: string[];
+  conversationContext?: ReasoningConversationContext;
 }): Promise<Omit<ReasoningVerificationResult, "createdAt">> {
   const text = await generateProviderTextWithBudget({
     provider: input.provider,
@@ -826,7 +883,8 @@ async function verifyProviderAuthoredResultText(input: {
         result: input.result,
         evidence: input.evidence,
         evidenceOmitted: input.evidenceOmitted,
-        allowedEvidenceIds: input.allowedEvidenceIds
+        allowedEvidenceIds: input.allowedEvidenceIds,
+        conversationContext: providerConversationContext(input.conversationContext)
       }
     }
   });
@@ -1433,6 +1491,7 @@ async function curatedEvidenceContext(input: {
   understanding: TurnUnderstanding;
   state: ReasoningKernelState;
   evidenceStore: EvidenceStore;
+  conversationContext?: ReasoningConversationContext;
 }) {
   let context = input.evidenceStore.context(REASONING_EVIDENCE_CONTEXT_MAX_CHARS, preferredEvidenceIds(input.state));
   const evidenceCount = input.evidenceStore.all().length;
@@ -1474,6 +1533,7 @@ async function curatedEvidenceContext(input: {
         userPrompt: "Curate the evidence pack for the next reasoning step.",
         context: {
           request: input.understanding.originalRequest,
+          conversationContext: providerConversationContext(input.conversationContext),
           evidenceInventory: inventory.selected,
           evidenceInventoryOmitted: inventory.omittedEvidenceIds.length,
           totalEvidenceIds: evidenceCount,

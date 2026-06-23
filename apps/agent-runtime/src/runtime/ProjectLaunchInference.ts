@@ -15,6 +15,37 @@ export type LaunchRecommendation = {
 };
 
 export function inferProjectLaunch(workspacePath: string, workspace: WorkspaceTools): LaunchRecommendation | null {
+  if (workspace.fileExists("package.json")) {
+    const manifest = parsePackageJson(safeRead(workspace, "package.json"));
+    const scripts = manifest?.scripts ?? {};
+    const packageManager = inferPackageManager(workspace);
+    const runScript = pickScript(scripts);
+    if (runScript) {
+      const command =
+        packageManager === "pnpm"
+          ? runScript === "dev"
+            ? "pnpm dev"
+            : `pnpm ${runScript}`
+          : runScript === "dev"
+            ? "npm run dev"
+            : `npm run ${runScript}`;
+      return {
+        strategy: "package_script",
+        command,
+        background: true,
+        preview: {
+          type: "url",
+          target: inferDevUrl(scripts[runScript]),
+          description: `Local ${runScript} server`,
+          command
+        },
+        multipleTerminals: false,
+        confidence: runScript === "dev" ? "high" : "medium",
+        reason: `Found package.json with a ${runScript} script.`
+      };
+    }
+  }
+
   const indexHtmlPath = "index.html";
   if (workspace.fileExists(indexHtmlPath)) {
     const html = safeRead(workspace, indexHtmlPath);
@@ -52,37 +83,6 @@ export function inferProjectLaunch(workspacePath: string, workspace: WorkspaceTo
       confidence: "medium",
       reason: "Found a standalone index.html that does not require module serving."
     };
-  }
-
-  if (workspace.fileExists("package.json")) {
-    const manifest = parsePackageJson(safeRead(workspace, "package.json"));
-    const scripts = manifest?.scripts ?? {};
-    const packageManager = inferPackageManager(workspace);
-    const runScript = pickScript(scripts);
-    if (runScript) {
-      const command =
-        packageManager === "pnpm"
-          ? runScript === "dev"
-            ? "pnpm dev"
-            : `pnpm ${runScript}`
-          : runScript === "dev"
-            ? "npm run dev"
-            : `npm run ${runScript}`;
-      return {
-        strategy: "package_script",
-        command,
-        background: true,
-        preview: {
-          type: "url",
-          target: inferDevUrl(scripts[runScript]),
-          description: `Local ${runScript} server`,
-          command
-        },
-        multipleTerminals: false,
-        confidence: runScript === "dev" ? "high" : "medium",
-        reason: `Found package.json with a ${runScript} script.`
-      };
-    }
   }
 
   return null;

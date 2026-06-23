@@ -5,6 +5,8 @@ import type { LlmProvider } from "../llm/LlmProvider.js";
 import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
+import { IntentLedgerService } from "./IntentLedgerService.js";
+import type { IntentContextSnapshot } from "./IntentLedgerModels.js";
 import { AgentTeamManager } from "./AgentTeamManager.js";
 import type { TeamContextScope } from "./AgentTeamModels.js";
 import { evaluatePromptQuality, isPromptQualityBlocking, summarizePromptQuality } from "./PromptQualityGate.js";
@@ -15,6 +17,7 @@ import {
   type PromptArtifactMetadata
 } from "./PromptSystem.js";
 import {
+  intentAlignmentFromReadOnlySwarmOutput,
   normalizeReadOnlySwarmOutput,
   schemaForReadOnlySwarmRole,
   summarizeReadOnlySwarmOutput
@@ -22,6 +25,7 @@ import {
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
 import type { SwarmWorker } from "./SwarmScheduler.js";
 import { SWARM_SCHEMA_VERSION, type WorkItemResult } from "./SwarmModels.js";
+import { createSwarmIntentFrame, IntentHandoffGate } from "./IntentHandoffGate.js";
 
 export type SwarmProviderWorkerMode = "provider_read_only";
 
@@ -116,7 +120,13 @@ export class ProviderBackedSwarmWorker {
     const createdAt = new Date().toISOString();
     const outputSchema = schemaForReadOnlySwarmRole(input.workItem.required_role, input.workItem.type);
     const teamContextScope = await this.resolveTeamContextScope(input);
-    const contextSummary = await buildContextSummary(input, teamContextScope, this.options.workspacePath);
+    const contextSummary = await buildContextSummary(input, teamContextScope, this.options.workspacePath, this.options.memoryDir);
+    if (!contextSummary.intent_frame) {
+      const reason = "Provider-backed swarm worker requires a ready intent frame before invocation.";
+      const result = this.blockedResult(input, reason);
+      await this.recordWorkerResultArtifact(input, result, { status: "blocked", errorSummary: reason });
+      return result;
+    }
     const contextRef = await this.artifactStore.saveProviderWorkerArtifact({
       runId: input.run.id,
       workItemId: input.workItem.id,
@@ -125,6 +135,28 @@ export class ProviderBackedSwarmWorker {
       value: contextSummary,
       metadata: { worker_invocation_id: invocationId, team_id: teamContextScope?.team_id }
     });
+    await new IntentLedgerService({
+      workspacePath: this.options.workspacePath,
+      memoryDir: this.options.memoryDir,
+      sourceComponent: "ProviderBackedSwarmWorker"
+    }).appendLedgerEntry({
+      runId: input.run.id,
+      runKind: "swarm",
+      artifactsPath: input.run.artifacts_path,
+      entryKind: "swarm_context_bound",
+      summary: `Provider-backed swarm context bound to canonical intent references for work item ${input.workItem.id}.`,
+      artifactRefs: uniqueStrings([
+        contextRef,
+        contextSummary.original_request_ref ?? "",
+        contextSummary.intent_ledger_ref ?? "",
+        ...(contextSummary.intent_ledger_refs ?? [])
+      ]),
+      metadata: {
+        work_item_id: input.workItem.id,
+        worker_invocation_id: invocationId,
+        locked_definition_count: contextSummary.locked_intent_definitions.length
+      }
+    }).catch(() => undefined);
     const promptResult = renderPromptTemplate(swarmPromptTemplateIdForRole(input.workItem.required_role, input.workItem.type), {
       run_id: input.run.id,
       task_id: input.workItem.id,
@@ -145,6 +177,13 @@ export class ProviderBackedSwarmWorker {
         worker_mode: this.mode,
         provider_name: this.options.providerName,
         model_name: this.options.modelName,
+        original_request_ref: contextSummary.original_request_ref,
+        original_request_hash: contextSummary.intent_frame.original_request_hash,
+        intent_contract_ref: contextSummary.intent_frame.intent_contract_ref,
+        task_slice_id: contextSummary.intent_frame.current_task_slice.task_slice_id,
+        intent_ledger_ref: contextSummary.intent_ledger_ref,
+        intent_ledger_refs: contextSummary.intent_ledger_refs,
+        locked_intent_definition_count: contextSummary.locked_intent_definitions.length,
         team_context: teamContextScope ? {
           team_id: teamContextScope.team_id,
           parent_team_id: teamContextScope.parent_team_id,
@@ -381,6 +420,7 @@ export class ProviderBackedSwarmWorker {
     }
 
     const summary = summarizeReadOnlySwarmOutput(normalizedOutput.value);
+    const intentAlignment = intentAlignmentFromReadOnlySwarmOutput(normalizedOutput.value);
     const parsedRef = await this.artifactStore.saveProviderWorkerArtifact({
       runId: input.run.id,
       workItemId: input.workItem.id,
@@ -404,8 +444,60 @@ export class ProviderBackedSwarmWorker {
       unknowns: summary.unknowns,
       validation_passed: input.workItem.type === "test" ? false : undefined,
       structured_output_valid: true,
-      confidence: summary.confidence
+      confidence: summary.confidence,
+      intent_alignment: intentAlignment as WorkItemResult["intent_alignment"]
     };
+    const gate = await new IntentHandoffGate({
+      workspacePath: this.options.workspacePath,
+      memoryDir: this.options.memoryDir,
+      provider,
+      sourceComponent: "ProviderBackedSwarmWorker"
+    }).evaluate({
+      runId: input.run.id,
+      runKind: "swarm",
+      artifactsPath: input.run.artifacts_path,
+      layer: "swarm",
+      taskId: input.workItem.id,
+      frame: contextSummary.intent_frame,
+      alignment: intentAlignment as WorkItemResult["intent_alignment"],
+      candidate: normalizedOutput.value,
+      reviewedArtifactRefs: [parsedRef, rawRef, validationRef],
+      target: "output"
+    });
+    result.intent_handoff_gate_ref = gate.artifact_ref;
+    result.intent_handoff_gate_status = gate.status;
+    if (!gate.passed) {
+      const blocked = {
+        ...result,
+        status: "blocked" as const,
+        structured_output_valid: false,
+        risks: uniqueStrings([...result.risks, `Intent handoff gate blocked this result: ${gate.deterministic_errors.join("; ")}`])
+      };
+      await this.recordWorkerResultArtifact(input, blocked, { status: blocked.status, errorSummary: blocked.summary });
+      await this.recordWorkerInvocation({
+        input,
+        invocationId,
+        createdAt,
+        status: blocked.status,
+        promptId: promptResult.rendered.prompt_id,
+        promptQualityResultId: quality.quality_result_id,
+        rawOutputRef: rawRef,
+        parsedOutputRef: parsedRef,
+        outputSchemaName: outputSchema.name,
+        outputSchemaStatus: "failed",
+        traceEventId: schemaTrace.trace_event_id,
+        errorSummary: blocked.summary,
+        metadata: {
+          prompt_ref: promptRef,
+          prompt_quality_ref: promptQualityRef,
+          schema_validation_ref: validationRef,
+          intent_handoff_gate_ref: gate.artifact_ref,
+          team_id: teamContextScope?.team_id,
+          team_memory_scope: teamContextScope?.memory_scope
+        }
+      });
+      return blocked;
+    }
     await this.recordWorkerResultArtifact(input, result, { status: result.status });
     await this.recordWorkerInvocation({
       input,
@@ -423,6 +515,7 @@ export class ProviderBackedSwarmWorker {
         prompt_ref: promptRef,
         prompt_quality_ref: promptQualityRef,
         schema_validation_ref: validationRef,
+        intent_handoff_gate_ref: gate.artifact_ref,
         schema_repaired: normalizedOutput.repaired,
         repair_reasons: normalizedOutput.repair_reasons,
         team_id: teamContextScope?.team_id,
@@ -561,12 +654,36 @@ function readOnlyGuard(input: Parameters<SwarmWorker>[0]): { ok: true } | { ok: 
   return { ok: true };
 }
 
-async function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContextScope: TeamContextScope | undefined, workspacePath: string) {
+async function buildContextSummary(
+  input: Parameters<SwarmWorker>[0],
+  teamContextScope: TeamContextScope | undefined,
+  workspacePath: string,
+  memoryDir?: string
+) {
   const fileExcerpts = await readFileExcerpts(workspacePath, input.workItem.read_files);
+  const intentContext = await new IntentLedgerService({
+    workspacePath,
+    memoryDir,
+    sourceComponent: "ProviderBackedSwarmWorker"
+  }).loadContext(input.run.id, "swarm", input.run.artifacts_path).catch((): IntentContextSnapshot => ({
+    intent_ledger_refs: [],
+    locked_definitions: []
+  }));
+  const intentFrame = intentContext.intent_contract?.status === "ready"
+    ? createSwarmIntentFrame({ run: input.run, workItem: input.workItem, context: intentContext })
+    : undefined;
   return {
     run_id: input.run.id,
     work_item_id: input.workItem.id,
     user_goal: input.run.user_goal,
+    original_user_request: intentFrame?.original_user_request,
+    intent_contract: intentFrame?.intent_contract,
+    intent_frame: intentFrame,
+    original_request_ref: intentContext.original_request?.artifact_ref ?? input.run.original_request_ref,
+    original_request_hash: intentContext.original_request?.request_hash,
+    intent_ledger_ref: intentContext.intent_ledger_ref ?? input.run.intent_ledger_ref,
+    intent_ledger_refs: intentContext.intent_ledger_refs,
+    locked_intent_definitions: intentContext.locked_definitions,
     role: input.workItem.required_role,
     work_item_type: input.workItem.type,
     read_files: input.workItem.read_files,
@@ -597,6 +714,14 @@ async function buildContextSummary(input: Parameters<SwarmWorker>[0], teamContex
       validation_level: input.staffingPlan.validation_level
     },
     constraints: [
+      "Preserve the canonical original user request and intent ledger references in all derived context and output metadata.",
+      ...(intentFrame ? [
+        `Original user request hash: ${intentFrame.original_request_hash}`,
+        `Intent contract ref: ${intentFrame.intent_contract_ref ?? "n/a"}`,
+        `Current task slice id: ${intentFrame.current_task_slice.task_slice_id}`,
+        "Every successful output must include intent_alignment tied to these exact values."
+      ] : ["Ready intent frame is missing; provider invocation must not proceed."]),
+      ...intentContext.locked_definitions.map((definition) => `Locked intent definition (${definition.term}): ${definition.definition}`),
       "Read-only provider-backed worker.",
       "No file edits, patches, diffs, or shell commands.",
       "Validation can be recommended but not marked mechanically passed."
@@ -654,6 +779,10 @@ function traceMetadata(input: Parameters<SwarmWorker>[0], extra: Record<string, 
     agent_id: input.agent.id,
     ...extra
   };
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function looksLikeCommand(value: string) {

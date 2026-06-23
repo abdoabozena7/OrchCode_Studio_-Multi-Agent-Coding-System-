@@ -68,7 +68,8 @@
     "eval:adaptive-reasoning": "tsx src/evals/adaptive-reasoning-certification-cli.ts",
     "smoke:run-to-green": "tsx scripts/run-to-green-smoke.ts",
     "smoke:inspect-provider-truth": "tsx scripts/inspect-provider-truth-smoke.ts",
-    "smoke:python-pygame-fallback": "tsx scripts/python-pygame-fallback-smoke.ts"
+    "smoke:python-pygame-fallback": "tsx scripts/python-pygame-fallback-smoke.ts",
+    "smoke:goal-steward": "tsx scripts/goal-steward-manual-smoke.ts"
   },
   "dependencies": {
     "@hivo/protocol": "file:../../packages/protocol",

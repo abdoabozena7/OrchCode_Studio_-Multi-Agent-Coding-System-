@@ -66,7 +66,11 @@ export type IntegrationConflict = {
     | "validation_not_passed"
     | "stale_candidate"
     | "lock_rejected"
-    | "apply_failed";
+    | "apply_failed"
+    | "goal_spec_conflict"
+    | "goal_change_requires_approval"
+    | "goal_spec_missing"
+    | "goal_steward_unavailable";
   changed_files: string[];
   lock_refs: string[];
   severity: "warning" | "blocking";

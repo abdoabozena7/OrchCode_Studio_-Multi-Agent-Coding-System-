@@ -21,15 +21,17 @@ Tester-backed provider work is planning-only. It can recommend validation, but i
 Each provider-backed worker invocation:
 
 1. Runs the read-only guard.
-2. Builds a minimal context summary or references the existing context pack.
-3. Renders a versioned PromptSystem template for the role.
-4. Runs PromptQualityGate before invocation.
-5. Calls the provider only after the prompt passes.
-6. Validates strict structured output schemas.
-7. Stores raw and parsed output artifacts.
-8. Records trace and SQLite metadata refs.
+2. Requires a ready intent frame with the exact original prompt, intent contract, and work item task slice.
+3. Builds a minimal context summary or references the existing context pack.
+4. Renders a versioned PromptSystem template for the role.
+5. Runs PromptQualityGate before invocation.
+6. Calls the provider only after the prompt passes.
+7. Validates strict structured output schemas, including `intent_alignment`.
+8. Runs `IntentHandoffGate` before returning success to the scheduler.
+9. Stores raw and parsed output artifacts.
+10. Records trace and SQLite metadata refs.
 
-Free-form or schema-invalid provider output is not fed into execution-driving state.
+Free-form, schema-invalid, or intent-unanchored provider output is not fed into execution-driving state.
 
 ## Artifacts
 
@@ -43,6 +45,7 @@ Provider worker artifacts live under the existing swarm run layout:
   raw_output.md
   parsed_output.json
   schema_validation.json
+  intent_handoffs/<work_item_id>/handoff_gate.json
   worker_result.json
 ```
 

@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
-import { writeJson } from "../memory/ProjectMemory.js";
+import { resolveMemoryPaths, writeJson } from "../memory/ProjectMemory.js";
 import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
 import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
+import { IntentLedgerService } from "./IntentLedgerService.js";
 import type { ContextPack, Task } from "./OrchestrationModels.js";
 import type { OrchestrationSafetyConfig } from "./OrchestrationConfig.js";
 import {
@@ -95,6 +96,28 @@ export class PromptWriterService {
     });
 
     await writeJson(artifacts.input, writerInput);
+    await new IntentLedgerService({
+      workspacePath: this.options.workspacePath,
+      memoryDir: this.options.memoryDir,
+      sourceComponent: "PromptWriterService"
+    }).appendLedgerEntry({
+      runId: writerInput.run_id,
+      runKind: "core",
+      artifactsPath: path.join(resolveMemoryPaths(this.options.workspacePath, this.options.memoryDir).rootDir, "runs", writerInput.run_id),
+      entryKind: "prompt_writer_bound",
+      summary: `PromptWriter input ${writerInput.prompt_writer_input_id} bound to canonical intent references for task ${writerInput.task_id}.`,
+      artifactRefs: uniqueStrings([
+        artifacts.input,
+        writerInput.context_pack_ref,
+        writerInput.original_request_ref ?? "",
+        ...(writerInput.intent_ledger_refs ?? [])
+      ]),
+      metadata: {
+        task_id: writerInput.task_id,
+        prompt_writer_input_id: writerInput.prompt_writer_input_id,
+        locked_definition_count: writerInput.locked_intent_definitions?.length ?? 0
+      }
+    }).catch(() => undefined);
     await this.traceWriter.write({
       run_id: writerInput.run_id,
       task_id: writerInput.task_id,
@@ -131,7 +154,8 @@ export class PromptWriterService {
             "You are PromptWriterAgent.",
             "Return strict JSON only.",
             "You are read-only: do not run commands, edit files, create patches, or mark tasks complete.",
-            "Suggest template input improvements only; do not bypass PromptSystem or PromptQualityGate."
+            "Suggest template input improvements only; do not bypass PromptSystem or PromptQualityGate.",
+            "Preserve original_request_ref, intent_ledger_refs, and locked_intent_definitions exactly; never delete, replace, or weaken protected intent references."
           ].join("\n"),
           userPrompt: "Create a controlled prompt draft and template input suggestions for the target agent.",
           context: writerInput
@@ -471,6 +495,11 @@ export class PromptWriterService {
       planning_evidence_refs: input.planningEvidenceRefs ?? evidenceRefsFromPack(input.pack),
       prior_decision_refs: input.priorDecisionRefs ?? input.pack.previous_decisions,
       prior_failure_refs: input.priorFailureRefs ?? [],
+      original_request_ref: input.pack.original_request_ref,
+      intent_contract_ref: input.pack.intent_contract_ref,
+      intent_contract_status: input.pack.intent_contract_status,
+      intent_ledger_refs: input.pack.intent_ledger_refs ?? (input.pack.intent_ledger_ref ? [input.pack.intent_ledger_ref] : []),
+      locked_intent_definitions: input.pack.locked_intent_definitions ?? [],
       team_id: input.pack.team_context?.scope.team_id,
       team_context_refs: input.pack.team_context ? uniqueStrings([
         input.pack.team_context.scope.artifact_ref,
@@ -482,6 +511,12 @@ export class PromptWriterService {
       mode,
       metadata_json: {
         context_pack_id: input.pack.id,
+        original_request_ref: input.pack.original_request_ref,
+        intent_contract_ref: input.pack.intent_contract_ref,
+        intent_contract_status: input.pack.intent_contract_status,
+        intent_ledger_ref: input.pack.intent_ledger_ref,
+        intent_ledger_refs: input.pack.intent_ledger_refs ?? [],
+        locked_intent_definitions: input.pack.locked_intent_definitions ?? [],
         original_prompt_id: input.originalPromptId,
         original_prompt_artifact_ref: input.originalPromptArtifactRef,
         prompt_writer_provider_mode: this.options.config.prompt_writer_provider_mode,
@@ -545,7 +580,7 @@ export class PromptWriterService {
   }
 
   private async artifactPaths(runId: string, taskId: string, outputId: string) {
-    const root = path.join(this.options.workspacePath, this.options.memoryDir ?? ".agent_memory", "runs", runId, "prompt_writers", taskId);
+    const root = path.join(resolveMemoryPaths(this.options.workspacePath, this.options.memoryDir).rootDir, "runs", runId, "prompt_writers", taskId);
     await mkdir(root, { recursive: true });
     return {
       input: path.join(root, `input_${outputId}.json`),
@@ -580,8 +615,14 @@ export function deterministicPromptWriterOutput(input: PromptWriterInput, output
           section_id: "objective",
           title: "Objective",
           content: `Clarify the task objective around: ${input.task_objective}`,
-          source_refs: [input.context_pack_ref]
+          source_refs: uniqueStrings([input.context_pack_ref, input.original_request_ref ?? ""])
         },
+        ...(input.original_request_ref ? [{
+          section_id: "intent",
+          title: "Canonical Intent",
+          content: "Preserve the original user request and locked intent definitions when refining this prompt.",
+          source_refs: uniqueStrings([input.original_request_ref, ...(input.intent_ledger_refs ?? [])])
+        }] : []),
         {
           section_id: "scope",
           title: "Scope",
@@ -602,7 +643,10 @@ export function deterministicPromptWriterOutput(input: PromptWriterInput, output
       metadata_json: {
         prompt_writer_mode: input.mode,
         prompt_writer_advisory: true,
-        prompt_writer_missing_context_count: input.risk_summary.length
+        prompt_writer_missing_context_count: input.risk_summary.length,
+        original_request_ref: input.original_request_ref,
+        intent_ledger_refs: input.intent_ledger_refs ?? [],
+        locked_intent_definition_count: input.locked_intent_definitions?.length ?? 0
       }
     },
     rationale: [

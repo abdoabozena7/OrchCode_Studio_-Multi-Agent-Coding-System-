@@ -27,6 +27,7 @@ import type { DurableRuntimeEvent } from "@hivo/protocol";
 import { EventBus } from "./EventBus.js";
 import { listDurableRuntimeEventsFromSqlite } from "./DurableRuntimeEvents.js";
 import { replaySessionFromDurableEvents } from "./SessionReplay.js";
+import { buildAgentRuntimeSwarmState } from "./SwarmSessionState.js";
 
 type SessionTokenRecord = {
   tokenHash: string;
@@ -268,6 +269,7 @@ export class SessionManager {
       | "runtime.branch_execution.blocked"
       | "runtime.branch_execution.failed"
       | "runtime.branch_result.recorded"
+      | "runtime.semantic_conflict_resolution.updated"
       | "runtime.recursive_fan_in.updated"
       | "runtime.recursive_final_report.created"
   }>) {
@@ -285,6 +287,10 @@ export class SessionManager {
       | "runtime.knowledge_branch_targets.created"
       | "runtime.knowledge_branch_execution.planned"
   }>) {
+    this.eventBus.publish(event);
+  }
+
+  publishIntentContractEvent(event: Extract<AppEvent, { type: "runtime.intent_contract.compiled" }>) {
     this.eventBus.publish(event);
   }
 
@@ -681,6 +687,7 @@ export class SessionManager {
   }
 
   private async saveAndPublish(session: AgentRuntimeSession) {
+    session.swarmState = buildAgentRuntimeSwarmState(session);
     await this.persist();
     this.eventBus.publish({ type: "runtime.session.updated", session });
   }
@@ -750,6 +757,13 @@ function createPersistedSessionSnapshot(session: AgentRuntimeSession): AgentRunt
     reasoningSummaries: session.reasoningSummaries.slice(-MAX_PERSISTED_MESSAGES),
     progressEvents: session.progressEvents.slice(-MAX_PERSISTED_EVENTS),
     agentWorkStatuses: session.agentWorkStatuses.slice(-MAX_PERSISTED_ITEMS),
+    swarmState: session.swarmState
+      ? {
+          ...session.swarmState,
+          nodes: session.swarmState.nodes.slice(-MAX_PERSISTED_ITEMS),
+          messages: session.swarmState.messages.slice(-MAX_PERSISTED_ITEMS)
+        }
+      : undefined,
     orchestration: session.orchestration
       ? {
           ...session.orchestration,
@@ -969,6 +983,7 @@ function hydrateSession(
   }
   session.progressEvents ??= [];
   session.agentWorkStatuses ??= [];
+  session.swarmState = buildAgentRuntimeSwarmState(session, session.swarmState?.messages ?? []);
   session.toolIntents ??= [];
   session.artifacts ??= [];
   session.backgroundJobs ??= [];
