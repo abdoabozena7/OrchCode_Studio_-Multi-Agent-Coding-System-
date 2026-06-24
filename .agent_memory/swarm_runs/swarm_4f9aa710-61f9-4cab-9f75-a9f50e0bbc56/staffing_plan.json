@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "staffing_07b6414a-0bb7-4777-9a35-441647d212cc",
+  "swarm_run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+  "task_complexity": "small",
+  "repo_scope": "multiple_modules",
+  "risk_level": "high",
+  "recommended_total_logical_agents": 8,
+  "max_parallel_agents": 6,
+  "scout_count": 2,
+  "planner_count": 1,
+  "architect_count": 0,
+  "executor_count": 1,
+  "reviewer_count": 2,
+  "tester_count": 1,
+  "integrator_count": 0,
+  "specialist_agents": [],
+  "role_counts": {
+    "ScoutAgent": 2,
+    "PlannerAgent": 1,
+    "ArchitectAgent": 0,
+    "ExecutorAgent": 1,
+    "ReviewerAgent": 2,
+    "TesterAgent": 1,
+    "IntegratorAgent": 0,
+    "ReporterAgent": 1,
+    "RiskAnalyzerAgent": 0,
+    "MemoryUpdaterAgent": 0,
+    "ContextBuilderAgent": 0
+  },
+  "executor_limit": 1,
+  "reviewer_limit": 2,
+  "tester_limit": 1,
+  "read_only_ratio": 0.88,
+  "write_agent_limit": 1,
+  "validation_level": "strict",
+  "requires_human_approval": true,
+  "reasoning": [
+    "Classified task as small with multiple_modules scope and high risk.",
+    "Goal may require edits, so executor fan-out is capped separately from total logical agents.",
+    "Repository index reports 439 indexed file(s); 24 candidate relevant file(s) were selected.",
+    "No dynamic specialists were created because no specialist trigger was justified.",
+    "The system selected 8 logical agents automatically; the user did not need to provide an agent count."
+  ],
+  "confidence": 0.85,
+  "downgrade_conditions": [
+    "Reduce executor fan-out after any validation failure or repeated patch fingerprint.",
+    "Downgrade to fewer scouts when the repo index is fresh and relevant files are already narrow.",
+    "Use a single executor when write scopes overlap or sensitive files are involved."
+  ],
+  "escalation_conditions": [
+    "Escalate scouts and reviewers when relevant modules remain unknown.",
+    "Add specialists when security, database, API, dependency, performance, or UI evidence appears.",
+    "Require human approval when high-risk files or critical safety gates are involved."
+  ],
+  "created_at": "2026-06-23T23:06:48.594Z"
+}

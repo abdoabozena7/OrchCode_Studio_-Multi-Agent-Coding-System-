@@ -3055,6 +3055,81 @@ body.resizing-sidebar * {
   font-size: 12px;
 }
 
+.swarm-goal-badge {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  justify-self: end;
+  align-self: center;
+  box-shadow: 0 0 4px color-mix(in srgb, var(--swarm-goal-color, #8f8f8f) 42%, transparent);
+}
+
+.swarm-complexity-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  justify-self: end;
+  align-self: center;
+}
+
+.swarm-dock-chip.mini {
+  opacity: 0.6;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.swarm-dock-chip.mini:hover {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.swarm-agent-summary.goal {
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.06);
+  border-left: 2px solid var(--warning);
+}
+
+.swarm-agent-detail {
+  padding: 0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.swarm-agent-detail summary {
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.swarm-agent-detail summary:hover {
+  color: var(--text);
+}
+
+.swarm-agent-pre {
+  padding: 8px;
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .swarm-minimap {
   position: absolute;
   right: 14px;

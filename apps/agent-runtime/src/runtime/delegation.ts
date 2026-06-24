@@ -48,6 +48,7 @@ export function estimateComplexity(prompt: string, projectMap: ProjectMap): Dele
     "backend",
     "frontend",
     "full stack",
+    "three.js",
     "threejs",
     "3d",
     "game",
@@ -55,9 +56,17 @@ export function estimateComplexity(prompt: string, projectMap: ProjectMap): Dele
     "authentication",
     "tauri",
     "rust",
-    "api"
+    "api",
+    "canvas",
+    "webgl",
+    "webgpu",
+    "physics",
+    "animation",
+    "interactive",
+    "generate",
+    "full game"
   ];
-  const mediumTerms = ["html", "css", "javascript", "typescript", "tests", "refactor", "settings", "page"];
+  const mediumTerms = ["html", "css", "javascript", "typescript", "tests", "refactor", "settings", "page", "single page", "file"];
 
   score += highComplexityTerms.filter((term) => normalized.includes(term)).length * 2;
   score += mediumTerms.filter((term) => normalized.includes(term)).length;
@@ -65,8 +74,9 @@ export function estimateComplexity(prompt: string, projectMap: ProjectMap): Dele
   score += projectMap.entryPoints.length > 4 ? 1 : 0;
   score += /\band\b/.test(normalized) ? 1 : 0;
   score += /[,/]/.test(normalized) ? 1 : 0;
+  score += /\b(create|make|build|implement|write)\b.*\b(html|js|ts|css|file|game|app|page)\b/i.test(normalized) ? 2 : 0;
 
-  if (score >= 6) return "high";
+  if (score >= 5) return "high";
   if (score >= 3) return "medium";
   return "low";
 }

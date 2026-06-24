@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "frame_id": "intent_frame_825b4821d4ff824eddab3036",
+  "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+  "run_kind": "swarm",
+  "layer": "swarm",
+  "original_user_request": "Develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN",
+  "original_request_hash": "775a9e7a134605633f526c2c2b7928bdd2af7a909e106a8b860a1780768db603",
+  "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+  "intent_contract": {
+    "schema_version": 1,
+    "contract_id": "intent_contract_030cf76c-a610-43d5-91f1-96b36e996045",
+    "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+    "run_kind": "swarm",
+    "revision": 1,
+    "original_user_request": "Develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN",
+    "precise_rewrite": "Create an HTML file that includes the necessary Three.js library from a CDN and implements a 3D Crossy Road game.",
+    "assumptions": [
+      "The user wants a fully functional 3D game in a single HTML file.",
+      "Three.js should be used for rendering the game."
+    ],
+    "missing_questions": [],
+    "tradeoffs": [
+      {
+        "name": "Speed vs Quality",
+        "options": [
+          "Speed",
+          "Quality"
+        ],
+        "rationale": "Balancing between development speed and ensuring a high-quality game experience."
+      },
+      {
+        "name": "Realism vs Fun",
+        "options": [
+          "Realism",
+          "Fun"
+        ],
+        "rationale": "Deciding whether to prioritize realism in the game design or creating an engaging, fun gameplay experience."
+      },
+      {
+        "name": "Security vs Cost",
+        "options": [
+          "Security",
+          "Cost"
+        ],
+        "rationale": "Evaluating the trade-off between ensuring the game is secure and minimizing costs."
+      }
+    ],
+    "priorities": {
+      "speed": {
+        "score": 80,
+        "rationale": "The user likely wants a quick development process to get the game up and running."
+      },
+      "quality": {
+        "score": 90,
+        "rationale": "A high-quality game experience is important, but speed is also crucial."
+      },
+      "realism": {
+        "score": 70,
+        "rationale": "Realism is a factor, but the primary goal seems to be creating an engaging game rather than a photorealistic one."
+      },
+      "fun": {
+        "score": 95,
+        "rationale": "The user specifically mentions fun, indicating that enjoyment should be a top priority."
+      },
+      "security": {
+        "score": 60,
+        "rationale": "Security is important but may not be the highest priority given the constraints of a single HTML file and CDN usage."
+      },
+      "cost": {
+        "score": 75,
+        "rationale": "Cost should be considered, but it's likely that free resources like CDN-hosted libraries will suffice."
+      }
+    },
+    "definition_of_done": [
+      "The HTML file is created and includes the necessary Three.js library from a CDN.",
+      "A basic 3D Crossy Road game is implemented within the HTML file.",
+      "The game runs in a web browser without errors.",
+      "The game provides an engaging and fun gameplay experience."
+    ],
+    "non_goals": [
+      "Creating a highly realistic 3D environment.",
+      "Implementing advanced security features beyond basic CDN usage.",
+      "Exceeding the budget for resources or development time."
+    ],
+    "conflict_rules": [
+      "In case of conflicts between speed and quality, prioritize quality to ensure a good user experience.",
+      "If realism is compromised for fun, focus on creating an engaging game that still meets the user's expectations.",
+      "Security should be considered but not at the expense of other priorities. If security becomes a blocking issue, re-evaluate the project requirements."
+    ],
+    "status": "ready",
+    "created_at": "2026-06-23T23:06:37.008Z",
+    "metadata_json": {
+      "source_component": "SwarmAutopilotRuntime",
+      "provider_used": true,
+      "validation_errors": []
+    },
+    "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+    "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md"
+  },
+  "intent_contract_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+  "intent_contract_status": "ready",
+  "intent_ledger_refs": [
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\context_ledger.jsonl",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.md",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.md"
+  ],
+  "locked_intent_definitions": [],
+  "current_task_slice": {
+    "task_slice_id": "intent_slice_180135e1b9f130c59dda50d2",
+    "task_id": "swarm_scout_1_281f08bb",
+    "layer": "swarm",
+    "role": "ScoutAgent",
+    "objective": "ScoutAgent scout work item swarm_scout_1_281f08bb",
+    "task_title": "swarm_scout_1_281f08bb",
+    "task_type": "scout",
+    "slice_summary": "scout assigned to ScoutAgent",
+    "read_files": [
+      "apps/agent-runtime/src/agents/workers/index.ts",
+      "apps/agent-runtime/src/index.ts",
+      "apps/agent-runtime/src/memory/index.ts",
+      "apps/agent-runtime/src/orchestration/index.ts",
+      "apps/desktop/index.html",
+      "apps/desktop/src-tauri/src/main.rs",
+      "apps/desktop/src/main.tsx",
+      "apps/agent-runtime/package.json",
+      "apps/desktop/src-tauri/Cargo.toml",
+      "packages/protocol/package.json",
+      "apps/desktop/vite.config.ts",
+      "apps/desktop/src-tauri/tauri.conf.json"
+    ],
+    "write_files": [],
+    "allowed_files": [],
+    "forbidden_files": [],
+    "dependencies": [],
+    "expected_output_schema": "ScoutResult",
+    "validation_requirements": [],
+    "context_refs": [],
+    "risk_level": "low",
+    "metadata_json": {
+      "priority": 10
+    }
+  },
+  "created_at": "2026-06-23T23:07:25.755Z",
+  "metadata_json": {}
+}

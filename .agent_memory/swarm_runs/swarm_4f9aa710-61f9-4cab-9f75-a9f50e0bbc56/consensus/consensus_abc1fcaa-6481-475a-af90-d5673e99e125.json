@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "consensus_abc1fcaa-6481-475a-af90-d5673e99e125",
+  "swarm_run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+  "topic": "Final integration readiness",
+  "participant_work_items": [
+    "swarm_review_1_ad13189f",
+    "swarm_review_2_519ade65"
+  ],
+  "quorum_policy": "reviewer_quorum",
+  "decision": "blocked_with_dissent",
+  "consolidated_findings": [],
+  "dissenting_findings": [
+    "swarm_review_1_ad13189f did not complete cleanly.",
+    "swarm_review_2_519ade65 did not complete cleanly."
+  ],
+  "confidence": 0,
+  "created_at": "2026-06-23T23:12:57.037Z"
+}

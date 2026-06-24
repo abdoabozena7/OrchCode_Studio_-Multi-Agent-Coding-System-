@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "run_id": "swarm_2f43509a-15da-427a-9df1-cb004685b1fd",
+  "run_kind": "swarm",
+  "original_request": "Develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN",
+  "request_hash": "775a9e7a134605633f526c2c2b7928bdd2af7a909e106a8b860a1780768db603",
+  "source": "user",
+  "created_at": "2026-06-23T22:38:13.062Z",
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\original_request.json",
+  "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\original_request.md",
+  "metadata_json": {
+    "source_component": "SwarmAutopilotRuntime"
+  }
+}

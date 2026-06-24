@@ -1,0 +1,165 @@
+{
+  "quality_result_id": "prompt_quality_dc51a90ec2d6350ec410ff9c",
+  "prompt_id": "prompt_4e6a2f48595b806feb857ce8",
+  "run_id": "swarm_2f43509a-15da-427a-9df1-cb004685b1fd",
+  "task_id": "swarm_scout_2_f3656476",
+  "agent_id": "agent_ScoutAgent_2_4f63063e",
+  "agent_role": "ScoutAgent",
+  "status": "passed",
+  "blocking": false,
+  "role_profile": "scout",
+  "checks_passed_count": 19,
+  "warnings_count": 0,
+  "failures_count": 0,
+  "blocked_count": 0,
+  "findings": [
+    {
+      "check_id": "run_id",
+      "severity": "passed",
+      "message": "Run id is present."
+    },
+    {
+      "check_id": "task_id",
+      "severity": "passed",
+      "message": "Task id is present."
+    },
+    {
+      "check_id": "agent_role",
+      "severity": "passed",
+      "message": "Agent role is present."
+    },
+    {
+      "check_id": "context_pack_ref",
+      "severity": "passed",
+      "message": "Context pack ref is present."
+    },
+    {
+      "check_id": "output_schema_name",
+      "severity": "passed",
+      "message": "Output schema name is present."
+    },
+    {
+      "check_id": "template_id",
+      "severity": "passed",
+      "message": "Template id is present."
+    },
+    {
+      "check_id": "template_version",
+      "severity": "passed",
+      "message": "Template version is present."
+    },
+    {
+      "check_id": "prompt_artifact_ref",
+      "severity": "passed",
+      "message": "Prompt artifact ref is present."
+    },
+    {
+      "check_id": "prompt_role_present",
+      "severity": "passed",
+      "message": "Rendered prompt includes a role line."
+    },
+    {
+      "check_id": "prompt_task_present",
+      "severity": "passed",
+      "message": "Rendered prompt includes a task line."
+    },
+    {
+      "check_id": "prompt_objective_present",
+      "severity": "passed",
+      "message": "Rendered prompt includes an objective line."
+    },
+    {
+      "check_id": "prompt_output_contract_present",
+      "severity": "passed",
+      "message": "Rendered prompt includes a structured-output contract."
+    },
+    {
+      "check_id": "forbidden_files_section_present",
+      "severity": "passed",
+      "message": "Prompt includes forbidden-files scope or an explicit empty list."
+    },
+    {
+      "check_id": "validation_section_present",
+      "severity": "passed",
+      "message": "Prompt includes validation requirements or an explicit empty validation list."
+    },
+    {
+      "check_id": "success_criteria",
+      "severity": "passed",
+      "message": "Success criteria are present or derivable from the output schema."
+    },
+    {
+      "check_id": "context_pack_ref_consistency",
+      "severity": "passed",
+      "message": "context_pack_ref_consistency passed."
+    },
+    {
+      "check_id": "output_schema_consistency",
+      "severity": "passed",
+      "message": "output_schema_consistency passed."
+    },
+    {
+      "check_id": "allowed_files_consistency",
+      "severity": "passed",
+      "message": "allowed_files_consistency passed.",
+      "metadata_json": {
+        "prompt_items": [],
+        "expected_items": []
+      }
+    },
+    {
+      "check_id": "forbidden_files_consistency",
+      "severity": "passed",
+      "message": "forbidden_files_consistency passed.",
+      "metadata_json": {
+        "prompt_items": [
+          ".agent_memory/",
+          ".env",
+          ".git/",
+          "build/",
+          "dist/",
+          "node_modules/"
+        ],
+        "expected_items": [
+          ".agent_memory/",
+          ".env",
+          ".git/",
+          "build/",
+          "dist/",
+          "node_modules/"
+        ]
+      }
+    }
+  ],
+  "unsafe_pattern_hits": [],
+  "consistency_checks": {
+    "context_pack_ref_consistency": "passed",
+    "output_schema_consistency": "passed",
+    "allowed_files_consistency": "passed",
+    "forbidden_files_consistency": "passed"
+  },
+  "checked_metadata": {
+    "prompt_artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\provider_workers\\swarm_scout_2_f3656476\\prompt.md",
+    "context_pack_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\provider_workers\\swarm_scout_2_f3656476\\context_summary.json",
+    "expected_output_schema": "swarm_scout_output",
+    "allowed_files": [],
+    "forbidden_files": [
+      ".agent_memory/",
+      ".git/",
+      "node_modules/",
+      "dist/",
+      "build/",
+      ".env"
+    ],
+    "validation_requirements": []
+  },
+  "suggested_remediation": [],
+  "metadata_json": {
+    "template_id": "factory.swarm.scout",
+    "template_version": "1.0.0",
+    "renderer_version": "factory-prompt-renderer-v1",
+    "template_input_schema_version": "role-prompt-input-v1",
+    "output_schema_name": "swarm_scout_output"
+  },
+  "created_at": "2026-06-23T22:47:55.812Z"
+}

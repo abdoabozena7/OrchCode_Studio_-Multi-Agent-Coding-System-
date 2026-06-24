@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "run_id": "session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3",
+  "run_kind": "runtime_session",
+  "latest_revision": 2,
+  "entries": [
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_4296d729-0956-4fc3-912d-3c1bee35e5c7",
+      "run_id": "session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3",
+      "run_kind": "runtime_session",
+      "revision": 1,
+      "entry_kind": "original_request_recorded",
+      "summary": "Original user request artifact recorded as canonical intent source.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3\\intent\\original_request.md"
+      ],
+      "source_component": "AgentRuntime",
+      "created_at": "2026-06-23T20:32:33.233Z",
+      "metadata_json": {
+        "request_hash": "79687c9c880c9a42da46b21d0ef390a66002d91ffc9ca8e2be579805e7fb75c4"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_e3edde12-1476-45eb-89cc-baf69cdcd609",
+      "run_id": "session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3",
+      "run_kind": "runtime_session",
+      "revision": 2,
+      "entry_kind": "intent_contract_compiled",
+      "summary": "Intent contract compiled with status ready.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_c5bc0f5b-0fa7-471b-ad7a-452aec2d4af3\\intent\\intent_contract.md"
+      ],
+      "source_component": "AgentRuntime",
+      "created_at": "2026-06-23T20:33:29.494Z",
+      "metadata_json": {
+        "contract_id": "intent_contract_6d4c51b8-8c75-4491-b273-90ed5a807e83",
+        "revision": 1,
+        "status": "ready"
+      }
+    }
+  ],
+  "updated_at": "2026-06-23T20:33:29.494Z"
+}

@@ -28,7 +28,7 @@ export function loadConfig(): RuntimeConfig {
     port: Number(process.env.HIVO_AGENT_PORT ?? process.env.ORCHCODE_AGENT_PORT ?? "4317"),
     storageDir: process.env.HIVO_AGENT_STORAGE ?? process.env.ORCHCODE_AGENT_STORAGE ?? resolveDefaultStorageDir(),
     defaultMode: "real_provider",
-    providerRequestTimeoutMs: intEnv("HIVO_PROVIDER_TIMEOUT_MS", intEnv("ORCHCODE_PROVIDER_TIMEOUT_MS", 180_000)),
+    providerRequestTimeoutMs: intEnv("HIVO_PROVIDER_TIMEOUT_MS", intEnv("ORCHCODE_PROVIDER_TIMEOUT_MS", 600_000)),
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiBaseUrl: process.env.OPENAI_BASE_URL ?? "https://api.openai.com",
     agenticTaskKernelEnabled: boolEnv("HIVO_AGENTIC_TASK_KERNEL_ENABLED", true),

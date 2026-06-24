@@ -1,4 +1,5 @@
 import type {
+  InvestigationBundle,
   ProviderAuthoredResult,
   InitialReasoningDecision,
   ReasoningBudget,
@@ -43,21 +44,21 @@ export function invokeReasoningProviderEmbedding(provider: LlmProvider, request:
 }
 
 export const REASONING_BUDGETS: Record<ReasoningBudget["profile"], ReasoningBudget> = {
-  conversation: { profile: "conversation", maxProviderCalls: 4, maxToolRounds: 0, maxRepairAttempts: 3, maxElapsedMs: 60_000 },
-  project: { profile: "project", maxProviderCalls: 12, maxToolRounds: 4, maxRepairAttempts: 3, maxElapsedMs: 90_000 },
-  deep_project: { profile: "deep_project", maxProviderCalls: 24, maxToolRounds: 8, maxRepairAttempts: 4, maxElapsedMs: 180_000 },
-  action: { profile: "action", maxProviderCalls: 24, maxToolRounds: 8, maxRepairAttempts: 4, maxElapsedMs: 180_000 }
+  conversation: { profile: "conversation", maxProviderCalls: 12, maxToolRounds: 0, maxRepairAttempts: 3, maxElapsedMs: 600_000 },
+  project: { profile: "project", maxProviderCalls: 12, maxToolRounds: 4, maxRepairAttempts: 3, maxElapsedMs: 600_000 },
+  deep_project: { profile: "deep_project", maxProviderCalls: 24, maxToolRounds: 8, maxRepairAttempts: 4, maxElapsedMs: 1_200_000 },
+  action: { profile: "action", maxProviderCalls: 24, maxToolRounds: 8, maxRepairAttempts: 4, maxElapsedMs: 1_200_000 }
 };
 
 const REASONING_STAGE_BUDGETS: Record<ReasoningStage, Omit<ReasoningStageBudget, "stage">> = {
-  route: { maxElapsedMs: 20_000, maxOutputTokens: 768, reserveMs: 3_000 },
-  audit: { maxElapsedMs: 20_000, maxOutputTokens: 768, reserveMs: 3_000 },
-  investigate: { maxElapsedMs: 60_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
-  reason: { maxElapsedMs: 35_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
-  curate: { maxElapsedMs: 25_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
-  compose: { maxElapsedMs: 35_000, maxOutputTokens: 2_048, reserveMs: 5_000 },
-  verify: { maxElapsedMs: 35_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
-  repair: { maxElapsedMs: 30_000, maxOutputTokens: 1_024, reserveMs: 5_000 }
+  route: { maxElapsedMs: 300_000, maxOutputTokens: 768, reserveMs: 3_000 },
+  audit: { maxElapsedMs: 300_000, maxOutputTokens: 768, reserveMs: 3_000 },
+  investigate: { maxElapsedMs: 300_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
+  reason: { maxElapsedMs: 300_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
+  curate: { maxElapsedMs: 300_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
+  compose: { maxElapsedMs: 300_000, maxOutputTokens: 2_048, reserveMs: 5_000 },
+  verify: { maxElapsedMs: 300_000, maxOutputTokens: 1_024, reserveMs: 5_000 },
+  repair: { maxElapsedMs: 300_000, maxOutputTokens: 1_024, reserveMs: 5_000 }
 };
 
 export const REASONING_MAX_PROVIDER_CALLS = REASONING_BUDGETS.deep_project.maxProviderCalls;
@@ -187,6 +188,9 @@ export async function understandAndDirectTurn(input: {
         "If you do not know, use refuse or ask_user. Do not invent facts.",
         "Do not use hidden chain-of-thought. Return only concise decision rationale.",
         "Unknown and general questions are direct_conversation unless the user asks about the current workspace.",
+        "CRITICAL: Creating new files, writing code, generating HTML/JS/CSS content, implementing features, building projects, or producing any output that should be saved to disk IS workspace_action (needsWorkspace=true).",
+        "When the user says 'create', 'make', 'build', 'write', 'generate', 'implement' + a file name or code output → workspace_action, NOT direct_conversation.",
+        "The workspace includes all files the system can create, not just files that already exist.",
         "Questions about this system, this repository, this project, current implementation behavior, files, code, or cross-file investigation are workspace questions even when they do not name a path.",
         "Deep read-only investigations spanning multiple files, modules, or relationships must use route=swarm_readonly and risk=high so the adaptive loop receives the deep-project budget.",
         "For conceptual, paraphrased, architecture, or cross-file workspace questions, prefer investigate_project; it returns ranked text/vector candidates, relationships, and source excerpts as facts in one round.",
@@ -400,12 +404,17 @@ export async function continueAdaptiveReasoningTurn(input: {
             toolResultMaxChars: REASONING_COMPOSE_REPAIR_TOOL_RESULT_CONTEXT_MAX_CHARS
           });
           providerResultValidationErrors = validateProviderResult(result, understanding, evidenceStore.all());
+          const markdownErrors = validateProviderResultMarkdown(result, understanding);
+          if (markdownErrors.length) {
+            providerResultValidationErrors.push(...markdownErrors);
+          }
           validationErrors = [...providerResultValidationErrors];
           if (input.tools) validationErrors.push(...evidenceStore.verifyWorkspaceFiles(input.tools));
         }
         if (!validationErrors.length && result.decision === "ANSWER") {
           const verification = await verifyProviderAuthoredResult({
             provider: input.verifierProvider ?? input.provider,
+            verifierProviderId: input.verifierProvider ? "separate_verifier" : undefined,
             understanding,
             result,
             state,
@@ -782,6 +791,7 @@ async function requestNextStep(input: {
 
 async function verifyProviderAuthoredResult(input: {
   provider: LlmProvider;
+  verifierProviderId?: string;
   understanding: TurnUnderstanding;
   result: ProviderAuthoredResult;
   state: ReasoningKernelState;
@@ -841,15 +851,17 @@ async function verifyProviderAuthoredResult(input: {
   }
   const allowed = new Set(input.evidenceStore.ids());
   const unknown = generated.evidenceRefs.filter((ref) => !allowed.has(ref));
+  const verifierModelId = input.verifierProviderId;
   if (unknown.length) {
     return {
       ...generated,
       verdict: "fail",
       unsupportedClaims: [...generated.unsupportedClaims, ...unknown.map((ref) => `Verifier cited unknown evidence id ${ref}`)],
+      verifierModelId,
       createdAt: new Date().toISOString()
     };
   }
-  return { ...generated, createdAt: new Date().toISOString() };
+  return { ...generated, verifierModelId, createdAt: new Date().toISOString() };
 }
 
 async function verifyProviderAuthoredResultText(input: {
@@ -938,6 +950,7 @@ async function generateWithProviderRepair<T>(input: {
   let request = input.request;
   let lastErrors: string[] = [];
   let lastProviderError: unknown;
+  let firstProviderError: unknown;
   const maxRepairAttempts = input.maxOperationalRepairAttempts ?? input.state.budget.maxRepairAttempts;
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     assertReasoningBudget(input.state);
@@ -957,6 +970,9 @@ async function generateWithProviderRepair<T>(input: {
       }, input.schema);
     } catch (error) {
       lastProviderError = error;
+      if (!firstProviderError && !isRepairStageBudgetExhaustion(error)) {
+        firstProviderError = error;
+      }
       recordRepairError(input.state, "provider_failure", request.reasoningStage ?? stageForPurpose(request.purpose), formatError(error));
       if (isContextTooLargeError(error)) break;
       if (attempt === maxRepairAttempts) break;
@@ -1005,9 +1021,13 @@ async function generateWithProviderRepair<T>(input: {
     };
   }
   if (lastProviderError && !lastErrors.length) {
-    throw new Error(`reasoning_kernel.provider_failed_after_retries: ${formatError(lastProviderError)}`);
+    throw new Error(`reasoning_kernel.provider_failed_after_retries: ${formatError(firstProviderError ?? lastProviderError)}`);
   }
   throw new Error(`reasoning_kernel.invalid_provider_output: ${lastErrors.join("; ")}`);
+}
+
+function isRepairStageBudgetExhaustion(error: unknown) {
+  return formatError(error).includes("reasoning_kernel.repair_stage_budget_exhausted");
 }
 
 async function generateProviderTextWithBudget(input: {
@@ -1146,14 +1166,66 @@ function shouldComposeDirectlyAfterToolBatch(
 ) {
   if (!evidenceStore.ids().length || progress.stagnant) return false;
   const hasInvestigationBundle = step.toolRequests.some((request) => request.kind === "investigate_project");
-  const enoughInvestigationGain = hasInvestigationBundle && progress.informationGain >= REASONING_DIRECT_COMPOSE_MIN_INFORMATION_GAIN;
+  if (!hasInvestigationBundle) {
+    const remainingMs = remainingReasoningMs(state);
+    return remainingMs > reasoningStageBudget("compose").reserveMs && remainingMs <= REASONING_DIRECT_COMPOSE_LOW_TIME_MS;
+  }
+  // Check coverage status from investigation bundle before allowing direct composition
+  const coverageStatus = latestInvestigationCoverage(step, state);
+  if (coverageStatus === "single_subsystem" || coverageStatus === "insufficient") {
+    return false;
+  }
+  const enoughCoverage = coverageStatus === "sufficient" || coverageStatus === "narrow";
+  const enoughInvestigationGain = enoughCoverage && progress.informationGain >= REASONING_DIRECT_COMPOSE_MIN_INFORMATION_GAIN;
   const remainingMs = remainingReasoningMs(state);
   const lowTimeWithEvidence = remainingMs > reasoningStageBudget("compose").reserveMs && remainingMs <= REASONING_DIRECT_COMPOSE_LOW_TIME_MS;
   return enoughInvestigationGain || lowTimeWithEvidence;
 }
 
+function latestInvestigationCoverage(step: ReasoningStep, state: ReasoningKernelState): string | undefined {
+  const bundleResults = state.toolResults.filter(
+    (r) => r.kind === "investigate_project" && r.data && typeof r.data === "object" && "bundle" in (r.data as Record<string, unknown>)
+  );
+  const latest = bundleResults[bundleResults.length - 1];
+  if (!latest) return undefined;
+  const bundle = (latest.data as { bundle: InvestigationBundle }).bundle;
+  return bundle.coverageStatus;
+}
+
 function shouldRepairVerifierFailureWithCompose(step: ReasoningStep, resultCameFromCompose: boolean) {
   return resultCameFromCompose || step.id.endsWith("_compose_from_current_evidence");
+}
+
+function validateProviderResultMarkdown(
+  result: ProviderAuthoredResult,
+  understanding: TurnUnderstanding
+): string[] {
+  const errors: string[] = [];
+  const markdown = result.answerMarkdown;
+  if (!markdown) return errors;
+  // Raw evidence_* IDs in markdown (should use hivo-file: links instead)
+  const rawEvidenceRefs = markdown.match(/\bevidence_[a-z0-9-]+\b/gi);
+  if (rawEvidenceRefs?.length) {
+    errors.push(`Provider answer contains raw evidence IDs (${rawEvidenceRefs.slice(0, 5).join(", ")}) instead of hivo-file: links`);
+  }
+  // Trailing backslashes (markdown line break abuse)
+  const trailingBackslashLines = markdown.split("\n").filter((l) => /[^\\]\\$/.test(l.trimEnd()));
+  if (trailingBackslashLines.length > 3) {
+    errors.push(`Provider answer has ${trailingBackslashLines.length} lines with trailing backslashes`);
+  }
+  // Wrong language check
+  if (understanding.language === "arabic" && /^[A-Za-z]/u.test(markdown.trim()) && !/[\u0600-\u06FF]/.test(markdown)) {
+    errors.push("Provider answer should be in Arabic but appears to be in another language");
+  }
+  if (understanding.language === "english" && /[\u0600-\u06FF]/.test(markdown) && !/^[A-Za-z]/u.test(markdown.trim())) {
+    errors.push("Provider answer should be in English but appears to be in Arabic");
+  }
+  // Malformed citations (hivo-file: with no path or broken syntax)
+  const malformedCitations = markdown.match(/\[([^\]]*)\]\(hivo-file:\s*\)/g);
+  if (malformedCitations?.length) {
+    errors.push(`Provider answer has ${malformedCitations.length} malformed hivo-file: citation(s) with empty path`);
+  }
+  return errors;
 }
 
 function validateProviderResult(result: ProviderAuthoredResult, understanding: TurnUnderstanding, evidence: ReasoningEvidenceRef[]) {
@@ -1191,18 +1263,47 @@ function createTrace(
   evidenceRefs: ReasoningEvidenceRef[],
   terminalFailure?: string
 ): ReasoningTurnTrace {
+  // Build purpose-built compact trace with tool queries, candidate paths, evidence refs, verdicts, and failures
+  const compactSteps = state.steps.map((s) => ({
+    id: s.id,
+    kind: s.kind,
+    rationale: s.rationale.slice(0, 500),
+    toolRequests: s.toolRequests.map((t) => ({ id: t.id, kind: t.kind, query: t.query, path: t.path, reason: t.reason.slice(0, 200) })),
+    missingFacts: s.missingFacts,
+    successCriteria: s.successCriteria,
+    resultDecision: s.result?.decision,
+    resultEvidenceCount: s.result?.evidenceRefs?.length ?? 0
+  }));
+  const compactToolResults = state.toolResults.map((r) => ({
+    requestId: r.requestId,
+    kind: r.kind,
+    status: r.status,
+    summary: r.summary.slice(0, 300),
+    candidateCount: Array.isArray((r.data as Record<string, unknown> | undefined)?.candidatePaths) ? (r.data as { candidatePaths: unknown[] }).candidatePaths.length : undefined,
+    evidenceCount: r.evidenceRefs.length,
+    error: r.error,
+    coverageStatus: r.data && typeof r.data === "object" ? (r.data as Record<string, unknown>).coverageStatus as string : undefined
+  }));
+  const compactVerificationResults = state.verificationResults.map((v) => ({
+    verdict: v.verdict,
+    rationale: v.rationale.slice(0, 300),
+    supportedCount: v.supportedClaims.length,
+    unsupportedCount: v.unsupportedClaims.length,
+    missingFactCount: v.missingFacts.length,
+    verifierModelId: v.verifierModelId
+  }));
   return {
     id: state.id,
     understanding,
-    steps: state.steps,
-    toolResults: state.toolResults,
+    steps: compactSteps as unknown as ReasoningStep[],
+    toolResults: compactToolResults as unknown as ReasoningToolResult[],
     evidenceRefs,
     budget: state.budget,
     providerCalls: state.providerCalls,
     reasoningAttempts: state.reasoningAttempts,
     repairAttempts: state.repairAttempts,
     toolRounds: state.toolRounds,
-    verificationResults: state.verificationResults,
+    verificationResults: compactVerificationResults as unknown as ReasoningVerificationResult[],
     contextOmissions: state.contextOmissions,
     stageBudgets: reasoningStageBudgets(),
     progress: state.progress,

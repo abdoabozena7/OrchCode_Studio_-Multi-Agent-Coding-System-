@@ -61,6 +61,11 @@ export function routeConversation(message: string): ConversationRouteDecision {
     if (signals.hasRiskyMultiFileScope && !signals.hasSmallChangeCue && !signals.hasFilePathSignal) {
       return decision("recursive_factory", "high", language, normalizedPrompt, workspacePrompt, "The requested change is large or cross-cutting and needs staged approval.");
     }
+    const hasNewFileCreation = /\b(create|build|make|write|generate|implement)\b/i.test(normalizedPrompt)
+      && /\b(file|game|app|page|html|component|feature|system|module)\b/i.test(normalizedPrompt);
+    if (hasNewFileCreation && !signals.hasFilePathSignal) {
+      return decision("orchestrated_run", "high", language, normalizedPrompt, workspacePrompt, "The request creates new files or components and needs multi-agent orchestration.");
+    }
     return decision("simple_run", signals.hasSmallChangeCue ? "high" : "medium", language, normalizedPrompt, workspacePrompt, "The request is a bounded code/project action.");
   }
 

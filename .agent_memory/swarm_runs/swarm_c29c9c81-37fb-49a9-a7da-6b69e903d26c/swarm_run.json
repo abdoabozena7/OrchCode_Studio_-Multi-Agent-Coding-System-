@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "swarm_c29c9c81-37fb-49a9-a7da-6b69e903d26c",
+  "user_goal": "Develop a 3D Crossy Road game in a single HTML file using Three.js from the CDN, featuring lanes, obstacles, a player character, scoring, and controls.",
+  "status": "repo_mapping",
+  "mode": "deep",
+  "staffing_plan_ref": "pending",
+  "effective_total_logical_agents": 0,
+  "active_agent_count": 0,
+  "max_supported_logical_agents": 300,
+  "scheduler_config": {
+    "max_parallel_agents": 1,
+    "max_parallel_read_only_agents": 1,
+    "executor_limit": 1,
+    "write_agent_limit": 1,
+    "reviewer_limit": 1,
+    "tester_limit": 1,
+    "risk_level": "low",
+    "validation_level": "basic",
+    "backpressure_failure_threshold": 1
+  },
+  "created_at": "2026-06-23T21:59:39.871Z",
+  "updated_at": "2026-06-23T22:01:52.213Z",
+  "artifacts_path": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_c29c9c81-37fb-49a9-a7da-6b69e903d26c",
+  "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_c29c9c81-37fb-49a9-a7da-6b69e903d26c\\intent\\original_request.json",
+  "intent_ledger_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_c29c9c81-37fb-49a9-a7da-6b69e903d26c\\intent\\intent_ledger.json",
+  "intent_contract_ref": "intent/intent_contract.json",
+  "intent_contract_status": "ready"
+}

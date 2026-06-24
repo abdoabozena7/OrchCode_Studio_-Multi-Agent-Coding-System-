@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "gate_id": "intent_handoff_c44c3585-6a57-4e46-a49a-fb2afad66438",
+  "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+  "task_id": "swarm_scout_2_0205ccbf",
+  "layer": "swarm",
+  "passed": true,
+  "status": "passed",
+  "deterministic_errors": [],
+  "provider_used": true,
+  "provider_status": "aligned",
+  "reviewed_artifact_refs": [
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_scout_2_0205ccbf\\intent_frame.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_9e418f38-4148-4963-b0e0-20d0e8aa000e\\intent_review.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\parsed_output.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\raw_output.md",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\schema_validation.json"
+  ],
+  "frame_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_scout_2_0205ccbf\\intent_frame.json",
+  "alignment": {
+    "schema_version": 1,
+    "original_request_hash": "775a9e7a134605633f526c2c2b7928bdd2af7a909e106a8b860a1780768db603",
+    "intent_contract_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+    "task_slice_id": "intent_slice_a6f9124d560d5acd9fa5c20b",
+    "task_understanding": "The user wants to develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN.",
+    "original_goal_contribution": "Develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN.",
+    "possible_intent_conflicts": [],
+    "assumptions_used": [
+      "The user wants a fully functional 3D game in a single HTML file.",
+      "Three.js should be used for rendering the game."
+    ],
+    "evidence_refs": []
+  },
+  "created_at": "2026-06-23T23:10:22.092Z",
+  "metadata_json": {
+    "source_component": "ProviderBackedSwarmWorker",
+    "original_request_hash": "775a9e7a134605633f526c2c2b7928bdd2af7a909e106a8b860a1780768db603",
+    "intent_contract_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+    "task_slice_id": "intent_slice_a6f9124d560d5acd9fa5c20b"
+  },
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_scout_2_0205ccbf\\handoff_gate.json"
+}

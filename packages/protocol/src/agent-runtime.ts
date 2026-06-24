@@ -382,7 +382,11 @@ export type AgentRuntimeSwarmNodeKind =
   | "specialist"
   | "work_item"
   | "gate"
-  | "aggregator";
+  | "aggregator"
+  | "splitter"
+  | "executor"
+  | "goal_keeper"
+  | "collector";
 export type AgentRuntimeSwarmMessageRole = "user" | "agent" | "system";
 
 export type AgentRuntimeSwarmMessage = {
@@ -400,6 +404,8 @@ export type AgentRuntimeSwarmNode = {
   id: string;
   parentId?: string;
   kind: AgentRuntimeSwarmNodeKind;
+  /** Original recursive swarm kind when kind is a mapped type */
+  nodeKind?: string;
   name: string;
   role: string;
   status: AgentRuntimeSwarmNodeStatus;
@@ -408,6 +414,18 @@ export type AgentRuntimeSwarmNode = {
   summary?: string;
   prompt?: string;
   output?: string;
+  /** Full task prompt for this agent */
+  taskPrompt?: string;
+  /** Original goal passed down from root */
+  originalGoal?: string;
+  /** Recursion depth level */
+  depth?: number;
+  /** Self-assessed complexity score 1-10 */
+  complexity?: number;
+  /** Rationale for complexity assessment */
+  complexityRationale?: string;
+  /** Goal Keeper alignment status */
+  goalAligned?: boolean;
   ownedPaths: string[];
   targetFiles: string[];
   changedFiles: string[];

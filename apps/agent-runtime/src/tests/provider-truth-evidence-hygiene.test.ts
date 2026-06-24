@@ -6,6 +6,7 @@ import test from "node:test";
 import type { AgentRuntimeSession, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { userPromptWithContext, type LlmProvider, type LlmRequest } from "../llm/LlmProvider.js";
+import { OllamaProvider } from "../llm/OllamaProvider.js";
 import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 import { TelemetryLlmProvider, createProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
@@ -35,6 +36,40 @@ class EchoTextProvider implements LlmProvider {
     return `echo:${input.userPrompt}`;
   }
 }
+
+test("Ollama provider uses configured provider timeout as the local request floor", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const scheduledTimeouts: number[] = [];
+  try {
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      scheduledTimeouts.push(Number(timeout));
+      return originalSetTimeout(handler, 0, ...args);
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timeoutId: NodeJS.Timeout | number | undefined) => {
+      if (timeoutId !== undefined) originalClearTimeout(timeoutId as NodeJS.Timeout);
+    }) as typeof clearTimeout;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ message: { content: "provider-authored reply" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "local-model", 180_000);
+    const result = await provider.generateText({
+      systemPrompt: "system",
+      userPrompt: "user",
+      timeoutMs: 20_000
+    });
+
+    assert.equal(result, "provider-authored reply");
+    assert.equal(scheduledTimeouts[0], 180_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
 
 test("provider telemetry records prompt context and response character volume", async () => {
   const recorder = createProviderTelemetryRecorder({

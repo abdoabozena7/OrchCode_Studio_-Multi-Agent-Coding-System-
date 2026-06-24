@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "review_id": "intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a",
+  "run_id": "swarm_941c8832-d019-4e1e-82c1-71907b321aa5",
+  "run_kind": "swarm",
+  "stage": "initial",
+  "status": "drift_detected",
+  "mode": "report_only",
+  "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+  "intent_ledger_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_ledger.json",
+  "reviewed_artifact_refs": [
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_ledger.json",
+    "intent/intent_contract.json",
+    "staffing_plan.json",
+    "work_items.json"
+  ],
+  "rationale": "The candidate plan introduces a detailed staffing plan and work items that are not aligned with the original request for creating a 3D Crossy Road game in a single HTML file using Three.js from CDN. The candidate plan includes multiple agents and tasks, which is not necessary for the original request.",
+  "findings": [
+    {
+      "finding_id": "intent_finding_8d8f7b9d-cbe6-4cce-a8d9-ba7851e697f7",
+      "severity": "warning",
+      "finding_type": "drift_detected",
+      "rationale": "The candidate plan introduces a detailed staffing plan and work items that are not aligned with the original request for creating a 3D Crossy Road game in a single HTML file using Three.js from CDN. The candidate plan includes multiple agents and tasks, which is not necessary for the original request.",
+      "evidence_refs": [],
+      "recommended_action": "review_manually"
+    }
+  ],
+  "provider_used": true,
+  "created_at": "2026-06-23T23:46:50.222Z",
+  "metadata_json": {
+    "rewrite_suggestion_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_rewrite_suggestion.json"
+  },
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.json",
+  "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.md",
+  "rewrite_suggestion_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_rewrite_suggestion.json"
+}

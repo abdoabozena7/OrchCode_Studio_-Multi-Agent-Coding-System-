@@ -140,9 +140,10 @@ impl ModelProviderService {
             .await
             .map_err(|err| format!("Failed to parse Ollama model list: {err}"))?;
 
-        Ok(body
+        let mut models = body
             .models
             .into_iter()
+            .filter(|model| is_ollama_chat_model(&model.name))
             .map(|model| ModelInfo {
                 id: model.name.clone(),
                 name: model.name,
@@ -152,7 +153,13 @@ impl ModelProviderService {
                 supports_vision: None,
                 is_local: true,
             })
-            .collect())
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| {
+            ollama_chat_model_rank(&left.name)
+                .cmp(&ollama_chat_model_rank(&right.name))
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        Ok(models)
     }
 
     async fn list_openai_models(
@@ -249,6 +256,44 @@ fn optional_model(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn is_ollama_chat_model(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    ![
+        "embed",
+        "embedding",
+        "nomic-embed",
+        "mxbai-embed",
+        "all-minilm",
+        "bge-",
+        "e5-",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn ollama_chat_model_rank(name: &str) -> u8 {
+    let normalized = name.to_ascii_lowercase();
+    if normalized.contains("qwen2.5-coder") {
+        return 0;
+    }
+    if normalized.contains("qwen") && normalized.contains("coder") {
+        return 1;
+    }
+    if normalized.contains("llama") && !normalized.contains("cloud") {
+        return 2;
+    }
+    if normalized.contains("deepseek") && !normalized.contains("cloud") {
+        return 3;
+    }
+    if normalized.contains("coder") && !normalized.contains("cloud") {
+        return 4;
+    }
+    if normalized.contains("cloud") {
+        return 20;
+    }
+    10
+}
+
 fn validate_reasoning_role_models(
     config: &ModelProviderConfigInput,
     models: &[ModelInfo],
@@ -261,10 +306,34 @@ fn validate_reasoning_role_models(
             continue;
         };
         if !models.iter().any(|entry| entry.name == model) {
-            return Err(format!("{role} model was not found in the provider model list"));
+            return Err(format!(
+                "{role} model was not found in the provider model list"
+            ));
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_ollama_chat_model, ollama_chat_model_rank};
+
+    #[test]
+    fn ollama_chat_model_filter_excludes_embedding_models_and_ranks_local_coders_first() {
+        assert!(!is_ollama_chat_model("nomic-embed-text:latest"));
+        assert!(!is_ollama_chat_model("mxbai-embed-large:latest"));
+        assert!(is_ollama_chat_model("qwen2.5-coder:7b"));
+        assert!(is_ollama_chat_model("gpt-oss:120b-cloud"));
+
+        assert!(
+            ollama_chat_model_rank("qwen2.5-coder:7b")
+                < ollama_chat_model_rank("deepseek-coder:6.7b")
+        );
+        assert!(
+            ollama_chat_model_rank("deepseek-coder:6.7b")
+                < ollama_chat_model_rank("gpt-oss:120b-cloud")
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]

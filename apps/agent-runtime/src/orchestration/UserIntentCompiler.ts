@@ -64,18 +64,26 @@ export class UserIntentCompiler {
       return result(contract, ["No UserIntentCompiler provider is configured."]);
     }
 
-    let providerOutput: ProviderIntentContract;
-    try {
-      providerOutput = await invokeReasoningProviderStructured<ProviderIntentContract>(input.provider, intentCompilerRequest(input), intentCompilerSchema);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+    let providerOutput: ProviderIntentContract | undefined;
+    let lastError = "";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        providerOutput = await invokeReasoningProviderStructured<ProviderIntentContract>(input.provider, intentCompilerRequest(input), intentCompilerSchema);
+        lastError = "";
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (!lastError.includes("timeout") && !lastError.includes("invalid_json")) break;
+      }
+    }
+    if (!providerOutput) {
       const contract = await ledger.saveIntentContract({
         runId: input.runId,
         runKind: input.runKind,
         artifactsPath: input.artifactsPath,
-        contract: unavailableContract(input, `UserIntentCompiler provider failed: ${reason}`)
+        contract: unavailableContract(input, `UserIntentCompiler provider failed: ${lastError}`)
       });
-      return result(contract, [`UserIntentCompiler provider failed: ${reason}`]);
+      return result(contract, [`UserIntentCompiler provider failed: ${lastError}`]);
     }
 
     const normalized = await normalizeOrRepairProviderContract(input, input.provider, providerOutput);
@@ -94,6 +102,7 @@ function intentCompilerRequest(input: UserIntentCompilerInput) {
     purpose: "route" as const,
     reasoningStage: "route" as const,
     responseFormat: "json" as const,
+    timeoutMs: 300_000,
     systemPrompt: [
       "You are UserIntentCompiler for a multi-agent coding system.",
       "Compile the user's request into a strict intent contract before any planning starts.",
@@ -114,7 +123,7 @@ function intentCompilerRequest(input: UserIntentCompilerInput) {
       parent_context: input.parentContext
     },
     maxContextChars: 48_000,
-    maxOutputTokens: 2_048
+    maxOutputTokens: 8_192
   };
 }
 
@@ -204,7 +213,7 @@ function intentCompilerRepairRequest(
       parent_context: input.parentContext
     },
     maxContextChars: 48_000,
-    maxOutputTokens: 2_048
+    maxOutputTokens: 8_192
   };
 }
 
@@ -458,7 +467,7 @@ function shouldIntentQuestionBlockPlanning(question: string, providerBlocking: b
 }
 
 function isSafeDefaultIntentQuestion(question: string) {
-  return /\b(mobile|desktop|browsers?|browser support|devices?|officially supported|platforms?|input method|keyboard|mouse|touch|accessibility|testing framework|test framework|test runner|unit test|integration test|jest|mocha|vitest|agent count|number of agents|number of internal agents|internal agents|max(?:imum)? agents?|logical agents?|budget constraint|compute budget|theme|color|colour|palette|visual style|bundle size|performance budget|fps|frame rate|audio|sound|difficulty|port|dev server|development server|local url|available port|runtime environment|runtime|interpreter|node\.?js|node|npm|package manager|start command|launch command)\b/i.test(question);
+  return /\b(mobile|desktop|browsers?|browser support|devices?|officially supported|platforms?|input method|keyboard|mouse|touch|accessibility|testing framework|test framework|test runner|unit test|integration test|jest|mocha|vitest|agent count|number of agents|number of internal agents|internal agents|max(?:imum)? agents?|logical agents?|budget constraint|compute budget|theme|color|colour|palette|visual style|bundle size|performance budget|fps|frame rate|audio|sound|difficulty|port|dev server|development server|local url|available port|runtime environment|runtime|interpreter|node\.?js|node|npm|package manager|start command|launch command|number of lanes|obstacles? types?|traffic patterns?|character (?:behavior|model|skin|design)|scoring|points|score|game genre|mechanic|game mechanic|camera angle|perspective|3d|2d|controls?|controls scheme|movement|jump|swipe|tap|click|enemies?|enemy types?|power.?ups?|collectibles?|levels?|stages?|difficulty curve|progression|speed|game speed|grid size|world size|map size|renderer|rendering|lighting|shadows?|particles?|animations?|animation style|shader|post.?processing|background|environment|terrain|building|buildings|trees?|clouds?|water|skybox|menu|ui|hud|user interface|game over|restart|retry|high.?score|leaderboard|save|persistence|local.?storage|file.?size|single.?file|html.?file|cdn|library|three\.?js|babylon|phaser|pixi|canvas|webgl|webgpu)\b/i.test(question);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

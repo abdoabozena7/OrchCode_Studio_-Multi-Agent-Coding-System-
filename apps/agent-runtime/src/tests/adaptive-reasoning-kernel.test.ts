@@ -597,6 +597,37 @@ test("terminal provider failure preserves the partial reasoning trace without a 
   }
 });
 
+test("repair stage budget exhaustion preserves the original provider failure", async () => {
+  const workspace = await fixture();
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    const provider = new RepairBudgetMasksProviderFailureProvider(() => {
+      now += 86_000;
+    });
+    await assert.rejects(
+      runAdaptiveReasoningTurn({
+        provider,
+        message: "Trace the beacon and then explain it.",
+        sessionId: "session_repair_budget_original_failure",
+        tools: new ToolRegistry(workspace)
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ReasoningKernelFailure);
+        assert.match(error.message, /provider_failed_after_retries/);
+        assert.match(error.message, /upstream provider 503/);
+        assert.doesNotMatch(error.message, /repair_stage_budget_exhausted/);
+        assert.ok(error.trace.repairErrors.some((entry) => /repair_stage_budget_exhausted/.test(entry.message)));
+        return true;
+      }
+    );
+  } finally {
+    Date.now = originalNow;
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("independent verifier can reclassify a missed workspace question and promote its tool budget", async () => {
   const workspace = await fixture();
   try {
@@ -787,6 +818,35 @@ class TerminalFailureProvider implements LlmProvider {
       } as T;
     }
     throw new Error("provider unavailable");
+  }
+}
+
+class RepairBudgetMasksProviderFailureProvider implements LlmProvider {
+  private calls = 0;
+
+  constructor(private readonly advancePastRepairReserve: () => void) {}
+
+  async generateText(): Promise<string> {
+    throw new Error("Unexpected text request");
+  }
+
+  async generateStructured<T>(): Promise<T> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return {
+        understanding: understanding("workspace_question", "inspect_explain"),
+        step: {
+          id: "search_before_repair_budget_failure",
+          kind: "tool_batch",
+          rationale: "Locate the implementation before explaining it.",
+          toolRequests: [{ id: "search_beacon_before_repair_budget_failure", kind: "repository_search", query: "unusualBeacon", reason: "Find the implementation." }],
+          missingFacts: ["Implementation location."],
+          successCriteria: ["Explain the implementation."]
+        }
+      } as T;
+    }
+    this.advancePastRepairReserve();
+    throw new Error("upstream provider 503");
   }
 }
 

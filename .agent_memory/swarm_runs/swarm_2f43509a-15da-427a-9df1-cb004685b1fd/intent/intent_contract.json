@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "contract_id": "intent_contract_d127c6f9-ae6e-4f25-9aa1-f31578b3d055",
+  "run_id": "swarm_2f43509a-15da-427a-9df1-cb004685b1fd",
+  "run_kind": "swarm",
+  "revision": 1,
+  "original_user_request": "Develop a 3D Crossy Road game within a single HTML file utilizing Three.js via CDN",
+  "precise_rewrite": "Create an HTML file that includes a 3D Crossy Road game using Three.js loaded from a CDN.",
+  "assumptions": [
+    "The user wants a fully functional 3D game in a single HTML file.",
+    "Three.js should be included via a Content Delivery Network (CDN)."
+  ],
+  "missing_questions": [],
+  "tradeoffs": [
+    {
+      "name": "Speed vs Quality",
+      "options": [
+        "Speed",
+        "Quality"
+      ],
+      "rationale": "Balancing the time to completion with the polish and functionality of the game."
+    },
+    {
+      "name": "Realism vs Fun",
+      "options": [
+        "Realism",
+        "Fun"
+      ],
+      "rationale": "Deciding whether to prioritize a more realistic 3D environment or a more engaging gameplay experience."
+    },
+    {
+      "name": "Security vs Cost",
+      "options": [
+        "Security",
+        "Cost"
+      ],
+      "rationale": "Evaluating the trade-off between ensuring the game is secure and minimizing costs."
+    }
+  ],
+  "priorities": {
+    "speed": {
+      "score": 80,
+      "rationale": "The user likely wants a quick solution to start playing."
+    },
+    "quality": {
+      "score": 90,
+      "rationale": "A polished game is more enjoyable and likely to be shared or used longer."
+    },
+    "realism": {
+      "score": 70,
+      "rationale": "Realism adds depth but may not be as engaging for all users."
+    },
+    "fun": {
+      "score": 95,
+      "rationale": "The primary goal is to create a fun game that people will enjoy playing."
+    },
+    "security": {
+      "score": 60,
+      "rationale": "Security is important but not the highest priority compared to functionality and enjoyment."
+    },
+    "cost": {
+      "score": 50,
+      "rationale": "Cost should be considered but is less critical than speed, quality, realism, and fun."
+    }
+  },
+  "definition_of_done": [
+    "The HTML file is created.",
+    "Three.js is included via a CDN.",
+    "A basic 3D Crossy Road game is implemented.",
+    "The game runs in a web browser without errors."
+  ],
+  "non_goals": [],
+  "conflict_rules": [
+    "If there is a conflict between speed and quality, prioritize quality to ensure the game is enjoyable and functional. If both are equally important, aim for a balance that allows for quick development while maintaining high standards.",
+    "If realism and fun clash, prioritize fun as it is the primary goal of creating an engaging game. However, consider how much realism can be incorporated without compromising the core gameplay experience.",
+    "Security should always be considered, but if there is a direct conflict with cost, prioritize security measures that are both effective and reasonably priced."
+  ],
+  "status": "ready",
+  "created_at": "2026-06-23T22:39:02.288Z",
+  "metadata_json": {
+    "source_component": "SwarmAutopilotRuntime",
+    "provider_used": true,
+    "validation_errors": []
+  },
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\intent_contract.json",
+  "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\intent_contract.md"
+}

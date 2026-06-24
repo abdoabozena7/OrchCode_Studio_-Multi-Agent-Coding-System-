@@ -168,6 +168,11 @@ export type IndexReadinessRecord = {
   refreshed: boolean;
   error?: string;
   createdAt: string;
+  semanticNodeCount?: number;
+  embeddingAvailable?: boolean;
+  retrievalMode?: "lexical_only" | "fts_only" | "hybrid" | "full";
+  sourceDiversity?: number;
+  coverageLimitations?: string[];
 };
 
 export type StructuredRepairError = {
@@ -194,8 +199,13 @@ export type InvestigationBundle = {
     sourceFiles: number;
     vectorUsed: boolean;
     vectorUnavailableReason?: string;
+    retrievalMode?: "lexical_only" | "fts_only" | "hybrid" | "full";
+    sourceDiversity?: number;
+    coverageLimitations?: string[];
   };
   candidatePaths: string[];
+  candidateProvenance?: Array<{ path: string; rank: number; source: "code_search" | "semantic" | "fts" | "vector" }>;
+  coverageStatus?: "sufficient" | "narrow" | "single_subsystem" | "insufficient";
   relatedNodeIds: string[];
   relationshipIds: string[];
   evidenceIds: string[];
@@ -210,6 +220,7 @@ export type ReasoningVerificationResult = {
   unsupportedClaims: string[];
   missingFacts: string[];
   evidenceRefs: string[];
+  verifierModelId?: string;
   createdAt: string;
 };
 

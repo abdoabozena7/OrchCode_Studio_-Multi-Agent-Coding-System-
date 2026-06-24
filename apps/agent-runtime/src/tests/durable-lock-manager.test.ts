@@ -341,6 +341,7 @@ async function fixtureWorkspace(prefix: string) {
 function baseConfig() {
   return {
     execution_mode: "deep" as const,
+    swarm_mode: "pipeline" as const,
     memory_path: ".agent_memory",
     enable_internal_swarm_autopilot: true,
     max_supported_logical_agents: 300,

@@ -1,0 +1,298 @@
+{
+  "schema_version": 1,
+  "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+  "run_kind": "swarm",
+  "latest_revision": 12,
+  "entries": [
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_f35bc004-3f8a-402c-854b-719326dbf0c8",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 1,
+      "entry_kind": "original_request_recorded",
+      "summary": "Original user request artifact recorded as canonical intent source.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.md"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:05:44.017Z",
+      "metadata_json": {
+        "request_hash": "775a9e7a134605633f526c2c2b7928bdd2af7a909e106a8b860a1780768db603"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_2a62e766-96b8-4825-8e72-3447d742403b",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 2,
+      "entry_kind": "intent_contract_compiled",
+      "summary": "Intent contract compiled with status ready.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:06:37.043Z",
+      "metadata_json": {
+        "contract_id": "intent_contract_030cf76c-a610-43d5-91f1-96b36e996045",
+        "revision": 1,
+        "status": "ready"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_61f69994-0312-43a7-94db-94cdae63374e",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 3,
+      "entry_kind": "intent_rewrite_suggested",
+      "summary": "Intent rewrite suggestion recorded for drift_detected.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_rewrite_suggestion.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_rewrite_suggestion.md",
+        "staffing_plan.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "intent/intent_contract.json"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:07:24.965Z",
+      "metadata_json": {
+        "review_id": "intent_review_7befcb16-91f6-4df5-b312-6031022a09bd",
+        "target": "plan",
+        "status": "suggested"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_de190370-c34d-4911-956a-290b431337c9",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 4,
+      "entry_kind": "initial_intent_review",
+      "summary": "Intent review initial completed: drift_detected.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "intent/intent_contract.json",
+        "staffing_plan.json",
+        "work_items.json"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:07:25.018Z",
+      "metadata_json": {
+        "review_id": "intent_review_7befcb16-91f6-4df5-b312-6031022a09bd",
+        "status": "drift_detected",
+        "provider_used": true
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_500213b2-f86e-478d-804f-4b4bdc33dfac",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 5,
+      "entry_kind": "swarm_context_bound",
+      "summary": "Provider-backed swarm context bound to canonical intent references for work item swarm_scout_2_0205ccbf.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\context_summary.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\context_ledger.jsonl",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.md"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:07:25.787Z",
+      "metadata_json": {
+        "work_item_id": "swarm_scout_2_0205ccbf",
+        "worker_invocation_id": "worker_invocation_342df400-5af5-45cd-9d6c-652c0e1039f2",
+        "locked_definition_count": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_b3ecec69-00bc-42d7-87c5-1ca9cf0a1f11",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 5,
+      "entry_kind": "swarm_context_bound",
+      "summary": "Provider-backed swarm context bound to canonical intent references for work item swarm_scout_1_281f08bb.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_1_281f08bb\\context_summary.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\context_ledger.jsonl",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_7befcb16-91f6-4df5-b312-6031022a09bd\\intent_review.md"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:07:25.788Z",
+      "metadata_json": {
+        "work_item_id": "swarm_scout_1_281f08bb",
+        "worker_invocation_id": "worker_invocation_45ac7595-055b-4058-a71b-ccf4eb650404",
+        "locked_definition_count": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_23b4999c-9f15-4a94-9080-b3dbd8a3fdcb",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 7,
+      "entry_kind": "final_intent_review",
+      "summary": "Intent review final completed: aligned.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_9e418f38-4148-4963-b0e0-20d0e8aa000e\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_9e418f38-4148-4963-b0e0-20d0e8aa000e\\intent_review.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_scout_2_0205ccbf\\intent_frame.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\parsed_output.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\raw_output.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_2_0205ccbf\\schema_validation.json"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:10:22.051Z",
+      "metadata_json": {
+        "review_id": "intent_review_9e418f38-4148-4963-b0e0-20d0e8aa000e",
+        "status": "aligned",
+        "provider_used": true
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_300b9c59-86cb-442b-9a9f-2f9cc3defe72",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 8,
+      "entry_kind": "final_intent_review",
+      "summary": "Intent review final completed: aligned.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_e3b2e7cf-29c9-4ca8-bf46-d4bbddfc83d6\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_e3b2e7cf-29c9-4ca8-bf46-d4bbddfc83d6\\intent_review.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_scout_1_281f08bb\\intent_frame.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_1_281f08bb\\parsed_output.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_1_281f08bb\\raw_output.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_scout_1_281f08bb\\schema_validation.json"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:10:29.720Z",
+      "metadata_json": {
+        "review_id": "intent_review_e3b2e7cf-29c9-4ca8-bf46-d4bbddfc83d6",
+        "status": "aligned",
+        "provider_used": true
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_b73d7981-2816-4934-9534-9bfb57613c58",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 9,
+      "entry_kind": "swarm_context_bound",
+      "summary": "Provider-backed swarm context bound to canonical intent references for work item swarm_plan_1_15c3aed2.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_plan_1_15c3aed2\\context_summary.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\context_ledger.jsonl",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_contract.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_e3b2e7cf-29c9-4ca8-bf46-d4bbddfc83d6\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_e3b2e7cf-29c9-4ca8-bf46-d4bbddfc83d6\\intent_review.md"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:10:30.209Z",
+      "metadata_json": {
+        "work_item_id": "swarm_plan_1_15c3aed2",
+        "worker_invocation_id": "worker_invocation_162785cf-e662-461e-a975-825b025f8acd",
+        "locked_definition_count": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_e0e34fa7-f268-4d61-a2cb-502a6fa02068",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 10,
+      "entry_kind": "final_intent_review",
+      "summary": "Intent review final completed: aligned.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_2a9b2989-d8b3-47b8-8906-865fd317c2b6\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_2a9b2989-d8b3-47b8-8906-865fd317c2b6\\intent_review.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent_handoffs\\swarm_plan_1_15c3aed2\\intent_frame.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_plan_1_15c3aed2\\parsed_output.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_plan_1_15c3aed2\\raw_output.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\provider_workers\\swarm_plan_1_15c3aed2\\schema_validation.json"
+      ],
+      "source_component": "ProviderBackedSwarmWorker",
+      "created_at": "2026-06-23T23:12:55.558Z",
+      "metadata_json": {
+        "review_id": "intent_review_2a9b2989-d8b3-47b8-8906-865fd317c2b6",
+        "status": "aligned",
+        "provider_used": true
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_88c09f12-05be-46ac-8cda-62dfb0b35223",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 11,
+      "entry_kind": "intent_rewrite_suggested",
+      "summary": "Intent rewrite suggestion recorded for drift_detected.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_714377df-5739-4054-b933-5fd55932f3fb\\intent_rewrite_suggestion.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_714377df-5739-4054-b933-5fd55932f3fb\\intent_rewrite_suggestion.md",
+        "staffing_plan.json",
+        "metrics.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "intent/intent_contract.json"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:13:30.962Z",
+      "metadata_json": {
+        "review_id": "intent_review_714377df-5739-4054-b933-5fd55932f3fb",
+        "target": "final_report",
+        "status": "suggested"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_1ec265ea-864f-4b1b-b77c-94bab19d28c9",
+      "run_id": "swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56",
+      "run_kind": "swarm",
+      "revision": 12,
+      "entry_kind": "final_intent_review",
+      "summary": "Intent review final completed: drift_detected.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_714377df-5739-4054-b933-5fd55932f3fb\\intent_review.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\reviews\\intent_review_714377df-5739-4054-b933-5fd55932f3fb\\intent_review.md",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_4f9aa710-61f9-4cab-9f75-a9f50e0bbc56\\intent\\intent_ledger.json",
+        "intent/intent_contract.json",
+        "staffing_plan.json",
+        "work_items.json",
+        "metrics.json"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T23:13:31.021Z",
+      "metadata_json": {
+        "review_id": "intent_review_714377df-5739-4054-b933-5fd55932f3fb",
+        "status": "drift_detected",
+        "provider_used": true
+      }
+    }
+  ],
+  "updated_at": "2026-06-23T23:13:31.021Z"
+}

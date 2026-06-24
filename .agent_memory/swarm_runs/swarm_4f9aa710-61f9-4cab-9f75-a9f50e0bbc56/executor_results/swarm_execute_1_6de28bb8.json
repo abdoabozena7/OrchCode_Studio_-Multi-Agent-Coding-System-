@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "work_item_id": "swarm_execute_1_6de28bb8",
+  "status": "blocked",
+  "summary": "Provider-backed read-only worker cannot handle work items with write files.",
+  "relevant_files": [
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/evals/cli.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/cli.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/cli.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/agent-runtime/src/server.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/app/App.tsx",
+    "apps/desktop/src/main.tsx",
+    "packages/protocol/src/index.ts",
+    "apps/agent-runtime/package.json",
+    "apps/desktop/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "package.json",
+    "packages/protocol/package.json",
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/vite.config.ts",
+    "apps/agent-runtime/tsconfig.json",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src/vite-env.d.ts"
+  ],
+  "findings": [],
+  "risks": [
+    "Provider-backed read-only worker cannot handle work items with write files."
+  ],
+  "unknowns": [],
+  "structured_output_valid": false,
+  "confidence": 0.2
+}

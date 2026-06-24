@@ -2,9 +2,11 @@ import {
   Bot,
   ChevronRight,
   GitBranch,
+  GitMerge,
   Maximize2,
   MessageSquarePlus,
   Search,
+  ShieldCheck,
   Workflow,
   X,
   ZoomIn,
@@ -87,6 +89,27 @@ const STATUS_COLORS: Record<AgentRuntimeSwarmNodeStatus, string> = {
   failed: "#ef4444"
 };
 
+const DEPTH_PALETTE = [
+  "#49b6e5",
+  "#a78bfa",
+  "#f472b6",
+  "#34d399",
+  "#fbbf24",
+  "#fb923c",
+  "#818cf8",
+  "#e879f9",
+  "#6ee7b7",
+  "#67e8f9"
+];
+
+function depthColor(depth: number): string {
+  return DEPTH_PALETTE[depth % DEPTH_PALETTE.length];
+}
+
+const GOAL_ALIGNED_COLOR = "#22c55e";
+const GOAL_DRIFT_COLOR = "#f59e0b";
+const GOAL_UNKNOWN_COLOR = "#8f8f8f";
+
 const ZOOM_MIN = 0.32;
 const ZOOM_MAX = 1.7;
 const RADIAL_MARGIN = 180;
@@ -98,7 +121,12 @@ export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgen
   const running = swarm?.activeAgentCount ?? 0;
   const blocked = (swarm?.statusCounts.blocked ?? 0) + (swarm?.statusCounts.failed ?? 0);
 
-  if (!swarm || swarm.nodes.length <= 1 || totalAgents <= 0) return null;
+  if (!swarm || totalAgents <= 0) {
+    if (!swarm) return null;
+    return (
+      <MiniSwarmChip onClick={() => setOpen(true)} />
+    );
+  }
 
   return (
     <>
@@ -112,7 +140,7 @@ export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgen
           <Workflow size={15} />
         </span>
         <span className="swarm-chip-copy">
-          <strong>{totalAgents} agents</strong>
+          <strong>{totalAgents} agents{swarm.source === "recursive_factory" ? " (recursive)" : ""}</strong>
           <small>{running} active{blocked ? ` | ${blocked} needs review` : ""}</small>
         </span>
         <ChevronRight size={14} />
@@ -259,7 +287,8 @@ function SwarmDockModal({
           <div>
             <strong>Swarm dock</strong>
             <span>
-              {swarm.effectiveTotalLogicalAgents} logical agents | {swarm.maxSupportedLogicalAgents} capacity | {swarm.source.replaceAll("_", " ")}
+              {swarm.effectiveTotalLogicalAgents} agent(s) | {swarm.maxSupportedLogicalAgents} capacity | {swarm.source.replaceAll("_", " ")}
+              {swarm.source === "recursive_factory" ? " | recursive tree" : ""}
               {swarm.swarmRunId ? ` | ${swarm.swarmRunId}` : ""}
             </span>
           </div>
@@ -449,13 +478,22 @@ const SwarmRadialNode = memo(function SwarmRadialNode({
 }) {
   const { node } = layoutNode;
   const lowDetail = zoom < 0.62 && layoutNode.depth > 1;
+  const dColor = depthColor(layoutNode.depth);
+  const goalColor = node.goalAligned === false ? GOAL_DRIFT_COLOR
+    : node.goalAligned === true ? GOAL_ALIGNED_COLOR
+    : GOAL_UNKNOWN_COLOR;
   const style = {
     left: layoutNode.x,
     top: layoutNode.y,
     "--swarm-node-color": STATUS_COLORS[node.status],
+    "--swarm-node-depth-color": dColor,
+    "--swarm-goal-color": goalColor,
     "--swarm-node-delay": `${Math.min(layoutNode.order * 18, 900)}ms`
   } as CSSProperties;
   const icon = iconForNode(node);
+  const taskPreview = node.taskPrompt
+    ? node.taskPrompt.slice(0, 80) + (node.taskPrompt.length > 80 ? "..." : "")
+    : node.objective;
   if (lowDetail) {
     return (
       <button
@@ -464,7 +502,7 @@ const SwarmRadialNode = memo(function SwarmRadialNode({
         onClick={onSelect}
         onMouseEnter={() => onHover(layoutNode.sourceId)}
         onMouseLeave={() => onHover(null)}
-        title={`${node.name} | ${node.role} | ${STATUS_LABELS[node.status]}`}
+        title={`${node.name} | ${node.role} | ${STATUS_LABELS[node.status]} | ${taskPreview}`}
         type="button"
       />
     );
@@ -476,14 +514,20 @@ const SwarmRadialNode = memo(function SwarmRadialNode({
       onClick={onSelect}
       onMouseEnter={() => onHover(layoutNode.sourceId)}
       onMouseLeave={() => onHover(null)}
-      title={`${node.name} | ${node.role} | ${node.objective}`}
+      title={`${node.name} | ${node.role} | ${STATUS_LABELS[node.status]} | ${taskPreview}`}
       type="button"
     >
       <span className="swarm-node-avatar">{icon}</span>
       <span className="swarm-node-main">
         <strong>{node.name}</strong>
-        <small>{node.role}</small>
+        <small>{node.role}{node.depth !== undefined ? ` (L${node.depth})` : ""}</small>
       </span>
+      <span className="swarm-goal-badge" style={{ backgroundColor: goalColor }} title={node.goalAligned === false ? "Goal drift detected" : node.goalAligned === true ? "Goal aligned" : "Goal unknown"} />
+      {node.complexity !== undefined ? (
+        <span className="swarm-complexity-badge" title={`Complexity: ${node.complexity}/10`}>
+          {node.complexity}
+        </span>
+      ) : null}
       {layoutNode.hasChildren ? (
         <span
           className="swarm-collapse-hit"
@@ -566,9 +610,26 @@ function SwarmAgentInspector({
         <strong>Objective</strong>
         <span>{node.objective}</span>
       </div>
+      {node.originalGoal ? (
+        <div className="swarm-agent-summary goal">
+          <strong>Original Goal</strong>
+          <span>{node.originalGoal}</span>
+        </div>
+      ) : null}
+      {node.taskPrompt ? (
+        <details className="swarm-agent-detail">
+          <summary>Task Prompt ({node.taskPrompt.length} chars)</summary>
+          <pre className="swarm-agent-pre">{node.taskPrompt}</pre>
+        </details>
+      ) : null}
       <div className="swarm-agent-grid">
         <div><strong>Action</strong><span>{node.currentAction ?? "Not reported yet."}</span></div>
         <div><strong>Summary</strong><span>{node.summary ?? node.output ?? "Not reported yet."}</span></div>
+        {node.depth !== undefined ? <div><strong>Depth</strong><span>Level {node.depth}</span></div> : null}
+        {node.complexity !== undefined ? (
+          <div><strong>Complexity</strong><span>{node.complexity}/10 {node.complexity >= 5 ? "(needs split)" : "(executable)"}</span></div>
+        ) : null}
+        {node.complexityRationale ? <div><strong>Why</strong><span>{node.complexityRationale}</span></div> : null}
         <div><strong>Children</strong><span>{stats ? `${stats.directChildren} direct | ${stats.agentCount} agent(s) | ${stats.workItemCount} work item(s)` : "None"}</span></div>
         <div><strong>Work items</strong><span>{node.workItemRefs.length ? node.workItemRefs.slice(0, 8).join(", ") : "None"}</span></div>
         <div><strong>Artifacts</strong><span>{node.artifactRefs.length ? node.artifactRefs.slice(0, 8).join(", ") : "None"}</span></div>
@@ -898,6 +959,10 @@ function kindRank(kind: AgentRuntimeSwarmNode["kind"]) {
   if (kind === "work_item") return 4;
   if (kind === "gate") return 5;
   if (kind === "aggregator") return 6;
+  if (kind === "splitter") return 0;
+  if (kind === "executor") return 3;
+  if (kind === "goal_keeper") return 5;
+  if (kind === "collector") return 6;
   return 7;
 }
 
@@ -911,11 +976,17 @@ function statusRank(status: AgentRuntimeSwarmNodeStatus) {
 }
 
 function isMessageableNode(node: AgentRuntimeSwarmNode) {
-  return node.kind === "worker" || node.kind === "specialist" || node.kind === "coordinator" || node.kind === "aggregator";
+  return node.kind === "worker" || node.kind === "specialist" || node.kind === "coordinator"
+    || node.kind === "aggregator" || node.kind === "splitter" || node.kind === "executor"
+    || node.kind === "goal_keeper" || node.kind === "collector";
 }
 
 function iconForNode(node: AgentRuntimeSwarmNode) {
   if (node.kind === "group") return <Workflow size={13} />;
+  if (node.kind === "splitter") return <GitBranch size={13} />;
+  if (node.kind === "executor") return <Bot size={13} />;
+  if (node.kind === "goal_keeper") return <ShieldCheck size={13} />;
+  if (node.kind === "collector") return <GitMerge size={13} />;
   if (node.kind === "work_item" || node.kind === "gate") return <GitBranch size={13} />;
   return <Bot size={13} />;
 }
@@ -988,6 +1059,21 @@ function nextVisibleNodeId(nodes: LayoutNode[], selectedId: string, direction: 1
     .map((node) => node.sourceId);
   const index = Math.max(0, sourceIds.indexOf(selectedId));
   return sourceIds[(index + direction + sourceIds.length) % sourceIds.length] ?? selectedId;
+}
+
+function MiniSwarmChip({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="swarm-dock-chip mini" onClick={onClick} type="button" title="Open swarm dock (new)">
+      <span className="swarm-chip-mark">
+        <Workflow size={15} />
+      </span>
+      <span className="swarm-chip-copy">
+        <strong>Swarm ready</strong>
+        <small>Click to expand</small>
+      </span>
+      <ChevronRight size={14} />
+    </button>
+  );
 }
 
 function clampZoom(value: number) {

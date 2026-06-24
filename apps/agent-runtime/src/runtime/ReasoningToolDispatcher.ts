@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  IndexReadinessRecord,
   InvestigationBundle,
   ReasoningToolRequest,
   ReasoningToolResult
@@ -188,17 +189,19 @@ export class ReasoningToolDispatcher {
     const store = await SqliteMemoryStore.open({ workspacePath });
     try {
       const allNodes = after.status === "fresh" ? store.semanticNodes() : [];
+      const semanticNodeCount = allNodes.length;
       const ftsNodes = after.status === "fresh"
         ? store.semanticNodes(store.search(query, { kinds: ["semantic_node"], limit: limit * 2 }).map((entry) => entry.id))
         : [];
       const lexicalNodes = rankSemanticNodes(allNodes, query).slice(0, limit);
       let vectorNodes: SemanticProjectNode[] = [];
       let vectorUnavailableReason: string | undefined;
-      if (after.status === "fresh" && this.options.embeddingModel && this.options.embed) {
+      const embeddingAvailable = !!(this.options.embeddingModel && this.options.embed);
+      if (after.status === "fresh" && embeddingAvailable) {
         try {
-          await ensureSemanticEmbeddings(store, this.options.embeddingModel, this.options.embed, allNodes);
-          const [queryVector] = await this.options.embed([query], this.options.embeddingModel);
-          if (queryVector?.length) vectorNodes = store.semanticSearch(queryVector, this.options.embeddingModel, limit).map((entry) => entry.node);
+          await ensureSemanticEmbeddings(store, this.options.embeddingModel!, this.options.embed!, allNodes);
+          const [queryVector] = await this.options.embed!([query], this.options.embeddingModel!);
+          if (queryVector?.length) vectorNodes = store.semanticSearch(queryVector, this.options.embeddingModel!, limit).map((entry) => entry.node);
         } catch (error) {
           vectorUnavailableReason = formatError(error);
         }
@@ -208,10 +211,46 @@ export class ReasoningToolDispatcher {
       const relationships = after.status === "fresh"
         ? store.semanticRelationships(nodeIds).slice(0, limit * 2)
         : [];
-      const candidatePaths = unique([
-        ...textMatches.map((match) => match.path),
-        ...nodes.flatMap((node) => node.path ? [node.path] : [])
-      ]).sort((a, b) => searchEvidenceRank(a) - searchEvidenceRank(b)).slice(0, INVESTIGATE_SOURCE_EVIDENCE_LIMIT);
+      // Rank and group candidate files by directory to ensure diversity
+      const candidateProvenance: Array<{ path: string; rank: number; source: "code_search" | "semantic" | "fts" | "vector" }> = [];
+      for (const match of textMatches) candidateProvenance.push({ path: match.path, rank: searchEvidenceRank(match.path), source: "code_search" });
+      for (const node of nodes) if (node.path) candidateProvenance.push({ path: node.path, rank: searchEvidenceRank(node.path), source: vectorNodes.includes(node) ? "vector" : ftsNodes.includes(node) ? "fts" : "semantic" });
+      // Deduplicate by path, keep lowest rank (highest priority)
+      const deduped = new Map<string, typeof candidateProvenance[0]>();
+      for (const entry of candidateProvenance) {
+        const existing = deduped.get(entry.path);
+        if (!existing || entry.rank < existing.rank) deduped.set(entry.path, entry);
+      }
+      const rankedPaths = [...deduped.values()].sort((a, b) => a.rank - b.rank);
+      // Reserve root documentation, manifests, and entrypoints for project-overview queries
+      const isProjectOverview = /^(project overview|overview|explain|what is this|describe)/i.test(query);
+      const rootDocs: string[] = [];
+      const subsystemPaths: string[] = [];
+      const MAX_EXCERPTS_PER_FILE = 3;
+      const fileExcerptCount = new Map<string, number>();
+      const selectedPaths: string[] = [];
+      for (const entry of rankedPaths) {
+        const isRoot = /^readme(\.[a-z0-9]+)?$/i.test(path.basename(entry.path))
+          || /^(agents|package)\.(md|json)$/i.test(path.basename(entry.path))
+          || /^docs\//i.test(entry.path)
+          || searchEvidenceRank(entry.path) <= 3;
+        if (isProjectOverview && isRoot && rootDocs.length < 3) {
+          rootDocs.push(entry.path);
+          continue;
+        }
+        subsystemPaths.push(entry.path);
+      }
+      // Insert root docs first, then subsystem files (grouped by directory, max excerpts per file)
+      const dirGrouped = groupByDirectory(subsystemPaths);
+      for (const group of dirGrouped) {
+        for (const p of group) {
+          const count = fileExcerptCount.get(p) ?? 0;
+          if (count >= MAX_EXCERPTS_PER_FILE) continue;
+          selectedPaths.push(p);
+          fileExcerptCount.set(p, count + 1);
+        }
+      }
+      const candidatePaths = [...rootDocs, ...selectedPaths].slice(0, INVESTIGATE_SOURCE_EVIDENCE_LIMIT);
       const lineByPath = new Map<string, number>();
       for (const match of textMatches) if (!lineByPath.has(match.path)) lineByPath.set(match.path, match.line);
       for (const node of nodes) if (node.path && node.line && !lineByPath.has(node.path)) lineByPath.set(node.path, node.line);
@@ -252,6 +291,23 @@ export class ReasoningToolDispatcher {
           }
         })
       ];
+      // Compute source diversity and coverage limitations
+      const sourceDirs = new Set(candidatePaths.map((p) => path.dirname(p).replaceAll("\\", "/")));
+      const sourceDiversity = sourceDirs.size;
+      const coverageLimitations: string[] = [];
+      if (vectorUnavailableReason) coverageLimitations.push(`Vector retrieval unavailable: ${vectorUnavailableReason}`);
+      if (allNodes.length === 0) coverageLimitations.push("Semantic index is empty or missing; results based on text search only");
+      if (sourceDiversity < 2) coverageLimitations.push(`Evidence covers only ${sourceDiversity} directory/directorie(s)`);
+      const retrievalMode: "lexical_only" | "fts_only" | "hybrid" | "full" =
+        !embeddingAvailable || vectorNodes.length === 0 ? "lexical_only"
+        : vectorNodes.length > 0 && ftsNodes.length > 0 ? "full"
+        : ftsNodes.length > 0 ? "fts_only"
+        : "hybrid";
+      const coverageStatus: "sufficient" | "narrow" | "single_subsystem" | "insufficient" =
+        sourceDiversity >= 3 && candidatePaths.length >= 4 ? "sufficient"
+        : sourceDiversity <= 1 ? "single_subsystem"
+        : candidatePaths.length <= 2 ? "insufficient"
+        : "narrow";
       const bundle: InvestigationBundle = {
         query,
         freshness: after.status,
@@ -261,9 +317,14 @@ export class ReasoningToolDispatcher {
           relationships: relationships.length,
           sourceFiles: candidatePaths.length,
           vectorUsed: vectorNodes.length > 0,
-          vectorUnavailableReason
+          vectorUnavailableReason,
+          retrievalMode,
+          sourceDiversity,
+          coverageLimitations
         },
         candidatePaths,
+        candidateProvenance: rankedPaths.slice(0, 20).map((entry) => ({ path: entry.path, rank: entry.rank, source: entry.source })),
+        coverageStatus,
         relatedNodeIds: nodeIds,
         relationshipIds: relationships.map((relationship) => relationship.id),
         evidenceIds: refs.map((ref) => ref.id)
@@ -273,20 +334,26 @@ export class ReasoningToolDispatcher {
         summary: `Fact-only investigation bundle for ${query}`,
         excerpt: JSON.stringify(bundle)
       });
+      const indexReadiness: IndexReadinessRecord & { semanticNodeCount?: number; embeddingAvailable?: boolean; retrievalMode?: string; sourceDiversity?: number; coverageLimitations?: string[] } = {
+        before: before.status,
+        after: after.status,
+        refreshed,
+        error: refreshError,
+        createdAt: new Date().toISOString(),
+        semanticNodeCount,
+        embeddingAvailable,
+        retrievalMode,
+        sourceDiversity,
+        coverageLimitations
+      };
       return this.result(
         request,
         refs.length ? "success" : "unavailable",
-        `Investigated project with ${textMatches.length} text match(es), ${nodes.length} semantic node(s), ${relationships.length} relationship(s), and ${candidatePaths.length} source excerpt(s).`,
+        `Investigated project with ${textMatches.length} text match(es), ${nodes.length} semantic node(s), ${relationships.length} relationship(s), and ${candidatePaths.length} source excerpt(s). Coverage: ${coverageStatus}.`,
         [...refs, bundleRef],
         {
           bundle: { ...bundle, evidenceIds: [...bundle.evidenceIds, bundleRef.id] },
-          indexReadiness: {
-            before: before.status,
-            after: after.status,
-            refreshed,
-            error: refreshError,
-            createdAt: new Date().toISOString()
-          }
+          indexReadiness
         },
         refreshError && !refs.length ? refreshError : undefined
       );
@@ -498,4 +565,17 @@ function unique(values: string[]) {
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function groupByDirectory(paths: string[]): string[][] {
+  const dirMap = new Map<string, string[]>();
+  for (const p of paths) {
+    const dir = path.dirname(p).replaceAll("\\", "/");
+    const list = dirMap.get(dir) ?? [];
+    list.push(p);
+    dirMap.set(dir, list);
+  }
+  const entries = [...dirMap.entries()];
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  return entries.map(([, group]) => group);
 }

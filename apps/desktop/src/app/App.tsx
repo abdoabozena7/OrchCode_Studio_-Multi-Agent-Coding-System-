@@ -1024,7 +1024,7 @@ export function App() {
   function applyCanonicalRuntimeSession(session: AgentRuntimeSession) {
     const merged = mergeRuntimeSessionState(runtimeSession, session);
     setRuntimeSession((current) => mergeRuntimeSessionState(current, session));
-    void mirrorRuntimeSession(merged);
+    mirrorRuntimeSession(merged);
     if (isTerminalOrOperatorHeldSession(merged)) {
       setAgentBusy(false);
     }
@@ -2063,7 +2063,7 @@ export function App() {
             </div>
 
             <div className="toolbar-group">
-              {runtimeSession?.swarmState && runtimeSession.swarmState.nodes.length > 1 ? (
+              {runtimeSession?.swarmState && (runtimeSession.swarmState.nodes.length > 0) ? (
                 <SwarmDock
                   session={runtimeSession}
                   sessionToken={runtimeSessionToken || (getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token ?? "")}
@@ -6069,16 +6069,24 @@ async function applyRuntimePatchWithRetry(sessionId: string, patchId: string) {
 }
 
 async function persistPatchApprovalForRust(sessionId: string, proposal: AgentRuntimeSession["patchProposals"][number]) {
-  await appendSessionEvent(sessionId, "runtime.patch.proposed", {
-    type: "runtime.patch.proposed",
-    sessionId,
-    proposal: { ...proposal, status: "proposed" }
-  });
-  await appendSessionEvent(sessionId, "runtime.patch.approved", {
-    type: "runtime.patch.approved",
-    sessionId,
-    proposal: { ...proposal, status: "approved" }
-  });
+  try {
+    await appendSessionEvent(sessionId, "runtime.patch.proposed", {
+      type: "runtime.patch.proposed",
+      sessionId,
+      proposal: { ...proposal, status: "proposed" }
+    });
+  } catch {
+    // Session might not be mirrored to Rust yet; non-critical projection will retry.
+  }
+  try {
+    await appendSessionEvent(sessionId, "runtime.patch.approved", {
+      type: "runtime.patch.approved",
+      sessionId,
+      proposal: { ...proposal, status: "approved" }
+    });
+  } catch {
+    // Session might not be mirrored to Rust yet; non-critical projection will retry.
+  }
 }
 
 function normalizeTerminalText(text: string) {

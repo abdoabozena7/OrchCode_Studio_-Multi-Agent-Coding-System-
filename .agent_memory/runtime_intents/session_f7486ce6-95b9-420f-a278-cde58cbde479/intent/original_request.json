@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "run_id": "session_f7486ce6-95b9-420f-a278-cde58cbde479",
+  "run_kind": "runtime_session",
+  "original_request": "Create a 3D Crossy Road game in a single HTML file using Three.js loaded from CDN. Include lane-based roads, obstacles, player character, scoring, and controls.",
+  "request_hash": "50cab599bd0a5738002691856b9630dfa20b6160094cdac1e1e379929dae39d9",
+  "source": "user",
+  "created_at": "2026-06-23T21:58:38.927Z",
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_f7486ce6-95b9-420f-a278-cde58cbde479\\intent\\original_request.json",
+  "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\runtime_intents\\session_f7486ce6-95b9-420f-a278-cde58cbde479\\intent\\original_request.md",
+  "metadata_json": {
+    "source_component": "AgentRuntime",
+    "session_id": "session_f7486ce6-95b9-420f-a278-cde58cbde479"
+  }
+}

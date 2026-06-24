@@ -1,3 +1,7 @@
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type {
@@ -18,6 +22,7 @@ export type RuntimeServer = {
   app: FastifyInstance;
   runtime: AgentRuntime;
   sessionManager: SessionManager;
+  workspaceFingerprint?: string;
 };
 
 export async function buildServer(config: RuntimeConfig = loadConfig()): Promise<RuntimeServer> {
@@ -28,6 +33,9 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
   await sessionManager.load();
   const runtime = new AgentRuntime(config, sessionManager);
 
+  // Compute workspace fingerprint for runtime identity checking
+  const workspaceFingerprint = computeWorkspaceFingerprint(config.storageDir);
+
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Headers", "content-type,x-hivo-session-token,x-orchcode-session-token");
@@ -36,7 +44,17 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
 
   app.options("*", async (_request, reply) => reply.status(204).send());
 
-  app.get("/health", async () => ({ status: "ok", mode: config.defaultMode, startedAt }));
+  app.get("/health", async () => ({
+    status: "ok",
+    mode: config.defaultMode,
+    startedAt,
+    buildVersion: process.env.HIVO_BUILD_VERSION ?? "dev",
+    sourceCommit: process.env.HIVO_BUILD_COMMIT ?? "unknown",
+    nodeVersion: process.version,
+    platform: process.platform,
+    workspaceFingerprint,
+    pid: process.pid
+  }));
 
   app.post("/sessions", async (request, reply) => {
     const body = request.body as CreateRuntimeSessionRequest;
@@ -224,4 +242,48 @@ function authorizeSessionRequest(sessionManager: SessionManager, sessionId: stri
 
 function sendSessionAuthFailure(reply: FastifyReply, auth: Extract<SessionTokenValidation, { ok: false }>) {
   return reply.status(401).send({ error: auth.message, code: auth.code });
+}
+
+function computeWorkspaceFingerprint(storageDir: string): string {
+  const checksums: string[] = [];
+  const candidates = ["package.json", "Cargo.toml", "pyproject.toml", "go.mod", ".git/config", "tsconfig.json"];
+  for (const candidate of candidates) {
+    const candidatePath = path.join(storageDir, candidate);
+    if (existsSync(candidatePath)) {
+      try {
+        const content = readFileSync(candidatePath, "utf-8").slice(0, 4096);
+        checksums.push(createHash("sha256").update(content).digest("hex"));
+      } catch { /* skip unreadable */ }
+    }
+  }
+  return checksums.length ? createHash("sha256").update(checksums.join("|")).digest("hex").slice(0, 16) : `pid_${process.pid}`;
+}
+
+export function terminateStaleRuntime(pid: number, port: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform === "win32") {
+      try {
+        execSync(`taskkill /PID ${pid} /T /F`, { timeout: 5000 });
+      } catch { /* process may already be dead */ }
+      // Confirm port release
+      const maxAttempts = 10;
+      let attempts = 0;
+      const check = () => {
+        attempts++;
+        try {
+          execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { timeout: 3000 });
+          if (attempts < maxAttempts) setTimeout(check, 300);
+          else resolve();
+        } catch {
+          resolve(); // Port released
+        }
+      };
+      check();
+    } else {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch { /* process may already be dead */ }
+      resolve();
+    }
+  });
 }

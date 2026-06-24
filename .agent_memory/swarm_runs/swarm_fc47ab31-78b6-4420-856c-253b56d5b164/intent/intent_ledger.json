@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "run_id": "swarm_fc47ab31-78b6-4420-856c-253b56d5b164",
+  "run_kind": "swarm",
+  "latest_revision": 2,
+  "entries": [
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_ce99ea81-1ac9-49ee-a8d0-62f8015b81be",
+      "run_id": "swarm_fc47ab31-78b6-4420-856c-253b56d5b164",
+      "run_kind": "swarm",
+      "revision": 1,
+      "entry_kind": "original_request_recorded",
+      "summary": "Original user request artifact recorded as canonical intent source.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_fc47ab31-78b6-4420-856c-253b56d5b164\\intent\\original_request.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_fc47ab31-78b6-4420-856c-253b56d5b164\\intent\\original_request.md"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T21:48:30.273Z",
+      "metadata_json": {
+        "request_hash": "ccd57ef338ed839c6971c21ab25bdc11d5851d512dd75ba969cd2e5cdff0e947"
+      }
+    },
+    {
+      "schema_version": 1,
+      "ledger_entry_id": "intent_ledger_b739f6a6-1b73-4b73-94cf-4a0f2ae8e837",
+      "run_id": "swarm_fc47ab31-78b6-4420-856c-253b56d5b164",
+      "run_kind": "swarm",
+      "revision": 2,
+      "entry_kind": "intent_contract_compiled",
+      "summary": "Intent contract compiled with status ready.",
+      "artifact_refs": [
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_fc47ab31-78b6-4420-856c-253b56d5b164\\intent\\intent_contract.json",
+        "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_fc47ab31-78b6-4420-856c-253b56d5b164\\intent\\intent_contract.md"
+      ],
+      "source_component": "SwarmAutopilotRuntime",
+      "created_at": "2026-06-23T21:52:33.456Z",
+      "metadata_json": {
+        "contract_id": "intent_contract_728d6a00-e0c1-44fa-bae3-6206b2881311",
+        "revision": 1,
+        "status": "ready"
+      }
+    }
+  ],
+  "updated_at": "2026-06-23T21:52:33.456Z"
+}

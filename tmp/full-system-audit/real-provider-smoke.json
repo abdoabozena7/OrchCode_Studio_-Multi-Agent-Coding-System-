@@ -1,13 +1,13 @@
 {
   "baseUrl": "http://127.0.0.1:11434",
   "preferredModel": "qwen2.5-coder:7b",
-  "startedAt": "2026-05-24T10:34:45.332Z",
+  "startedAt": "2026-06-23T19:45:11.796Z",
   "directProvider": {
     "status": "succeeded",
     "providerMode": "real_provider",
     "model": "qwen2.5-coder:7b",
     "responsePreview": "OK.",
-    "latencyMs": 6283
+    "latencyMs": 7524
   },
   "runtimeRealProvider": {
     "status": "completed",
@@ -17,56 +17,49 @@
     "model": "qwen2.5-coder:7b",
     "providerCalls": 2,
     "fallbackUsed": false,
-    "assistantPreview": "I searched for `one`; strongest local evidence:\n\n- This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode-file:README.md:3)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:1](orchcode-file:README.md:1)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:2](orchcode-file:README.md:2)\n- # Smoke Workspace This workspace is for an OrchCode real-provider audit smoke. [README.md:3](orchcode",
+    "assistantPreview": "This project is a coding system designed to understand and explain user requests using natural language processing.",
     "artifactTypes": [
-      "project_intake",
-      "context_pack",
-      "project_explain_report",
-      "concept_resolution",
-      "investigation_graph",
-      "mechanism_chain",
-      "evidence_tiers",
-      "verification",
-      "project_explain_answer"
+      "decision_pipeline"
     ],
     "commandRequests": 0,
     "patchProposals": 0,
-    "latencyMs": 14538
+    "latencyMs": 23526
   },
   "calls": [
     {
       "url": "http://127.0.0.1:11434/api/chat",
       "model": "qwen2.5-coder:7b",
-      "startedAt": "2026-05-24T10:34:45.361Z",
-      "durationMs": 6282,
+      "startedAt": "2026-06-23T19:45:11.835Z",
+      "durationMs": 7523,
       "ok": true,
       "status": 200
     },
     {
       "url": "http://127.0.0.1:11434/api/chat",
       "model": "qwen2.5-coder:7b",
-      "startedAt": "2026-05-24T10:34:51.795Z",
-      "durationMs": 6985,
+      "startedAt": "2026-06-23T19:45:19.371Z",
+      "durationMs": 18791,
       "ok": true,
       "status": 200
     },
     {
       "url": "http://127.0.0.1:11434/api/chat",
       "model": "qwen2.5-coder:7b",
-      "startedAt": "2026-05-24T10:34:58.783Z",
-      "durationMs": 7353,
+      "startedAt": "2026-06-23T19:45:38.171Z",
+      "durationMs": 4688,
       "ok": true,
       "status": 200
     }
   ],
   "availableModels": [
+    "nomic-embed-text:latest",
     "gpt-oss:120b-cloud",
     "qwen2.5-coder:7b",
     "deepseek-coder:6.7b"
   ],
   "selectedModel": "qwen2.5-coder:7b",
-  "tagsLatencyMs": 28,
-  "finishedAt": "2026-05-24T10:35:06.182Z",
+  "tagsLatencyMs": 38,
+  "finishedAt": "2026-06-23T19:45:42.885Z",
   "providerCallCount": 3,
   "responseCount": 3,
   "mockFallbackUsage": false

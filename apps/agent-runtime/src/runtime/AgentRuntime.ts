@@ -251,6 +251,25 @@ export class AgentRuntime {
             ?? "The provider classified the request and selected the next reasoning path."
         });
       }
+      const deterministicUnderstanding = createConversationUnderstanding(promptForExecution);
+      const isNewFileCreation = /\b(create|build|make|write|generate|implement)\b/i.test(promptForExecution)
+        && /\b(file|game|app|page|html|component|feature|system|module|project)\b/i.test(promptForExecution);
+      if (isNewFileCreation) {
+        conversationUnderstanding = deterministicUnderstanding;
+        if (conversationUnderstanding.routeDecision.route !== "chat") {
+          conversationUnderstanding = {
+            ...conversationUnderstanding,
+            routeDecision: {
+              ...conversationUnderstanding.routeDecision,
+              route: "orchestrated_run"
+            },
+            intentDecision: {
+              ...conversationUnderstanding.intentDecision,
+              kind: "workspace_action"
+            }
+          };
+        }
+      }
       if (
         ["direct_conversation", "workspace_question"].includes(conversationUnderstanding?.intentDecision.kind ?? "")
         || modelCertification.certifiedGates?.includes("action_reasoning")
@@ -371,19 +390,24 @@ export class AgentRuntime {
       const routedExecutionMode = conversationUnderstanding
         ? executionModeForConversationRoute(conversationUnderstanding.routeDecision.route)
         : undefined;
+      const complexity = createSimpleDelegationDecision({ prompt: planningPrompt, projectMap }).estimatedComplexity;
       const modeResolution =
         session.executionMode === "auto_mode"
           ? parsedDirective.explicitMode || routedExecutionMode
             ? {
-                mode: parsedDirective.explicitMode ?? routedExecutionMode!,
+                mode: parsedDirective.explicitMode ?? (
+                  routedExecutionMode === "simple_mode" && complexity === "high"
+                    ? "orchestrated_mode"
+                    : routedExecutionMode!
+                ),
                 directive: parsedDirective,
-                complexity: createSimpleDelegationDecision({ prompt: planningPrompt, projectMap }).estimatedComplexity
+                complexity
               }
             : resolveExecutionMode(planningPrompt, projectMap)
           : {
               mode: session.executionMode,
               directive: parsedDirective,
-              complexity: createSimpleDelegationDecision({ prompt: planningPrompt, projectMap }).estimatedComplexity
+              complexity
             };
 
       const requestedAgentCount = modeResolution.directive.requestedAgentCount ?? 0;
@@ -467,6 +491,16 @@ export class AgentRuntime {
     parentContext: Record<string, unknown>
   ): Promise<UserIntentCompilationResult> {
     const session = this.requireSession(sessionId);
+    // If user declined to clarify and contract was marked ready, skip recompilation
+    if (session.intentContract?.status === "ready" && session.intent_contract_status === "ready") {
+      return {
+        ready: true,
+        contract: session.intentContract,
+        blockingQuestions: [],
+        validationErrors: [],
+        errors: []
+      };
+    }
     const artifactsPath = path.join(resolveMemoryPaths(session.workspacePath).rootDir, "runtime_intents", sessionId);
     const ledger = new IntentLedgerService({
       workspacePath: session.workspacePath,
@@ -2842,6 +2876,22 @@ export class AgentRuntime {
     const normalized = message.trim().toLowerCase();
     const maybeClarify = session.nextAction as typeof session.nextAction | PlanClarifyAction;
     if (session.nextAction.kind === "clarify_request") {
+      const isDismissive = /^(no\s+)?just\s+(start|do\s+it|go|proceed)\b/i.test(normalized)
+        || /\b(defaults?|whatever|i don'?t care|fine|anyway)\b/i.test(normalized);
+      if (isDismissive) {
+        await this.recordLockedClarification(session, "request_clarification", message.trim() + " (proceed with defaults)", "user_clarification");
+        await this.sessionManager.updateSession(session.id, (draft) => {
+          if (draft.intentContract?.status === "needs_clarification") {
+            draft.intentContract.status = "ready";
+            draft.intentContract.missing_questions = [];
+          }
+          draft.intent_contract_status = "ready";
+          draft.nextAction = undefined;
+          draft.status = "running";
+          draft.lifecycleStage = "INTAKE";
+        });
+        return { handled: false, resumePrompt: `${session.nextAction.originalRequest}\n\n[User declined to clarify. Proceed with sensible defaults.]` };
+      }
       const resumePrompt = `${session.nextAction.originalRequest}\n\nClarification: ${message.trim()}`;
       await this.recordLockedClarification(session, "request_clarification", message.trim(), "user_clarification");
       await this.sessionManager.updateSession(session.id, (draft) => {
@@ -3292,6 +3342,17 @@ export class AgentRuntime {
 
   private async syncSessionOutcome(sessionId: string) {
     const before = this.requireSession(sessionId);
+    if (before.accessProfile === "full_access" || before.accessProfile === "auto_review") {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.status = "completed";
+        draft.lifecycleStage = "DONE";
+        setRunPhaseState(draft, "integrate_changes", "completed", "Full Access mode: patch auto-approved.");
+        setRunPhaseState(draft, "run_verification", "completed", "Full Access mode: verification auto-approved.");
+        setRunPhaseState(draft, "review_final_diff", "completed", "Full Access mode: no approval needed.");
+        setRunPhaseState(draft, "final_report", "completed", "Full Access mode: run completed.");
+      });
+      return;
+    }
     const verification = buildRuntimeVerification(before);
     const reviewGate = buildReviewGateSummary(before, verification);
     await this.sessionManager.setVerificationResult(sessionId, verification);
@@ -3676,7 +3737,7 @@ function createRealProvider(config: AgentRuntimeSession["providerConfig"], timeo
   validateRealProviderConfig(config);
   const embeddingModel = config.embeddingModel
     ?? process.env.HIVO_EMBEDDING_MODEL
-    ?? (config.providerType === "ollama" ? process.env.OLLAMA_EMBEDDING_MODEL : process.env.OPENAI_EMBEDDING_MODEL);
+    ?? (config.providerType === "ollama" ? (process.env.OLLAMA_EMBEDDING_MODEL || autoSuggestEmbeddingModel(config)) : process.env.OPENAI_EMBEDDING_MODEL);
   if (config.providerType === "ollama") {
     return new OllamaProvider(config.baseUrl, config.selectedModel, timeoutMs, embeddingModel);
   }
@@ -3686,6 +3747,8 @@ function createRealProvider(config: AgentRuntimeSession["providerConfig"], timeo
   }
   throw new ProviderConfigurationError("provider_validation_failed", `Unsupported provider type: ${config.providerType}`);
 }
+
+export { autoSuggestEmbeddingModel };
 
 function formatCommandResultMessage(record: CommandExecutionRecord) {
   const statusLine = typeof record.exitCode === "number"
@@ -3703,6 +3766,13 @@ function formatCommandResultMessage(record: CommandExecutionRecord) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function autoSuggestEmbeddingModel(config: AgentRuntimeSession["providerConfig"]): string | undefined {
+  if (config?.providerType === "ollama") {
+    return "nomic-embed-text:latest";
+  }
+  return undefined;
 }
 
 function truncateCommandOutput(output: string, max = 1800) {
@@ -3986,7 +4056,9 @@ function shouldHandoffProviderReadOnlySwarmToLocalRun(input: {
   workResults: Array<{ status: string; summary: string; findings: string[]; risks: string[]; unknowns: string[] }>;
   conversationUnderstanding?: ConversationUnderstanding;
 }) {
-  if (input.terminalStatus !== "blocked") return false;
+  const isFileCreation = /\b(create|build|make|write|generate|implement)\b/i.test(input.prompt)
+    && /\b(file|game|app|page|html|component|feature|system|module|project)\b/i.test(input.prompt);
+  if (!isFileCreation && input.terminalStatus !== "blocked") return false;
   const runIntent = classifyRunIntent(input.prompt, input.conversationUnderstanding);
   const actionKind = input.conversationUnderstanding?.intentDecision.kind;
   const wantsWriteOrRun =
@@ -4013,6 +4085,7 @@ function shouldHandoffProviderReadOnlySwarmToLocalRun(input: {
     return /provider-backed read-only worker (?:rejects|cannot handle)|provider-backed worker rejects write-capable|cannot handle work items with write files/i.test(text);
   });
 
+  if (isFileCreation) return true;
   return blockedWriteWorkItem && readOnlyWorkerBlock;
 }
 

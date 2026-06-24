@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "review_id": "intent_review_f49a1f2c-94be-4462-8f4e-a83cb3426968",
+  "run_id": "swarm_2f43509a-15da-427a-9df1-cb004685b1fd",
+  "run_kind": "swarm",
+  "stage": "initial",
+  "status": "drift_detected",
+  "mode": "report_only",
+  "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\original_request.json",
+  "intent_ledger_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\intent_ledger.json",
+  "reviewed_artifact_refs": [
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\original_request.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\intent_ledger.json",
+    "intent/intent_contract.json",
+    "staffing_plan.json",
+    "work_items.json"
+  ],
+  "rationale": "The candidate plan introduces new work items and a more complex staffing plan compared to the original request. The original request was for a single HTML file, while the candidate plan involves multiple modules and a detailed workflow.",
+  "findings": [
+    {
+      "finding_id": "intent_finding_beb1a9d5-5a73-483b-a320-00cc2bc72ea8",
+      "severity": "warning",
+      "finding_type": "drift_detected",
+      "rationale": "The candidate plan introduces new work items and a more complex staffing plan compared to the original request. The original request was for a single HTML file, while the candidate plan involves multiple modules and a detailed workflow.",
+      "evidence_refs": [],
+      "recommended_action": "review_manually"
+    }
+  ],
+  "provider_used": true,
+  "created_at": "2026-06-23T22:47:32.543Z",
+  "metadata_json": {
+    "rewrite_suggestion_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\reviews\\intent_review_f49a1f2c-94be-4462-8f4e-a83cb3426968\\intent_rewrite_suggestion.json"
+  },
+  "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\reviews\\intent_review_f49a1f2c-94be-4462-8f4e-a83cb3426968\\intent_review.json",
+  "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\reviews\\intent_review_f49a1f2c-94be-4462-8f4e-a83cb3426968\\intent_review.md",
+  "rewrite_suggestion_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_2f43509a-15da-427a-9df1-cb004685b1fd\\intent\\reviews\\intent_review_f49a1f2c-94be-4462-8f4e-a83cb3426968\\intent_rewrite_suggestion.json"
+}

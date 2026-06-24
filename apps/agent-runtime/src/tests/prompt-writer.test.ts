@@ -410,6 +410,7 @@ async function promptWriterFixture(workspace: string, runId: string, taskId: str
 function baseConfig(workspace: string) {
   return {
     execution_mode: "deep" as const,
+    swarm_mode: "pipeline" as const,
     memory_path: ".agent_memory",
     enable_internal_swarm_autopilot: true,
     max_supported_logical_agents: 300,

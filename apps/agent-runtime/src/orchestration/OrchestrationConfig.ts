@@ -1,5 +1,6 @@
 import type { PromptWriterMode, PromptWriterProviderMode } from "./PromptWriterModels.js";
 
+export type SwarmMode = "pipeline" | "recursive_tree";
 export type ExecutionMode = "fast" | "deep" | "exhaustive";
 export type ValidationLevel = "basic" | "standard" | "strict";
 export type SwarmWorkerMode = "provider_read_only";
@@ -23,6 +24,7 @@ export type IntegrationFinalizationMode = "off" | "report_only" | "finalize_meta
 
 export type OrchestrationSafetyConfig = {
   execution_mode: ExecutionMode;
+  swarm_mode: SwarmMode;
   memory_path: string;
   enable_internal_swarm_autopilot: boolean;
   max_supported_logical_agents: number;
@@ -159,6 +161,7 @@ export type OrchestrationSafetyConfig = {
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   execution_mode: "deep",
+  swarm_mode: "pipeline",
   memory_path: ".agent_memory",
   enable_internal_swarm_autopilot: true,
   max_supported_logical_agents: 300,
@@ -394,6 +397,7 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     ...DEFAULT_ORCHESTRATION_CONFIG,
     ...preset,
     execution_mode: mode,
+    swarm_mode: envSwarmMode("HIVO_SWARM_MODE", input.swarm_mode, DEFAULT_ORCHESTRATION_CONFIG.swarm_mode),
     memory_path: envString("HIVO_MEMORY_DIR", input.memory_path, DEFAULT_ORCHESTRATION_CONFIG.memory_path),
     enable_internal_swarm_autopilot: envBool("HIVO_ENABLE_INTERNAL_SWARM_AUTOPILOT", input.enable_internal_swarm_autopilot, DEFAULT_ORCHESTRATION_CONFIG.enable_internal_swarm_autopilot),
     max_supported_logical_agents: envNumber("HIVO_MAX_SUPPORTED_LOGICAL_AGENTS", input.max_supported_logical_agents, DEFAULT_ORCHESTRATION_CONFIG.max_supported_logical_agents),
@@ -619,6 +623,7 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   }
   if (!config.memory_path.trim()) throw new Error("Invalid orchestration config memory_path");
   if (!["fast", "deep", "exhaustive"].includes(config.execution_mode)) throw new Error("Invalid orchestration config execution_mode");
+  if (!["pipeline", "recursive_tree"].includes(config.swarm_mode)) throw new Error("Invalid orchestration config swarm_mode");
   if (!["basic", "standard", "strict"].includes(config.validation_level)) throw new Error("Invalid orchestration config validation_level");
   if (config.swarm_worker_mode !== "provider_read_only") throw new Error("Only provider_read_only swarm workers are supported.");
   if (!["off", "available", "require_for_provider_mode"].includes(config.planning_evidence_mode)) throw new Error("Invalid orchestration config planning_evidence_mode");
@@ -666,6 +671,12 @@ function envList(name: string, value: string[] | undefined, fallback: string[]) 
   const raw = envRaw(name);
   if (raw === undefined || raw === "") return value ?? fallback;
   return raw.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function envSwarmMode(name: string, value: SwarmMode | undefined, fallback: SwarmMode): SwarmMode {
+  const raw = envRaw(name);
+  if (raw === "pipeline" || raw === "recursive_tree") return raw;
+  return value ?? fallback;
 }
 
 function envMode(name: string, fallback: ExecutionMode): ExecutionMode {

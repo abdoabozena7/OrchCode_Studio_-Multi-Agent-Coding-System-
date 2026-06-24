@@ -169,3 +169,8 @@ export * from "./TaskGraphManager.js";
 export * from "./Validation.js";
 export * from "./ValidationRunner.js";
 export * from "./ValidationSemantics.js";
+export * from "./RecursiveSwarmModels.js";
+export * from "./RecursiveTaskSplitter.js";
+export * from "./GoalKeeperAgent.js";
+export * from "./HierarchicalCollector.js";
+export * from "./RecursiveSwarmOrchestrator.js";

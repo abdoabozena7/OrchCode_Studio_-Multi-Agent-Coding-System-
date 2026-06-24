@@ -1,0 +1,353 @@
+{
+  "run_id": "swarm_941c8832-d019-4e1e-82c1-71907b321aa5",
+  "work_item_id": "swarm_scout_1_0691ab1b",
+  "user_goal": "Create a 3D Crossy Road game in a single HTML file using Three.js from CDN",
+  "original_user_request": "Create a 3D Crossy Road game in a single HTML file using Three.js from CDN",
+  "intent_contract": {
+    "schema_version": 1,
+    "contract_id": "intent_contract_176c3b39-3f38-41d1-a912-eb50099fc95f",
+    "run_id": "swarm_941c8832-d019-4e1e-82c1-71907b321aa5",
+    "run_kind": "swarm",
+    "revision": 1,
+    "original_user_request": "Create a 3D Crossy Road game in a single HTML file using Three.js from CDN",
+    "precise_rewrite": "Develop a 3D Crossy Road game that can be played entirely within a single HTML file, utilizing the Three.js library hosted via a Content Delivery Network (CDN)",
+    "assumptions": [
+      "The user desires a fully self-contained solution without external dependencies beyond the CDN",
+      "Performance and efficiency are important factors in the development process"
+    ],
+    "missing_questions": [],
+    "tradeoffs": [
+      {
+        "name": "Speed vs Quality",
+        "options": [
+          "Speed",
+          "Quality"
+        ],
+        "rationale": "Balancing the time required to develop the game with its overall quality and polish"
+      },
+      {
+        "name": "Realism vs Fun",
+        "options": [
+          "Realism",
+          "Fun"
+        ],
+        "rationale": "Deciding whether to prioritize a more realistic 3D environment or a more engaging gameplay experience"
+      },
+      {
+        "name": "Security vs Cost",
+        "options": [
+          "Security",
+          "Cost"
+        ],
+        "rationale": "Evaluating the trade-off between ensuring the game's security and minimizing development costs"
+      }
+    ],
+    "priorities": {
+      "speed": {
+        "score": 80,
+        "rationale": "The user likely wants a quick solution to start playing the game"
+      },
+      "quality": {
+        "score": 75,
+        "rationale": "While speed is important, maintaining a good level of quality ensures a better user experience"
+      },
+      "realism": {
+        "score": 60,
+        "rationale": "Realism is less critical than fun and quality in this context"
+      },
+      "fun": {
+        "score": 90,
+        "rationale": "The primary goal is to create an enjoyable game experience for the user"
+      },
+      "security": {
+        "score": 50,
+        "rationale": "Security is a concern, but it's not as critical as speed and fun in this scenario"
+      },
+      "cost": {
+        "score": 70,
+        "rationale": "Cost should be considered to ensure the project remains feasible within budget constraints"
+      }
+    },
+    "definition_of_done": [
+      "The game must be playable within a single HTML file",
+      "Three.js library must be sourced from a CDN",
+      "Game must include basic Crossy Road mechanics (player movement, obstacles, scoring)",
+      "Game should be visually appealing and engaging"
+    ],
+    "non_goals": [
+      "Incorporating advanced physics or complex AI for the game's environment",
+      "Developing a multiplayer version of the game",
+      "Extensive testing or optimization beyond basic functionality"
+    ],
+    "conflict_rules": [
+      "If speed and quality conflict, prioritize quality to ensure a better user experience",
+      "If realism and fun conflict, prioritize fun to maintain engagement",
+      "If security and cost conflict, prioritize security to protect user data"
+    ],
+    "status": "ready",
+    "created_at": "2026-06-23T23:44:07.833Z",
+    "metadata_json": {
+      "source_component": "SwarmAutopilotRuntime",
+      "provider_used": true,
+      "validation_errors": []
+    },
+    "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+    "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.md"
+  },
+  "intent_frame": {
+    "schema_version": 1,
+    "frame_id": "intent_frame_2ff5d5ef78c49b7af8f6e9bc",
+    "run_id": "swarm_941c8832-d019-4e1e-82c1-71907b321aa5",
+    "run_kind": "swarm",
+    "layer": "swarm",
+    "original_user_request": "Create a 3D Crossy Road game in a single HTML file using Three.js from CDN",
+    "original_request_hash": "63671ec3c3bf3d3b2685c8b05e2e773523920302dcebda0b7969ef9c5acb066e",
+    "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+    "intent_contract": {
+      "schema_version": 1,
+      "contract_id": "intent_contract_176c3b39-3f38-41d1-a912-eb50099fc95f",
+      "run_id": "swarm_941c8832-d019-4e1e-82c1-71907b321aa5",
+      "run_kind": "swarm",
+      "revision": 1,
+      "original_user_request": "Create a 3D Crossy Road game in a single HTML file using Three.js from CDN",
+      "precise_rewrite": "Develop a 3D Crossy Road game that can be played entirely within a single HTML file, utilizing the Three.js library hosted via a Content Delivery Network (CDN)",
+      "assumptions": [
+        "The user desires a fully self-contained solution without external dependencies beyond the CDN",
+        "Performance and efficiency are important factors in the development process"
+      ],
+      "missing_questions": [],
+      "tradeoffs": [
+        {
+          "name": "Speed vs Quality",
+          "options": [
+            "Speed",
+            "Quality"
+          ],
+          "rationale": "Balancing the time required to develop the game with its overall quality and polish"
+        },
+        {
+          "name": "Realism vs Fun",
+          "options": [
+            "Realism",
+            "Fun"
+          ],
+          "rationale": "Deciding whether to prioritize a more realistic 3D environment or a more engaging gameplay experience"
+        },
+        {
+          "name": "Security vs Cost",
+          "options": [
+            "Security",
+            "Cost"
+          ],
+          "rationale": "Evaluating the trade-off between ensuring the game's security and minimizing development costs"
+        }
+      ],
+      "priorities": {
+        "speed": {
+          "score": 80,
+          "rationale": "The user likely wants a quick solution to start playing the game"
+        },
+        "quality": {
+          "score": 75,
+          "rationale": "While speed is important, maintaining a good level of quality ensures a better user experience"
+        },
+        "realism": {
+          "score": 60,
+          "rationale": "Realism is less critical than fun and quality in this context"
+        },
+        "fun": {
+          "score": 90,
+          "rationale": "The primary goal is to create an enjoyable game experience for the user"
+        },
+        "security": {
+          "score": 50,
+          "rationale": "Security is a concern, but it's not as critical as speed and fun in this scenario"
+        },
+        "cost": {
+          "score": 70,
+          "rationale": "Cost should be considered to ensure the project remains feasible within budget constraints"
+        }
+      },
+      "definition_of_done": [
+        "The game must be playable within a single HTML file",
+        "Three.js library must be sourced from a CDN",
+        "Game must include basic Crossy Road mechanics (player movement, obstacles, scoring)",
+        "Game should be visually appealing and engaging"
+      ],
+      "non_goals": [
+        "Incorporating advanced physics or complex AI for the game's environment",
+        "Developing a multiplayer version of the game",
+        "Extensive testing or optimization beyond basic functionality"
+      ],
+      "conflict_rules": [
+        "If speed and quality conflict, prioritize quality to ensure a better user experience",
+        "If realism and fun conflict, prioritize fun to maintain engagement",
+        "If security and cost conflict, prioritize security to protect user data"
+      ],
+      "status": "ready",
+      "created_at": "2026-06-23T23:44:07.833Z",
+      "metadata_json": {
+        "source_component": "SwarmAutopilotRuntime",
+        "provider_used": true,
+        "validation_errors": []
+      },
+      "artifact_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+      "summary_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.md"
+    },
+    "intent_contract_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+    "intent_contract_status": "ready",
+    "intent_ledger_refs": [
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_ledger.json",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\context_ledger.jsonl",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.md",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.md",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.json",
+      "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.md"
+    ],
+    "locked_intent_definitions": [],
+    "current_task_slice": {
+      "task_slice_id": "intent_slice_b0f8710f135c85543b2d745c",
+      "task_id": "swarm_scout_1_0691ab1b",
+      "layer": "swarm",
+      "role": "ScoutAgent",
+      "objective": "ScoutAgent scout work item swarm_scout_1_0691ab1b",
+      "task_title": "swarm_scout_1_0691ab1b",
+      "task_type": "scout",
+      "slice_summary": "scout assigned to ScoutAgent",
+      "read_files": [
+        "apps/agent-runtime/src/agents/workers/index.ts",
+        "apps/agent-runtime/src/index.ts",
+        "apps/agent-runtime/src/memory/index.ts",
+        "apps/agent-runtime/src/orchestration/index.ts",
+        "apps/desktop/index.html",
+        "apps/desktop/src-tauri/src/main.rs",
+        "apps/desktop/src/main.tsx",
+        "apps/agent-runtime/package.json",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "packages/protocol/package.json",
+        "apps/desktop/vite.config.ts",
+        "apps/desktop/src-tauri/tauri.conf.json"
+      ],
+      "write_files": [],
+      "allowed_files": [],
+      "forbidden_files": [],
+      "dependencies": [],
+      "expected_output_schema": "ScoutResult",
+      "validation_requirements": [],
+      "context_refs": [],
+      "risk_level": "low",
+      "metadata_json": {
+        "priority": 10
+      }
+    },
+    "created_at": "2026-06-23T23:47:18.777Z",
+    "metadata_json": {}
+  },
+  "original_request_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+  "original_request_hash": "63671ec3c3bf3d3b2685c8b05e2e773523920302dcebda0b7969ef9c5acb066e",
+  "intent_ledger_ref": "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_ledger.json",
+  "intent_ledger_refs": [
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_ledger.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\context_ledger.jsonl",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\original_request.md",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.md",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.json",
+    "D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\reviews\\intent_review_be48c7fb-f852-4eb7-80fa-a428caaaec3a\\intent_review.md"
+  ],
+  "locked_intent_definitions": [],
+  "role": "ScoutAgent",
+  "work_item_type": "scout",
+  "read_files": [
+    "apps/agent-runtime/src/agents/workers/index.ts",
+    "apps/agent-runtime/src/index.ts",
+    "apps/agent-runtime/src/memory/index.ts",
+    "apps/agent-runtime/src/orchestration/index.ts",
+    "apps/desktop/index.html",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src/main.tsx",
+    "apps/agent-runtime/package.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "packages/protocol/package.json",
+    "apps/desktop/vite.config.ts",
+    "apps/desktop/src-tauri/tauri.conf.json"
+  ],
+  "file_excerpts": [
+    {
+      "path": "apps/agent-runtime/src/agents/workers/index.ts",
+      "content": "export { ArchitectAgent } from \"./ArchitectAgent.js\";\nexport { CodebaseMapperAgent } from \"./CodebaseMapperAgent.js\";\nexport { FrontendAgent } from \"./FrontendAgent.js\";\nexport { ReviewerAgent } from \"./ReviewerAgent.js\";\nexport { RustBackendAgent } from \"./RustBackendAgent.js\";\nexport { SecurityAgent } from \"./SecurityAgent.js\";\nexport { TestAgent } from \"./TestAgent.js\";\nexport { ToolingTerminalAgent } from \"./ToolingTerminalAgent.js\";\nexport { GenericWorkerAgent } from \"./GenericWorkerAgent.js\";\n",
+      "truncated": false,
+      "chars": 504
+    },
+    {
+      "path": "apps/agent-runtime/src/index.ts",
+      "content": "import { loadConfig } from \"./config.js\";\nimport { memoryCache } from \"./memory/MemoryCache.js\";\nimport { buildServer } from \"./server.js\";\n\nconst config = loadConfig();\nawait memoryCache.deletePrefix(\"hivo:verified-answer:v1:\");\nconst { app } = await buildServer(config);\n\nawait app.listen({ host: config.host, port: config.port });\nconsole.log(`Hivo agent runtime listening on http://${config.host}:${config.port} (${config.defaultMode} mode)`);\n",
+      "truncated": false,
+      "chars": 448
+    },
+    {
+      "path": "apps/agent-runtime/src/memory/index.ts",
+      "content": "export * from \"./types.js\";\nexport * from \"./ProjectMemory.js\";\nexport * from \"./RepoIndexer.js\";\nexport * from \"./CommandInventory.js\";\nexport * from \"./IndexFreshness.js\";\nexport * from \"./ProjectIntelligence.js\";\nexport * from \"./MemoryCache.js\";\nexport * from \"./SqliteMemoryStore.js\";\nexport * from \"./SemanticProjectModel.js\";\n",
+      "truncated": false,
+      "chars": 333
+    },
+    {
+      "path": "apps/agent-runtime/src/orchestration/index.ts",
+      "content": "export * from \"./ArtifactStore.js\";\nexport * from \"./AgentTeamManager.js\";\nexport * from \"./AgentTeamModels.js\";\nexport * from \"./ApprovalGates.js\";\nexport * from \"./CampaignManager.js\";\nexport * from \"./ContextInclusion.js\";\nexport * from \"./ContextPackBuilder.js\";\nexport * from \"./FileLockManager.js\";\nexport * from \"./DurableLockManager.js\";\nexport * from \"./FactoryLockModels.js\";\nexport * from \"./FactoryMetadataStore.js\";\nexport * from \"./FactoryTraceEvents.js\";\nexport * from \"./FactoryTraceReader.js\";\nexport * from \"./FactoryTraceWriter.js\";\nexport * from \"./GoalSteward.js\";\nexport {\n  GOAL_STEWARD_SCHEMA_VERSION,\n  PROJECT_GOAL_SPEC_SCHEMA_VERSION,\n  createGoalStewardFinding,\n  createGoalStewardReview,\n  createProjectGoalSpec\n} from \"./GoalStewardModels.js\";\nexport type {\n  GoalStewardFinding,\n  GoalStewardFindingType,\n  GoalStewardRecommendedAction,\n  GoalStewardReview,\n  GoalStewardReviewStatus,\n  ProjectGoalSpec,\n  ProjectGoalSpecStatus,\n  ProjectGoalTradeoff\n} from \"./GoalStewardModels.js\";\nexport * from \"./IntegrationManager.js\";\nexport * from \"./SemanticConflictResolver.js\";\nexport * from \"./SemanticConflictResolverModels.js\";\nexport * from \"./IntentLedgerModels.js\";\nexport * from \"./IntentLedgerService.js\";\nexport * from \"./IntentHandoffGate.js\";\nexport * from \"./UserIntentCompiler.js\";\nexport {\n  createIntegrationCandidate,\n  createIntegrationPlan,\n  createIntegrationResult,\n  integrationStatusFromValidation,\n  integrationValidationImpact,\n  isIntegrationBlocking,\n  isIntegrationSuccessful,\n  riskLevelForFiles\n} from \"./IntegrationModels.js\";\nexport type {\n  IntegrationApplyMode,\n  IntegrationArtifactRef,\n  IntegrationBatch,\n  IntegrationCandidate,\n  IntegrationConflict,\n  IntegrationPlan,\n  IntegrationResult as FactoryIntegrationResult,\n  IntegrationRiskLevel,\n  IntegrationRollbackPlan,\n  IntegrationStatus,\n  IntegrationValidationImpact\n} from \"./IntegrationModels.js\";\nexport * from \"./OrchestrationModels.js\";\nexport * from \"./OrchestrationConfig.js\";\nexport * from \"./Orchestrator.js\";\nexport * from \"./Metrics.js\";\nexport * from \"./MultiPlanFactory.js\";\nexport * from \"./MultiPlanModels.js\";\nexport * from \"./PlanEvaluator.js\";\nexport * from \"./PlanMerger.js\";\nexport * from \"./PlanningEvidenceCollector.js\";\nexport * from \"./PatchSafety.js\";\nexport * from \"./PromptSystem.js\";\nexport * from \"./PromptQualityGate.js\";\nexport * from \"./PromptWriterModels.js\";\nexport * from \"./PromptWriterService.js\";\nexport * from \"./ProviderBackedSwarmWorker.js\";\nexport * from \"./ReadOnlySwarmWorkerSchemas.js\";\nexport * from \"./RepairLoop.js\";\nexport * from \"./ReviewLoop.js\";\nexport * from \"./RoleRegistry.js\";\nexport * from \"./RunStateMachine.js\";\nexport * from \"./StructuredOutputs.js\";\nexport * from \"./SpecialistAgentFactory.js\";\nexport * from \"./SwarmAgentTemplates.js\";\nexport * from \"./SwarmArtifactStore.js\";\nexport * from \"./SwarmFanInOut.js\";\nexport * from \"./SwarmModels.js\";\nexport * from \"./SwarmRuntime.js\";\nexport * from \"./SwarmScheduler.js\";\nexp",
+      "truncated": true,
+      "chars": 3000
+    },
+    {
+      "path": "apps/desktop/index.html",
+      "content": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n    <link rel=\"icon\" type=\"image/png\" href=\"/hivo-icon.png\" />\n    <title>Hivo Studio</title>\n  </head>\n  <body>\n    <div id=\"root\"></div>\n    <script type=\"module\" src=\"/src/main.tsx\"></script>\n  </body>\n</html>\n",
+      "truncated": false,
+      "chars": 361
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/main.rs",
+      "content": "fn main() {\n    hivo_desktop_lib::run();\n}\n",
+      "truncated": false,
+      "chars": 43
+    },
+    {
+      "path": "apps/desktop/src/main.tsx",
+      "content": "import React, { Component, type ErrorInfo, type ReactNode } from \"react\";\nimport ReactDOM from \"react-dom/client\";\nimport { App } from \"./app/App\";\nimport \"./app/styles.css\";\n\nclass AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {\n  state: { error: Error | null } = { error: null };\n\n  static getDerivedStateFromError(error: Error) {\n    return { error };\n  }\n\n  componentDidCatch(error: Error, errorInfo: ErrorInfo) {\n    console.error(\"Hivo Studio render failed\", error, errorInfo);\n  }\n\n  render() {\n    if (this.state.error) {\n      return (\n        <main className=\"app-error-boundary\">\n          <div className=\"app-error-card\">\n            <strong>Hivo Studio could not render this chat.</strong>\n            <p>{this.state.error.message}</p>\n            <button onClick={() => window.location.reload()} type=\"button\">Reload Hivo Studio</button>\n          </div>\n        </main>\n      );\n    }\n    return this.props.children;\n  }\n}\n\nReactDOM.createRoot(document.getElementById(\"root\") as HTMLElement).render(\n  <React.StrictMode>\n    <AppErrorBoundary>\n      <App />\n    </AppErrorBoundary>\n  </React.StrictMode>\n);\n",
+      "truncated": false,
+      "chars": 1161
+    },
+    {
+      "path": "apps/agent-runtime/package.json",
+      "content": "{\n  \"name\": \"@hivo/agent-runtime\",\n  \"version\": \"0.2.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"main\": \"./dist/index.js\",\n  \"types\": \"./dist/index.d.ts\",\n  \"scripts\": {\n    \"dev\": \"tsx watch --clear-screen=false src/index.ts\",\n    \"build\": \"tsc -p tsconfig.json\",\n    \"typecheck\": \"tsc -p tsconfig.json --noEmit\",\n    \"test\": \"npm run build && node --test dist/tests/*.test.js\",\n    \"test:reasoning-v2\": \"npm run build && node --test dist/tests/adaptive-reasoning-kernel.test.js dist/tests/adaptive-reasoning-certification.test.js dist/tests/reasoning-architecture.test.js dist/tests/decision-pipeline.test.js\",\n    \"memory:index\": \"tsx src/memory/cli.ts index repo --workspace ../..\",\n    \"memory:index-status\": \"tsx src/memory/cli.ts index status --workspace ../..\",\n    \"memory:index-refresh\": \"tsx src/memory/cli.ts index refresh --workspace ../..\",\n    \"memory:index-explain\": \"tsx src/memory/cli.ts index explain --workspace ../..\",\n    \"memory:inspect\": \"tsx src/memory/cli.ts memory inspect --workspace ../..\",\n    \"memory:status\": \"tsx src/memory/cli.ts memory status --workspace ../..\",\n    \"memory:show-commands\": \"tsx src/memory/cli.ts memory show-commands --workspace ../..\",\n    \"memory:clean-runs\": \"tsx src/memory/cli.ts memory clean-runs --workspace ../..\",\n    \"memory:compact\": \"tsx src/memory/cli.ts memory compact --workspace ../..\",\n    \"memory:lessons\": \"tsx src/memory/cli.ts memory lessons --workspace ../..\",\n    \"memory:decisions\": \"tsx src/memory/cli.ts memory decisions --workspace ../..\",\n    \"memory:failed-attempts\": \"tsx src/memory/cli.ts memory failed-attempts --workspace ../..\",\n    \"memory:explain-task\": \"tsx src/memory/cli.ts memory explain-task --workspace ../..\",\n    \"memory:migrate-sqlite\": \"tsx src/memory/cli.ts memory migrate-sqlite --workspace ../..\",\n    \"memory:export-backup\": \"tsx src/memory/cli.ts memory export-backup --workspace ../..\",\n    \"memory:search\": \"tsx src/memory/cli.ts memory search --workspace ../..\",\n    \"memory:db-status\": \"tsx src/memory/cli.ts memory db-status --workspace ../..\",\n    \"agent:run\": \"tsx src/orchestration/cli.ts agent run --workspace ../..\",\n    \"agent:plan\": \"tsx src/orchestration/cli.ts agent plan --workspace ../..\",\n    \"agent:inspect-run\": \"tsx src/orchestration/cli.ts agent inspect-run --workspace ../..\",\n    \"agent:report\": \"tsx src/orchestration/cli.ts agent report --workspace ../..\",\n    \"agent:resume\": \"tsx src/orchestration/cli.ts agent resume --workspace ../..\",\n    \"agent:trial:architecture-scan\": \"tsx src/orchestration/cli.ts agent trial architecture-scan --workspace ../..\",\n    \"agent:trial:test-discovery\": \"tsx src/orchestration/cli.ts agent trial test-discovery --workspace ../..\",\n    \"agent:trial:staffing-eval\": \"tsx src/orchestration/cli.ts agent trial staffing-eval --workspace ../..\",\n    \"agent:trial:scheduler-scale\": \"tsx src/orchestration/cli.ts agent trial scheduler-scale --workspace ../..\",\n    \"agent:trial:compare\": \"tsx src/orchestration/cli.ts agent trial compare --",
+      "truncated": true,
+      "chars": 3000
+    }
+  ],
+  "write_files": [],
+  "risk_level": "low",
+  "expected_output_schema": "ScoutResult",
+  "staffing": {
+    "task_complexity": "small",
+    "repo_scope": "multiple_modules",
+    "risk_level": "high",
+    "validation_level": "strict"
+  },
+  "constraints": [
+    "Preserve the canonical original user request and intent ledger references in all derived context and output metadata.",
+    "Original user request hash: 63671ec3c3bf3d3b2685c8b05e2e773523920302dcebda0b7969ef9c5acb066e",
+    "Intent contract ref: D:\\projects\\Ai\\OrchCode_Studio_(Multi-Agent-Coding-System)\\.agent_memory\\swarm_runs\\swarm_941c8832-d019-4e1e-82c1-71907b321aa5\\intent\\intent_contract.json",
+    "Current task slice id: intent_slice_b0f8710f135c85543b2d745c",
+    "Every successful output must include intent_alignment tied to these exact values.",
+    "Read-only provider-backed worker.",
+    "No file edits, patches, diffs, or shell commands.",
+    "Validation can be recommended but not marked mechanically passed."
+  ],
+  "confidence": "low",
+  "inclusion_metadata": {
+    "source": "fallback_work_item_summary",
+    "inclusion_reason": "Read-only file excerpts were included so provider-backed workers can inspect evidence, not just file names.",
+    "access_mode": "reference_only"
+  }
+}

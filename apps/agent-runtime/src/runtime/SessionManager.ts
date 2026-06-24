@@ -362,6 +362,10 @@ export class SessionManager {
       pushTaskTransition(taskState, "patch.proposed", `Patch proposed: ${proposal.title}`);
     });
     this.eventBus.publish({ type: "runtime.patch.proposed", sessionId, proposal });
+    const session = this.getSession(sessionId);
+    if (session?.accessProfile === "full_access" || session?.accessProfile === "auto_review") {
+      await this.setPatchStatus(sessionId, proposal.id, "approved");
+    }
   }
 
   async addCommandRequest(sessionId: string, commandRequest: CommandRequest) {
@@ -1196,7 +1200,7 @@ function buildResolvedAccessPolicy(declared: DeclaredAccessPolicy, resolvedAt: s
         "restore_session"
       ],
       blockedCapabilities: ["execute_dangerous_command", "use_network"],
-      requiresApprovalFor: ["patch_apply", "command_execution", "dangerous_command"],
+      requiresApprovalFor: ["command_execution", "dangerous_command"],
       backendRestrictions: baseRestrictions,
       resolvedBy: "runtime",
       resolvedAt
@@ -1210,12 +1214,14 @@ function buildResolvedAccessPolicy(declared: DeclaredAccessPolicy, resolvedAt: s
       effectiveCapabilities: [
         "read_workspace",
         "propose_patch",
+        "apply_patch",
+        "write_workspace",
         "request_command",
         "execute_safe_command",
         "restore_session"
       ],
-      blockedCapabilities: ["write_workspace", "apply_patch", "execute_dangerous_command", "use_network"],
-      requiresApprovalFor: ["patch_proposal", "patch_apply", "command_execution", "dangerous_command"],
+      blockedCapabilities: ["execute_dangerous_command", "use_network"],
+      requiresApprovalFor: ["command_execution", "dangerous_command"],
       backendRestrictions: baseRestrictions,
       resolvedBy: "runtime",
       resolvedAt
