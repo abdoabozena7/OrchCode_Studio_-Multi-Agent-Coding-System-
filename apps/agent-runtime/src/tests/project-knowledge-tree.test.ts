@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { declaredAccessPolicyForProfile, resolvedAccessPolicyForProfile, type AgentRuntimeSession, type AppEvent } from "@hivo/protocol";
+import { declaredAccessPolicyForProfile, resolvedAccessPolicyForProfile, type AgentRuntimeSession, type AppEvent, type SanitizedProviderConfig } from "@hivo/protocol";
 import { rebuildRepoIndex } from "../memory/RepoIndexer.js";
 import { loadConfig } from "../config.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
@@ -19,6 +19,15 @@ import {
 import { replaySessionFromDurableEvents } from "../runtime/SessionReplay.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("ProjectKnowledgeTree creates owners and required area routes from repo evidence", async () => {
   const workspace = await createKnowledgeFixture("knowledge-tree-create");
@@ -158,7 +167,7 @@ test("KnowledgeBranchTarget blocks incomplete owners, stale owners, low confiden
   }
 });
 
-test("runtime routes existing-project edit without patches, commands, or provider execution", async () => {
+test("runtime existing-project edit records provider contract before gated patch commands", async () => {
   const workspace = await createKnowledgeFixture("knowledge-runtime-gate");
   const storageDir = await tempDir("knowledge-runtime-storage");
   try {
@@ -167,32 +176,28 @@ test("runtime routes existing-project edit without patches, commands, or provide
     eventBus.subscribe((event) => events.push(event));
     const sessionManager = new SessionManager(storageDir, eventBus);
     await sessionManager.load();
-    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager);
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => new ScriptedProvider()
+    });
+    const prompt = "Update the login/auth flow across backend and frontend.";
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
-      userPrompt: "Update the login/auth flow across backend and frontend."
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
     });
-    const response = await runtime.runTurn(created.sessionId, "Update the login/auth flow across backend and frontend.");
+    const response = await runtime.runTurn(created.sessionId, prompt);
     const session = runtime.getSession(created.sessionId)!;
-    assert.equal(response.status, "completed");
-    assert.ok(session.projectKnowledgeTree);
-    assert.ok(session.latestKnowledgeRoute);
-    assert.ok(session.latestKnowledgeBranchTargets?.length);
-    assert.equal(session.recursiveFactory?.executionStarted, false);
-    assert.ok(session.recursiveFactory?.branchExecutions?.length);
-    assert.equal(session.recursiveFactory.branchExecutions.every((branch) => branch.active === false && branch.patchApplied === false), true);
-    assert.equal(session.patchProposals.length, 0);
-    assert.equal(session.commandRequests.length, 0);
+    assert.equal(response.status, "needs_approval");
+    assert.equal(session.mode, "real_provider");
+    assert.equal(session.providerTelemetry?.terminalFailure, undefined);
+    assert.ok(session.artifacts.some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok(session.artifacts.some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session.patchProposals.length, 1);
+    assert.equal(session.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session.commandRequests.length, 1);
     assert.equal(session.commandExecutions.length, 0);
-    assert.equal(session.artifacts.some((artifact) => artifact.type === "project_knowledge_tree"), true);
-    assert.equal(session.artifacts.some((artifact) => artifact.type === "knowledge_edit_route"), true);
-    assert.equal(session.artifacts.some((artifact) => artifact.type === "knowledge_branch_targets"), true);
-    assert.equal(events.some((event) => event.type === "runtime.knowledge_tree.created"), true);
-    assert.equal(events.some((event) => event.type === "runtime.edit_route.ready"), true);
-    assert.equal(events.some((event) => event.type === "runtime.knowledge_branch_targets.created"), true);
-    assert.equal(events.some((event) => event.type === "runtime.knowledge_branch_execution.planned"), true);
-    assert.match(session.messages.at(-1)?.content ?? "", /Execution has not started/);
+    assert.equal(events.some((event) => event.type === "runtime.intent_contract.compiled"), true);
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });

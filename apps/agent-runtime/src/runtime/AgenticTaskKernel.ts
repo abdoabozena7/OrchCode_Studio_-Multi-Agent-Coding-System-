@@ -31,7 +31,7 @@ export async function runAgenticTaskKernel(request: AgenticTaskRequest): Promise
   if (disabled) {
     const emptyDraft: AgenticOutputDraft = {
       format: "markdown",
-      text: disabledMessage(intent.language),
+      text: "",
       claims: [],
       fallbackReason: "kernel_disabled"
     };
@@ -98,10 +98,6 @@ export async function runAgenticTaskKernel(request: AgenticTaskRequest): Promise
     ? await requestProviderDraft(request, config, intent.mode)
     : { text: undefined, fallbackReason: "none" as AgenticFallbackReason, providerCalls: [{ kind: "draft" as const, status: "skipped" as const, reason: "natural_draft_disabled" }] };
   const draft = synthesizeAgenticOutput({
-    prompt: request.prompt,
-    intent,
-    evidenceGraph,
-    mentalModel,
     providerDraft: providerDraft.text,
     providerFallbackReason: providerDraft.fallbackReason
   });
@@ -112,9 +108,9 @@ export async function runAgenticTaskKernel(request: AgenticTaskRequest): Promise
     fileExists: request.tools.workspace.fileExists.bind(request.tools.workspace),
     claimValidationRequired: config.agenticTaskClaimValidationRequired
   });
-  const fallbackReason = providerDraft.fallbackReason === "none" && !providerDraft.text
-    ? evidenceGraph.accepted.length ? "none" : "insufficient_evidence"
-    : providerDraft.fallbackReason;
+  const fallbackReason = providerDraft.text
+    ? providerDraft.fallbackReason
+    : draft.fallbackReason ?? (evidenceGraph.accepted.length ? "adapter_not_available" : "insufficient_evidence");
   return {
     request,
     intent,
@@ -281,12 +277,6 @@ function emptyEvidenceGraph(): AgenticTaskResult["evidenceGraph"] {
       confidence: "low"
     }
   };
-}
-
-function disabledMessage(language: "arabic" | "english") {
-  return language === "arabic"
-    ? "\u0643\u064a\u0631\u0646\u0644 \u0627\u0644\u062a\u0641\u0643\u064a\u0631 \u0627\u0644\u0648\u0643\u064a\u0644\u064a \u0645\u062a\u0648\u0642\u0641 \u0645\u0646 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a."
-    : "The agentic task kernel is disabled by configuration.";
 }
 
 function countClaimStatuses(claims: AgenticTaskResult["finalOutput"]["claims"]) {

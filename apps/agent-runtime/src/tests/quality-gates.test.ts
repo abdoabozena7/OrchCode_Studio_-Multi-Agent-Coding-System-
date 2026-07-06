@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ReviewerAgent } from "../agents/workers/ReviewerAgent.js";
-import { createThreeJsSnakeProposal, validateThreeJsSnakeProposal } from "../mock/threeJsSnake.js";
+import { createThreeJsSnakeProposal, validateThreeJsSnakeProposal } from "../curatedProposals/threeJsSnake.js";
+import { runQualityGates } from "../runtime/OrchestratedReviewService.js";
 
-test("ReviewerAgent blocks placeholder patch content", () => {
-  const reviewer = new ReviewerAgent();
-  const result = reviewer.review(
+test("quality gates block placeholder patch content", () => {
+  const results = runQualityGates(
     "session_test",
+    "create a patch",
     [
       {
         id: "patch_stub",
@@ -23,11 +23,13 @@ test("ReviewerAgent blocks placeholder patch content", () => {
       }
     ],
     [],
+    true,
     []
   );
+  const reviewerGate = results.find((result) => result.gateName === "ReviewerGate");
 
-  assert.equal(result.status, "needs_changes");
-  assert.match(result.findings.join("\n"), /placeholder/);
+  assert.equal(reviewerGate?.status, "failed");
+  assert.match(reviewerGate?.blockingReasons.join("\n") ?? "", /placeholder/);
 });
 
 test("Three.js snake validator blocks broken UMD bundle output", () => {

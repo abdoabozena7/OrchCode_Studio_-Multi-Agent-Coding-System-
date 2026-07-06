@@ -3,6 +3,7 @@ export type ReadOnlySwarmWorkerOutputKind =
   | "swarm_planner_output"
   | "swarm_risk_analyst_output"
   | "swarm_reviewer_output"
+  | "adversarial_reviewer_output"
   | "swarm_specialist_output"
   | "swarm_tester_planner_output"
   | "swarm_reporter_output";
@@ -11,6 +12,7 @@ export const swarmScoutOutputSchema = { name: "swarm_scout_output" } as const;
 export const swarmPlannerOutputSchema = { name: "swarm_planner_output" } as const;
 export const swarmRiskAnalystOutputSchema = { name: "swarm_risk_analyst_output" } as const;
 export const swarmReviewerOutputSchema = { name: "swarm_reviewer_output" } as const;
+export const adversarialReviewerOutputSchema = { name: "adversarial_reviewer_output" } as const;
 export const swarmSpecialistOutputSchema = { name: "swarm_specialist_output" } as const;
 export const swarmTesterPlannerOutputSchema = { name: "swarm_tester_planner_output" } as const;
 export const swarmReporterOutputSchema = { name: "swarm_reporter_output" } as const;
@@ -34,7 +36,10 @@ export function schemaForReadOnlySwarmRole(role: string, workItemType: string) {
   if (workItemType === "risk_analysis" || role === "RiskAnalyzerAgent") return swarmRiskAnalystOutputSchema;
   if (workItemType === "test" || role === "TesterAgent") return swarmTesterPlannerOutputSchema;
   if (workItemType === "summarize" || role === "ReporterAgent") return swarmReporterOutputSchema;
-  if (role === "ReviewerAgent" || workItemType === "review") return swarmReviewerOutputSchema;
+  if (role === "ReviewerAgent" || workItemType === "review") {
+    if (process.env.HIVO_ADVERSARIAL_REVIEWER === "1") return adversarialReviewerOutputSchema;
+    return swarmReviewerOutputSchema;
+  }
   return swarmSpecialistOutputSchema;
 }
 
@@ -63,6 +68,31 @@ export function validateReadOnlySwarmOutput(value: unknown, schema: { name: stri
       errors.push(...requiredStrings(value, ["decision", "severity"]));
       errors.push(...requiredArrays(value, ["findings", "required_changes", "validation_recommendations"]));
       errors.push(...requiredNumber(value, ["confidence"]));
+      break;
+    case "adversarial_reviewer_output":
+      errors.push(...requiredStrings(value, ["schema", "decision"]));
+      errors.push(...requiredArrays(value, ["assertions", "files_examined", "tests_checked", "code_quotes"]));
+      errors.push(...requiredNumber(value, ["lines_of_code_reviewed", "confidence"]));
+      if (Array.isArray(value.assertions)) {
+        for (let i = 0; i < value.assertions.length; i++) {
+          const a = value.assertions[i];
+          if (!isRecord(a)) { errors.push(`assertions[${i}] must be an object`); continue; }
+          if (!["correctness","security","maintainability","scope","testability","performance"].includes(a.assertion_type as string)) {
+            errors.push(`assertions[${i}].assertion_type invalid`);
+          }
+          if (typeof a.file_path !== "string") errors.push(`assertions[${i}].file_path required`);
+          if (!Array.isArray(a.line_range) || a.line_range.length !== 2) errors.push(`assertions[${i}].line_range must be [number, number]`);
+          if (!["low","medium","high","critical"].includes(a.severity as string)) errors.push(`assertions[${i}].severity invalid`);
+          if (typeof a.description !== "string") errors.push(`assertions[${i}].description required`);
+          if (typeof a.evidence !== "string") errors.push(`assertions[${i}].evidence required`);
+        }
+      }
+      if (value.decision === "approved" && Array.isArray(value.code_quotes) && value.code_quotes.length < 3) {
+        errors.push("approved decision requires at least 3 code_quotes proving exhaustive review");
+      }
+      if (value.decision === "approved" && Array.isArray(value.assertions) && value.assertions.length === 0 && Array.isArray(value.code_quotes) && value.code_quotes.length < 3) {
+        errors.push("zero assertions without 3+ code_quotes is forbidden");
+      }
       break;
     case "swarm_specialist_output":
       errors.push(...requiredStrings(value, ["specialty"]));
@@ -217,6 +247,18 @@ function repairReadOnlyRecord(record: Record<string, unknown>, schemaName: strin
         findings,
         required_changes: arrayField(record, "required_changes"),
         validation_recommendations: arrayField(record, "validation_recommendations"),
+        confidence
+      };
+    case "adversarial_reviewer_output":
+      return {
+        ...record,
+        schema: "adversarial_reviewer_output",
+        decision: stringField(record, "decision") ?? "blocked",
+        assertions: Array.isArray(record.assertions) ? record.assertions : [],
+        files_examined: arrayField(record, "files_examined"),
+        lines_of_code_reviewed: typeof record.lines_of_code_reviewed === "number" ? record.lines_of_code_reviewed : 0,
+        tests_checked: arrayField(record, "tests_checked"),
+        code_quotes: Array.isArray(record.code_quotes) ? record.code_quotes : [],
         confidence
       };
     case "swarm_specialist_output":

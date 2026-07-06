@@ -3,13 +3,24 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { AgentRuntimeSession, ModuleExecutionPlan, PatchProposal, ProjectIntake, VerificationResult } from "@hivo/protocol";
+import type { AgentRuntimeSession, ModuleExecutionPlan, PatchProposal, ProjectIntake, SanitizedProviderConfig, VerificationResult } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
+import { EventBus } from "../runtime/EventBus.js";
 import { buildModuleExecutionPlan, summarizeModuleExecution, validatePatchAgainstModulePlan } from "../runtime/ModuleExecutionPlanning.js";
+import { SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
-test("existing project edit records intake and Knowledge Tree route before implementation", async () => {
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
+
+test("existing project edit records provider decision artifacts before implementation", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-plan-existing-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-plan-existing-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -17,76 +28,85 @@ test("existing project edit records intake and Knowledge Tree route before imple
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
   await writeFile(path.join(workspace, "src", "main.ts"), "export const main = true;\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const runtime = await createProviderRuntime(storageDir);
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "update the main module"
     });
-    await runtime.runTurn(created.sessionId, "update the main module");
+    const turn = await runtime.runTurn(created.sessionId, "update the main module");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.moduleExecutionPlan, undefined);
-    assert.ok(session?.projectKnowledgeTree);
-    assert.ok(session?.latestKnowledgeRoute);
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "project_intake"));
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "context_pack"));
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "project_knowledge_tree"));
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "knowledge_edit_route"));
-    assert.ok((session?.decisionLedger ?? []).some((record) => /Project Knowledge Tree/i.test(record.decision)));
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.mode, "real_provider");
+    assert.equal(session?.moduleExecutionPlan?.status, "blocked");
+    assert.equal(session?.moduleExecutionPlan?.targetModuleName, "src/main.ts");
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
 });
 
-test("empty project does not force continuation module planning", async () => {
+test("empty project creation remains provider-gated without fabricated module planning", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-plan-empty-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-plan-empty-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const runtime = await createProviderRuntime(storageDir);
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "create a new app"
     });
-    await runtime.runTurn(created.sessionId, "create a new app");
+    const turn = await runtime.runTurn(created.sessionId, "create a new app");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.projectIntake?.projectKind, "empty_project");
+    assert.equal(turn.status, "needs_approval");
     assert.equal(session?.moduleExecutionPlan, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
 });
 
-test("unknown project prefers inspect-only over broad implementation assumptions", async () => {
+test("unknown project stays provider-gated instead of broad implementation assumptions", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-plan-unknown-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-plan-unknown-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "tests"), { recursive: true });
   await writeFile(path.join(workspace, "tests", "smoke.test.snap"), "fixture\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const runtime = await createProviderRuntime(storageDir);
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "continue this project"
     });
-    await runtime.runTurn(created.sessionId, "continue this project");
+    const turn = await runtime.runTurn(created.sessionId, "continue this project");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.projectIntake?.projectKind, "unknown");
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.moduleExecutionPlan, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.equal((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"), false);
     assert.equal(session?.patchProposals.length, 0);
-    assert.equal(session?.verificationResult?.status, "passed");
+    assert.equal(session?.commandRequests.length, 0);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -116,7 +136,7 @@ test("context pack fields flow into the module execution plan", () => {
   assert.ok(modulePlan.unknowns.includes("Missing mechanism link: backend_handler"));
 });
 
-test("Knowledge Tree route records target files and review chain for existing project edit", async () => {
+test("existing project edit records provider contract before scope review", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module-contract-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module-contract-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -124,25 +144,27 @@ test("Knowledge Tree route records target files and review chain for existing pr
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
   await writeFile(path.join(workspace, "src", "auth.ts"), "export const auth = true;\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const runtime = await createProviderRuntime(storageDir);
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "update auth.ts"
     });
-    await runtime.runTurn(created.sessionId, "update auth.ts");
+    const turn = await runtime.runTurn(created.sessionId, "update auth.ts");
     const session = runtime.getSession(created.sessionId);
-    const tree = session?.projectKnowledgeTree;
-    const route = session?.latestKnowledgeRoute;
 
-    assert.ok(tree);
-    assert.ok(route);
-    assert.ok(tree.fileOwnership.some((entry) => entry.path === "src/auth.ts"));
-    assert.ok(route.plan.requiredReviewChain.rootIntegrationReview.length > 0);
-    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.moduleExecutionPlan?.status, "blocked");
+    assert.equal(session?.moduleExecutionPlan?.targetModuleName, "src/auth.ts");
+    assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -235,7 +257,7 @@ test("new dependency changes require review unless explicitly allowed", async ()
   }
 });
 
-test("Knowledge Tree route stops existing project edit before review-gate application", async () => {
+test("provider prelude stops existing project edit before review-gate application", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-scope-review-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-scope-review-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -243,22 +265,27 @@ test("Knowledge Tree route stops existing project edit before review-gate applic
   await writeFile(path.join(workspace, "README.md"), "# Voxbox\n", "utf8");
   await writeFile(path.join(workspace, "src", "main.ts"), "export const main = true;\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const runtime = await createProviderRuntime(storageDir);
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "update the main module"
     });
-    await runtime.runTurn(created.sessionId, "update the main module");
+    const turn = await runtime.runTurn(created.sessionId, "update the main module");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.reviewGate, undefined);
-    assert.ok(session?.latestKnowledgeRoute);
-    assert.equal(session?.runSummary?.gates[0]?.name, "Project Knowledge Tree routing");
-    assert.match(session?.messages.at(-1)?.content ?? "", /Execution has not started/i);
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.moduleExecutionPlan?.status, "blocked");
+    assert.equal(session?.moduleExecutionPlan?.targetModuleName, "src/main.ts");
+    assert.equal(session?.reviewGate?.recommendation, "do_not_apply");
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -495,6 +522,14 @@ function createSessionFixture(): AgentRuntimeSession {
     createdAt: "2026-05-15T00:00:00.000Z",
     updatedAt: "2026-05-15T00:00:00.000Z"
   };
+}
+
+async function createProviderRuntime(storageDir: string): Promise<AgentRuntime> {
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  return new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
 }
 
 async function createWorkspaceWithPackage() {

@@ -3,14 +3,23 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { PatchProposal, ProductBrief, BusinessBrief, TechnicalPlan, TaskGraph } from "@hivo/protocol";
+import type { ProductBrief, BusinessBrief, TechnicalPlan, TaskGraph, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
-import { FileLockManager } from "../scheduler/FileLockManager.js";
-import { TaskScheduler } from "../scheduler/TaskScheduler.js";
+import { OrchestrationFileLockManager } from "../orchestration/FileLockManager.js";
 import { validateBusinessBrief, validateProductBrief, validateTaskGraph, validateTechnicalPlan } from "../schemas/validators.js";
 import { SecurityAgent } from "../agents/workers/SecurityAgent.js";
-import { MergeController } from "../scheduler/MergeController.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
+import { EventBus } from "../runtime/EventBus.js";
+import { SessionManager } from "../runtime/SessionManager.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("ProductBrief and BusinessBrief validators accept valid briefs", () => {
   const product: ProductBrief = {
@@ -65,72 +74,51 @@ test("TechnicalPlan and TaskGraph validators check dependency shape", () => {
   assert.equal(validateTechnicalPlan(plan).valid, true);
 });
 
-test("FileLockManager detects conflicts", async () => {
-  const locks = new FileLockManager();
-  assert.equal((await locks.acquireLocks("task-a", ["src/App.tsx"])).acquired, true);
-  const conflict = await locks.acquireLocks("task-b", ["src/App.tsx"], { timeoutMs: 1 });
+test("OrchestrationFileLockManager detects conflicts", () => {
+  const locks = new OrchestrationFileLockManager("D:/workspace");
+  assert.equal(locks.acquire("run-a", "task-a", ["src/App.tsx"]).acquired, true);
+  const conflict = locks.acquire("run-a", "task-b", ["src/App.tsx"]);
   assert.equal(conflict.acquired, false);
-  assert.equal(conflict.conflict?.ownerTaskId, "task-a");
+  assert.equal(conflict.conflicts[0]?.owner_task_id, "task-a");
 });
 
-test("TaskScheduler respects dependencies and file locks", () => {
-  const graph: TaskGraph = {
-    sessionId: "s1",
-    nodes: [
-      {
-        id: "a",
-        title: "A",
-        description: "first",
-        assignedAgent: "ArchitectAgent",
-        status: "pending",
-        dependsOn: [],
-        fileLocks: ["src/a.ts"],
-        expectedOutput: "a",
-        riskLevel: "low"
-      },
-      {
-        id: "b",
-        title: "B",
-        description: "second",
-        assignedAgent: "FrontendAgent",
-        status: "pending",
-        dependsOn: ["a"],
-        fileLocks: ["src/a.ts"],
-        expectedOutput: "b",
-        riskLevel: "medium"
-      }
-    ],
-    edges: [{ from: "a", to: "b" }]
-  };
-  const scheduler = new TaskScheduler(graph, new FileLockManager(), 3);
-  scheduler.runAll(() => undefined);
-  assert.deepEqual(graph.nodes.map((node) => node.status), ["completed", "completed"]);
-  assert.deepEqual(scheduler.events.filter((event) => event.type === "task.started").map((event) => event.task.id), ["a", "b"]);
-});
-
-test("Mock orchestrated run creates dynamic tasks, intents, artifacts, and patch proposals", async () => {
+test("provider-backed orchestrated session reaches approval without demo mock runtime", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-module3-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-module3-storage-${Date.now()}`);
-  await mkdir(path.join(workspace, "apps/desktop/src/app"), { recursive: true });
-  await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
-  await writeFile(path.join(workspace, "apps/desktop/src/app/App.tsx"), "export function App(){return null}\n", "utf8");
+  try {
+    await mkdir(path.join(workspace, "apps/desktop/src/app"), { recursive: true });
+    await writeFile(path.join(workspace, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n", "utf8");
+    await writeFile(path.join(workspace, "apps/desktop/src/app/App.tsx"), "export function App(){return null}\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    executionMode: "orchestrated_mode",
-    userPrompt: "Add a settings page with theme toggle"
-  });
-  const turn = await runtime.runTurn(created.sessionId, "Add a settings page with theme toggle");
-  const session = runtime.getSession(created.sessionId);
+    const sessionManager = new SessionManager(storageDir, new EventBus());
+    await sessionManager.load();
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => new ScriptedProvider()
+    });
+    const prompt = "Add a settings page with theme toggle";
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "orchestrated_mode",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
 
-  assert.ok((session?.tasks.length ?? 0) >= 1);
-  assert.ok((session?.patchProposals?.length ?? 0) >= 0);
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(session?.mode, "real_provider");
+    assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+    assert.notEqual(session?.agentName, "Mock Agent");
+    assert.equal(session?.providerTelemetry?.terminalFailure, undefined);
+    assert.ok((session?.messages.length ?? 0) >= 1);
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("SecurityAgent blocks dangerous command requests", () => {
@@ -151,21 +139,4 @@ test("SecurityAgent blocks dangerous command requests", () => {
     ]
   );
   assert.equal(review.status, "blocked");
-});
-
-test("MergeController detects patch conflicts", () => {
-  const basePatch = (id: string): PatchProposal => ({
-    id,
-    sessionId: "s1",
-    title: id,
-    summary: id,
-    riskLevel: "low",
-    filesChanged: [{ path: "src/App.tsx", changeType: "modify", explanation: "same file" }],
-    unifiedDiff: "diff --git a/src/App.tsx b/src/App.tsx",
-    requiresApproval: true,
-    status: "proposed",
-    createdAt: new Date().toISOString()
-  });
-  const summary = new MergeController().detectPatchConflicts([basePatch("p1"), basePatch("p2")]);
-  assert.equal(summary.conflicts.length, 1);
 });

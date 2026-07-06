@@ -1,14 +1,12 @@
 # Provider-Backed Read-Only Swarm Workers
 
-The swarm runtime can opt into provider-backed workers for read-only roles while preserving the existing mock worker as the default and fallback path.
+The swarm runtime uses provider-backed workers for read-only roles. There is no runtime-selectable mock or local semantic fallback path for these workers.
 
-## Modes
+## Mode
 
-- `mock`: default. Uses the existing deterministic mock worker.
 - `provider_read_only`: uses a configured provider for read-only roles and blocks when no provider is available.
-- `auto`: uses a configured provider for read-only roles and falls back to mock workers when unavailable.
 
-The runtime reads `HIVO_SWARM_WORKER_MODE` through orchestration config. Tests use fake providers only.
+Tests may use private scripted providers, but runtime configuration only accepts provider-backed read-only workers.
 
 ## Allowed Roles
 
@@ -55,4 +53,4 @@ Artifact contents remain on disk. SQLite stores refs and metadata only.
 
 Provider worker invocations are recorded in `factory_worker_invocations` with prompt refs, quality refs, output refs, schema status, provider/model names, and status metadata.
 
-Trace events include provider selection/unavailability, read-only guard pass/block, provider invocation start/completion/failure, output save/schema validation, worker result recording, and fallback to mock.
+Trace events include provider selection/unavailability, read-only guard pass/block, provider invocation start/completion/failure, output save/schema validation, and worker result recording.

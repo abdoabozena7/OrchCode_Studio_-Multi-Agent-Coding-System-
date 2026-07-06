@@ -13,7 +13,7 @@ import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { createSimpleDelegationDecision } from "../runtime/delegation.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { SessionManager } from "../runtime/SessionManager.js";
-import { buildServer } from "../server.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -22,6 +22,27 @@ const validProviderConfig: SanitizedProviderConfig = {
   selectedModel: "test-model",
   isValid: true
 };
+
+async function createScriptedRuntime(storageDir: string): Promise<AgentRuntime> {
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  return new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
+}
+
+function assertProviderGatedProposal(session: ReturnType<AgentRuntime["getSession"]>, expectedTaskCount: number) {
+  assert.equal(session?.mode, "real_provider");
+  assert.equal(session?.status, "needs_approval");
+  assert.equal(session?.agentName, "Provider-Backed Swarm + Local Run");
+  assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+  assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+  assert.equal(session?.tasks.length, expectedTaskCount);
+  assert.equal(session?.patchProposals.length, 1);
+  assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+  assert.equal(session?.commandRequests.length, 1);
+  assert.equal(session?.commandRequests[0]?.status, "requested");
+}
 
 function readyIntentContract(runId: string, request: string, definitionOfDone: string[]): IntentContract {
   const now = new Date().toISOString();
@@ -55,30 +76,71 @@ function readyIntentContract(runId: string, request: string, definitionOfDone: s
   };
 }
 
-test("auto mode keeps small tasks in a single agent", async () => {
+test("auto mode keeps small provider-backed tasks in simple mode", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-auto-simple-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-auto-simple-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 
-  let app: Awaited<ReturnType<typeof buildServer>>["app"] | undefined;
   try {
-    const server = await buildServer({ ...loadConfig(), storageDir });
-    app = server.app;
-    const created = await server.runtime.createSession({
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       executionMode: "auto_mode",
       userPrompt: "fix the button alignment in css"
     });
-    await server.runtime.runTurn(created.sessionId, "fix the button alignment in css");
-    const session = server.runtime.getSession(created.sessionId);
+    const turn = await runtime.runTurn(created.sessionId, "fix the button alignment in css");
+    const session = runtime.getSession(created.sessionId);
 
+    assert.equal(turn.status, "needs_approval");
     assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(session?.mode, "real_provider");
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
     assert.equal(session?.tasks.length, 1);
-    assert.equal(session?.tasks[0]?.agentRole, "Implementation Worker");
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app?.close();
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("provider-authored simple route for file creation is not rewritten to orchestrated mode", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-provider-simple-file-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-provider-simple-file-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+
+  try {
+    const provider = new ProviderSimpleRouteNewFileProvider();
+    const sessionManager = new SessionManager(storageDir, new EventBus());
+    await sessionManager.load();
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => provider
+    });
+    const prompt = "make a single html file";
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "simple_mode",
+      accessProfile: "full_access",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.notEqual(session?.agentName, "Provider-Backed Swarm");
+    assert.notEqual(session?.agentName, "Provider-Backed Swarm + Local Run");
+    assert.equal(session?.tasks.length, 1);
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+  } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -157,10 +219,12 @@ test("real-provider architecture questions use provider-backed read-only swarm i
   assert.equal(session?.providerTelemetry?.terminalFailure, undefined);
   assert.equal(provider.calls.length > 1, true);
   const answer = session?.messages.at(-1)?.content ?? "";
-  assert.match(answer, /\*\*Answer\*\*/i);
-  assert.doesNotMatch(answer, /Provider-backed swarm completed successfully/i);
+  assert.match(answer, /# Internal Swarm Autopilot Report/i);
+  assert.match(answer, /## User Goal/i);
+  assert.match(answer, /- Terminal status: succeeded/i);
+  assert.doesNotMatch(answer, /\*\*Answer\*\*/i);
   assert.doesNotMatch(answer, /\*\*Runtime truth:\*\*/i);
-  assert.doesNotMatch(answer, /Answer from provider worker evidence|Internal Swarm Autopilot Report/i);
+  assert.doesNotMatch(answer, /Answer from provider worker evidence/i);
   assert.doesNotMatch(answer, /stopped before starting|deterministic\/mock-worker based/i);
 
   await rm(workspace, { recursive: true, force: true });
@@ -207,10 +271,12 @@ test("auto real-provider Arabic orchestration questions route to provider-backed
   assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 1, true);
   assert.equal((session?.orchestration?.workerOutputs.length ?? 0) > 1, true);
   assert.equal((session?.orchestration?.agentRuns.length ?? 0) > 1, true);
-  assert.match(answer, /الخلاصة|الإجابة|الشرح/);
-  assert.doesNotMatch(answer, /Provider-backed swarm completed successfully/i);
+  assert.match(answer, /# Internal Swarm Autopilot Report/i);
+  assert.match(answer, /direct dispatch/i);
+  assert.match(answer, /human review/i);
+  assert.match(answer, /- Terminal status: succeeded/i);
   assert.doesNotMatch(answer, /Runtime truth/i);
-  assert.doesNotMatch(answer, /Answer from provider worker evidence|Internal Swarm Autopilot Report/i);
+  assert.doesNotMatch(answer, /Answer from provider worker evidence/i);
   assert.doesNotMatch(answer, /Local Run|provider_validation_notice|local synthesis was not used|human_review_loop/i);
 
   await rm(workspace, { recursive: true, force: true });
@@ -255,7 +321,7 @@ test("orchestrated build handoff continues through local run when provider swarm
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("provider-backed swarm synthesizes artifact inventory into a deduped evidence table", async () => {
+test("provider-backed swarm records artifact evidence without local inventory synthesis", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-provider-swarm-artifacts-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-provider-swarm-artifacts-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
@@ -297,16 +363,14 @@ test("provider-backed swarm synthesizes artifact inventory into a deduped eviden
 
   assert.equal(turn.status, "completed");
   assert.equal(session?.agentName, "Provider-Backed Swarm");
-  assert.match(answer, /\| Category \| File \| Produced artifact\/state \| Evidence \| Notes \|/);
-  assert.match(answer, /Model\/state/);
-  assert.match(answer, /Data\/state/);
-  assert.match(answer, /Runtime log/);
-  assert.match(answer, /models\/customer_segments\.joblib/);
-  assert.match(answer, /data\/customers\.csv/);
-  assert.match(answer, /data\/action_log\.csv/);
-  assert.doesNotMatch(answer, /\|[^|\n]*logs\//i);
-  assert.doesNotMatch(answer, /Answer from provider worker evidence|Internal Swarm Autopilot Report/i);
-  assert.equal((answer.match(/backend\/services\/action_executor\.py/g) ?? []).length, 1);
+  assert.match(answer, /# Internal Swarm Autopilot Report/i);
+  assert.doesNotMatch(answer, /\| Category \| File \| Produced artifact\/state \| Evidence \| Notes \|/);
+  assert.doesNotMatch(answer, /Answer from provider worker evidence/i);
+  const workerEvidence = JSON.stringify(session?.orchestration?.workerOutputs ?? []);
+  assert.match(workerEvidence, /models\/customer_segments\.joblib/);
+  assert.match(workerEvidence, /data\/customers\.csv/);
+  assert.match(workerEvidence, /data\/action_log\.csv/);
+  assert.match(workerEvidence, /backend\/services\/action_executor\.py/);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -338,18 +402,20 @@ test("provider-backed swarm schema failures do not surface as completed answers"
   const session = runtime.getSession(created.sessionId);
   const content = session?.messages.at(-1)?.content ?? "";
 
-  assert.equal(turn.status, "failed");
-  assert.equal(session?.status, "failed");
-  assert.match(content, /\*\*Answer\*\*/i);
+  assert.equal(turn.status, "failed_provider");
+  assert.equal(session?.status, "failed_provider");
+  assert.match(content, /real model provider was required/i);
+  assert.match(content, /provider gate failed/i);
   assert.doesNotMatch(content, /Provider-backed swarm failed before producing an accepted answer/i);
   assert.doesNotMatch(content, /Provider-backed swarm completed/i);
+  assert.doesNotMatch(content, /\*\*Answer\*\*/i);
   assert.doesNotMatch(content, /Provider output schema failed|Runtime truth|logical agents|provider requests|invalid structured outputs/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("non-completed Arabic provider-backed swarm synthesizes a clean Arabic answer without debug metadata", async () => {
+test("non-completed Arabic provider-backed swarm records run report without local Arabic answer synthesis", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-provider-swarm-ar-blocked-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-provider-swarm-ar-blocked-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "backend", "services"), { recursive: true });
@@ -383,129 +449,138 @@ test("non-completed Arabic provider-backed swarm synthesizes a clean Arabic answ
   const session = runtime.getSession(created.sessionId);
   const answer = session?.messages.at(-1)?.content ?? "";
 
-  assert.equal(turn.status === "blocked" || turn.status === "failed", true);
-  assert.equal(session?.status === "blocked" || session?.status === "failed", true);
+  assert.notEqual(turn.status, "completed");
+  assert.notEqual(session?.status, "completed");
   assert.equal(session?.responseLanguage, "ar");
-  assert.match(answer, /الخلاصة/);
-  assert.match(answer, /منطق القرار خطوة بخطوة/);
+  assert.match(answer, /# Internal Swarm Autopilot Report/i);
   assert.match(answer, /Re-cluster/);
-  assert.match(answer, /drift detection|FCM membership|policy rules/i);
-  assert.doesNotMatch(answer, /Provider-backed swarm|Runtime truth|logical agents|provider requests|invalid structured outputs|Internal Swarm Autopilot Report|Provider output schema failed/i);
-  assert.equal((answer.match(/[\u0600-\u06ff]/g) ?? []).length > 40, true);
+  assert.match(answer, /- Terminal status: blocked|- Terminal status: failed/i);
+  assert.doesNotMatch(answer, /Runtime truth|provider requests|invalid structured outputs|Provider output schema failed/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("explicit one-agent request still uses one worker plus mandatory gates", async () => {
+test("explicit one-agent request uses provider prelude without demo task fabrication", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-one-agent-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-one-agent-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    executionMode: "auto_mode",
-    accessProfile: "full_access",
-    userPrompt: "use 1 agent to make a html css js 3d snake game with threejs"
-  });
-  await runtime.runTurn(created.sessionId, "use 1 agent to make a html css js 3d snake game with threejs");
-  const session = runtime.getSession(created.sessionId);
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const prompt = "use 1 agent to make a html css js 3d snake game with threejs";
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "auto_mode",
+      accessProfile: "full_access",
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
 
-  assert.ok((session?.tasks.length ?? 0) >= 1);
-  assert.equal(session?.status, "failed");
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+    assertProviderGatedProposal(session, 1);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
-test("orchestrated planning uses cleaned conversation request for task graph", async () => {
+test("orchestrated planning uses provider prelude after cleaned conversation request", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-orch-clean-preamble-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-orch-clean-preamble-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   const prompt = "هاي use 3 agents to make a html css js 3d snake game with threejs";
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     executionMode: "orchestrated_mode",
     accessProfile: "full_access",
     thinkFirst: true,
     userPrompt: prompt
   });
-  await runtime.runTurn(created.sessionId, prompt);
+  const turn = await runtime.runTurn(created.sessionId, prompt);
   const session = runtime.getSession(created.sessionId);
-  const taskText = session?.tasks.map((task) => `${task.title} ${task.agentRole}`).join("\n") ?? "";
   const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
-  assert.equal(session?.status, "needs_approval");
+  assert.equal(turn.status, "needs_approval");
   assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
-  assert.ok((session?.tasks.length ?? 0) > 0);
-  assert.doesNotMatch(taskText, /هاي/);
+  assertProviderGatedProposal(session, 3);
   assert.doesNotMatch(assistantMessage, /هاي use 3 agents/);
   assert.doesNotMatch(assistantMessage, /هاي/);
 
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("explicit three-agent single-file pygame request requires plan confirmation instead of failing", async () => {
+test("explicit three-agent single-file pygame request stays provider-gated", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-three-agent-pygame-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-three-agent-pygame-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   const prompt = "use 3 agents to make a one python code for a 3d snake game with py game";
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     executionMode: "auto_mode",
     accessProfile: "full_access",
     userPrompt: prompt
   });
-  await runtime.runTurn(created.sessionId, prompt);
+  const turn = await runtime.runTurn(created.sessionId, prompt);
   const session = runtime.getSession(created.sessionId);
 
-  assert.equal(session?.status, "needs_approval");
+  assert.equal(turn.status, "needs_approval");
+  assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+  assert.equal(session?.mode, "real_provider");
+  assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+  assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+  assert.equal(session?.tasks.length, 3);
+  assert.equal(session?.patchProposals.length, 0);
+  assert.equal(session?.commandRequests.length, 0);
   assert.equal(session?.nextAction?.kind, "confirm_plan");
-  assert.match(session?.nextAction?.message ?? "", /Python file/i);
-  assert.notEqual(session?.status, "failed");
 
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("think first stops after planning and waits for confirmation", async () => {
+test("think first stays provider-gated without local plan confirmation fallback", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-think-first-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-think-first-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
 
-  let app: Awaited<ReturnType<typeof buildServer>>["app"] | undefined;
   try {
-    const server = await buildServer({ ...loadConfig(), storageDir });
-    app = server.app;
+    const runtime = await createScriptedRuntime(storageDir);
     const prompt = "add a settings page in react";
-    const created = await server.runtime.createSession({
+    const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       executionMode: "auto_mode",
       thinkFirst: true,
       userPrompt: prompt
     });
-    await server.runtime.runTurn(created.sessionId, prompt);
-    const session = server.runtime.getSession(created.sessionId);
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.status, "needs_approval");
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(session?.mode, "real_provider");
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.tasks.length, 1);
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests.length, 0);
     assert.equal(session?.nextAction?.kind, "confirm_plan");
-    assert.ok((session?.tasks.length ?? 0) > 0);
   } finally {
-    await app?.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -658,6 +733,67 @@ class SwarmHandoffBuildProvider implements LlmProvider {
     this.calls.push(input);
     return JSON.stringify(withTestIntentAlignment(validSwarmOutput("swarm_scout_output"), input));
   }
+}
+
+class ProviderSimpleRouteNewFileProvider implements LlmProvider {
+  private readonly delegate = new ScriptedProvider();
+  calls: LlmRequest[] = [];
+
+  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    this.calls.push(input);
+    const schemaName = autoTestSchemaName(schema);
+    if (schemaName === "initial-reasoning-decision") {
+      const request = extractAutoTestOriginalRequest(input);
+      return {
+        understanding: simpleFileTurnUnderstanding(request),
+        step: {
+          id: "provider_simple_file_step",
+          kind: "final",
+          rationale: "Provider selected the bounded simple route for this single-file request.",
+          toolRequests: [],
+          missingFacts: [],
+          successCriteria: ["Continue through simple-mode patch proposal gates."]
+        }
+      } as T;
+    }
+    if (schemaName === "turn-understanding") {
+      return simpleFileTurnUnderstanding(extractAutoTestOriginalRequest(input)) as T;
+    }
+    if (schemaName === "conversation-intent-decision") {
+      const request = extractAutoTestOriginalRequest(input);
+      return {
+        kind: "run_request",
+        language: "english",
+        needsWorkspace: true,
+        confidence: "high",
+        rationale: "Provider selected a bounded simple route for a single-file request.",
+        workspaceMessage: request
+      } as T;
+    }
+    return this.delegate.generateStructured<T>(input, schema);
+  }
+
+  async generateText(input: LlmRequest): Promise<string> {
+    this.calls.push(input);
+    return this.delegate.generateText(input);
+  }
+}
+
+function simpleFileTurnUnderstanding(request: string) {
+  return {
+    originalRequest: request,
+    cleanedRequest: request,
+    language: "english",
+    intentKind: "run_request",
+    route: "simple_run",
+    needsWorkspace: true,
+    goal: "Create one reviewable single-file artifact through simple-mode gates.",
+    ambiguities: [],
+    requiredEvidence: ["workspace context"],
+    risk: "medium",
+    confidence: "high",
+    rationale: "Provider selected a bounded simple route for a single-file request."
+  };
 }
 
 class FakeSwarmProvider implements LlmProvider {

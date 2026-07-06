@@ -4,10 +4,22 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
+import { EventBus } from "../runtime/EventBus.js";
 import { buildProjectIntake, classifyRunIntent } from "../runtime/ProjectIntake.js";
+import { SessionManager } from "../runtime/SessionManager.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("empty workspace intake stays empty or unknown without fake certainty", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-intake-empty-${Date.now()}`);
@@ -162,7 +174,7 @@ test("run intent contract distinguishes run once and run to green", () => {
   assert.equal(classifyRunIntent("implement the auth module"), "implement_module");
 });
 
-test("runtime records project intake, context pack, and intake decisions before patch planning", async () => {
+test("runtime records provider-authored decision and intent artifacts before orchestration", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-runtime-intake-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-runtime-intake-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -172,24 +184,32 @@ test("runtime records project intake, context pack, and intake decisions before 
   await writeFile(path.join(workspace, "src", "main.ts"), "export const main = true;\n", "utf8");
   await writeFile(path.join(workspace, "tests", "main.test.ts"), "export {};\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
   try {
+    const sessionManager = new SessionManager(storageDir, new EventBus());
+    await sessionManager.load();
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => new ScriptedProvider()
+    });
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "orchestrated_mode",
       userPrompt: "add a small README note"
     });
-    await runtime.runTurn(created.sessionId, "add a small README note");
+    const turn = await runtime.runTurn(created.sessionId, "add a small README note");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(session?.projectIntake?.projectKind, "existing_project");
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "project_intake"));
-    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "context_pack"));
-    assert.ok((session?.decisionLedger ?? []).some((record) => /Treat this workspace as existing work/i.test(record.decision)));
-    assert.equal(session?.runIntent, "implement_module");
-    assert.notEqual(session?.plan?.summary.includes("Create a new local project"), true);
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.mode, "real_provider");
+    assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+    assert.equal(session?.providerTelemetry?.terminalFailure, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "intent_contract"));
+    assert.equal(session?.patchProposals.length, 1);
+    assert.equal(session?.patchProposals[0]?.requiresApproval, true);
+    assert.equal(session?.commandRequests.length, 1);
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }

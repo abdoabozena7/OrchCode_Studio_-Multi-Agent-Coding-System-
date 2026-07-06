@@ -12,7 +12,6 @@ import {
   FactoryMetadataStore,
   ORCHESTRATION_SCHEMA_VERSION,
   OrchestrationArtifactStore,
-  TaskGraphManager,
   createApprovalConstraint,
   createApprovalScope,
   createExecutionPromotionRequest,
@@ -26,6 +25,7 @@ import {
   type Run,
   type Task
 } from "../orchestration/index.js";
+import { TaskGraphManager } from "../orchestration/TaskGraphManager.js";
 
 test("execution approval models create requests approval records queue items and constraints", () => {
   const scope = createApprovalScope({ allowed_files: ["src/runtime.ts"], forbidden_files: [".env"], required_locks: ["module:src"] });

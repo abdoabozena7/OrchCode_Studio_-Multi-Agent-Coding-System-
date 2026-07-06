@@ -105,7 +105,7 @@ export function buildAgentRuntimeSwarmState(
     changedFiles: [],
     artifactRefs: session.artifacts.map((artifact) => artifact.id),
     workItemRefs: session.tasks.map((task) => task.id),
-    evidenceRefs: session.decisionLedger.flatMap((record) => record.evidenceRefs.map((ref) => ref.id ?? "")).filter(Boolean),
+    evidenceRefs: session.decisionLedger.flatMap((record) => evidenceRefStrings(record.evidenceRefs)).filter(Boolean),
     riskRefs: [],
     updatedAt: session.updatedAt
   });
@@ -130,8 +130,8 @@ export function buildAgentRuntimeSwarmState(
       changedFiles: agent.changedFiles ?? [],
       artifactRefs: collectAgentArtifactRefs(agent.artifactJson),
       workItemRefs,
-      evidenceRefs: uniqueStrings((agent.evidenceRefs ?? []).map((ref) => ref.id ?? `${ref.type}:${ref.reason ?? ref.note ?? ""}`)),
-      riskRefs: uniqueStrings((agent.riskRefs ?? []).map((risk) => risk.id ?? risk.reason)),
+      evidenceRefs: uniqueStrings(evidenceRefStrings(agent.evidenceRefs)),
+      riskRefs: uniqueStrings(riskRefStrings(agent.riskRefs)),
       metrics: {
         tokenCount: agent.tokenCount,
         costUsd: agent.costUsd
@@ -178,6 +178,48 @@ export function buildAgentRuntimeSwarmState(
       fallbackRole: status.role,
       updatedAt: status.updatedAt
     });
+  }
+
+  // Recursive Swarm (recursive_tree mode) nodes
+  if (session.recursiveSwarmRunState) {
+    const rswarm = session.recursiveSwarmRunState;
+    const swarmGroupId = ensureGroup(
+      "recursive-swarm",
+      "Recursive swarm",
+      "Swarm agent group",
+      rswarm.goalEnvelope.theme
+    );
+    if (rswarm.tree.nodes && rswarm.tree.nodes.length > 0) {
+      for (const recursiveNode of rswarm.tree.nodes) {
+        const parentId = recursiveNode.id === rswarm.tree.rootId
+          ? swarmGroupId
+          : recursiveNode.parentId ?? swarmGroupId;
+        addNode({
+          ...recursiveNode,
+          parentId
+        });
+      }
+    } else {
+      addNode({
+        id: `recursive-swarm:${rswarm.runId}:root`,
+        parentId: swarmGroupId,
+        kind: "coordinator",
+        name: "Root Agent",
+        role: "Swarm Root",
+        status: mapRecursiveStatus(rswarm.tree.status),
+        objective: rswarm.goalEnvelope.originalGoal,
+        currentAction: rswarm.tree.status === "running" ? "Delegating tasks" : `Run ${rswarm.tree.status}`,
+        summary: `Goal: ${rswarm.goalEnvelope.originalGoal?.slice(0, 200)}`,
+        ownedPaths: [],
+        targetFiles: [],
+        changedFiles: [],
+        artifactRefs: [],
+        workItemRefs: [rswarm.runId],
+        evidenceRefs: [],
+        riskRefs: [],
+        updatedAt: rswarm.updatedAt
+      });
+    }
   }
 
   const recursiveGroupId = ensureGroup(
@@ -510,9 +552,11 @@ function inferSwarmSource(session: AgentRuntimeSession, nodes: AgentRuntimeSwarm
   const realNodes = nodes.filter(isLogicalAgentNode);
   const hasProviderBackedSwarm = realNodes.some((node) => node.artifactRefs.some((ref) => /swarmRunId|swarm_run|swarm/i.test(ref)) || node.id.startsWith("agent_"));
   const hasRecursive = realNodes.some((node) => node.id.startsWith("recursive-"));
+  const hasRecursiveSwarm = Boolean(session.recursiveSwarmRunState);
   const hasOrchestration = Boolean(session.orchestration?.agentRuns.length || session.orchestration?.workOrders.length);
-  const count = [hasProviderBackedSwarm, hasRecursive, hasOrchestration].filter(Boolean).length;
+  const count = [hasProviderBackedSwarm, hasRecursive, hasRecursiveSwarm, hasOrchestration].filter(Boolean).length;
   if (count > 1) return "mixed";
+  if (hasRecursiveSwarm) return "recursive_factory";
   if (hasProviderBackedSwarm) return "provider_backed_swarm";
   if (hasRecursive) return "recursive_factory";
   if (hasOrchestration) return "orchestration";
@@ -545,6 +589,36 @@ function collectAgentArtifactRefs(value: unknown): string[] {
     extractStringFromUnknown(value, "workerMode")
   ];
   return uniqueStrings(refs);
+}
+
+function evidenceRefStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value.map((entry) => {
+    if (typeof entry === "string") return entry;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const record = entry as Record<string, unknown>;
+    const id = stringField(record, "id");
+    if (id) return id;
+    const type = stringField(record, "type");
+    const detail = stringField(record, "reason") ?? stringField(record, "note");
+    if (type && detail) return `${type}:${detail}`;
+    return type ?? detail;
+  }));
+}
+
+function riskRefStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value.map((entry) => {
+    if (typeof entry === "string") return entry;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const record = entry as Record<string, unknown>;
+    return stringField(record, "id") ?? stringField(record, "reason");
+  }));
+}
+
+function stringField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" && value ? value : undefined;
 }
 
 function extractCurrentWorkItemId(value: unknown) {

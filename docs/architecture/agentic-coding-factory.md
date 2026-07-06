@@ -15,11 +15,12 @@ Hivo is an orchestration-first coding system. It keeps small worker agents relia
 
 2. Orchestrator and task graph
    - `CoreOrchestrator` turns a request into Scout, Planner, Executor, and Reporter tasks.
-   - `TaskGraphManager` enforces status transitions, dependencies, and persisted task state.
+   - New orchestration paths use the canonical LangGraph spine: `CanonicalTaskGraphBuilder` validates task graphs, `CanonicalExecutionAdapter` runs scheduler-shaped adapters, and `CoreTaskGraphExecutionService` is the only legacy `TaskGraphManager` execution bridge.
+   - `TaskGraphManager` remains a compatibility state container for older CoreOrchestrator tasks; it is not a new scheduler extension point.
    - Context packs include only relevant snippets, constraints, allowed edit scope, validation requirements, prior decisions, and warnings.
    - When an active `ProjectGoalSpec` exists, every context pack includes it as `project_goal_spec` context plus the constraint: do not propose or accept changes that contradict the active spec without human approval.
    - When a task or read-only worker is assigned to an `AgentTeam`, context packs carry team scope metadata, inherited parent constraints, memory-scope refs, planning evidence links, durable lock context, and explicit fallback warnings without changing task execution order.
-   - Medium and multi-plan runs can produce read-only `TeamSubPlan` artifacts after AgentTeam proposal. These scoped sub-plans summarize team assumptions, task drafts, risks, dependencies, evidence, memory refs, lock context, and validation strategy, then aggregate them into a recursive planning summary without creating executor tasks or changing scheduling.
+   - Medium and multi-plan runs can produce read-only `TeamSubPlan` artifacts after AgentTeam proposal only when the configured provider authors the sub-plan through `ReasoningKernel`. Runtime team sub-planning modes are limited to `off`, `provider_read_only`, and `auto`. If provider-backed team sub-planning is unavailable, the planner records a blocked metadata artifact instead of inventing deterministic task drafts. Accepted scoped sub-plans summarize team assumptions, task drafts, risks, dependencies, evidence, memory refs, lock context, and validation strategy, then aggregate them into a recursive planning summary without creating executor tasks or changing scheduling.
    - Team sub-plan task drafts can pass through a task adoption gate that records `AdoptedTaskProposal` metadata and readiness decisions. These proposals can be represented in a separate proposed task graph, but proposed nodes are explicitly non-executable and do not schedule work or grant write authority.
 
 3. Roles
@@ -160,7 +161,7 @@ Campaign artifacts:
 - Do not treat blocked validation as invisible success.
 - Do not silently rely on stale memory.
 - Do not assume campaign work runs in the background.
-- Do not treat team context, team sub-plans, or adopted task proposals as recursive execution authority; teams currently scope memory, context, read-only planning, and metadata-only future task proposals.
+- Do not treat team context, team sub-plans, or adopted task proposals as recursive execution authority; teams currently scope memory, context, provider-authored read-only planning, and metadata-only future task proposals.
 - Keep each run auditable enough that a human can inspect what happened and why.
 
 ## Current Limitations

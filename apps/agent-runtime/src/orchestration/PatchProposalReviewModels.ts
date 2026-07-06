@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { PatchProposalReviewMode } from "./OrchestrationConfig.js";
 
+export type PatchProposalReviewArtifactMode = PatchProposalReviewMode;
+
 export type PatchProposalReviewStatus =
   | "not_required"
   | "pending"
@@ -77,8 +79,6 @@ export type PatchProposalReviewWarning = {
   warning_id: string;
   review_id: string;
   warning_type:
-    | "deterministic_review"
-    | "fake_provider"
     | "prompt_quality_warning"
     | "specialist_review_required"
     | "validation_candidate_only"
@@ -128,12 +128,6 @@ export type PatchProposalReviewProviderResult = {
   metadata_json?: Record<string, unknown>;
 };
 
-export type PatchProposalReviewProvider = {
-  provider_name: string;
-  reviewer_mode: PatchProposalReviewMode;
-  reviewPatchProposal(input: PatchProposalReviewProviderInput): Promise<PatchProposalReviewProviderResult>;
-};
-
 export type PatchProposalReview = {
   review_id: string;
   run_id: string;
@@ -141,7 +135,7 @@ export type PatchProposalReview = {
   preparation_plan_id: string;
   proposed_node_id: string;
   reviewer_role: string;
-  reviewer_mode: PatchProposalReviewMode;
+  reviewer_mode: PatchProposalReviewArtifactMode;
   provider_name?: string;
   model_name?: string;
   prompt_id?: string;

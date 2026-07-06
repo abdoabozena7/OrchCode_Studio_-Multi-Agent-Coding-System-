@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -176,7 +176,7 @@ test("Agentic claim validation rejects fake path citations and preserves grounde
   }
 });
 
-test("AgenticTaskKernel falls back to evidence-grounded Arabic output without mojibake", async () => {
+test("AgenticTaskKernel does not synthesize Arabic answer text when provider draft fails", async () => {
   const workspace = await createWorkspace("agentic-arabic");
   try {
     await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -195,9 +195,9 @@ test("AgenticTaskKernel falls back to evidence-grounded Arabic output without mo
 
     assert.equal(result.intent.language, "arabic");
     assert.ok(result.evidenceGraph.accepted.length > 0);
-    assert.doesNotMatch(result.finalOutput.markdown, /\uFFFD|ï؟½|أک|أ™|ط§|ظپ|ط¨ط/);
-    assert.match(result.finalOutput.markdown, /\u0627\u0644\u062e\u0644\u0627\u0635\u0629/);
+    assert.equal(result.finalOutput.markdown, "");
     assert.notEqual(result.trace.providerCalls[0]?.status, "success");
+    assert.equal(result.trace.fallbackReason, "provider_failed");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

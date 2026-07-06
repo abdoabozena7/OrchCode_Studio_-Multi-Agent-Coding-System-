@@ -121,31 +121,28 @@ export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgen
   const running = swarm?.activeAgentCount ?? 0;
   const blocked = (swarm?.statusCounts.blocked ?? 0) + (swarm?.statusCounts.failed ?? 0);
 
-  if (!swarm || totalAgents <= 0) {
-    if (!swarm) return null;
-    return (
-      <MiniSwarmChip onClick={() => setOpen(true)} />
-    );
-  }
-
   return (
     <>
-      <button
-        className={`swarm-dock-chip ${open ? "active-toggle" : ""}`}
-        onClick={() => setOpen(true)}
-        type="button"
-        title="Open swarm dock"
-      >
-        <span className="swarm-chip-mark">
-          <Workflow size={15} />
-        </span>
-        <span className="swarm-chip-copy">
-          <strong>{totalAgents} agents{swarm.source === "recursive_factory" ? " (recursive)" : ""}</strong>
-          <small>{running} active{blocked ? ` | ${blocked} needs review` : ""}</small>
-        </span>
-        <ChevronRight size={14} />
-      </button>
-      {open ? (
+      {!swarm ? null : totalAgents <= 0 ? (
+        <MiniSwarmChip onClick={() => setOpen(true)} />
+      ) : (
+        <button
+          className={`swarm-dock-chip ${open ? "active-toggle" : ""}`}
+          onClick={() => setOpen(true)}
+          type="button"
+          title="Open swarm dock"
+        >
+          <span className="swarm-chip-mark">
+            <Workflow size={15} />
+          </span>
+          <span className="swarm-chip-copy">
+            <strong>{totalAgents} agents{swarm.source === "recursive_factory" ? " (recursive)" : ""}</strong>
+            <small>{running} active{blocked ? ` | ${blocked} needs review` : ""}</small>
+          </span>
+          <ChevronRight size={14} />
+        </button>
+      )}
+      {open && swarm ? (
         <SwarmDockModal
           session={session}
           swarm={swarm}

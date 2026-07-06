@@ -27,12 +27,9 @@ import type { SwarmWorker } from "./SwarmScheduler.js";
 import { SWARM_SCHEMA_VERSION, type WorkItemResult } from "./SwarmModels.js";
 import { createSwarmIntentFrame, IntentHandoffGate } from "./IntentHandoffGate.js";
 
-export type SwarmProviderWorkerMode = "provider_read_only";
-
 export type ProviderBackedSwarmWorkerOptions = {
   workspacePath: string;
   memoryDir?: string;
-  mode?: SwarmProviderWorkerMode;
   providerFactory?: (role: string) => LlmProvider | undefined;
   providerName?: string;
   modelName?: string;
@@ -40,7 +37,7 @@ export type ProviderBackedSwarmWorkerOptions = {
 };
 
 export class ProviderBackedSwarmWorker {
-  private readonly mode: SwarmProviderWorkerMode;
+  private readonly mode: "provider_read_only";
   private readonly artifactStore: SwarmArtifactStore;
   private readonly traceWriter: FactoryTraceWriter;
   private readonly metadata: FactoryMetadataAdapter;

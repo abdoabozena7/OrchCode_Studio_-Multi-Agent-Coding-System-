@@ -77,7 +77,6 @@ export const FACTORY_TRACE_EVENT_TYPES = [
   "prompt_writer_adopted",
   "prompt_writer_rejected",
   "prompt_writer_shadow_recorded",
-  "prompt_writer_fallback_used",
   "agent_invocation_started",
   "agent_invocation_completed",
   "agent_invocation_failed",

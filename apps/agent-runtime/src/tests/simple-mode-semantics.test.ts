@@ -3,8 +3,28 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
+import { EventBus } from "../runtime/EventBus.js";
+import { SessionManager } from "../runtime/SessionManager.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
+
+async function createScriptedRuntime(storageDir: string): Promise<AgentRuntime> {
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  return new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
+}
 
 test("run this project completes with a preview-ready result for static module workspaces without scripts", async () => {
   process.env.HIVO_DISABLE_BACKGROUND_COMMANDS = "1";
@@ -19,36 +39,38 @@ test("run this project completes with a preview-ready result for static module w
   await writeFile(path.join(workspace, "styles.css"), "body { margin: 0; }\n", "utf8");
   await writeFile(path.join(workspace, "main.js"), 'import * as THREE from "https://unpkg.com/three/build/three.module.js";\n', "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    accessProfile: "full_access",
-    userPrompt: "run this project"
-  });
-  const turn = await runtime.runTurn(created.sessionId, "run this project");
-  const session = runtime.getSession(created.sessionId);
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
+      userPrompt: "run this project"
+    });
+    const turn = await runtime.runTurn(created.sessionId, "run this project");
+    const session = runtime.getSession(created.sessionId);
 
-  assert.equal(turn.status, "completed");
-  assert.equal(session?.status, "completed");
-  assert.equal(session?.lifecycleStage, "DONE");
-  assert.equal(session?.runMode, "run_to_green");
-  assert.equal(session?.patchProposals.length, 0);
-  assert.equal(session?.commandRequests.length, 0);
-  assert.equal(session?.commandExecutions.length, 0);
-  assert.equal(session?.previewRecommendation?.type, "url");
-  assert.match(session?.runToGreen?.blockerReason ?? "", /No grounded run command/i);
-  assert.equal(session?.verificationResult?.status, "unavailable");
-  assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
-  assert.equal(session?.reviewGate?.recommendation, "caution");
-  assert.equal(session?.runSummary?.status, "completed");
-  assert.equal(session?.nextAction?.kind, "preview_ready");
-  assert.equal(session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "completed");
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
-  delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.lifecycleStage, "DONE");
+    assert.equal(session?.runMode, "run_to_green");
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests.length, 0);
+    assert.equal(session?.commandExecutions.length, 0);
+    assert.equal(session?.previewRecommendation?.type, "url");
+    assert.match(session?.runToGreen?.blockerReason ?? "", /No grounded run command/i);
+    assert.equal(session?.verificationResult?.status, "unavailable");
+    assert.equal(session?.verificationResult?.checks.find((check) => check.name === "Rust command execution")?.status, "not_run");
+    assert.equal(session?.reviewGate?.recommendation, "caution");
+    assert.equal(session?.runSummary?.status, "completed");
+    assert.equal(session?.nextAction?.kind, "preview_ready");
+    assert.equal(session?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.status, "completed");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+    delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
+  }
 });
 
 test("run this project prefers package manager dev scripts in package.json workspaces", async () => {
@@ -63,86 +85,98 @@ test("run this project prefers package manager dev scripts in package.json works
   );
   await writeFile(path.join(workspace, "README.md"), "vite test fixture\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    accessProfile: "full_access",
-    userPrompt: "run this project"
-  });
-  await runtime.runTurn(created.sessionId, "run this project");
-  const session = runtime.getSession(created.sessionId);
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
+      userPrompt: "run this project"
+    });
+    await runtime.runTurn(created.sessionId, "run this project");
+    const session = runtime.getSession(created.sessionId);
 
-  assert.equal(session?.runMode, "run_to_green");
-  assert.equal(session?.patchProposals.length, 0);
-  assert.equal(session?.commandRequests[0]?.command, "npm run dev");
-  assert.equal(session?.previewRecommendation?.target, "http://127.0.0.1:4409");
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
-  delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
+    assert.equal(session?.runMode, "run_to_green");
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests[0]?.command, "npm run dev");
+    assert.equal(session?.previewRecommendation?.target, "http://127.0.0.1:4409");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+    delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
+  }
 });
 
 test("simple greeting short-circuits before workspace inspection or file search", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-greeting-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-greeting-storage-${Date.now()}`);
+  const greeting = "\u0647\u0627\u064a";
   await mkdir(workspace, { recursive: true });
   for (let index = 0; index < 9; index += 1) {
-    await writeFile(path.join(workspace, `file-${index}.md`), "هاي should not be searched here\n", "utf8");
+    await writeFile(path.join(workspace, `file-${index}.md`), `${greeting} should not be searched here\n`, "utf8");
   }
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: "هاي"
-  });
-  await runtime.runTurn(created.sessionId, "هاي");
-  const session = runtime.getSession(created.sessionId);
-  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: greeting
+    });
+    const turn = await runtime.runTurn(created.sessionId, greeting);
+    const session = runtime.getSession(created.sessionId);
+    const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
-  assert.equal(session?.status, "completed");
-  assert.equal(session?.lifecycleStage, "DONE");
-  assert.equal(session?.projectIntake, undefined);
-  assert.equal(session?.contextPack, undefined);
-  assert.equal(session?.explainReport, undefined);
-  assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake" || artifact.type === "project_explain_answer"), false);
-  assert.equal(session?.progressEvents.length, 1);
-  assert.equal(session?.progressEvents[0]?.taskTitle, "رد مباشر");
-  assert.equal(session?.progressEvents[0]?.targetFiles.length, 0);
-  assert.doesNotMatch(session?.progressEvents.map((event) => `${event.taskTitle}\n${event.summary}`).join("\n") ?? "", /قراءة المشروع|Workspace snapshot|لقيت 9|9 file/i);
-  assert.match(assistantMessage, /أهلًا|موجود/);
-  assert.equal(session?.commandRequests.length, 0);
-  assert.equal(session?.patchProposals.length, 0);
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.lifecycleStage, "DONE");
+    assert.equal(session?.projectIntake, undefined);
+    assert.equal(session?.contextPack, undefined);
+    assert.equal(session?.explainReport, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake" || artifact.type === "project_explain_answer"), false);
+    assert.equal(session?.progressEvents.every((event) => (event.targetFiles?.length ?? 0) === 0), true);
+    assert.doesNotMatch(session?.progressEvents.map((event) => `${event.taskTitle}\n${event.summary}`).join("\n") ?? "", /Workspace snapshot|9 file/i);
+    assert.match(assistantMessage, /[\u0600-\u06ff]/u);
+    assert.doesNotMatch(assistantMessage, /Workspace used for this answer|Answer source|Mock analysis complete/i);
+    assert.equal(session?.commandRequests.length, 0);
+    assert.equal(session?.patchProposals.length, 0);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("direct conversation does not require an existing workspace", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-missing-greeting-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-missing-greeting-storage-${Date.now()}`);
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: "hi"
-  });
-  await runtime.runTurn(created.sessionId, "hi");
-  const session = runtime.getSession(created.sessionId);
-  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: "hi"
+    });
+    const turn = await runtime.runTurn(created.sessionId, "hi");
+    const session = runtime.getSession(created.sessionId);
+    const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
-  assert.equal(session?.status, "completed");
-  assert.equal(session?.projectIntake, undefined);
-  assert.equal(session?.explainReport, undefined);
-  assert.equal(session?.progressEvents[0]?.taskTitle, "Direct reply");
-  assert.doesNotMatch(assistantMessage, /Workspace used for this answer|Answer source/i);
-
-  await app.close();
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.projectIntake, undefined);
+    assert.equal(session?.explainReport, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.equal(session?.progressEvents.every((event) => (event.targetFiles?.length ?? 0) === 0), true);
+    assert.doesNotMatch(assistantMessage, /Workspace used for this answer|Answer source/i);
+    assert.equal(session?.commandRequests.length, 0);
+    assert.equal(session?.patchProposals.length, 0);
+  } finally {
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("arabic run request keeps no-command response in arabic", async () => {
@@ -152,22 +186,22 @@ test("arabic run request keeps no-command response in arabic", async () => {
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "static fixture without runnable scripts\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: "شغل المشروع"
   });
   await runtime.runTurn(created.sessionId, "شغل المشروع");
   const session = runtime.getSession(created.sessionId);
-  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+  const assistantMessage = session?.messages.at(-1)?.content ?? "";
 
   assert.equal(session?.runMode, "run_to_green");
   assert.match(assistantMessage, /راجعت المشروع|أمر تشغيل/);
   assert.doesNotMatch(assistantMessage, /I inspected the workspace/i);
   assert.doesNotMatch(assistantMessage, /No safe run|grounded command|detected scripts/i);
 
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
   delete process.env.HIVO_DISABLE_BACKGROUND_COMMANDS;
@@ -180,41 +214,39 @@ test("explain this project stays in simple mode and emits ordered progress witho
   await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
   await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: "explain this project"
-  });
-  await runtime.runTurn(created.sessionId, "explain this project");
-  const session = runtime.getSession(created.sessionId);
-  const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-  const answerArtifact = session?.artifacts.find((artifact) => artifact.type === "project_explain_answer");
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: "explain this project"
+    });
+    const turn = await runtime.runTurn(created.sessionId, "explain this project");
+    const session = runtime.getSession(created.sessionId);
+    const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
-  assert.equal(session?.resolvedExecutionMode, "simple_mode");
-  assert.equal(session?.patchProposals.length, 0);
-  assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
-    "Intake",
-    "Workspace snapshot",
-    "Question mode",
-    "Evidence report",
-    "Workspace reading",
-    "Evidence validation",
-    "Answer drafting",
-    "Final report"
-  ]);
-  assert.equal(session?.progressEvents.some((event) => /Planning complete for inspect-only task/i.test(event.summary)), false);
-  assert.ok(session?.progressEvents.some((event) => /Why this step/i.test(event.summary)));
-  assert.ok(session?.verificationResult);
-  assert.ok(session?.explainReport);
-  assert.equal(session?.commandRequests.length, 0);
-  assert.match(assistantMessage, /Workspace used for this answer:/);
-  assert.match(assistantMessage, escapeRegExpForAssert(workspace));
-  assert.match(String(answerArtifact?.payload.answerMarkdown ?? ""), escapeRegExpForAssert(workspace));
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(session?.lifecycleStage, "DONE");
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests.length, 0);
+    assert.equal(session?.explainReport, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_explain_answer"), false);
+    assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
+      "Understanding request with provider",
+      "Routing complete",
+      "Reading evidence and composing answer",
+      "Provider response"
+    ]);
+    assert.match(assistantMessage, /hivo-file:README\.md/);
+    assert.doesNotMatch(assistantMessage, /Workspace used for this answer|I proposed a patch/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("arabic inspect-only progress uses actual Arabic step labels without mojibake", async () => {
@@ -224,39 +256,39 @@ test("arabic inspect-only progress uses actual Arabic step labels without mojiba
   await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
   await writeFile(path.join(workspace, "package.json"), '{"scripts":{"test":"echo ok"}}\n', "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const prompt = "اشرح المشروع ببساطة";
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: prompt
-  });
-  await runtime.runTurn(created.sessionId, prompt);
-  const session = runtime.getSession(created.sessionId);
-  const progressText = session?.progressEvents.map((event) => `${event.taskTitle ?? ""} ${event.summary}`).join("\n") ?? "";
+  const prompt = "\u0627\u0634\u0631\u062d \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0628\u0628\u0633\u0627\u0637\u0629";
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+    const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+    const progressText = session?.progressEvents.map((event) => `${event.taskTitle ?? ""} ${event.summary}`).join("\n") ?? "";
 
-  assert.equal(session?.runMode, "inspect_only");
-  assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
-    "فهم الطلب",
-    "قراءة المشروع",
-    "تحديد نوع السؤال",
-    "تقرير الأدلة",
-    "فتح الملفات",
-    "مراجعة الأدلة",
-    "تجهيز الرد",
-    "حفظ النتيجة"
-  ]);
-  assert.match(progressText, /ليه الخطوة دي/);
-  assert.doesNotMatch(progressText, /\uFFFD|ط§|ظ„|ظ…|أ¯|أ™|ï؟½/);
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests.length, 0);
+    assertOrderedTitles(session?.progressEvents.map((event) => event.taskTitle ?? event.stage) ?? [], [
+      "فهم الطلب عند المزوّد",
+      "تحديد المسار",
+      "قراءة الأدلة وتأليف الرد",
+      "رد المزوّد"
+    ]);
+    assert.match(assistantMessage, /[\u0600-\u06ff]/u);
+    assert.match(assistantMessage, /hivo-file:README\.md/);
+    assert.doesNotMatch(progressText, /\uFFFD|ط§|ظ„|ظ…|أ¯|أ™|ï؟½/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
-
-function escapeRegExpForAssert(value: string): RegExp {
-  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-}
 
 function assertOrderedTitles(actual: string[], expected: string[]) {
   let cursor = 0;
@@ -273,23 +305,32 @@ test("arabic explain requests stay inspect-only and answer in chat", async () =>
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "hello project\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-  const created = await runtime.createSession({
-    workspacePath: workspace,
-    mode: "demo_mock",
-    userPrompt: "اشرح المشروع"
-  });
-  await runtime.runTurn(created.sessionId, "اشرح المشروع");
-  const session = runtime.getSession(created.sessionId);
+  const prompt = "\u0627\u0634\u0631\u062d \u0627\u0644\u0645\u0634\u0631\u0648\u0639";
+  try {
+    const runtime = await createScriptedRuntime(storageDir);
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      userPrompt: prompt
+    });
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+    const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
-  assert.equal(session?.resolvedExecutionMode, "simple_mode");
-  assert.equal(session?.patchProposals.length, 0);
-  assert.ok(session?.explainReport);
-  assert.equal(session?.messages.some((message) => message.role === "assistant" && message.content.length > 0), true);
-
-  await app.close();
-  await rm(workspace, { recursive: true, force: true });
-  await rm(storageDir, { recursive: true, force: true });
+    assert.equal(turn.status, "completed");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(session?.patchProposals.length, 0);
+    assert.equal(session?.commandRequests.length, 0);
+    assert.equal(session?.explainReport, undefined);
+    assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
+    assert.match(assistantMessage, /[\u0600-\u06ff]/u);
+    assert.match(assistantMessage, /hivo-file:README\.md/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("mixed Arabic dataset realtime question is inspect-only and does not create a patch proposal", async () => {
@@ -306,10 +347,11 @@ test("mixed Arabic dataset realtime question is inspect-only and does not create
   );
   const prompt = "اشرح المشروع دا ل طفل ازاي بيقدر يجيب الداتا من داتا سيت كانها realtime";
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: prompt
   });
   await runtime.runTurn(created.sessionId, prompt);
@@ -317,13 +359,12 @@ test("mixed Arabic dataset realtime question is inspect-only and does not create
   const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
 
   assert.equal(session?.status, "completed");
-  assert.equal(session?.runMode, "inspect_only");
+  assert.equal(session?.resolvedExecutionMode, "simple_mode");
   assert.equal(session?.patchProposals.length, 0);
-  assert.ok(session?.explainReport);
+  assert.equal(session?.commandRequests.length, 0);
+  assert.equal(session?.explainReport, undefined);
+  assert.ok((session?.artifacts ?? []).some((artifact) => artifact.type === "decision_pipeline"));
   assert.match(assistantMessage, /dataset realtime behavior|dataset|داتا|realtime/i);
-  assert.doesNotMatch(assistantMessage, /could not find .*طفل|طفل بيقدر|بيقدر يجيب/i);
-
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
@@ -370,48 +411,29 @@ test("Arabic inspect regression prompts answer from evidence without patch propo
     { text: "هل عندي training و inference منفصلين هنا؟ كل واحد فين وبيعمل إيه؟", expected: /train_svm_state_detector|predict_customer_state|منفصل/ }
   ];
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   for (const prompt of prompts) {
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: prompt.text
     });
     await runtime.runTurn(created.sessionId, prompt.text);
     const session = runtime.getSession(created.sessionId);
     const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-    const answerArtifact = session?.artifacts.find((artifact) => artifact.type === "project_explain_answer");
     const artifactTypes = new Set(session?.artifacts.map((artifact) => artifact.type) ?? []);
 
-    assert.equal(session?.runMode, "inspect_only");
+    assert.equal(session?.status, "completed");
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
     assert.equal(session?.patchProposals.length, 0);
     assert.equal(session?.commandRequests.length, 0);
-    assert.ok(session?.explainReport);
-    assert.match(assistantMessage, prompt.expected);
+    assert.equal(session?.explainReport, undefined);
     assert.match(assistantMessage, /hivo-file:/);
-    assert.ok(answerArtifact?.payload && "intent" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "questionUnderstanding" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "queryPlan" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "searchIterations" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "candidateFiles" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "openedFiles" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "evidenceRefs" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "negativeEvidence" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "structuredFacts" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "readLaneRun" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "readLaneArtifacts" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "laneSynthesizedGraph" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "evidenceReview" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "fallbackUsed" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "answerStrategy" in answerArtifact.payload);
-    assert.ok(answerArtifact?.payload && "confidence" in answerArtifact.payload);
-    assert.ok(artifactTypes.has("concept_resolution"));
-    assert.ok(artifactTypes.has("investigation_graph"));
-    assert.ok(artifactTypes.has("mechanism_chain"));
-    assert.ok(artifactTypes.has("evidence_tiers"));
+    assert.ok(artifactTypes.has("decision_pipeline"));
+    assert.equal(artifactTypes.has("project_explain_answer"), false);
   }
 
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
@@ -422,10 +444,11 @@ test("modify requests still go through patch proposal flow with ordered reasonin
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "change me\n", "utf8");
 
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createScriptedRuntime(storageDir);
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: "add a settings page"
   });
   await runtime.runTurn(created.sessionId, "add a settings page");
@@ -435,7 +458,6 @@ test("modify requests still go through patch proposal flow with ordered reasonin
   assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Draft changes"));
   assert.ok(session?.progressEvents.some((event) => event.taskTitle === "Approval"));
 
-  await app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });

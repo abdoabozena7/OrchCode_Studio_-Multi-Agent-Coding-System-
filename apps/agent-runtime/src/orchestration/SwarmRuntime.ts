@@ -13,11 +13,12 @@ import { FactoryTraceWriter } from "./FactoryTraceWriter.js";
 import { IntentLedgerService } from "./IntentLedgerService.js";
 import type { IntentReviewResult, IntentRewriteTarget } from "./IntentLedgerModels.js";
 import { ProjectGoalSpecStore } from "./GoalSteward.js";
-import { ProviderBackedSwarmWorker, type SwarmProviderWorkerMode } from "./ProviderBackedSwarmWorker.js";
+import { ProviderBackedSwarmWorker } from "./ProviderBackedSwarmWorker.js";
 import { createSwarmAgentTemplates } from "./SwarmAgentTemplates.js";
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
 import { createConsensusGroup, createInitialSwarmWorkItems } from "./SwarmFanInOut.js";
 import { SwarmScheduler, createAgentInstancesForPlan, type SwarmWorker } from "./SwarmScheduler.js";
+import { runSwarmSchedulerThroughCanonicalGraph } from "./CanonicalSwarmAdapter.js";
 import { SwarmStaffingPlanner } from "./SwarmStaffingPlanner.js";
 import { transitionRun as createRunTransition, type RunTransitionTrigger } from "./RunStateMachine.js";
 import { UserIntentCompiler, type UserIntentCompilationResult } from "./UserIntentCompiler.js";
@@ -40,7 +41,6 @@ export type SwarmRuntimeOptions = {
   mode?: SwarmRunMode;
   explicitAgentLimit?: number;
   worker?: SwarmWorker;
-  workerMode?: SwarmProviderWorkerMode;
   providerFactory?: (role: string) => LlmProvider | undefined;
   providerName?: string;
   modelName?: string;
@@ -63,7 +63,6 @@ export class SwarmAutopilotRuntime {
   private readonly artifactStore: SwarmArtifactStore;
   private readonly traceWriter: FactoryTraceWriter;
   private readonly worker?: SwarmWorker;
-  private readonly workerMode: SwarmProviderWorkerMode;
   private readonly providerFactory?: (role: string) => LlmProvider | undefined;
   private readonly providerName?: string;
   private readonly modelName?: string;
@@ -77,7 +76,6 @@ export class SwarmAutopilotRuntime {
     this.artifactStore = new SwarmArtifactStore(this.workspacePath, this.memoryDir);
     this.traceWriter = new FactoryTraceWriter({ workspacePath: this.workspacePath, memoryDir: this.memoryDir, sourceComponent: "SwarmAutopilotRuntime" });
     this.worker = options.worker;
-    this.workerMode = options.workerMode ?? (options.providerFactory ? "provider_read_only" : envSwarmWorkerMode());
     this.providerFactory = options.providerFactory;
     this.providerName = options.providerName;
     this.modelName = options.modelName;
@@ -183,7 +181,7 @@ export class SwarmAutopilotRuntime {
         run,
         staffingPlan: planned.staffingPlan,
         metrics,
-        workerMode: this.workerMode
+        workerMode: "provider_read_only"
       });
       return {
         run,
@@ -206,15 +204,22 @@ export class SwarmAutopilotRuntime {
       }),
       this.worker ?? this.createConfiguredWorker()
     );
-    const scheduled = await scheduler.run({
+    const canonicalScheduled = await runSwarmSchedulerThroughCanonicalGraph({
+      scheduler,
       run,
       staffingPlan: planned.staffingPlan,
       agentTemplates: planned.agentTemplates,
       agentInstances: planned.agentInstances,
       workItems: planned.workItems
     });
+    const scheduled = canonicalScheduled.scheduled;
     run.active_agent_count = scheduled.metrics.peak_active_agents;
     run.metrics_ref = "metrics.json";
+    await this.event(run.id, "swarm.task.analyzed", `Canonical orchestration graph completed swarm scheduling with status ${canonicalScheduled.graph.status}.`, {
+      canonical_status: canonicalScheduled.graph.status,
+      canonical_final_status: canonicalScheduled.graph.finalStatus,
+      blocking_reasons: canonicalScheduled.blockingReasons
+    });
 
     const reviewItems = scheduled.workItems.filter((item) => item.type === "review");
     const consensus = createConsensusGroup({
@@ -290,7 +295,7 @@ export class SwarmAutopilotRuntime {
       workItems: scheduled.workItems,
       metrics: scheduled.metrics,
       consensusDecision: consensus.decision,
-      workerMode: this.workerMode,
+      workerMode: "provider_read_only",
       intentReview: finalIntentReview
     });
     const finalReportRef = await this.artifactStore.saveFinalReport(run.id, finalReport);
@@ -408,7 +413,6 @@ export class SwarmAutopilotRuntime {
     return new ProviderBackedSwarmWorker({
       workspacePath: this.workspacePath,
       memoryDir: this.memoryDir,
-      mode: this.workerMode,
       providerFactory: this.providerFactory ?? defaultProviderFactory,
       providerName: this.providerName ?? (process.env.OPENAI_API_KEY ? "openai_compatible" : undefined),
       modelName: this.modelName ?? process.env.OPENAI_MODEL,
@@ -509,7 +513,7 @@ export class SwarmAutopilotRuntime {
       run,
       staffingPlan,
       metrics,
-      workerMode: this.workerMode
+      workerMode: "provider_read_only"
     });
     const metricsRef = await this.artifactStore.saveMetrics(run.id, metrics);
     const finalReportRef = await this.artifactStore.saveFinalReport(run.id, finalReport);
@@ -795,10 +799,6 @@ function chooseValidationCommands(commandInventory: CommandInventory) {
   ].slice(0, 3);
 }
 
-function envSwarmWorkerMode(): SwarmProviderWorkerMode {
-  return "provider_read_only";
-}
-
 function defaultProviderFactory(): LlmProvider | undefined {
   if (!process.env.OPENAI_API_KEY) return undefined;
   return new OpenAIProvider(
@@ -892,6 +892,7 @@ function emptySwarmMetrics(run: SwarmRun, staffingPlan: StaffingPlan): SwarmMetr
     validation_pass_rate: 0,
     conflicts_detected: 0,
     approval_gates_triggered: 0,
+    bankruptcy_count: 0,
     generated_at: new Date().toISOString()
   };
 }
@@ -900,7 +901,7 @@ function buildBlockedFinalReport(input: {
   run: SwarmRun;
   staffingPlan: StaffingPlan;
   metrics: SwarmMetrics;
-  workerMode: SwarmProviderWorkerMode;
+  workerMode: "provider_read_only";
 }) {
   return buildFinalReport({
     ...input,
@@ -915,7 +916,7 @@ function buildFinalReport(input: {
   workItems: WorkItem[];
   metrics: SwarmMetrics;
   consensusDecision: string;
-  workerMode: SwarmProviderWorkerMode;
+  workerMode: "provider_read_only";
   intentReview?: IntentReviewResult;
 }) {
   const plannedWriteTargets = uniqueStrings(input.workItems.flatMap((item) => item.write_files));

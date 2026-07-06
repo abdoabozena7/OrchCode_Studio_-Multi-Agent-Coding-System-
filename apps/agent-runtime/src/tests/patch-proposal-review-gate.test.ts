@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { writeJson } from "../memory/ProjectMemory.js";
 import {
   CoreOrchestrator,
@@ -28,12 +29,6 @@ import {
   reconstructFactoryRunTrace,
   type ExecutionPreparationPlan,
   type OneWriterDryRunProposal,
-  type OneWriterDryRunProvider,
-  type OneWriterDryRunProviderInput,
-  type OneWriterDryRunProviderResult,
-  type PatchProposalReviewProvider,
-  type PatchProposalReviewProviderInput,
-  type PatchProposalReviewProviderResult
 } from "../orchestration/index.js";
 
 test("patch proposal review models create reviews findings and summaries", () => {
@@ -53,7 +48,7 @@ test("patch proposal review models create reviews findings and summaries", () =>
     preparation_plan_id: "prep_model",
     proposed_node_id: "node_model",
     reviewer_role: "ReviewerAgent",
-    reviewer_mode: "deterministic",
+    reviewer_mode: "provider",
     decision: "request_changes",
     status: "changes_requested",
     findings: [finding],
@@ -65,7 +60,7 @@ test("patch proposal review models create reviews findings and summaries", () =>
     test_coverage_risks: ["Missing focused test."],
     confidence: 0.77
   });
-  const request = createPatchProposalReviewRequest({ run_id: "run_model", proposal_ids: ["proposal_model"], requested_by: "test", mode: "deterministic" });
+  const request = createPatchProposalReviewRequest({ run_id: "run_model", proposal_ids: ["proposal_model"], requested_by: "test", mode: "provider" });
   const summary = createPatchProposalReviewSummary({
     run_id: "run_model",
     patch_review_used: true,
@@ -90,7 +85,7 @@ test("review eligibility allows review candidates and blocks ineligible proposal
     const artifactStore = new OrchestrationArtifactStore(workspace);
     const proposal = await reviewReadyProposal(workspace, artifactStore, "run_review_eligibility");
     const provider = reviewProvider(validReviewOutput("accept_for_validation_candidate"));
-    const gate = new PatchProposalReviewGate({ workspacePath: workspace, config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }), artifactStore, provider });
+    const gate = new PatchProposalReviewGate({ workspacePath: workspace, config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }), artifactStore, provider });
     assert.equal((await gate.validateProposalForReview(proposal)).eligible, true);
     const variants: OneWriterDryRunProposal[] = [
       { ...proposal, proposal_id: "scope_failed", status: "scope_failed" },
@@ -108,49 +103,26 @@ test("review eligibility allows review candidates and blocks ineligible proposal
   }
 });
 
-test("deterministic review accepts low-risk proposals and requests changes for broad or sensitive work", async () => {
-  const workspace = await fixtureWorkspace("patch-review-deterministic");
+test("review blocks when no provider is configured instead of using local fallback", async () => {
+  const workspace = await fixtureWorkspace("patch-review-provider-required");
   try {
     const artifactStore = new OrchestrationArtifactStore(workspace);
-    const lowRisk = await reviewReadyProposal(workspace, artifactStore, "run_review_low");
-    const lowResult = await new PatchProposalReviewGate({
+    const proposal = await reviewReadyProposal(workspace, artifactStore, "run_review_no_provider");
+    const result = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "deterministic" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore
-    }).reviewPatchProposal(lowRisk);
-    assert.equal(lowResult.status, "accepted_for_validation_candidate");
-    assert.equal(lowResult.review?.decision, "accept_for_validation_candidate");
-
-    const broad = await reviewReadyProposal(workspace, artifactStore, "run_review_broad", {
-      allowed_files: ["src/runtime.ts", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"],
-      changedFiles: ["src/runtime.ts", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]
-    });
-    const broadResult = await new PatchProposalReviewGate({
-      workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "deterministic" }),
-      artifactStore
-    }).reviewPatchProposal(broad);
-    assert.equal(broadResult.status, "changes_requested");
-    assert.equal(broadResult.review?.decision, "split_further");
-
-    const sensitive = await reviewReadyProposal(workspace, artifactStore, "run_review_sensitive", {
-      allowed_files: ["package.json"],
-      changedFiles: ["package.json"],
-      preparationMetadata: { allow_sensitive_file_changes: true }
-    });
-    const sensitiveResult = await new PatchProposalReviewGate({
-      workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "deterministic" }),
-      artifactStore
-    }).reviewPatchProposal(sensitive);
-    assert.equal(sensitiveResult.status, "changes_requested");
-    assert.equal(sensitiveResult.review?.decision, "require_human_approval");
+    }).reviewPatchProposal(proposal);
+    assert.equal(result.status, "blocked");
+    assert.equal(result.review?.decision, "block");
+    assert.equal(result.blockers.some((entry) => entry.blocker_type === "provider_unavailable"), true);
+    assert.equal(result.warnings.length, 0);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("fake provider review valid invalid and failing outputs are handled without real provider calls", async () => {
+test("scripted provider review valid invalid and failing outputs are handled without real provider calls", async () => {
   const workspace = await fixtureWorkspace("patch-review-provider");
   try {
     const artifactStore = new OrchestrationArtifactStore(workspace);
@@ -158,7 +130,7 @@ test("fake provider review valid invalid and failing outputs are handled without
     const provider = reviewProvider(validReviewOutput("accept_for_validation_candidate"));
     const result = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider
     }).reviewPatchProposal(proposal);
@@ -171,7 +143,7 @@ test("fake provider review valid invalid and failing outputs are handled without
     const invalidProposal = await reviewReadyProposal(workspace, artifactStore, "run_review_schema_fail");
     const invalid = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider: reviewProvider("not json")
     }).reviewPatchProposal(invalidProposal);
@@ -182,7 +154,7 @@ test("fake provider review valid invalid and failing outputs are handled without
     const errorProvider = reviewProvider(validReviewOutput("accept_for_validation_candidate"), new Error("review provider failed"));
     const error = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider: errorProvider
     }).reviewPatchProposal(errorProposal);
@@ -201,7 +173,7 @@ test("review prompt quality blocks unsafe prompt text before provider calls", as
     const provider = reviewProvider(validReviewOutput("accept_for_validation_candidate"));
     const result = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider
     }).reviewPatchProposal(proposal);
@@ -219,7 +191,7 @@ test("decision rules prevent invalid validation candidacy and persist review met
     const proposal = await reviewReadyProposal(workspace, artifactStore, "run_review_decision_rules");
     const gate = new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider: reviewProvider(validReviewOutput("accept_for_validation_candidate", {
         findings: [{ category: "security", severity: "critical", message: "Critical issue.", blocking: true }],
@@ -233,7 +205,7 @@ test("decision rules prevent invalid validation candidacy and persist review met
     const requestChangesProposal = await reviewReadyProposal(workspace, artifactStore, "run_review_request_changes");
     const requestChanges = await new PatchProposalReviewGate({
       workspacePath: workspace,
-      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "fake_provider" }),
+      config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }),
       artifactStore,
       provider: reviewProvider(validReviewOutput("request_changes", { required_changes: ["Clarify edge case handling."] }))
     }).reviewPatchProposal(requestChangesProposal);
@@ -289,7 +261,7 @@ test("CoreOrchestrator review hook respects disabled and enabled config without 
       metadata.close();
     }
 
-    const enabled = new CoreOrchestrator({ workspacePath: workspace, config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "deterministic" }) });
+    const enabled = new CoreOrchestrator({ workspacePath: workspace, config: config({ enable_patch_proposal_review_gate: true, patch_proposal_review_mode: "auto" }) });
     await (enabled as unknown as { reviewPatchProposalsIfAllowed(runId: string, planOnly: boolean): Promise<void> }).reviewPatchProposalsIfAllowed("run_review_core", true);
     metadata = await FactoryMetadataStore.open({ workspacePath: workspace, readOnly: true });
     try {
@@ -326,7 +298,7 @@ async function reviewReadyProposal(
   const provider = dryRunProvider(validPatchOutput(changedFiles, { summary: options.patchSummary }));
   const result = await new OneWriterDryRunExecutor({
     workspacePath: workspace,
-    config: config({ enable_one_writer_dry_run: true, one_writer_dry_run_mode: "fake_provider" }),
+    config: config({ enable_one_writer_dry_run: true, one_writer_dry_run_mode: "auto" }),
     artifactStore,
     provider
   }).generatePatchProposalFromPreparation(preparation);
@@ -460,27 +432,41 @@ function validReviewOutput(decision: string, overrides: Record<string, unknown> 
   }, null, 2);
 }
 
-function dryRunProvider(raw: string): OneWriterDryRunProvider & { calls: number } {
+function dryRunProvider(raw: string): LlmProvider & { calls: number; requests: LlmRequest[] } {
   return {
-    provider_name: "review_test_dry_provider",
-    provider_mode: "fake_provider",
     calls: 0,
-    async generatePatchProposal(_input: OneWriterDryRunProviderInput): Promise<OneWriterDryRunProviderResult> {
+    requests: [],
+    async generateStructured<T>(input: LlmRequest): Promise<T> {
       this.calls += 1;
-      return { raw_output: raw, provider_name: "review_test_dry_provider", model_name: "fake-dry" };
+      this.requests.push(input);
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return raw as T;
+      }
+    },
+    async generateText(): Promise<string> {
+      throw new Error("generateText is not used by review dry-run tests.");
     }
   };
 }
 
-function reviewProvider(raw: string, error?: Error): PatchProposalReviewProvider & { calls: number } {
+function reviewProvider(raw: string, error?: Error): LlmProvider & { calls: number; requests: LlmRequest[] } {
   return {
-    provider_name: "review_test_provider",
-    reviewer_mode: "fake_provider",
     calls: 0,
-    async reviewPatchProposal(_input: PatchProposalReviewProviderInput): Promise<PatchProposalReviewProviderResult> {
+    requests: [],
+    async generateStructured<T>(input: LlmRequest): Promise<T> {
       this.calls += 1;
+      this.requests.push(input);
       if (error) throw error;
-      return { raw_output: raw, provider_name: "review_test_provider", model_name: "fake-review" };
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return raw as T;
+      }
+    },
+    async generateText(): Promise<string> {
+      throw new Error("generateText is not used by patch review tests.");
     }
   };
 }
@@ -489,9 +475,9 @@ function config(overrides: Parameters<typeof loadOrchestrationConfig>[0] = {}) {
   return loadOrchestrationConfig({
     memory_path: ".agent_memory",
     enable_one_writer_dry_run: false,
-    one_writer_dry_run_mode: "fake_provider",
+    one_writer_dry_run_mode: "auto",
     enable_patch_proposal_review_gate: false,
-    patch_proposal_review_mode: "deterministic",
+    patch_proposal_review_mode: "auto",
     allow_real_provider_review: false,
     allow_real_provider_dry_run: false,
     ...overrides

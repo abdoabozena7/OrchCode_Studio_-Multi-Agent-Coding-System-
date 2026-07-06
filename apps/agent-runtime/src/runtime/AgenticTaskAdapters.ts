@@ -11,7 +11,6 @@ export type ProjectExplainAgenticAdapterInput = {
 };
 
 export type ProjectExplainAgenticAdapterOutput = {
-  answerMarkdown: string;
   evidenceRefs: string[];
   trace: AgenticTaskResult["trace"];
   result: AgenticTaskResult;
@@ -35,7 +34,6 @@ export const ProjectExplainAgenticAdapter: AgenticTaskAdapter<ProjectExplainAgen
   },
   fromResult(result) {
     return {
-      answerMarkdown: result.finalOutput.markdown,
       evidenceRefs: result.finalOutput.citations,
       trace: result.trace,
       result

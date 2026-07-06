@@ -4,10 +4,11 @@ import type { PromptTemplateInput, PromptTemplateVersion, PromptType, RenderedPr
 export const PROMPT_WRITER_SCHEMA_VERSION = 1;
 
 export type PromptWriterMode = "off" | "shadow" | "advisory" | "gated_adopt";
-export type PromptWriterProviderMode = "deterministic" | "provider_read_only" | "auto";
+export type PromptWriterProviderMode = "provider_read_only" | "auto";
+export type PromptWriterObservedProviderMode = PromptWriterProviderMode | "provider_unavailable" | "provider_failed";
 export type PromptWriterRoleName = "PromptWriterAgent";
 export type PromptWriterAdoptionRecommendation = "do_not_adopt" | "advisory_only" | "adopt_if_gated" | "needs_more_context";
-export type PromptWriterDecision = "off" | "shadow_recorded" | "advisory_recorded" | "adopted" | "rejected" | "fallback_used";
+export type PromptWriterDecision = "off" | "shadow_recorded" | "advisory_recorded" | "adopted" | "rejected";
 export type PromptWriterSchemaStatus = "passed" | "failed";
 
 export type PromptWriterRole = {
@@ -136,7 +137,7 @@ export type PromptWriterSchemaValidation = {
 
 export type PromptWriterRunResult = {
   mode: PromptWriterMode;
-  provider_mode: PromptWriterProviderMode | "fallback";
+  provider_mode: PromptWriterObservedProviderMode;
   input: PromptWriterInput;
   output?: PromptWriterOutput;
   schema_validation: PromptWriterSchemaValidation;

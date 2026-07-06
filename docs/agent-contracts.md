@@ -58,53 +58,23 @@ The contract preserves `original_user_request` exactly, provides `precise_rewrit
 
 ## Workers
 
-### CodebaseMapperAgent
+Ordinary queue worker execution is now a contract, not a built-in local semantic worker set. Worker executors must satisfy `OrchestratedWorkerExecutionContracts` and be injected into queue execution explicitly. Missing worker execution blocks the canonical queue; it must not create deterministic worker prose, canned patches, mock outputs, or local semantic fallback results.
 
-- Output: project map.
-- Tools: read-only workspace listing/search/project summary.
-- Forbidden: reading secret-like files.
+Provider-backed swarm and recursive workers keep their own provider-required contracts, context packs, structured outputs, and safety gates. Role names such as `ArchitectAgent`, `ReviewerAgent`, or specialist reviewer names may still appear in task graphs, staffing plans, prompts, and durable artifacts, but role names are not runtime permission to invoke a local deterministic implementation.
 
-### ArchitectAgent
-
-- Output: technical design notes.
-- Tools: project map and briefs.
-- Forbidden: patching directly or expanding scope without justification.
-
-### RustBackendAgent
-
-- Output: backend impact notes or patch proposal.
-- Tools: patch proposal only for Rust/Tauri changes.
-- Forbidden: unsafe local filesystem or command logic.
-
-### FrontendAgent
-
-- Output: React/TypeScript patch proposal.
-- Tools: patch proposal only.
-- Forbidden: direct writes, unrelated visual rewrites.
-
-### ToolingTerminalAgent
-
-- Output: command requests.
-- Tools: command risk classifier.
-- Forbidden: dangerous commands and unapproved medium commands.
-
-### TestAgent
-
-- Output: test plan and safe command requests.
-- Tools: command request flow.
-- Forbidden: running commands directly.
+Any legacy local worker class that remains for compatibility must behave as a blocked adapter only: it may report the missing provider-backed executor, but it must not propose patches, commands, previews, canned implementation notes, or mock task results.
 
 ### SecurityAgent
 
-- Output: `ReviewResult`.
+- Output: deterministic `ReviewResult`.
 - Tools: patch and command metadata.
 - Forbidden: approving dangerous command requests or secret-like file changes.
 
 ### ReviewerAgent
 
-- Output: final `ReviewResult`.
+- Output: provider-backed final `ReviewResult`.
 - Tools: worker outputs, patch proposals, merge conflict summary.
-- Forbidden: nitpicking; focus on real correctness, consistency, maintainability, and readiness risks.
+- Forbidden: fallback approval, local semantic review, or approving without provider evidence; provider missing, invalid, or errored review must block.
 # Decision Pipeline Contract
 
 Every request carries a provider-required `ReasoningKernel v2` trace from understanding through the final decision. The provider owns semantic understanding, adaptive `ReasoningStep` selection, planning, patch intent, claims, and final assistant prose, but it cannot create evidence, approve unknown citations, widen write authority, or bypass approval gates.

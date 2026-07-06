@@ -16,10 +16,8 @@ import {
 import type { OrchestrationSafetyConfig, TeamSubPlanningMode } from "./OrchestrationConfig.js";
 import {
   createTeamSubPlan,
-  createTeamSubPlanTaskDraft,
   type TeamSubPlan,
   type TeamSubPlanBudgetUsage,
-  type TeamSubPlanDependency,
   type TeamSubPlanGenerationMode,
   type TeamSubPlanInput,
   type TeamSubPlanRisk,
@@ -151,9 +149,9 @@ export class TeamSubPlanner {
     const mode = this.options.config.team_sub_planning_mode;
     if (mode === "provider_read_only" || mode === "auto") {
       const providerPlan = await this.tryProviderReadOnlyPlan(input, mode);
-      if (providerPlan) return this.acceptOrMark(providerPlan);
+      return this.acceptOrMark(providerPlan);
     }
-    return this.acceptOrMark(this.generateDeterministicPlan(input, mode === "auto" ? "mixed" : input.generation_mode));
+    return this.acceptOrMark(this.blockedTeamSubPlan(input, "provider_authored_team_sub_planning_required", input.generation_mode));
   }
 
   validateTeamSubPlan(plan: TeamSubPlan): TeamSubPlanValidationResult {
@@ -293,22 +291,19 @@ export class TeamSubPlanner {
     return checked;
   }
 
-  private async tryProviderReadOnlyPlan(input: TeamSubPlanInput, mode: TeamSubPlanningMode): Promise<TeamSubPlan | undefined> {
+  private async tryProviderReadOnlyPlan(input: TeamSubPlanInput, mode: TeamSubPlanningMode): Promise<TeamSubPlan> {
     if (!this.options.config.allow_provider_team_sub_planning || !this.provider) {
-      if (mode === "auto") {
-        await this.traceWriter.write({
-          run_id: input.run_id,
-          team_id: input.team_id,
-          event_type: "team_sub_plan_skipped",
-          lifecycle_stage: "planning",
-          severity: "warning",
-          summary: `Provider team sub-planning unavailable; falling back for ${input.team_id}.`,
-          reason: "provider_unavailable_auto_fallback",
-          metadata_json: { run_id: input.run_id, team_id: input.team_id, generation_mode: "auto" }
-        });
-        return undefined;
-      }
-      return this.blockedProviderPlan(input, "provider_read_only_team_sub_planning_unavailable");
+      await this.traceWriter.write({
+        run_id: input.run_id,
+        team_id: input.team_id,
+        event_type: "team_sub_plan_blocked",
+        lifecycle_stage: "planning",
+        severity: "warning",
+        summary: `Provider team sub-planning unavailable; blocked ${input.team_id}.`,
+        reason: "provider_read_only_team_sub_planning_unavailable",
+        metadata_json: { run_id: input.run_id, team_id: input.team_id, generation_mode: mode }
+      });
+      return this.blockedTeamSubPlan(input, "provider_read_only_team_sub_planning_unavailable", mode === "auto" ? "mixed" : "provider_read_only");
     }
     const generated = await invokeReasoningProviderStructured<Partial<TeamSubPlan>>(this.provider, {
       systemPrompt: "You are a read-only team sub-planner. Produce metadata only. Do not propose patches, sub-runs, executor tasks, or source edits outside team scope.",
@@ -323,27 +318,41 @@ export class TeamSubPlanner {
         read_only: true
       }
     }, { type: "object", readOnly: true });
-    const fallback = this.generateDeterministicPlan(input, "provider_read_only");
-    return {
-      ...fallback,
-      ...generated,
-      sub_plan_id: typeof generated.sub_plan_id === "string" ? generated.sub_plan_id : fallback.sub_plan_id,
+    return createTeamSubPlan({
+      sub_plan_id: typeof generated.sub_plan_id === "string" ? generated.sub_plan_id : undefined,
       run_id: input.run_id,
       team_id: input.team_id,
       parent_team_id: input.parent_team_id,
       team_domain: input.team.domain,
       team_type: input.team.team_type,
-      generation_mode: "provider_read_only",
+      objective: typeof generated.objective === "string" ? generated.objective : input.objective,
       status: "generated",
+      scope_summary: typeof generated.scope_summary === "string" ? generated.scope_summary : input.scope_summary,
+      assumptions: asStringArray(generated.assumptions),
+      proposed_tasks: Array.isArray(generated.proposed_tasks) ? generated.proposed_tasks : [],
+      dependencies: Array.isArray(generated.dependencies) ? generated.dependencies : [],
+      risks: Array.isArray(generated.risks) ? generated.risks : [],
+      validation_strategy: generated.validation_strategy && typeof generated.validation_strategy === "object"
+        ? generated.validation_strategy
+        : validationStrategy([], ["Provider did not specify validation commands; validation remains not run."]),
+      required_context_refs: asStringArray(generated.required_context_refs).length ? asStringArray(generated.required_context_refs) : [input.context_pack_ref ?? ""].filter(Boolean),
+      evidence_refs: asStringArray(generated.evidence_refs).length ? asStringArray(generated.evidence_refs) : input.planning_evidence_refs,
+      memory_scope_refs: Array.isArray(generated.memory_scope_refs) ? generated.memory_scope_refs : input.memory_scope_refs,
+      lock_context_refs: asStringArray(generated.lock_context_refs).length ? asStringArray(generated.lock_context_refs) : input.lock_context_refs,
+      budget_usage: generated.budget_usage && typeof generated.budget_usage === "object"
+        ? generated.budget_usage
+        : this.budgetUsage(input, Array.isArray(generated.proposed_tasks) ? generated.proposed_tasks.length : 0),
+      unresolved_questions: asStringArray(generated.unresolved_questions),
+      confidence: typeof generated.confidence === "number" ? Math.max(0, Math.min(1, generated.confidence)) : 0.5,
+      generation_mode: "provider_read_only",
       metadata_json: {
-        ...fallback.metadata_json,
-        ...generated.metadata_json,
-        provider_read_only: true
+        ...(generated.metadata_json && typeof generated.metadata_json === "object" ? generated.metadata_json : {}),
+        ...this.planMetadata(input, { provider_read_only: true })
       }
-    } as TeamSubPlan;
+    });
   }
 
-  private blockedProviderPlan(input: TeamSubPlanInput, reason: string): TeamSubPlan {
+  private blockedTeamSubPlan(input: TeamSubPlanInput, reason: string, generationMode: TeamSubPlanGenerationMode): TeamSubPlan {
     return createTeamSubPlan({
       run_id: input.run_id,
       team_id: input.team_id,
@@ -356,7 +365,7 @@ export class TeamSubPlanner {
       assumptions: [],
       proposed_tasks: [],
       dependencies: [],
-      risks: [risk("medium", `Provider read-only team sub-planning blocked: ${reason}.`, [], "Use deterministic fallback or enable provider read-only mode explicitly.", [])],
+      risks: [risk("medium", `Provider-authored team sub-planning blocked: ${reason}.`, [], "Enable provider read-only team sub-planning or leave team sub-planning disabled.", [])],
       validation_strategy: validationStrategy([], [`Blocked before validation: ${reason}.`]),
       required_context_refs: [input.context_pack_ref ?? ""].filter(Boolean),
       evidence_refs: input.planning_evidence_refs,
@@ -365,58 +374,8 @@ export class TeamSubPlanner {
       budget_usage: this.budgetUsage(input, 0),
       unresolved_questions: [reason],
       confidence: 0.2,
-      generation_mode: "provider_read_only",
-      metadata_json: this.planMetadata(input, { blocked_reason: reason, provider_read_only: true })
-    });
-  }
-
-  private generateDeterministicPlan(input: TeamSubPlanInput, mode: TeamSubPlanGenerationMode): TeamSubPlan {
-    const team = input.team;
-    const files = input.team_context_scope.allowed_files.slice(0, 8);
-    const task = createTeamSubPlanTaskDraft({
-      title: taskTitleForTeam(team),
-      objective: taskObjectiveForTeam(team),
-      role_hint: roleForTeam(team.team_type),
-      read_only: readOnlyByDefault(team.team_type),
-      proposed_files: files,
-      allowed_write_paths: readOnlyByDefault(team.team_type) ? [] : files,
-      forbidden_files: input.team_context_scope.forbidden_files,
-      required_context_refs: [input.context_pack_ref ?? input.team_context_scope.artifact_ref ?? ""].filter(Boolean),
-      evidence_refs: input.planning_evidence_refs.slice(0, 8),
-      validation_refs: input.team_context_scope.evidence_refs.slice(0, 8),
-      rationale: `Deterministic sub-plan draft for ${team.team_type} team ${team.team_id}; scoped to team context and not scheduled for execution.`,
-      metadata_json: { team_type: team.team_type, generation: "deterministic_fallback" }
-    });
-    const tasks = [task].slice(0, Math.max(1, this.options.config.max_team_sub_plan_tasks));
-    const assumptions = [
-      `Team scope is bounded by ${input.team_context_scope.allowed_files.length} allowed file(s) and ${input.team_context_scope.forbidden_files.length} forbidden file guardrail(s).`,
-      "Sub-plan task drafts are read-only planning records and are not executor tasks."
-    ];
-    const dependencies = dependenciesForInput(input);
-    const risks = risksForTeam(input);
-    return createTeamSubPlan({
-      run_id: input.run_id,
-      team_id: input.team_id,
-      parent_team_id: input.parent_team_id,
-      team_domain: team.domain,
-      team_type: team.team_type,
-      objective: team.objective,
-      status: "generated",
-      scope_summary: input.scope_summary,
-      assumptions,
-      proposed_tasks: tasks,
-      dependencies,
-      risks,
-      validation_strategy: validationStrategy(validationCommandsForTeam(team.team_type), ["Validation is planned only; nothing has been run by sub-planning."]),
-      required_context_refs: [input.context_pack_ref ?? input.team_context_scope.artifact_ref ?? ""].filter(Boolean),
-      evidence_refs: input.planning_evidence_refs,
-      memory_scope_refs: input.memory_scope_refs,
-      lock_context_refs: input.lock_context_refs,
-      budget_usage: this.budgetUsage(input, tasks.length),
-      unresolved_questions: unresolvedQuestionsForTeam(input),
-      confidence: confidenceForInput(input),
-      generation_mode: mode,
-      metadata_json: this.planMetadata(input, { deterministic_fallback: mode === "mixed" })
+      generation_mode: generationMode,
+      metadata_json: this.planMetadata(input, { blocked_reason: reason, provider_required: true })
     });
   }
 
@@ -487,7 +446,7 @@ export class TeamSubPlanner {
     const mode = this.options.config.team_sub_planning_mode;
     if (mode === "provider_read_only") return "provider_read_only";
     if (mode === "auto") return "mixed";
-    return "deterministic";
+    return "mixed";
   }
 
   private async latestArtifactRefs(runId: string, table: string, column: string, limit: number) {
@@ -509,91 +468,12 @@ export class TeamSubPlanner {
   }
 }
 
-function taskTitleForTeam(team: AgentTeam) {
-  if (team.team_type === "review") return `Review scoped plan for ${team.domain}`;
-  if (team.team_type === "validation") return `Plan validation checks for ${team.domain}`;
-  if (team.team_type === "integration") return `Plan integration constraints for ${team.domain}`;
-  if (team.team_type === "memory") return `Plan memory updates for ${team.domain}`;
-  return `Plan ${team.domain} team work`;
-}
-
-function taskObjectiveForTeam(team: AgentTeam) {
-  if (team.team_type === "review") return `Identify review risks and required evidence inside ${team.domain} scope.`;
-  if (team.team_type === "validation") return `Identify validation commands and artifacts needed for ${team.domain} scope.`;
-  if (team.team_type === "integration") return `Identify integration ordering, lock context, and merge constraints for ${team.domain} scope.`;
-  if (team.team_type === "memory") return `Identify decisions, failures, lessons, and memory refs relevant to ${team.domain} scope.`;
-  return `Break down ${team.objective} into scoped, non-executing planning drafts.`;
-}
-
 function roleForTeam(teamType: AgentTeamType) {
   if (teamType === "review") return "ReviewerAgent";
   if (teamType === "validation") return "TesterAgent";
   if (teamType === "integration") return "IntegratorAgent";
   if (teamType === "memory") return "ReporterAgent";
   return "PlannerAgent";
-}
-
-function readOnlyByDefault(teamType: AgentTeamType) {
-  return ["review", "validation", "integration", "memory"].includes(teamType);
-}
-
-function validationCommandsForTeam(teamType: AgentTeamType) {
-  if (teamType === "validation") return ["npm test --workspace apps/agent-runtime"];
-  if (teamType === "review") return ["git diff --check"];
-  if (teamType === "integration") return ["git diff --check"];
-  return [];
-}
-
-function dependenciesForInput(input: TeamSubPlanInput): TeamSubPlanDependency[] {
-  return [
-    ...input.lock_context_refs.slice(0, 4).map((ref) => ({
-      dependency_id: `team_sub_plan_dependency_${randomUUID()}`,
-      dependency_type: ref.startsWith("semantic:") || ref.startsWith("module:") ? "lock" as const : "context" as const,
-      source_ref: input.team_id,
-      target_ref: ref,
-      summary: `Team sub-plan depends on lock/context ref ${ref}.`,
-      metadata_json: { lock_context: true }
-    })),
-    ...input.planning_evidence_refs.slice(0, 4).map((ref) => ({
-      dependency_id: `team_sub_plan_dependency_${randomUUID()}`,
-      dependency_type: "artifact" as const,
-      source_ref: input.team_id,
-      target_ref: ref,
-      summary: `Team sub-plan uses planning evidence ${ref}.`,
-      metadata_json: { planning_evidence: true }
-    }))
-  ];
-}
-
-function risksForTeam(input: TeamSubPlanInput): TeamSubPlanRisk[] {
-  const risks = [
-    input.team_context_scope.forbidden_files.length
-      ? risk("medium", "Forbidden file guardrails must remain inherited by any future executable work.", input.team_context_scope.forbidden_files.slice(0, 5), "Keep forbidden paths reference-only and validate future tasks against team scope.", input.team_context_scope.evidence_refs)
-      : undefined,
-    input.team_context_scope.module_locks.length || input.team_context_scope.semantic_locks.length
-      ? risk("medium", "Module or semantic lock boundaries may constrain later integration.", [], "Carry lock refs into future task prompts and integration checks.", input.lock_context_refs)
-      : undefined,
-    input.team_context_scope.warnings.length
-      ? risk("low", "Team context scope produced warnings that may lower confidence.", [], "Review team context summary before converting any draft into execution work.", input.team_context_scope.warnings.map((warning) => warning.warning_id))
-      : undefined
-  ].filter((entry): entry is TeamSubPlanRisk => Boolean(entry));
-  return risks.length ? risks : [risk("low", "No major team-specific risk surfaced during deterministic sub-planning.", [], "Keep normal review and validation gates active.", [])];
-}
-
-function unresolvedQuestionsForTeam(input: TeamSubPlanInput) {
-  return [
-    input.team_context_scope.allowed_files.length ? "" : "Team has no allowed files; future executable planning may require explicit scope.",
-    input.planning_evidence_refs.length ? "" : "No planning evidence refs were linked directly to this team.",
-    input.memory_scope_refs.length ? "" : "No inherited memory scope refs were resolved."
-  ].filter(Boolean);
-}
-
-function confidenceForInput(input: TeamSubPlanInput) {
-  let score = input.team_context_scope.confidence;
-  if (!input.team_context_scope.allowed_files.length) score -= 0.15;
-  if (!input.planning_evidence_refs.length) score -= 0.1;
-  if (input.team_context_scope.warnings.length) score -= 0.05;
-  return Math.max(0.1, Math.min(0.95, Number(score.toFixed(2))));
 }
 
 function validationStrategy(commands: string[], notes: string[]): TeamSubPlanValidationStrategy {

@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,7 +49,7 @@ test("existing-file edits use patch intents and generate focused reviewable diff
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "هاي update App.tsx color");
+  const session = await runTurnWithProvider(workspace, storageDir, provider, "ظ‡ط§ظٹ update App.tsx color");
   const proposal = session.patchProposals[0];
 
   assert.ok(proposal);
@@ -60,18 +60,18 @@ test("existing-file edits use patch intents and generate focused reviewable diff
   assert.match(proposal?.unifiedDiff ?? "", /\+  const color = "blue";/);
   assert.doesNotMatch(proposal?.unifiedDiff ?? "", /console\.log\("tail line"\);/);
   assert.equal(provider.prompts.some((prompt) => prompt.includes("do not return full file contents")), true);
-  assert.equal(provider.prompts.every((prompt) => !prompt.includes("هاي")), true);
+  assert.equal(provider.prompts.every((prompt) => !prompt.includes("ظ‡ط§ظٹ")), true);
   assert.equal(provider.prompts.some((prompt) => prompt.includes("update App.tsx color")), true);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("direct social turns bypass workspace intake and provider even when files match", async () => {
+test("direct social turns reject in RunEngine instead of composing local answers", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-direct-intent-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-direct-intent-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
-  await writeFile(path.join(workspace, "src", "hay.ts"), "export const value = 'هاي';\n", "utf8");
+  await writeFile(path.join(workspace, "src", "hay.ts"), "export const value = 'ظ‡ط§ظٹ';\n", "utf8");
 
   const provider = new PatchIntentProvider({
     targetFiles: ["src/hay.ts"],
@@ -82,22 +82,25 @@ test("direct social turns bypass workspace intake and provider even when files m
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "هاي", ["src/hay.ts"]);
-  const answer = session.messages.at(-1)?.content ?? "";
-
-  assert.equal(session.status, "completed");
+  const session = await assertRunEngineRejects(
+    workspace,
+    storageDir,
+    provider,
+    "ظ‡ط§ظٹ",
+    /reasoning_kernel\.direct_conversation_must_be_provider_composed/,
+    ["src/hay.ts"]
+  );
   assert.equal(provider.prompts.length, 0);
   assert.equal(session.artifacts.some((artifact) => artifact.type === "project_intake"), false);
   assert.equal(session.artifacts.some((artifact) => artifact.type === "project_explain_report"), false);
-  assert.equal(session.progressEvents.some((event) => /قراءة المشروع|Workspace snapshot/.test(event.taskTitle ?? "")), false);
-  assert.doesNotMatch(answer, /Workspace used for this answer|لقيت|src\/hay\.ts/i);
-  assert.match(answer, /أهل|موجود/);
+  assert.equal(session.progressEvents.some((event) => /ظ‚ط±ط§ط،ط© ط§ظ„ظ…ط´ط±ظˆط¹|Workspace snapshot/.test(event.taskTitle ?? "")), false);
+  assert.equal(session.messages.filter((message) => message.role === "assistant").length, 0);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("malformed broad patch intents fail with a chat explanation instead of creating AGENT_PROPOSAL", async () => {
+test("malformed broad patch intents reject instead of creating AGENT_PROPOSAL", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-patch-malformed-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-patch-malformed-storage-${Date.now()}`);
   await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -119,18 +122,22 @@ test("malformed broad patch intents fail with a chat explanation instead of crea
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "break the patch intent in src/App.tsx");
-  assert.equal(session.status, "failed");
-  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
+  const session = await assertPatchIntentRejects(
+    workspace,
+    storageDir,
+    provider,
+    "break the patch intent in src/App.tsx",
+    /provider_patch_intent_invalid_after_repairs/
+  );
   assert.equal(session.patchProposals.length, 0);
-  assert.match(session.messages.at(-1)?.content ?? "", /could not produce a file change/i);
-  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /AGENT_PROPOSAL/i);
+  assert.equal(session.commandRequests.length, 0);
+  assert.doesNotMatch(JSON.stringify(session.decisionLedger), /AGENT_PROPOSAL|deterministic fallback/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("malformed simple file requests fall back to the requested file instead of AGENT_PROPOSAL", async () => {
+test("malformed simple file requests reject instead of creating requested-file fallbacks", async () => {
   const workspace = path.join(os.tmpdir(), `hivo-patch-simple-file-${Date.now()}`);
   const storageDir = path.join(os.tmpdir(), `hivo-patch-simple-file-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
@@ -144,11 +151,17 @@ test("malformed simple file requests fall back to the requested file instead of 
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "اكتب ملف hello.txt فيه hello");
-  const proposal = session.patchProposals[0];
-  assert.equal(session.status, "needs_approval");
-  assert.equal(proposal?.filesChanged[0]?.path, "hello.txt");
-  assert.match(proposal?.unifiedDiff ?? "", /\+hello/);
+  const session = await assertPatchIntentRejects(
+    workspace,
+    storageDir,
+    provider,
+    "write file hello.txt with hello",
+    /provider_patch_intent_invalid_after_repairs/,
+    ["hello.txt"]
+  );
+  assert.equal(session.patchProposals.length, 0);
+  assert.equal(session.commandRequests.length, 0);
+  assert.doesNotMatch(JSON.stringify(session), /AGENT_PROPOSAL|deterministic fallback/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -168,11 +181,12 @@ test("single-file pygame provider failures do not invent deterministic implement
     }
   });
 
-  const session = await runTurnWithProvider(
+  const session = await assertPatchIntentRejects(
     workspace,
     storageDir,
     provider,
     "make a one python code for a 3d snake game with pygame",
+    /provider_patch_intent_invalid_after_repairs/,
     {
       stack: ["Python"],
       packageManagers: [],
@@ -181,12 +195,9 @@ test("single-file pygame provider failures do not invent deterministic implement
     }
   );
 
-  assert.equal(session.status, "failed");
-  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
   assert.equal(session.patchProposals.length, 0);
   assert.equal(session.commandRequests.length, 0);
-  assert.match(session.messages.at(-1)?.content ?? "", /could not produce a file change/i);
-  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /pygame|snake|import pygame/i);
+  assert.doesNotMatch(JSON.stringify(session), /import pygame|deterministic fallback/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -206,17 +217,23 @@ test("empty provider patch envelopes fail instead of creating demo scaffold", as
     }
   });
 
-  const session = await runTurnWithProvider(workspace, storageDir, provider, "create a tiny vite demo project", {
-    stack: [],
-    packageManagers: [],
-    testCommands: [],
-    importantFiles: []
-  });
+  const session = await assertPatchIntentRejects(
+    workspace,
+    storageDir,
+    provider,
+    "create a tiny vite demo project",
+    /provider_patch_intent_empty_after_repairs/,
+    {
+      stack: [],
+      packageManagers: [],
+      testCommands: [],
+      importantFiles: []
+    }
+  );
 
-  assert.equal(session.status, "failed");
   assert.equal(session.patchProposals.length, 0);
-  assert.ok(session.reasoningSummaries.includes("Provider patch output was invalid; no deterministic implementation was invented."));
-  assert.doesNotMatch(session.messages.at(-1)?.content ?? "", /starter project|scaffold|vite/i);
+  assert.equal(session.commandRequests.length, 0);
+  assert.doesNotMatch(JSON.stringify(session), /starter project|scaffold|deterministic fallback/i);
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
@@ -528,6 +545,42 @@ async function runTurnWithProvider(
     projectMap: createProjectMap(projectMapInput)
   });
   return sessionManager.getSession(session.id)!;
+}
+
+async function assertRunEngineRejects(
+  workspace: string,
+  storageDir: string,
+  provider: PatchIntentProvider,
+  message: string,
+  expectedError: RegExp,
+  projectMapInput: string[] | ProjectMapFixture = ["src/App.tsx"]
+) {
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  const session = await sessionManager.createSession({
+    workspacePath: workspace,
+    mode: "real_provider",
+    userPrompt: message
+  });
+  await assert.rejects(
+    new RunEngine(provider, sessionManager).runTurn(session.id, message, {
+      resolvedMode: "simple_mode",
+      projectMap: createProjectMap(projectMapInput)
+    }),
+    expectedError
+  );
+  return sessionManager.getSession(session.id)!;
+}
+
+async function assertPatchIntentRejects(
+  workspace: string,
+  storageDir: string,
+  provider: PatchIntentProvider,
+  message: string,
+  expectedError: RegExp,
+  projectMapInput: string[] | ProjectMapFixture = ["src/App.tsx"]
+) {
+  return assertRunEngineRejects(workspace, storageDir, provider, message, expectedError, projectMapInput);
 }
 
 type ProjectMapFixture = {

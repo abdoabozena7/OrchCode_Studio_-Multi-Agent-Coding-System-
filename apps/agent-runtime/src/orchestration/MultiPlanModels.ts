@@ -25,7 +25,6 @@ export type PlanningEvidenceSourceType =
   | "provider_specialist_output"
   | "provider_tester_planner_output"
   | "provider_reporter_output"
-  | "mock_worker_output"
   | "deterministic_context"
   | "repo_index"
   | "context_pack"
@@ -75,7 +74,6 @@ export type PlanningEvidenceSummary = {
   evidence_used: boolean;
   evidence_item_count: number;
   provider_evidence_count: number;
-  mock_evidence_count: number;
   low_confidence_count: number;
   rejected_evidence_count: number;
   evidence_conflict_count: number;
@@ -303,7 +301,6 @@ export type MultiPlanSummary = {
   evidence_used?: boolean;
   evidence_item_count?: number;
   provider_evidence_count?: number;
-  mock_evidence_count?: number;
   low_confidence_count?: number;
   rejected_evidence_count?: number;
   evidence_conflict_count?: number;

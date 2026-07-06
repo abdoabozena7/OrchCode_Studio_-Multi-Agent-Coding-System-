@@ -5,14 +5,14 @@ export type ExecutionMode = "fast" | "deep" | "exhaustive";
 export type ValidationLevel = "basic" | "standard" | "strict";
 export type SwarmWorkerMode = "provider_read_only";
 export type PlanningEvidenceMode = "off" | "available" | "require_for_provider_mode";
-export type TeamSubPlanningMode = "off" | "deterministic" | "provider_read_only" | "auto";
+export type TeamSubPlanningMode = "off" | "provider_read_only" | "auto";
 export type TeamTaskAdoptionMode = "off" | "metadata_only" | "read_only_only" | "gated_future_ready";
 export type ProposedTaskGraphMode = "off" | "metadata_only" | "read_only_ready";
 export type ExecutionReadinessMode = "off" | "report_only" | "strict";
 export type PromotionQueueMode = "off" | "report_only" | "approval_records" | "queue_candidates";
 export type ExecutionPreparationMode = "off" | "report_only" | "prepare_only";
-export type OneWriterDryRunMode = "off" | "fake_provider" | "provider" | "auto";
-export type PatchProposalReviewMode = "off" | "deterministic" | "fake_provider" | "provider" | "auto";
+export type OneWriterDryRunMode = "off" | "provider" | "auto";
+export type PatchProposalReviewMode = "off" | "provider" | "auto";
 export type ValidationCandidateMode = "off" | "report_only" | "preflight";
 export type PatchApplySandboxMode = "off" | "simulate_only" | "temp_copy" | "git_worktree_if_available";
 export type SandboxValidationMode = "off" | "report_only" | "execute_safe_commands";
@@ -52,7 +52,6 @@ export type OrchestrationSafetyConfig = {
   planning_evidence_mode: PlanningEvidenceMode;
   max_evidence_items: number;
   min_evidence_confidence: number;
-  allow_mock_evidence: boolean;
   prompt_writer_mode: PromptWriterMode;
   prompt_writer_provider_mode: PromptWriterProviderMode;
   enable_team_sub_planning: boolean;
@@ -157,11 +156,33 @@ export type OrchestrationSafetyConfig = {
   require_passed_post_apply_validation?: boolean;
   allow_partial_finalization_for_rollback?: boolean;
   max_finalizations_per_run?: number;
+  enable_task_queue: boolean;
+  task_queue_db_path: string;
+  task_queue_max_attempts: number;
+  task_queue_lease_ttl_ms: number;
+  task_queue_poll_timeout_ms: number;
+  enable_suspend_hydrate: boolean;
+  suspend_hydrate_ttl_ms: number;
+  max_snapshot_size_bytes: number;
+  enable_circuit_breaker: boolean;
+  max_bankruptcy_attempts: number;
+  max_circuit_breaker_duplicate_outputs: number;
+  max_circuit_breaker_stagnant_rounds: number;
 };
+
+export type TaskQueueConfig = Pick<OrchestrationSafetyConfig,
+  "enable_task_queue" | "task_queue_db_path" | "task_queue_max_attempts" | "task_queue_lease_ttl_ms" | "task_queue_poll_timeout_ms"
+>;
+export type SuspendHydrateConfig = Pick<OrchestrationSafetyConfig,
+  "enable_suspend_hydrate" | "suspend_hydrate_ttl_ms" | "max_snapshot_size_bytes"
+>;
+export type CircuitBreakerConfig = Pick<OrchestrationSafetyConfig,
+  "enable_circuit_breaker" | "max_bankruptcy_attempts" | "max_circuit_breaker_duplicate_outputs" | "max_circuit_breaker_stagnant_rounds"
+>;
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   execution_mode: "deep",
-  swarm_mode: "pipeline",
+  swarm_mode: "recursive_tree",
   memory_path: ".agent_memory",
   enable_internal_swarm_autopilot: true,
   max_supported_logical_agents: 300,
@@ -189,11 +210,10 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   planning_evidence_mode: "available",
   max_evidence_items: 20,
   min_evidence_confidence: 0.2,
-  allow_mock_evidence: false,
   prompt_writer_mode: "shadow",
   prompt_writer_provider_mode: "auto",
   enable_team_sub_planning: true,
-  team_sub_planning_mode: "deterministic",
+  team_sub_planning_mode: "auto",
   max_team_sub_plans_per_run: 12,
   max_team_sub_plan_tasks: 6,
   max_team_sub_plan_depth: 2,
@@ -231,13 +251,13 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   block_on_stale_context: false,
   block_on_prompt_quality_warning_for_write: false,
   enable_one_writer_dry_run: false,
-  one_writer_dry_run_mode: "fake_provider",
+  one_writer_dry_run_mode: "auto",
   allow_real_provider_dry_run: false,
   max_dry_run_proposals_per_run: 12,
   block_on_prompt_quality_warning_for_writer: true,
   block_on_stale_context_for_writer: false,
   enable_patch_proposal_review_gate: false,
-  patch_proposal_review_mode: "deterministic",
+  patch_proposal_review_mode: "auto",
   allow_real_provider_review: false,
   max_patch_proposal_reviews_per_run: 12,
   require_specialist_review_for_high_risk: true,
@@ -293,7 +313,22 @@ export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationSafetyConfig = {
   create_integration_lessons: true,
   require_passed_post_apply_validation: true,
   allow_partial_finalization_for_rollback: true,
-  max_finalizations_per_run: 4
+  max_finalizations_per_run: 4,
+
+  enable_task_queue: true,
+  task_queue_db_path: ".agent_memory",
+  task_queue_max_attempts: 3,
+  task_queue_lease_ttl_ms: 300_000,
+  task_queue_poll_timeout_ms: 5_000,
+
+  enable_suspend_hydrate: true,
+  suspend_hydrate_ttl_ms: 86_400_000,
+  max_snapshot_size_bytes: 10_485_760,
+
+  enable_circuit_breaker: true,
+  max_bankruptcy_attempts: 5,
+  max_circuit_breaker_duplicate_outputs: 2,
+  max_circuit_breaker_stagnant_rounds: 3,
 };
 
 export const EXECUTION_MODE_PRESETS: Record<ExecutionMode, Partial<OrchestrationSafetyConfig>> = {
@@ -425,7 +460,6 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     planning_evidence_mode: envPlanningEvidenceMode("HIVO_PLANNING_EVIDENCE_MODE", input.planning_evidence_mode ?? DEFAULT_ORCHESTRATION_CONFIG.planning_evidence_mode),
     max_evidence_items: envNumber("HIVO_MAX_PLANNING_EVIDENCE_ITEMS", input.max_evidence_items, DEFAULT_ORCHESTRATION_CONFIG.max_evidence_items),
     min_evidence_confidence: envNumber("HIVO_MIN_PLANNING_EVIDENCE_CONFIDENCE", input.min_evidence_confidence, DEFAULT_ORCHESTRATION_CONFIG.min_evidence_confidence),
-    allow_mock_evidence: envBool("HIVO_ALLOW_MOCK_PLANNING_EVIDENCE", input.allow_mock_evidence, DEFAULT_ORCHESTRATION_CONFIG.allow_mock_evidence),
     prompt_writer_mode: envPromptWriterMode("HIVO_PROMPT_WRITER_MODE", input.prompt_writer_mode ?? DEFAULT_ORCHESTRATION_CONFIG.prompt_writer_mode),
     prompt_writer_provider_mode: envPromptWriterProviderMode("HIVO_PROMPT_WRITER_PROVIDER_MODE", input.prompt_writer_provider_mode ?? DEFAULT_ORCHESTRATION_CONFIG.prompt_writer_provider_mode),
     enable_team_sub_planning: envBool("HIVO_ENABLE_TEAM_SUB_PLANNING", input.enable_team_sub_planning, preset.enable_team_sub_planning ?? DEFAULT_ORCHESTRATION_CONFIG.enable_team_sub_planning),
@@ -529,7 +563,22 @@ export function loadOrchestrationConfig(input: PartialOrchestrationSafetyConfig 
     create_integration_lessons: envBool("HIVO_CREATE_INTEGRATION_LESSONS", input.create_integration_lessons, DEFAULT_ORCHESTRATION_CONFIG.create_integration_lessons ?? true),
     require_passed_post_apply_validation: envBool("HIVO_REQUIRE_PASSED_POST_APPLY_VALIDATION", input.require_passed_post_apply_validation, DEFAULT_ORCHESTRATION_CONFIG.require_passed_post_apply_validation ?? true),
     allow_partial_finalization_for_rollback: envBool("HIVO_ALLOW_PARTIAL_FINALIZATION_FOR_ROLLBACK", input.allow_partial_finalization_for_rollback, DEFAULT_ORCHESTRATION_CONFIG.allow_partial_finalization_for_rollback ?? true),
-    max_finalizations_per_run: envNumber("HIVO_MAX_FINALIZATIONS_PER_RUN", input.max_finalizations_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_finalizations_per_run ?? 4)
+    max_finalizations_per_run: envNumber("HIVO_MAX_FINALIZATIONS_PER_RUN", input.max_finalizations_per_run, DEFAULT_ORCHESTRATION_CONFIG.max_finalizations_per_run ?? 4),
+
+    enable_task_queue: envBool("HIVO_ENABLE_TASK_QUEUE", input.enable_task_queue, DEFAULT_ORCHESTRATION_CONFIG.enable_task_queue),
+    task_queue_db_path: envString("HIVO_TASK_QUEUE_DB_PATH", input.task_queue_db_path, DEFAULT_ORCHESTRATION_CONFIG.task_queue_db_path),
+    task_queue_max_attempts: envNumber("HIVO_TASK_QUEUE_MAX_ATTEMPTS", input.task_queue_max_attempts, DEFAULT_ORCHESTRATION_CONFIG.task_queue_max_attempts),
+    task_queue_lease_ttl_ms: envNumber("HIVO_TASK_QUEUE_LEASE_TTL_MS", input.task_queue_lease_ttl_ms, DEFAULT_ORCHESTRATION_CONFIG.task_queue_lease_ttl_ms),
+    task_queue_poll_timeout_ms: envNumber("HIVO_TASK_QUEUE_POLL_TIMEOUT_MS", input.task_queue_poll_timeout_ms, DEFAULT_ORCHESTRATION_CONFIG.task_queue_poll_timeout_ms),
+
+    enable_suspend_hydrate: envBool("HIVO_ENABLE_SUSPEND_HYDRATE", input.enable_suspend_hydrate, DEFAULT_ORCHESTRATION_CONFIG.enable_suspend_hydrate),
+    suspend_hydrate_ttl_ms: envNumber("HIVO_SUSPEND_HYDRATE_TTL_MS", input.suspend_hydrate_ttl_ms, DEFAULT_ORCHESTRATION_CONFIG.suspend_hydrate_ttl_ms),
+    max_snapshot_size_bytes: envNumber("HIVO_MAX_SNAPSHOT_SIZE_BYTES", input.max_snapshot_size_bytes, DEFAULT_ORCHESTRATION_CONFIG.max_snapshot_size_bytes),
+
+    enable_circuit_breaker: envBool("HIVO_ENABLE_CIRCUIT_BREAKER", input.enable_circuit_breaker, DEFAULT_ORCHESTRATION_CONFIG.enable_circuit_breaker),
+    max_bankruptcy_attempts: envNumber("HIVO_MAX_BANKRUPTCY_ATTEMPTS", input.max_bankruptcy_attempts, DEFAULT_ORCHESTRATION_CONFIG.max_bankruptcy_attempts),
+    max_circuit_breaker_duplicate_outputs: envNumber("HIVO_MAX_CIRCUIT_BREAKER_DUPLICATE_OUTPUTS", input.max_circuit_breaker_duplicate_outputs, DEFAULT_ORCHESTRATION_CONFIG.max_circuit_breaker_duplicate_outputs),
+    max_circuit_breaker_stagnant_rounds: envNumber("HIVO_MAX_CIRCUIT_BREAKER_STAGNANT_ROUNDS", input.max_circuit_breaker_stagnant_rounds, DEFAULT_ORCHESTRATION_CONFIG.max_circuit_breaker_stagnant_rounds)
   };
   validateOrchestrationConfig(config);
   return config;
@@ -575,6 +624,14 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     | "max_controlled_applies_per_run"
     | "controlled_apply_validation_timeout_ms"
     | "max_finalizations_per_run"
+    | "task_queue_max_attempts"
+    | "task_queue_lease_ttl_ms"
+    | "task_queue_poll_timeout_ms"
+    | "suspend_hydrate_ttl_ms"
+    | "max_snapshot_size_bytes"
+    | "max_bankruptcy_attempts"
+    | "max_circuit_breaker_duplicate_outputs"
+    | "max_circuit_breaker_stagnant_rounds"
   >> = [
     "max_tasks_per_run",
     "max_supported_logical_agents",
@@ -612,7 +669,15 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
     "max_apply_approvals_per_run",
     "max_controlled_applies_per_run",
     "controlled_apply_validation_timeout_ms",
-    "max_finalizations_per_run"
+    "max_finalizations_per_run",
+    "task_queue_max_attempts",
+    "task_queue_lease_ttl_ms",
+    "task_queue_poll_timeout_ms",
+    "suspend_hydrate_ttl_ms",
+    "max_snapshot_size_bytes",
+    "max_bankruptcy_attempts",
+    "max_circuit_breaker_duplicate_outputs",
+    "max_circuit_breaker_stagnant_rounds"
   ];
   for (const key of numericKeys) {
     const minValue = key === "max_repair_rounds" ? 0 : 1;
@@ -628,15 +693,15 @@ export function validateOrchestrationConfig(config: OrchestrationSafetyConfig) {
   if (config.swarm_worker_mode !== "provider_read_only") throw new Error("Only provider_read_only swarm workers are supported.");
   if (!["off", "available", "require_for_provider_mode"].includes(config.planning_evidence_mode)) throw new Error("Invalid orchestration config planning_evidence_mode");
   if (!["off", "shadow", "advisory", "gated_adopt"].includes(config.prompt_writer_mode)) throw new Error("Invalid orchestration config prompt_writer_mode");
-  if (!["deterministic", "provider_read_only", "auto"].includes(config.prompt_writer_provider_mode)) throw new Error("Invalid orchestration config prompt_writer_provider_mode");
-  if (!["off", "deterministic", "provider_read_only", "auto"].includes(config.team_sub_planning_mode)) throw new Error("Invalid orchestration config team_sub_planning_mode");
+  if (!["provider_read_only", "auto"].includes(config.prompt_writer_provider_mode)) throw new Error("Invalid orchestration config prompt_writer_provider_mode");
+  if (!["off", "provider_read_only", "auto"].includes(config.team_sub_planning_mode)) throw new Error("Invalid orchestration config team_sub_planning_mode");
   if (!["off", "metadata_only", "read_only_only", "gated_future_ready"].includes(config.team_task_adoption_mode)) throw new Error("Invalid orchestration config team_task_adoption_mode");
   if (!["off", "metadata_only", "read_only_ready"].includes(config.proposed_task_graph_mode)) throw new Error("Invalid orchestration config proposed_task_graph_mode");
   if (!["off", "report_only", "strict"].includes(config.execution_readiness_mode)) throw new Error("Invalid orchestration config execution_readiness_mode");
   if (!["off", "report_only", "approval_records", "queue_candidates"].includes(config.promotion_queue_mode ?? "off")) throw new Error("Invalid orchestration config promotion_queue_mode");
   if (!["off", "report_only", "prepare_only"].includes(config.execution_preparation_mode ?? "off")) throw new Error("Invalid orchestration config execution_preparation_mode");
-  if (!["off", "fake_provider", "provider", "auto"].includes(config.one_writer_dry_run_mode ?? "off")) throw new Error("Invalid orchestration config one_writer_dry_run_mode");
-  if (!["off", "deterministic", "fake_provider", "provider", "auto"].includes(config.patch_proposal_review_mode ?? "off")) throw new Error("Invalid orchestration config patch_proposal_review_mode");
+  if (!["off", "provider", "auto"].includes(config.one_writer_dry_run_mode ?? "off")) throw new Error("Invalid orchestration config one_writer_dry_run_mode");
+  if (!["off", "provider", "auto"].includes(config.patch_proposal_review_mode ?? "off")) throw new Error("Invalid orchestration config patch_proposal_review_mode");
   if (!["off", "report_only", "preflight"].includes(config.validation_candidate_mode ?? "off")) throw new Error("Invalid orchestration config validation_candidate_mode");
   if (!["off", "simulate_only", "temp_copy", "git_worktree_if_available"].includes(config.patch_apply_sandbox_mode ?? "off")) throw new Error("Invalid orchestration config patch_apply_sandbox_mode");
   if (!["off", "report_only", "execute_safe_commands"].includes(config.sandbox_validation_mode ?? "off")) throw new Error("Invalid orchestration config sandbox_validation_mode");
@@ -711,13 +776,13 @@ function envPromptWriterMode(name: string, fallback: PromptWriterMode): PromptWr
 
 function envPromptWriterProviderMode(name: string, fallback: PromptWriterProviderMode): PromptWriterProviderMode {
   const raw = envRaw(name);
-  if (raw === "deterministic" || raw === "provider_read_only" || raw === "auto") return raw;
+  if (raw === "provider_read_only" || raw === "auto") return raw;
   return fallback;
 }
 
 function envTeamSubPlanningMode(name: string, fallback: TeamSubPlanningMode): TeamSubPlanningMode {
   const raw = envRaw(name);
-  if (raw === "off" || raw === "deterministic" || raw === "provider_read_only" || raw === "auto") return raw;
+  if (raw === "off" || raw === "provider_read_only" || raw === "auto") return raw;
   return fallback;
 }
 
@@ -753,13 +818,13 @@ function envExecutionPreparationMode(name: string, fallback: ExecutionPreparatio
 
 function envOneWriterDryRunMode(name: string, fallback: OneWriterDryRunMode): OneWriterDryRunMode {
   const raw = envRaw(name);
-  if (raw === "off" || raw === "fake_provider" || raw === "provider" || raw === "auto") return raw;
+  if (raw === "off" || raw === "provider" || raw === "auto") return raw;
   return fallback;
 }
 
 function envPatchProposalReviewMode(name: string, fallback: PatchProposalReviewMode): PatchProposalReviewMode {
   const raw = envRaw(name);
-  if (raw === "off" || raw === "deterministic" || raw === "fake_provider" || raw === "provider" || raw === "auto") return raw;
+  if (raw === "off" || raw === "provider" || raw === "auto") return raw;
   return fallback;
 }
 

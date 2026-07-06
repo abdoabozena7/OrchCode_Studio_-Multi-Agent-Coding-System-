@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { writeJson } from "../memory/ProjectMemory.js";
 import {
   CoreOrchestrator,
@@ -26,10 +27,7 @@ import {
   createWriterSlot,
   loadOrchestrationConfig,
   reconstructFactoryRunTrace,
-  type ExecutionPreparationPlan,
-  type OneWriterDryRunProvider,
-  type OneWriterDryRunProviderInput,
-  type OneWriterDryRunProviderResult
+  type ExecutionPreparationPlan
 } from "../orchestration/index.js";
 
 test("dry-run writer models create proposals patch changes batches and scope checks", () => {
@@ -64,7 +62,7 @@ test("dry-run writer models create proposals patch changes batches and scope che
     approval_id: "approval_model",
     proposed_node_id: "node_model",
     writer_role: "ExecutorAgent",
-    provider_mode: "fake_provider",
+    provider_mode: "provider",
     prompt_id: "prompt_model",
     context_pack_ref: "context.json",
     patch_summary: patch.summary,
@@ -102,7 +100,7 @@ test("dry-run writer models create proposals patch changes batches and scope che
   assert.equal(batch.summary.review_candidate_count, 1);
 });
 
-test("fake provider valid output creates one review-candidate proposal without applying or integrating", async () => {
+test("scripted provider valid output creates one review-candidate proposal without applying or integrating", async () => {
   const workspace = await fixtureWorkspace("one-writer-dry-run-valid");
   try {
     const artifactStore = new OrchestrationArtifactStore(workspace);
@@ -172,13 +170,13 @@ test("preparation validation blocks missing gates without provider calls", async
     const realProviderDisallowed = await persistPreparedPlan(workspace, artifactStore, "run_real_provider_block", {});
     const provider = providerReturning(validPatchOutput(["src/runtime.ts"]));
     for (const [expectedRun, planInput, mode] of [
-      ["run_missing_approval", noApproval, "fake_provider"],
-      ["run_not_prepared", notPrepared, "fake_provider"],
-      ["run_missing_validation", missingValidation, "fake_provider"],
-      ["run_missing_review", missingReview, "fake_provider"],
-      ["run_missing_integration", missingIntegration, "fake_provider"],
-      ["run_missing_scope", missingScope, "fake_provider"],
-      ["run_blocked_node", blockedNode, "fake_provider"],
+      ["run_missing_approval", noApproval, "auto"],
+      ["run_not_prepared", notPrepared, "auto"],
+      ["run_missing_validation", missingValidation, "auto"],
+      ["run_missing_review", missingReview, "auto"],
+      ["run_missing_integration", missingIntegration, "auto"],
+      ["run_missing_scope", missingScope, "auto"],
+      ["run_blocked_node", blockedNode, "auto"],
       ["run_real_provider_block", realProviderDisallowed, "provider"]
     ] as const) {
       const result = await new OneWriterDryRunExecutor({
@@ -266,7 +264,7 @@ test("scope checker rejects forbidden out-of-scope delete sensitive and false va
       approval_id: preparation.approval_id,
       proposed_node_id: preparation.proposed_node_id,
       writer_role: "ExecutorAgent",
-      provider_mode: "fake_provider",
+      provider_mode: "provider",
       patch_summary: "",
       changed_files: [],
       allowed_files: preparation.allowed_files,
@@ -462,15 +460,22 @@ function validPatchOutput(files: string[], overrides: Record<string, unknown> = 
   }, null, 2);
 }
 
-function providerReturning(raw: string, error?: Error): OneWriterDryRunProvider & { calls: number } {
+function providerReturning(raw: string, error?: Error): LlmProvider & { calls: number; requests: LlmRequest[] } {
   return {
-    provider_name: "test_fake_provider",
-    provider_mode: "fake_provider",
     calls: 0,
-    async generatePatchProposal(_input: OneWriterDryRunProviderInput): Promise<OneWriterDryRunProviderResult> {
+    requests: [],
+    async generateStructured<T>(input: LlmRequest): Promise<T> {
       this.calls += 1;
+      this.requests.push(input);
       if (error) throw error;
-      return { raw_output: raw, provider_name: "test_fake_provider", model_name: "test-fake-model" };
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return raw as T;
+      }
+    },
+    async generateText(): Promise<string> {
+      throw new Error("generateText is not used by one-writer dry-run tests.");
     }
   };
 }
@@ -479,7 +484,7 @@ function config(overrides: Parameters<typeof loadOrchestrationConfig>[0] = {}) {
   return loadOrchestrationConfig({
     memory_path: ".agent_memory",
     enable_one_writer_dry_run: false,
-    one_writer_dry_run_mode: "fake_provider",
+    one_writer_dry_run_mode: "auto",
     allow_real_provider_dry_run: false,
     ...overrides
   });

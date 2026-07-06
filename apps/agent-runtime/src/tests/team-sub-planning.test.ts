@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { LlmProvider } from "../llm/LlmProvider.js";
 import { writeJson } from "../memory/ProjectMemory.js";
 import {
   AgentTeamManager,
@@ -91,7 +92,7 @@ test("TeamSubPlan models create task drafts dependencies risks validation strate
     },
     unresolved_questions: [],
     confidence: 0.8,
-    generation_mode: "deterministic",
+    generation_mode: "mixed",
     metadata_json: { team_allowed_files: ["src/runtime.ts"], team_forbidden_files: [".env"] }
   });
   const aggregation = createTeamSubPlanAggregation({
@@ -141,7 +142,7 @@ test("TeamSubPlanner validates scope budget provider read-only and validation tr
   }
 });
 
-test("TeamSubPlanner generates focused deterministic sub-plans for supported team types and auto provider fallback", async () => {
+test("TeamSubPlanner blocks local semantic fallback and accepts provider-authored sub-plans", async () => {
   const workspace = await fixtureWorkspace("team-sub-plan-generation");
   try {
     const run = fakeRun(workspace, "run_sub_plan_generation");
@@ -150,24 +151,24 @@ test("TeamSubPlanner generates focused deterministic sub-plans for supported tea
     for (const team of teams) {
       const input = await planner.buildTeamSubPlanInput(team.team_id);
       const plan = await planner.generateTeamSubPlan(input);
-      assert.equal(plan.status, "generated");
+      assert.equal(plan.status, "blocked");
       assert.equal(plan.team_type, team.team_type);
       assert.notEqual(String(plan.validation_strategy.status), "passed");
-      if (team.team_type === "review") assert.match(plan.proposed_tasks[0].title, /Review/);
-      if (team.team_type === "validation") assert.match(plan.proposed_tasks[0].title, /validation/i);
-      if (team.team_type === "integration") assert.match(plan.proposed_tasks[0].title, /integration/i);
-      if (team.team_type === "memory") assert.match(plan.proposed_tasks[0].title, /memory/i);
+      assert.equal(plan.proposed_tasks.length, 0);
+      assert.equal(plan.metadata_json.provider_required, true);
     }
     const autoPlanner = new TeamSubPlanner({
       workspacePath: workspace,
       config: config({ team_sub_planning_mode: "auto", allow_provider_team_sub_planning: true }),
-      teamManager: manager
+      teamManager: manager,
+      provider: providerSubPlanner()
     });
     const input = await autoPlanner.buildTeamSubPlanInput(teams[0].team_id);
-    const fallback = await autoPlanner.generateTeamSubPlan(input);
-    assert.equal(fallback.status, "generated");
-    assert.equal(fallback.generation_mode, "mixed");
-    assert.equal(fallback.metadata_json.deterministic_fallback, true);
+    const providerPlan = await autoPlanner.generateTeamSubPlan(input);
+    assert.equal(providerPlan.status, "generated");
+    assert.equal(providerPlan.generation_mode, "provider_read_only");
+    assert.equal(providerPlan.proposed_tasks[0]?.title, "Provider scoped review");
+    assert.equal(providerPlan.metadata_json.provider_read_only, true);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -178,7 +179,12 @@ test("TeamSubPlanner writes artifacts persists metadata and emits traces without
   try {
     const run = fakeRun(workspace, "run_sub_plan_artifacts");
     const { manager, teams } = await createTeamFixture(workspace, run, ["domain"]);
-    const planner = new TeamSubPlanner({ workspacePath: workspace, config: config(), teamManager: manager });
+    const planner = new TeamSubPlanner({
+      workspacePath: workspace,
+      config: config({ team_sub_planning_mode: "provider_read_only", allow_provider_team_sub_planning: true }),
+      teamManager: manager,
+      provider: providerSubPlanner()
+    });
     const input = await planner.buildTeamSubPlanInput(teams[0].team_id);
     const generated = await planner.generateTeamSubPlan(input);
     const withArtifacts = await planner.writeTeamSubPlanArtifacts(generated);
@@ -251,7 +257,7 @@ test("TeamSubPlanAggregator skips invalid plans detects duplicates dependencies 
   }
 });
 
-test("CoreOrchestrator plan-only run records recursive planning summary without executor task graph changes", async () => {
+test("CoreOrchestrator plan-only run blocks safely without provider-authored planning", async () => {
   const workspace = await fixtureWorkspace("team-sub-plan-core");
   try {
     const result = await new CoreOrchestrator({
@@ -262,14 +268,13 @@ test("CoreOrchestrator plan-only run records recursive planning summary without 
         execution_mode: "deep",
         enable_multi_plan_factory: true,
         enable_team_sub_planning: true,
-        team_sub_planning_mode: "deterministic"
+        team_sub_planning_mode: "auto"
       }
     }).planOnly("Plan a medium orchestration and runtime change across src/runtime.ts and src/review.ts without editing files.");
-    assert.equal(result.run.status, "succeeded");
+    assert.equal(result.run.status, "blocked");
     assert.equal(result.tasks.every((task) => !task.id.startsWith("team_sub_plan_")), true);
-    assert.equal(result.report.team_sub_planning_used, true);
-    assert.ok((result.report.sub_plan_count ?? 0) >= 1);
-    assert.ok(result.report.aggregation_ref && existsSync(result.report.aggregation_ref));
+    assert.equal(result.report.team_sub_planning_used, false);
+    assert.equal(result.report.sub_plan_count ?? 0, 0);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -302,6 +307,52 @@ async function createTeamFixture(workspace: string, run: Run, types: AgentTeamTy
   return { manager, teams };
 }
 
+function providerSubPlanner(): LlmProvider {
+  return {
+    async generateStructured<T>() {
+      const result = {
+        assumptions: ["Provider authored this read-only team sub-plan."],
+        proposed_tasks: [createTeamSubPlanTaskDraft({
+          title: "Provider scoped review",
+          objective: "Review the scoped files and report risks.",
+          role_hint: "ReviewerAgent",
+          read_only: true,
+          proposed_files: ["src/domain.ts"],
+          allowed_write_paths: [],
+          forbidden_files: [".env"],
+          required_context_refs: ["ctx"],
+          evidence_refs: ["evidence"],
+          validation_refs: [],
+          rationale: "Provider-authored read-only planning metadata."
+        })],
+        dependencies: [{
+          dependency_id: "dependency_provider_sub_plan",
+          dependency_type: "artifact",
+          source_ref: "team_provider",
+          target_ref: "ctx",
+          summary: "Provider linked the plan to context evidence.",
+          metadata_json: {}
+        }],
+        validation_strategy: {
+          strategy_id: "validation_provider_sub_plan",
+          status: "planned",
+          commands: ["git diff --check"],
+          required_checks: ["scope"],
+          artifact_refs: [],
+          notes: ["not run"],
+          metadata_json: {}
+        },
+        confidence: 0.74,
+        metadata_json: { provider_fixture: true }
+      };
+      return result as T;
+    },
+    async generateText() {
+      throw new Error("generateText_not_expected");
+    }
+  };
+}
+
 function manualPlan(input: {
   teamId?: string;
   subPlanId?: string;
@@ -313,7 +364,7 @@ function manualPlan(input: {
   maxTasks?: number;
   maxDepth?: number;
   plannedDepth?: number;
-  generationMode?: "deterministic" | "heuristic" | "provider_read_only" | "mixed";
+  generationMode?: "heuristic" | "provider_read_only" | "mixed";
   readOnly?: boolean;
 }): TeamSubPlan {
   const taskCount = input.taskCount ?? 1;
@@ -377,7 +428,7 @@ function manualPlan(input: {
     },
     unresolved_questions: [],
     confidence: 0.8,
-    generation_mode: input.generationMode ?? "deterministic",
+    generation_mode: input.generationMode ?? "mixed",
     metadata_json: {
       team_allowed_files: input.allowedFiles ?? ["src/"],
       team_forbidden_files: input.forbiddenFiles ?? [],

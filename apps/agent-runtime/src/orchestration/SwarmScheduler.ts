@@ -16,6 +16,7 @@ import type {
 } from "./SwarmModels.js";
 import { SWARM_SCHEMA_VERSION } from "./SwarmModels.js";
 import { IntentHandoffGate, intentGateBlockedWorkItemResult } from "./IntentHandoffGate.js";
+import { AgentCircuitBreaker, type BranchBankruptcyError } from "./CircuitBreaker.js";
 
 export type SwarmWorker = (input: {
   workItem: WorkItem;
@@ -81,6 +82,8 @@ export class SwarmScheduler {
   private readonly deferralAging = new Map<string, number>();
   private readonly resourceMonitor: SchedulerResourceMonitor;
   private readonly now: () => number;
+  private readonly circuitBreakers = new Map<string, AgentCircuitBreaker>();
+  private readonly bankruptcyErrors: BranchBankruptcyError[] = [];
 
   constructor(
     private readonly workspacePath: string,
@@ -486,6 +489,25 @@ export class SwarmScheduler {
     }
 
     input.agent.failure_count += 1;
+
+    const breaker = this.getOrCreateCircuitBreaker(input.workItem, input.agent);
+    const fingerprint = AgentCircuitBreaker.createFingerprint(result.summary + result.risks.join(" "));
+    breaker.recordAttempt(fingerprint, result.summary, result.summary);
+    breaker.recordStagnantRound();
+
+    const bankruptcy = breaker.checkBankruptcy();
+    if (bankruptcy) {
+      this.bankruptcyErrors.push(bankruptcy);
+      input.workItem.status = "failed";
+      input.workItem.updated_at = new Date().toISOString();
+      await this.event(input.run.id, "swarm.work_item.failed", `Work item ${input.workItem.id} declared BANKRUPT: ${bankruptcy.last_error}`, {
+        result_ref: input.workItem.result_ref,
+        bankruptcy,
+        summary: `Bankruptcy after ${bankruptcy.attempt_count} attempts: ${bankruptcy.reason}`
+      }, input.workItem.id);
+      return;
+    }
+
     if (input.workItem.attempt_count < input.workItem.max_attempts && result.structured_output_valid) {
       this.retryCount += 1;
       input.workItem.status = "queued";
@@ -511,7 +533,7 @@ export class SwarmScheduler {
         summary: result.summary
       }, input.workItem.id);
     }
-    if (result.validation_passed === false) {
+    if (result.validation_passed === false && this.bankruptcyErrors.length === 0) {
       await this.createRepairItem(input.run.id, input.workItems, input.workItem);
     }
     await this.reduceConcurrency(input.run.id, `Terminal failure in ${input.workItem.id} reduced executor concurrency.`);
@@ -562,6 +584,8 @@ export class SwarmScheduler {
     this.executorBackpressure = 0;
     this.healthyBatchStreak = 0;
     this.deferralAging.clear();
+    this.circuitBreakers.clear();
+    this.bankruptcyErrors.length = 0;
     this.currentParallelLimit = 1;
     this.minimumExecutorLimit = staffingPlan.executor_limit > 0 && staffingPlan.executor_count > 0 && run.scheduler_config.executor_limit > 0 ? 1 : 0;
     this.currentExecutorLimit = this.effectiveExecutorLimit(staffingPlan, run.scheduler_config);
@@ -727,6 +751,7 @@ export class SwarmScheduler {
       validation_pass_rate: validationItems.length ? Math.round((validationPassed / validationItems.length) * 100) / 100 : 1,
       conflicts_detected: this.conflictsDetected,
       approval_gates_triggered: this.approvalGatesTriggered,
+      bankruptcy_count: this.bankruptcyErrors.length,
       generated_at: new Date().toISOString()
     };
   }
@@ -764,6 +789,26 @@ export class SwarmScheduler {
       created_at: new Date().toISOString(),
       payload
     });
+  }
+
+  private getOrCreateCircuitBreaker(workItem: WorkItem, agent: AgentInstance): AgentCircuitBreaker {
+    const key = `${workItem.required_role}:${workItem.id}`;
+    if (!this.circuitBreakers.has(key)) {
+      const breaker = new AgentCircuitBreaker(workItem.id, agent.role, {
+        max_bankruptcy_attempts: Math.max(workItem.max_attempts + 1, 5),
+        max_repair_rounds: 2,
+        max_duplicate_outputs: Math.max(workItem.max_attempts, 2),
+        max_stagnant_rounds: 3,
+        stagnation_window_ms: 120_000,
+        fingerprint_similarity_threshold: 0.85
+      });
+      this.circuitBreakers.set(key, breaker);
+    }
+    return this.circuitBreakers.get(key)!;
+  }
+
+  getBankruptcyErrors(): BranchBankruptcyError[] {
+    return [...this.bankruptcyErrors];
   }
 }
 

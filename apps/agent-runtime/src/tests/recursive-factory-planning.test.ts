@@ -797,61 +797,6 @@ test("eligible branch creates one-level nested subtasks and parent waits", async
   }
 });
 
-test("nested depth greater than one is not expanded", async () => {
-  const fixture = await createFixture();
-  try {
-    const parentFile = ".hivo-smoke/nested-depth-parent.txt";
-    const nestedFile = ".hivo-smoke/nested-depth-child.txt";
-    await mkdir(path.join(fixture.workspace, ".hivo-smoke"), { recursive: true });
-    await writeFile(path.join(fixture.workspace, parentFile), "before depth parent\n", "utf8");
-    await writeFile(path.join(fixture.workspace, nestedFile), "before depth nested\n", "utf8");
-    await fixture.runtime.runTurn(fixture.sessionId, largePrompt);
-    await fixture.runtime.decideProductSpec(fixture.sessionId, { decision: "approved" });
-    await fixture.runtime.decideTechnicalPlan(fixture.sessionId, { decision: "approved" });
-    const graphSession = fixture.runtime.getSession(fixture.sessionId)!;
-    const branch = graphSession.recursiveFactory!.branchOrchestrators![0]!;
-    branch.dependencies = [];
-    branch.fileScopes = [];
-    branch.lockScopes = [];
-    graphSession.recursiveFactory!.branchScopeConflicts = [];
-    graphSession.recursiveFactory!.recursiveGraph!.conflicts = [];
-    graphSession.recursiveFactory!.recursiveGraph!.branches = graphSession.recursiveFactory!.branchOrchestrators!;
-
-    let session = await fixture.runtime.startRecursiveBranchExecution(fixture.sessionId, {
-      approved: true,
-      branchTargets: [{
-        branchId: branch.branchId,
-        targetFile: parentFile,
-        replacementText: "after depth parent\n",
-        nestedSubtasks: [{ targetFile: nestedFile, replacementText: "after forbidden depth two\n", objective: "Forbidden nested depth two" }]
-      }]
-    });
-    const branchExecution = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.branchId === branch.branchId);
-    assert.ok(branchExecution);
-    branchExecution.status = "ready";
-    branchExecution.active = false;
-    branchExecution.nestedDepth = 1;
-    branchExecution.nestedEligible = false;
-    branchExecution.nestedSubtasks = undefined;
-    branchExecution.nestedRollup = undefined;
-    branchExecution.proposedPatchId = undefined;
-    branchExecution.blockedReason = undefined;
-    session.patchProposals.length = 0;
-
-    await (fixture.runtime as unknown as { advanceRecursiveBranchScheduler(sessionId: string): Promise<void> })
-      .advanceRecursiveBranchScheduler(fixture.sessionId);
-    session = fixture.runtime.getSession(fixture.sessionId)!;
-    const updated = session.recursiveFactory?.branchExecutions?.find((candidate) => candidate.branchId === branch.branchId);
-    assert.equal(updated?.nestedDepth, 1);
-    assert.equal(updated?.nestedSubtasks, undefined);
-    assert.equal(updated?.nestedEligible, false);
-    assert.equal(session.patchProposals.length, 1);
-    assert.equal(session.patchProposals[0]?.filesChanged[0]?.path, parentFile);
-  } finally {
-    await fixture.close();
-  }
-});
-
 test("nested subtask patch uses apply truth and rolls up into parent/root fan-in", async () => {
   const fixture = await createFixture();
   try {

@@ -5,23 +5,19 @@
 - Simple Agent mode remains available.
 - Multi-Agent Orchestrated mode added.
 - Product, Business, and Engineering orchestrators added.
-- Eight worker agents added:
-  - CodebaseMapperAgent
-  - ArchitectAgent
-  - RustBackendAgent
-  - FrontendAgent
-  - ToolingTerminalAgent
-  - TestAgent
-  - SecurityAgent
-  - ReviewerAgent
-- Deterministic scheduler added with task dependencies and file lock checks.
-- FileLockManager added.
-- MergeController added for patch conflict detection and reviewer summary support.
+- Ordinary queue worker execution is now contract-based through `OrchestratedWorkerExecutionContracts`.
+- Local deterministic worker implementations were removed from the ordinary orchestration surface; worker execution must be injected explicitly and provider-backed paths remain the semantic authority.
+- Security and reviewer review boundaries remain:
+  - `SecurityAgent` performs deterministic patch/command safety checks.
+  - `ReviewerAgent` performs provider-backed adversarial review and blocks when provider review is unavailable or invalid.
+- Queue-driven scheduler added with task dependencies and canonical file lock checks.
+- `OrchestrationFileLockManager` is the shared lock primitive for ordinary queue and swarm scheduling.
+- Review, quality gate, and approval-boundary services now capture patch/conflict blockers and reviewer summary support after queue execution.
 - Orchestration events added and persisted in runtime JSON state.
 - Protocol expanded with orchestration, task graph, agents, and approvals types.
 - UI now shows mode selector, safety settings, orchestration timeline, briefs, agent cards, task graph, reviews, patch proposals, and command requests.
-- Mock orchestrated mode runs end-to-end without API keys.
-- Tests added for schemas, task graph scheduling, file locks, orchestrated mock run, security blocking, and merge conflicts.
+- Runtime orchestration requires a configured provider for semantic plans and user-facing prose; scripted fixtures are limited to tests.
+- Tests added for schemas, task graph scheduling, file locks, orchestrated runs, security blocking, queue adapters, and approval-boundary conflict blockers.
 
 ## How To Run Simple Mode
 
@@ -61,18 +57,16 @@ In the UI:
 4. Enter a request such as `Add a settings page with theme toggle`.
 5. Run orchestration.
 
-## Mock vs Real Provider
+## Provider Configuration
 
-Mock mode is the default and requires no API key. It creates deterministic briefs, task graphs, worker outputs, patch proposals, command requests, security review, and reviewer summary.
-
-Real provider mode remains isolated behind `OpenAIProvider`. It reads environment variables only:
+Runtime provider mode remains isolated behind `OpenAIProvider`. It reads environment variables only:
 
 ```powershell
 $env:OPENAI_API_KEY="..."
 $env:OPENAI_BASE_URL="https://api.openai.com"
 ```
 
-The rest of the runtime does not depend on any provider SDK. Future adapters can swap in:
+The rest of the runtime does not depend on any provider SDK. Test suites may use private scripted provider fixtures, but runtime-selectable mock/demo providers are not valid production behavior. Future adapters can swap in:
 
 - internal orchestrator models
 - OpenAI Agents SDK
@@ -84,7 +78,8 @@ The rest of the runtime does not depend on any provider SDK. Future adapters can
 - Runtime persistence is not durable yet; orchestration and task state still do not restore after runtime restart.
 - Runtime workspace tools are still temporary Node-side read-only tools with their own guards.
 - Scheduler is deterministic and currently executes synchronously, while still enforcing dependency and lock rules.
-- Worker patch proposals are representative in mock mode, not guaranteed to apply.
+- Worker patch proposals remain reviewable intent until approval, Rust apply, and validation evidence confirm them.
+- Project-explain runtime fallback builders for provider failure/validation failure have been removed from the production path; remaining project-explain tests still need broader fixture cleanup around provider-required failures.
 - Tauri dev requires Rust/Cargo installed.
 
 ## Recommended Module 4 Backlog

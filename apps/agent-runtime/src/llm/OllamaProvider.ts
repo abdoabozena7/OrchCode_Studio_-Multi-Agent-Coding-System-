@@ -75,6 +75,7 @@ export class OllamaProvider implements LlmProvider {
           body: JSON.stringify({
             model: this.model,
             stream: false,
+            keep_alive: "30m",
             ...(input.responseFormat === "json"
               ? {
                   format:
@@ -126,7 +127,7 @@ export class OllamaProvider implements LlmProvider {
   }
 
   private requestTimeoutMs(input: LlmRequest) {
-    return Math.min(this.timeoutMs, input.timeoutMs ?? this.timeoutMs);
+    return Math.max(this.timeoutMs, input.timeoutMs ?? this.timeoutMs);
   }
 
   async embed(input: EmbeddingRequest): Promise<EmbeddingResponse> {

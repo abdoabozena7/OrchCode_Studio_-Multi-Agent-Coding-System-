@@ -16,7 +16,6 @@ import {
   createOneWriterDryRunWarning,
   type OneWriterDryRunBatch,
   type OneWriterDryRunBlocker,
-  type OneWriterDryRunProvider,
   type OneWriterDryRunProviderInput,
   type OneWriterDryRunProviderResult,
   type OneWriterDryRunProposal,
@@ -36,7 +35,9 @@ import {
 import { checkPatchProposalScope as runScopeCheck } from "./PatchProposalScopeChecker.js";
 import { evaluatePromptQuality, isPromptQualityBlocking } from "./PromptQualityGate.js";
 import { hashPromptInput, hashRenderedPrompt, renderRolePrompt, type RenderedPrompt } from "./PromptSystem.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { readJson } from "../memory/ProjectMemory.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 
 export type OneWriterDryRunExecutorOptions = {
   workspacePath: string;
@@ -44,7 +45,7 @@ export type OneWriterDryRunExecutorOptions = {
   config: OrchestrationSafetyConfig;
   artifactStore?: OrchestrationArtifactStore;
   traceWriter?: FactoryTraceWriter;
-  provider?: OneWriterDryRunProvider;
+  provider?: LlmProvider;
 };
 
 export type OneWriterDryRunBatchOptions = {
@@ -59,6 +60,48 @@ type DryRunPreparationValidation = {
   warnings: OneWriterDryRunWarning[];
 };
 
+const oneWriterDryRunPatchProposalSchema = {
+  name: "OneWriterDryRunPatchProposalOutput",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "summary",
+    "changed_files",
+    "file_changes",
+    "risks",
+    "assumptions",
+    "validation_recommendations",
+    "review_notes",
+    "confidence"
+  ],
+  properties: {
+    summary: { type: "string", minLength: 1 },
+    changed_files: { type: "array", items: { type: "string" } },
+    file_changes: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["path", "change_type", "rationale", "risk", "within_allowed_scope"],
+        properties: {
+          path: { type: "string", minLength: 1 },
+          change_type: { type: "string", enum: ["create", "modify", "delete", "rename"] },
+          proposed_diff: { type: "string" },
+          replacement_snippet_ref: { type: "string" },
+          rationale: { type: "string", minLength: 1 },
+          risk: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          within_allowed_scope: { type: "boolean" }
+        }
+      }
+    },
+    risks: { type: "array", items: { type: "string" } },
+    assumptions: { type: "array", items: { type: "string" } },
+    validation_recommendations: { type: "array", items: { type: "string" } },
+    review_notes: { type: "array", items: { type: "string" } },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
+  }
+} as const;
+
 export class OneWriterDryRunExecutor {
   private readonly workspacePath: string;
   private readonly memoryDir?: string;
@@ -66,7 +109,7 @@ export class OneWriterDryRunExecutor {
   private readonly artifactStore: OrchestrationArtifactStore;
   private readonly traceWriter: FactoryTraceWriter;
   private readonly metadata: FactoryMetadataAdapter;
-  private readonly provider?: OneWriterDryRunProvider;
+  private readonly provider?: LlmProvider;
 
   constructor(options: OneWriterDryRunExecutorOptions) {
     this.workspacePath = options.workspacePath;
@@ -199,8 +242,8 @@ export class OneWriterDryRunExecutor {
       team_id: proposal.team_id,
       event_type: "one_writer_dry_run_provider_selected",
       lifecycle_stage: "planning",
-      summary: `Dry-run writer provider selected: ${provider.provider_name}.`,
-      metadata_json: { proposal_id: proposal.proposal_id, provider_mode: provider.provider_mode, real_provider_allowed: this.config.allow_real_provider_dry_run ?? false }
+      summary: "Dry-run writer provider selected through ReasoningKernel.",
+      metadata_json: { proposal_id: proposal.proposal_id, provider_name: "configured_llm_provider", provider_mode: dryRunRequest.mode, real_provider_allowed: this.config.allow_real_provider_dry_run ?? false }
     });
     let providerResult: OneWriterDryRunProviderResult;
     try {
@@ -233,7 +276,7 @@ export class OneWriterDryRunExecutor {
       });
     }
 
-    proposal.provider_name = providerResult.provider_name ?? provider.provider_name;
+    proposal.provider_name = providerResult.provider_name ?? "configured_llm_provider";
     proposal.model_name = providerResult.model_name;
     await this.traceWriter.write({
       run_id: proposal.run_id,
@@ -422,6 +465,7 @@ export class OneWriterDryRunExecutor {
     const add = (type: OneWriterDryRunBlocker["blocker_type"], reason: string, refs: string[] = []) => blockers.push(blocker(proposalId, type, reason, refs));
     if (!this.config.enable_one_writer_dry_run || mode === "off") add("dry_run_disabled", "One-writer dry-run is disabled by configuration.");
     if (mode === "provider" && !this.config.allow_real_provider_dry_run) add("provider_unavailable", "Real provider dry-run requires explicit allow_real_provider_dry_run opt-in.");
+    if (mode !== "off" && !this.provider) add("provider_unavailable", "One-writer dry-run requires a configured provider; local fake writer output is not a runtime fallback.");
     if (preparationPlan.status !== "prepared") add("not_prepared", `Preparation plan status ${preparationPlan.status} is not dry-run eligible.`, [preparationPlan.preparation_plan_id]);
     if (isWriteClassified(preparationPlan.read_or_write_classification) && !preparationPlan.approval_id) add("missing_approval", "Write-classified dry-run requires human approval.", [preparationPlan.promotion_request_id]);
     if (!preparationPlan.prompt_id || !preparationPlan.prompt_quality_result_ref) add("missing_prompt", "Preparation plan is missing prompt or prompt quality refs.", [preparationPlan.preparation_plan_id]);
@@ -439,9 +483,6 @@ export class OneWriterDryRunExecutor {
     const nodeStatus = await this.proposedNodeStatus(preparationPlan);
     if (nodeStatus && ["blocked", "rejected", "duplicate", "superseded"].includes(nodeStatus)) add("blocked_proposed_node", `Proposed node status ${nodeStatus} blocks dry-run.`, [preparationPlan.proposed_node_id]);
     if (!request?.allow_duplicate_preparation && await this.hasActiveProposal(preparationPlan.preparation_plan_id)) add("duplicate_proposal", "An active dry-run proposal already exists for this preparation plan.", [preparationPlan.preparation_plan_id]);
-    if (mode === "fake_provider" || (mode === "auto" && !(this.config.allow_real_provider_dry_run ?? false))) {
-      warnings.push(createOneWriterDryRunWarning({ proposal_id: proposalId, warning_type: "fake_provider", severity: "info", message: "Fake provider mode selected; no real provider/API call will be made.", refs: [] }));
-    }
     return {
       allowed: blockers.length === 0,
       status: blockers.length ? "blocked" : "pending",
@@ -456,9 +497,18 @@ export class OneWriterDryRunExecutor {
       event_type: "one_writer_dry_run_provider_started",
       lifecycle_stage: "planning",
       summary: `Dry-run writer provider started for ${input.preparation_plan_id}.`,
-      metadata_json: { proposal_id: input.proposal_id, provider_name: provider.provider_name, provider_mode: provider.provider_mode, provider_calls: 1 }
+      metadata_json: { proposal_id: input.proposal_id, provider_name: "configured_llm_provider", provider_mode: input.request.mode, provider_calls: 1 }
     });
-    return provider.generatePatchProposal(input);
+    const generated = await invokeReasoningProviderStructured<Record<string, unknown>>(
+      provider,
+      this.providerRequest(input),
+      oneWriterDryRunPatchProposalSchema
+    );
+    return {
+      raw_output: JSON.stringify(generated, null, 2),
+      provider_name: "reasoning_kernel",
+      metadata_json: { structured_schema: oneWriterDryRunPatchProposalSchema.name }
+    };
   }
 
   parsePatchProposalOutput(rawOutput: string, proposal: OneWriterDryRunProposal): PatchProposal {
@@ -665,12 +715,45 @@ export class OneWriterDryRunExecutor {
     };
   }
 
-  private selectProvider(mode: OneWriterDryRunRequest["mode"]): OneWriterDryRunProvider {
+  private providerRequest(input: OneWriterDryRunProviderInput): LlmRequest {
+    return {
+      purpose: "reason",
+      reasoningStage: "reason",
+      responseFormat: "json",
+      structuredSchema: oneWriterDryRunPatchProposalSchema,
+      maxOutputTokens: 4096,
+      systemPrompt: [
+        "You are the provider-backed semantic writer for a one-writer dry-run patch proposal.",
+        "Use only the supplied prompt and context. Return strict JSON matching OneWriterDryRunPatchProposalOutput.",
+        "This is a dry-run proposal only: do not claim files were modified, tests passed, locks were acquired, or validation completed.",
+        "Do not propose forbidden or out-of-scope file changes."
+      ].join("\n"),
+      userPrompt: input.prompt,
+      context: {
+        request: input.request,
+        proposal_id: input.proposal_id,
+        run_id: input.run_id,
+        preparation_plan_id: input.preparation_plan_id,
+        prompt_id: input.prompt_id,
+        objective: input.objective,
+        allowed_files: input.allowed_files,
+        forbidden_files: input.forbidden_files,
+        read_only_files: input.read_only_files,
+        validation_requirements: input.validation_requirements,
+        review_policy: input.review_policy,
+        integration_preview: input.integration_preview,
+        required_locks_preview: input.required_locks_preview,
+        metadata_json: input.metadata_json
+      }
+    };
+  }
+
+  private selectProvider(mode: OneWriterDryRunRequest["mode"]): LlmProvider {
     if (this.provider) return this.provider;
     if (mode === "provider" && !(this.config.allow_real_provider_dry_run ?? false)) {
       throw new Error("Real provider dry-run was requested without allow_real_provider_dry_run.");
     }
-    return new FakeOneWriterDryRunProvider(mode === "provider" ? "provider" : "fake_provider");
+    throw new Error("One-writer dry-run provider is not configured.");
   }
 
   private async loadPreparedPlansForRun(runId: string, ids?: string[]) {
@@ -717,40 +800,6 @@ export class OneWriterDryRunExecutor {
     } finally {
       store.close();
     }
-  }
-}
-
-class FakeOneWriterDryRunProvider implements OneWriterDryRunProvider {
-  provider_name = "fake_one_writer_dry_run_provider";
-  provider_mode: "fake_provider" | "provider";
-
-  constructor(mode: "fake_provider" | "provider") {
-    this.provider_mode = mode;
-  }
-
-  async generatePatchProposal(input: OneWriterDryRunProviderInput): Promise<OneWriterDryRunProviderResult> {
-    const file = input.allowed_files[0] ?? "README.md";
-    return {
-      provider_name: this.provider_name,
-      model_name: "fake-dry-run-v1",
-      raw_output: JSON.stringify({
-        summary: `Dry-run patch proposal for ${file}.`,
-        changed_files: [file],
-        file_changes: [{
-          path: file,
-          change_type: "modify",
-          proposed_diff: `--- a/${file}\n+++ b/${file}\n@@\n+// dry-run proposal only\n`,
-          rationale: "Demonstrates a scoped dry-run patch proposal without modifying the repository.",
-          risk: "low",
-          within_allowed_scope: true
-        }],
-        risks: ["Requires later review, validation, lock acquisition, and IntegrationManager acceptance."],
-        assumptions: ["Fake provider output is deterministic for tests and local dry-run previews."],
-        validation_recommendations: input.validation_requirements.length ? input.validation_requirements : ["Run required validation later; no validation has been executed by this dry-run."],
-        review_notes: ["Review before any future integration candidate is created."],
-        confidence: 0.72
-      }, null, 2)
-    };
   }
 }
 

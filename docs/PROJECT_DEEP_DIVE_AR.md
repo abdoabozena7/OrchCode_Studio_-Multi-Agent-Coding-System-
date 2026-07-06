@@ -97,7 +97,7 @@
 075. `npm run smoke:terminal-authority` runs a terminal authority smoke flow.
 076. `npm run smoke:run-to-green` exercises the run-to-green runtime path.
 077. `npm run smoke:inspect-provider-truth` checks provider-truth evidence.
-078. `npm run smoke:python-pygame-fallback` checks a Python fallback scenario.
+078. Python/Pygame deterministic patch fallback smoke was removed; malformed provider patch output is covered by provider-failure tests instead.
 079. `npm run memory:index` rebuilds repository memory.
 080. `npm run memory:index-status` checks whether the index is fresh.
 081. `npm run memory:index-refresh` refreshes the memory index.

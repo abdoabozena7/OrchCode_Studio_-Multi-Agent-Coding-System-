@@ -203,7 +203,7 @@ test("session manager distinguishes event replay from snapshot fallback during l
     await persisted.load();
     await persisted.createSession({
       workspacePath: fixture.session.workspacePath,
-      mode: "demo_mock",
+      mode: "real_provider",
       userPrompt: fixture.session.userPrompt
     });
 
@@ -293,7 +293,7 @@ async function createSeedFixture() {
   await manager.load();
   const created = await manager.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "restore replay fixture"
   });
   const session = manager.getSession(created.id);

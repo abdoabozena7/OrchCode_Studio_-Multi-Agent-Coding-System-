@@ -17,13 +17,13 @@ import {
   ContextPackBuilder,
   ORCHESTRATION_SCHEMA_VERSION,
   OrchestrationArtifactStore,
-  TaskGraphManager,
   listAgentRoles,
   validateRun,
   validateTask,
   type Run,
   type Task
 } from "../orchestration/index.js";
+import { TaskGraphManager } from "../orchestration/TaskGraphManager.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -222,7 +222,7 @@ test("provider-backed orchestrator uses provider calls for read-only worker role
   }
 });
 
-test("old simple SeniorCodingAgent path still works alongside Phase 2", async () => {
+test("simple SeniorCodingAgent compatibility path uses a real-provider session", async () => {
   const workspace = await createFixtureWorkspace("hivo-simple-agent");
   try {
     const sessionManager = new SessionManager(path.join(workspace, ".runtime-test"), new EventBus(), {
@@ -231,7 +231,9 @@ test("old simple SeniorCodingAgent path still works alongside Phase 2", async ()
     await sessionManager.load();
     const session = await sessionManager.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      activeProviderSource: "session_override",
       executionMode: "simple_mode",
       userPrompt: "Explain this project."
     });

@@ -35,6 +35,7 @@ test("PlanningEvidenceCollector collects provider outputs, rejects invalid refs,
     await saveProviderEvidence(workspace, run, "test_duplicate", "TesterAgent", "swarm_tester_planner_output", testerOutput({ confidence: 0.31 }), { reuseWorkItem: "test_1" });
     await saveProviderEvidence(workspace, run, "invalid_1", "ScoutAgent", "swarm_scout_output", { nope: true }, { schemaStatus: "passed" });
     await saveProviderEvidence(workspace, run, "missing_1", "ScoutAgent", "swarm_scout_output", scoutOutput({ confidence: 0.9 }), { deleteParsed: true });
+    await saveProviderEvidence(workspace, run, "mock_1", "ScoutAgent", "swarm_scout_output", scoutOutput({ confidence: 0.91 }), { workerMode: "mock" });
 
     const bundle = await new PlanningEvidenceCollector(workspace).collect({
       run,
@@ -46,7 +47,8 @@ test("PlanningEvidenceCollector collects provider outputs, rejects invalid refs,
     assert.equal(bundle.items.length, 3);
     assert.equal(bundle.summary.provider_evidence_count, 3);
     assert.equal(bundle.summary.low_confidence_count, 1);
-    assert.equal(bundle.rejected_items.length, 3);
+    assert.equal(bundle.rejected_items.length, 4);
+    assert.ok(bundle.rejected_items.some((item) => /Mock worker evidence is not accepted/i.test(item.reason)));
     assert.ok(bundle.items.some((item) => item.source_type === "provider_scout_output" && item.extracted_findings.some((finding) => /metadata/i.test(finding))));
     assert.ok(bundle.items.some((item) => item.source_type === "provider_risk_analyst_output" && item.extracted_risks.some((risk) => /High validation risk/i.test(risk))));
     assert.ok(bundle.items.some((item) => item.source_type === "provider_tester_planner_output" && item.extracted_validation_recommendations.includes("npm run test")));
@@ -172,16 +174,31 @@ test("PlanEvaluator and PlanMerger preserve evidence penalties, conflicts, and r
   assert.ok(merged.unresolved_questions.some((question) => /Evidence conflict/i.test(question)));
 });
 
-test("planning evidence disabled keeps deterministic multi-plan behavior", () => {
-  const run = fakeRun("run_evidence_disabled", "/tmp/workspace", { use_planning_evidence: false, planning_evidence_mode: "off" });
-  const variants = generatePlanVariants({
-    run,
-    rawUserRequest: run.user_request,
-    config: loadOrchestrationConfig(run.config),
-    planOnly: true
-  });
-  assert.equal(variants.every((variant) => !variant.evidence_item_refs?.length), true);
-  assert.equal(variants.every((variant) => variant.generation_mode === "deterministic"), true);
+test("MultiPlanFactory skips without provider-backed evidence instead of using deterministic planning fallback", async () => {
+  const workspace = await fixtureWorkspace("planning-evidence-provider-required");
+  try {
+    const run = fakeRun("run_evidence_provider_required", workspace);
+    await new OrchestrationArtifactStore(workspace).saveRun(run);
+    const result = await new MultiPlanFactory(workspace).create({
+      run,
+      rawUserRequest: run.user_request,
+      repoIndex: fixtureRepoIndex(workspace),
+      commandInventory: fixtureCommandInventory(),
+      config: loadOrchestrationConfig(run.config),
+      planOnly: true
+    });
+    assert.equal(result.used, false);
+    assert.equal(result.variants.length, 0);
+    assert.match(result.trigger.reason, /requires provider-backed planning evidence/i);
+
+    const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: run.id });
+    assert.ok(trace.events.some((event) =>
+      event.event_type === "multi_plan_skipped"
+      && /provider-backed planning evidence/i.test(event.reason ?? event.summary ?? "")
+    ));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 async function fixtureWorkspace(prefix: string) {
@@ -222,7 +239,6 @@ function fakeRun(id: string, workspace: string, config: Partial<Run["config"]> =
       planning_evidence_mode: "available",
       max_evidence_items: 20,
       min_evidence_confidence: 0.2,
-      allow_mock_evidence: false,
       ...config
     },
     artifacts_path: path.join(workspace, ".agent_memory", "runs", id)
@@ -236,7 +252,7 @@ async function saveProviderEvidence(
   role: string,
   schemaName: string,
   parsed: unknown,
-  options: { schemaStatus?: string; deleteParsed?: boolean; reuseWorkItem?: string } = {}
+  options: { schemaStatus?: string; deleteParsed?: boolean; reuseWorkItem?: string; workerMode?: string } = {}
 ) {
   const dir = path.join(workspace, ".agent_memory", "swarm_runs", run.id, "provider_workers", options.reuseWorkItem ?? workItemId);
   await mkdir(dir, { recursive: true });
@@ -251,7 +267,7 @@ async function saveProviderEvidence(
     workItemId,
     agentId: `agent_${role}`,
     agentRole: role,
-    workerMode: "provider_read_only",
+    workerMode: options.workerMode ?? "provider_read_only",
     providerName: "fake",
     modelName: "fake-readonly",
     promptId: `prompt_${workItemId}`,
@@ -275,7 +291,8 @@ function scoutOutput(input: { confidence: number }) {
     risks: [],
     unknowns: [],
     suggested_next_steps: ["Reuse existing artifact store and metadata adapter."],
-    confidence: input.confidence
+    confidence: input.confidence,
+    intent_alignment: fixtureIntentAlignment()
   };
 }
 
@@ -286,7 +303,8 @@ function riskOutput(input: { confidence: number }) {
     impacted_files_or_modules: ["apps/agent-runtime/src/orchestration/PlanEvaluator.ts"],
     mitigation: ["Link evidence refs and keep provider output advisory."],
     blockers: [],
-    confidence: input.confidence
+    confidence: input.confidence,
+    intent_alignment: fixtureIntentAlignment()
   };
 }
 
@@ -297,7 +315,8 @@ function testerOutput(input: { confidence: number }) {
     optional_commands: ["npm run typecheck"],
     smoke_checks: ["Inspect evidence summary artifact."],
     blocked_or_missing_validation: [],
-    confidence: input.confidence
+    confidence: input.confidence,
+    intent_alignment: fixtureIntentAlignment()
   };
 }
 
@@ -307,7 +326,19 @@ function specialistOutput(input: { confidence: number }) {
     findings: ["Architecture concern: keep provider evidence as references, not execution-driving truth."],
     recommendations: ["Preserve module boundaries between collector, evaluator, and merger."],
     risks: ["Specialist risk: source role mismatch should not be trusted blindly."],
-    confidence: input.confidence
+    confidence: input.confidence,
+    intent_alignment: fixtureIntentAlignment()
+  };
+}
+
+function fixtureIntentAlignment() {
+  return {
+    original_request_hash: "fixture_request_hash",
+    task_understanding: "Collect provider-backed planning evidence for the requested orchestration work.",
+    original_goal_contribution: "Provides advisory evidence for planning without authorizing writes.",
+    possible_intent_conflicts: [],
+    assumptions_used: [],
+    evidence_refs: []
   };
 }
 
@@ -365,7 +396,6 @@ function manualEvidenceBundle(runId: string): PlanningEvidenceBundle {
       evidence_used: true,
       evidence_item_count: 2,
       provider_evidence_count: 2,
-      mock_evidence_count: 0,
       low_confidence_count: 0,
       rejected_evidence_count: 0,
       evidence_conflict_count: 1,

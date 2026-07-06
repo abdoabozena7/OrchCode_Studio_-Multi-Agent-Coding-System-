@@ -123,7 +123,7 @@ export class SessionManager {
 
   async createSession(input: {
     workspacePath: string;
-    mode: AgentRuntimeMode | "demo_mock";
+    mode: AgentRuntimeMode;
     executionMode?: AgentRuntimeSession["executionMode"];
     accessProfile?: AccessProfileInput;
     trustProfile?: import("@hivo/protocol").RunTrustProfile;

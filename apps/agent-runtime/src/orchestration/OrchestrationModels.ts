@@ -91,11 +91,10 @@ export type Run = {
     planning_evidence_mode?: "off" | "available" | "require_for_provider_mode";
     max_evidence_items?: number;
     min_evidence_confidence?: number;
-    allow_mock_evidence?: boolean;
     prompt_writer_mode?: "off" | "shadow" | "advisory" | "gated_adopt";
-    prompt_writer_provider_mode?: "deterministic" | "provider_read_only" | "auto";
+    prompt_writer_provider_mode?: "provider_read_only" | "auto";
     enable_team_sub_planning?: boolean;
-    team_sub_planning_mode?: "off" | "deterministic" | "provider_read_only" | "auto";
+    team_sub_planning_mode?: "off" | "provider_read_only" | "auto";
     max_team_sub_plans_per_run?: number;
     max_team_sub_plan_tasks?: number;
     max_team_sub_plan_depth?: number;
@@ -133,9 +132,9 @@ export type Run = {
     block_on_stale_context?: boolean;
     block_on_prompt_quality_warning_for_write?: boolean;
     enable_one_writer_dry_run?: boolean;
-    one_writer_dry_run_mode?: "off" | "fake_provider" | "provider" | "auto";
+    one_writer_dry_run_mode?: "off" | "provider" | "auto";
     enable_patch_proposal_review_gate?: boolean;
-    patch_proposal_review_mode?: "off" | "deterministic" | "fake_provider" | "provider" | "auto";
+    patch_proposal_review_mode?: "off" | "provider" | "auto";
     enable_validation_candidate_gate?: boolean;
     validation_candidate_mode?: "off" | "report_only" | "preflight";
     enable_patch_apply_sandbox?: boolean;
@@ -406,7 +405,6 @@ export type FinalRunReport = {
   evidence_used?: boolean;
   evidence_item_count?: number;
   provider_evidence_count?: number;
-  mock_evidence_count?: number;
   low_confidence_count?: number;
   rejected_evidence_count?: number;
   evidence_conflict_count?: number;

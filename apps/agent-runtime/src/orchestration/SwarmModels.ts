@@ -293,6 +293,7 @@ export type SwarmMetrics = {
   validation_pass_rate: number;
   conflicts_detected: number;
   approval_gates_triggered: number;
+  bankruptcy_count: number;
   generated_at: string;
 };
 

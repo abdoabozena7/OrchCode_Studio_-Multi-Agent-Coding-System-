@@ -407,7 +407,7 @@ async function persistedSandboxFixture(workspace: string, sandbox: string, artif
     preparation_plan_id: `prep_${options.runId}`,
     proposed_node_id: `node_${options.runId}`,
     reviewer_role: "ReviewerAgent",
-    reviewer_mode: "deterministic",
+    reviewer_mode: "provider",
     decision: "accept_for_validation_candidate",
     status: "accepted_for_validation_candidate",
     findings: [],

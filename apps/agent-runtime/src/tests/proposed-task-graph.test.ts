@@ -11,7 +11,6 @@ import {
   ORCHESTRATION_SCHEMA_VERSION,
   OrchestrationArtifactStore,
   ProposedTaskGraphManager,
-  TaskGraphManager,
   createAdoptedTaskProposal,
   createProposedTaskGraph,
   createProposedTaskGraphEdge,
@@ -24,6 +23,7 @@ import {
   type Run,
   type Task
 } from "../orchestration/index.js";
+import { TaskGraphManager } from "../orchestration/TaskGraphManager.js";
 
 test("proposed task graph models create graph node edge and validation summary", () => {
   const node = createProposedTaskGraphNode({

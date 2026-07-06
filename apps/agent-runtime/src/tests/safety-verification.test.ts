@@ -9,7 +9,6 @@ import {
   OrchestrationArtifactStore,
   OrchestrationFileLockManager,
   PatchFingerprintTracker,
-  TaskGraphManager,
   ValidationRunner,
   captureFileSnapshots,
   consolidateReviewResults,
@@ -24,6 +23,7 @@ import {
   type ReviewResult,
   type Task
 } from "../orchestration/index.js";
+import { TaskGraphManager } from "../orchestration/TaskGraphManager.js";
 
 test("Phase 3 structured output validation and repair are explicit", () => {
   const invalidScout = validateStructuredOutput("ScoutResult", { relevant_files: ["src/index.ts"] });

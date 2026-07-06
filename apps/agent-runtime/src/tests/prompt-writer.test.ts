@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { writeJson } from "../memory/ProjectMemory.js";
 import {
   ContextPackBuilder,
-  CoreOrchestrator,
   FactoryMetadataStore,
   IntentLedgerService,
   ORCHESTRATION_SCHEMA_VERSION,
   PromptWriterService,
-  deterministicPromptWriterOutput,
   reconstructFactoryRunTrace,
   renderRolePrompt,
   rolePromptInputFromTask,
@@ -22,13 +20,14 @@ import {
   type PromptWriterOutput,
   type Task
 } from "../orchestration/index.js";
-import type { LlmProvider } from "../llm/LlmProvider.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { scriptedPromptWriterOutput } from "./fixtures/PromptWriterFixtureOutput.js";
 
 test("PromptWriter models validate safe output and reject invalid or safety-weakening output", async () => {
   const workspace = await fixtureWorkspace("prompt-writer-models");
   try {
     const { task, pack, contextPackRef, input } = await promptWriterFixture(workspace, "run_prompt_writer_models", "task_prompt_writer_models");
-    const safeOutput = deterministicPromptWriterOutput(input);
+    const safeOutput = scriptedPromptWriterOutput(input);
     const safeValidation = validatePromptWriterOutput(safeOutput, input);
     assert.equal(safeValidation.schema_status, "passed");
 
@@ -92,8 +91,9 @@ test("PromptWriter input preserves protected intent refs and rejects metadata re
       config: {
         ...baseConfig(workspace),
         prompt_writer_mode: "shadow",
-        prompt_writer_provider_mode: "deterministic"
-      }
+        prompt_writer_provider_mode: "provider_read_only"
+      },
+      providerFactory: () => promptWriterProviderFromContext()
     }).run({
       runId,
       task,
@@ -111,7 +111,7 @@ test("PromptWriter input preserves protected intent refs and rejects metadata re
     assert.ok((writerInput.intent_ledger_refs ?? []).some((ref) => ref.endsWith("intent_ledger.json")));
     assert.equal(writerInput.locked_intent_definitions?.length, 1);
 
-    const unsafeOutput = deterministicPromptWriterOutput(writerInput, "prompt_writer_output_intent_unsafe");
+    const unsafeOutput = scriptedPromptWriterOutput(writerInput, "prompt_writer_output_intent_unsafe");
     assert.ok(unsafeOutput.template_input_patch);
     unsafeOutput.template_input_patch.metadata_json = {
       original_request_ref: "tampered",
@@ -192,7 +192,7 @@ test("PromptWriter gated adoption falls back on candidate quality failure", asyn
   const workspace = await fixtureWorkspace("prompt-writer-quality-fail");
   try {
     const { task, pack, contextPackRef, roleInput, render } = await promptWriterFixture(workspace, "run_prompt_writer_quality_fail", "task_prompt_writer_quality_fail");
-    const providerOutput = deterministicPromptWriterOutput({
+    const providerOutput = scriptedPromptWriterOutput({
       ...(await promptWriterFixture(workspace, "run_prompt_writer_quality_fail", "task_prompt_writer_quality_fail")).input,
       mode: "gated_adopt"
     });
@@ -229,15 +229,18 @@ test("PromptWriter gated adoption falls back on candidate quality failure", asyn
   }
 });
 
-test("PromptWriter provider unavailable and invalid provider output fall back safely or reject", async () => {
-  const fallbackWorkspace = await fixtureWorkspace("prompt-writer-provider-fallback");
+test("PromptWriter provider unavailable and invalid provider output block or reject without local fallback", async () => {
+  const fallbackWorkspace = await fixtureWorkspace("prompt-writer-provider-unavailable");
   try {
     const fallback = await runPromptWriterService(fallbackWorkspace, "run_prompt_writer_provider_fallback", "task_prompt_writer_provider_fallback", {
       mode: "shadow",
-      providerMode: "auto"
+      providerMode: "auto",
+      provider: undefined
     });
-    assert.equal(fallback?.provider_mode, "fallback");
+    assert.equal(fallback?.provider_mode, "provider_unavailable");
+    assert.equal(fallback?.schema_validation.schema_status, "failed");
     assert.equal(fallback?.adoption_decision.adopted, false);
+    assert.equal(fallback?.adoption_decision.decision, "rejected");
   } finally {
     await rm(fallbackWorkspace, { recursive: true, force: true });
   }
@@ -304,40 +307,7 @@ test("PromptWriter persists metadata artifact refs only and emits trace events",
     assert.ok(events.has("prompt_writer_candidate_prompt_rendered"));
     assert.ok(events.has("prompt_writer_adoption_evaluated"));
     assert.ok(events.has("prompt_writer_shadow_recorded"));
-    assert.ok(events.has("prompt_writer_fallback_used"));
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
-});
-
-test("CoreOrchestrator shadow mode preserves static PromptSystem invocation prompt", async () => {
-  const workspace = await fixtureWorkspace("prompt-writer-core-shadow");
-  try {
-    const result = await new CoreOrchestrator({
-      workspacePath: workspace,
-      maxContextFiles: 3,
-      maxContextChars: 2500,
-      config: {
-        prompt_writer_mode: "shadow",
-        prompt_writer_provider_mode: "deterministic"
-      }
-    }).runAgenticTask("Explain src/index.ts and do not change files.");
-    assert.equal(result.run.status, "failed");
-    assert.ok(result.report.limitations.some((limitation) => /provider_required_for_readonly_worker/i.test(limitation)));
-    assert.ok(result.report.prompt_writer_runs && result.report.prompt_writer_runs > 0);
-    assert.equal(result.report.prompt_writer_mode, "shadow");
-
-    const invocationDir = path.join(result.run.artifacts_path, "invocations");
-    const invocationArtifacts = (await readdir(invocationDir)).filter((entry) => entry.endsWith(".json"));
-    assert.ok(invocationArtifacts.length > 0);
-    const invocation = JSON.parse(await readFile(path.join(invocationDir, invocationArtifacts[0]), "utf8")) as { prompt: string; prompt_metadata?: { source_component: string } };
-    assert.equal(invocation.prompt_metadata?.source_component, "CoreOrchestrator");
-    assert.match(invocation.prompt, /^Role:/m);
-    assert.doesNotMatch(invocation.prompt, /PromptWriter advisory focus/);
-
-    const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: result.run.id });
-    assert.ok(trace.events.some((event) => event.event_type === "prompt_writer_shadow_recorded"));
-    assert.ok(trace.events.some((event) => event.event_type === "agent_invocation_started"));
+    assert.ok(events.has("prompt_writer_provider_selected"));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -347,16 +317,21 @@ async function runPromptWriterService(
   workspace: string,
   runId: string,
   taskId: string,
-  options: { mode: "shadow" | "advisory" | "gated_adopt"; providerMode?: "deterministic" | "provider_read_only" | "auto" }
+  options: { mode: "shadow" | "advisory" | "gated_adopt"; providerMode?: "provider_read_only" | "auto"; provider?: LlmProvider }
 ) {
   const { task, pack, contextPackRef, roleInput, render } = await promptWriterFixture(workspace, runId, taskId);
+  const providerMode = options.providerMode ?? "provider_read_only";
+  const provider = Object.prototype.hasOwnProperty.call(options, "provider")
+    ? options.provider
+    : promptWriterProviderFromContext();
   const service = new PromptWriterService({
     workspacePath: workspace,
     config: {
       ...baseConfig(workspace),
       prompt_writer_mode: options.mode,
-      prompt_writer_provider_mode: options.providerMode ?? "deterministic"
-    }
+      prompt_writer_provider_mode: providerMode
+    },
+    providerFactory: provider ? () => provider : undefined
   });
   return service.run({
     runId: task.run_id,
@@ -438,11 +413,10 @@ function baseConfig(workspace: string) {
     planning_evidence_mode: "available" as const,
     max_evidence_items: 20,
     min_evidence_confidence: 0.2,
-    allow_mock_evidence: false,
     prompt_writer_mode: "shadow" as const,
-    prompt_writer_provider_mode: "deterministic" as const,
+    prompt_writer_provider_mode: "provider_read_only" as const,
     enable_team_sub_planning: true,
-    team_sub_planning_mode: "deterministic" as const,
+    team_sub_planning_mode: "auto" as const,
     max_team_sub_plans_per_run: 12,
     max_team_sub_plan_tasks: 6,
     max_team_sub_plan_depth: 2,
@@ -465,7 +439,19 @@ function baseConfig(workspace: string) {
     allow_write_future_candidates: true,
     require_human_approval_for_write: true,
     allow_auto_approval_for_low_risk_read_only: true,
-    max_nodes_evaluated_per_run: 48
+    max_nodes_evaluated_per_run: 48,
+    enable_task_queue: true,
+    task_queue_db_path: ".agent_memory",
+    task_queue_max_attempts: 3,
+    task_queue_lease_ttl_ms: 300_000,
+    task_queue_poll_timeout_ms: 5_000,
+    enable_suspend_hydrate: true,
+    suspend_hydrate_ttl_ms: 86_400_000,
+    max_snapshot_size_bytes: 10_485_760,
+    enable_circuit_breaker: true,
+    max_bankruptcy_attempts: 5,
+    max_circuit_breaker_duplicate_outputs: 2,
+    max_circuit_breaker_stagnant_rounds: 3
   };
 }
 
@@ -506,6 +492,17 @@ async function fixtureWorkspace(prefix: string) {
   await writeFile(path.join(root, "package-lock.json"), "{}\n", "utf8");
   await writeFile(path.join(root, "src", "index.ts"), "export const promptWriterValue = 1;\n", "utf8");
   return root;
+}
+
+function promptWriterProviderFromContext(): LlmProvider {
+  return {
+    async generateStructured<T>(input: LlmRequest) {
+      return scriptedPromptWriterOutput(input.context as PromptWriterInput) as T;
+    },
+    async generateText(input: LlmRequest) {
+      return JSON.stringify(scriptedPromptWriterOutput(input.context as PromptWriterInput));
+    }
+  };
 }
 
 function fakeProvider(output: unknown): LlmProvider {

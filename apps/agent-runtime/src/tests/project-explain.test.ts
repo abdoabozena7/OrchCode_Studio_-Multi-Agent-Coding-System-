@@ -1,11 +1,10 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { ProjectExplainReport, ProjectMap } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
-import { loadConfig } from "../config.js";
 import { buildLargeProjectExplainReport } from "../runtime/LargeProjectContextBuilder.js";
 import {
   explainProjectWithLlm,
@@ -21,7 +20,6 @@ import {
   type ProjectAnswerStyle
 } from "../runtime/ProjectQuestionGrounding.js";
 import { inferWorkspaceIntent } from "../runtime/WorkspaceReasoningPipeline.js";
-import { buildServer } from "../server.js";
 
 class CapturingExplainProvider implements LlmProvider {
   readonly requests: LlmRequest[] = [];
@@ -81,7 +79,7 @@ class NaturalTextExplainProvider implements LlmProvider {
   }
 }
 
-function explainProjectWithLegacySynthesis(input: Parameters<typeof explainProjectWithLlm>[0]) {
+function explainProjectWithProviderOnly(input: Parameters<typeof explainProjectWithLlm>[0]) {
   return explainProjectWithLlm(input);
 }
 
@@ -144,12 +142,11 @@ test("project explain rejects ungrounded plain path citations from provider outp
         unsupportedOrUnclearParts: []
       }
     ]);
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: prompt, report });
-
-    assert.equal(result.fallbackUsed, true);
-    assert.match(result.fallbackReason ?? "", /validation|failed|ungrounded/i);
-    assert.doesNotMatch(result.answerMarkdown, /backend\/services\/action_executor\.py|backend\/routes\.py|frontend\/index\.html/);
-    assert.ok(result.unsupportedOrUnclearParts.some((item) => /ungrounded plain file ref/.test(item)));
+    await assert.rejects(
+      explainProjectWithProviderOnly({ provider, userPrompt: prompt, report }),
+      /provider_answer_failed_local_validation|ungrounded plain file ref|plain file ref/
+    );
+    assert.equal(provider.requests.length, 2);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -165,7 +162,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"],
-    forbiddenConceptPattern: /طفل|بيقدر|يجيب/i
+    forbiddenConceptPattern: /���|�����|����/i
   },
   {
     name: "Actual Arabic child style plus dataset realtime concept",
@@ -175,7 +172,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedConceptLabel: "dataset realtime behavior",
     expectedSpecific: true,
     expectedEvidenceGroupIds: ["dataset_source", "realtime_update"],
-    forbiddenConceptPattern: /طفل|بيقدر|يجيب/i
+    forbiddenConceptPattern: /���|�����|����/i
   },
   {
     name: "Arabic style plus English sentiment concept",
@@ -184,7 +181,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
-    forbiddenConceptPattern: /طفل|يقدر|يفهم/i
+    forbiddenConceptPattern: /���|����|����/i
   },
   {
     name: "Arabic sentiment concept plus child style",
@@ -193,7 +190,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
-    forbiddenConceptPattern: /طفل/i
+    forbiddenConceptPattern: /���/i
   },
   {
     name: "Sentement typo plus simple style",
@@ -202,7 +199,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "sentiment analysis",
     expectedSpecific: true,
-    forbiddenConceptPattern: /ببساطة/i
+    forbiddenConceptPattern: /������/i
   },
   {
     name: "Arabic style-only project explanation",
@@ -211,7 +208,7 @@ const CONCEPT_EXTRACTION_REGRESSIONS: ConceptExtractionRegressionCase[] = [
     expectedAnswerShape: "concise_explanation",
     expectedConceptLabel: "this project",
     expectedSpecific: false,
-    forbiddenConceptPattern: /طفل/i
+    forbiddenConceptPattern: /���/i
   },
   {
     name: "English dataset realtime concept",
@@ -549,7 +546,7 @@ test("LLM project explainer answers the focused child realtime dataset prompt fr
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.conceptFound, true);
     if (provider.requests.length) {
@@ -560,7 +557,7 @@ test("LLM project explainer answers the focused child realtime dataset prompt fr
     } else {
       assert.match(result.answerMarkdown, /could not safely produce|current workspace evidence|realtime/i);
     }
-    assert.match(result.answerMarkdown, /dataset|داتا/i);
+    assert.match(result.answerMarkdown, /dataset|����/i);
     assert.match(result.answerMarkdown, /polling|repeated refresh|about every second|setInterval/i);
     assert.doesNotMatch(result.answerMarkdown, /e-commerce|cart|checkout/i);
     assert.deepEqual(result.usedEvidenceRefs, [sentimentRef, appRef, cleaningRef]);
@@ -590,7 +587,7 @@ test("Arabic spaced child dataset realtime prompt requires dataset and realtime 
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.style, "child_simple");
     assert.equal(result.grounding.concept.label, "dataset realtime behavior");
@@ -601,7 +598,7 @@ test("Arabic spaced child dataset realtime prompt requires dataset and realtime 
     assert.ok(result.grounding.evidenceGroupCoverage.find((group) => group.id === "realtime_update")?.found);
     assert.equal(provider.requests.length, 1);
     assert.match(provider.requests[0]!.userPrompt, /Evidence groups:/);
-    assert.doesNotMatch(result.answerMarkdown, /could not find .*طفل|طفل بيقدر|بيقدر يجيب/i);
+    assert.doesNotMatch(result.answerMarkdown, /could not find .*���|��� �����|����� ����/i);
     assert.deepEqual(result.usedEvidenceRefs, [sentimentRef, cleaningRef, appRef]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -619,16 +616,16 @@ test("actual Arabic project dataset realtime answer keeps sentiment project cont
     const appRef = requireRef(report, /dashboard_ui\/src\/App\.jsx/);
     const provider = new CapturingExplainProvider([{
       answerMarkdown: [
-        `المشروع هنا sentiment analysis مثبت من ${linkForRef(sentimentRef)}.`,
-        `الداتا جاية كـ dataset records من ${linkForRef(streamRef)}.`,
-        `والواجهة بتعمل fetch مع setInterval في ${linkForRef(appRef)} عشان تبان قريبة من realtime.`,
-        "ده polling/refresh، مش socket حقيقي مثبت."
+        `������� ��� sentiment analysis ���� �� ${linkForRef(sentimentRef)}.`,
+        `������ ���� �� dataset records �� ${linkForRef(streamRef)}.`,
+        `�������� ����� fetch �� setInterval �� ${linkForRef(appRef)} ���� ���� ����� �� realtime.`,
+        "�� polling/refresh� �� socket ����� ����."
       ].join(" "),
       usedEvidenceRefs: [sentimentRef, streamRef, appRef],
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.projectContextRequired, true);
     assert.equal(result.grounding.projectDomain.label, "sentiment analysis");
@@ -636,9 +633,9 @@ test("actual Arabic project dataset realtime answer keeps sentiment project cont
     assert.equal(result.grounding.conceptFound, true);
     assert.ok(result.grounding.projectDomain.sourceEvidenceRefs.some((ref) => ref.includes("sentiment_pipeline.py")));
     assert.match(provider.requests[0]!.userPrompt, /Project Mapper:|Data Flow Mapper:|Grounding Skeptic:/);
-    assert.match(result.answerMarkdown, /sentiment analysis|تحليل/);
+    assert.match(result.answerMarkdown, /sentiment analysis|�����/);
     assert.match(result.answerMarkdown, /stream_comments|setInterval|fetch|polling/);
-    assert.doesNotMatch(result.answerMarkdown, /notebook of rows|ظƒراسة/);
+    assert.doesNotMatch(result.answerMarkdown, /notebook of rows|ك����/);
     assert.ok(result.usedEvidenceRefs.some((ref) => ref.includes("sentiment_pipeline.py")));
     assert.ok(result.usedEvidenceRefs.some((ref) => ref.includes("stream_comments.py")));
   } finally {
@@ -656,16 +653,16 @@ test("project-context provider answer cannot omit proven sentiment domain", asyn
     const appRef = requireRef(report, /dashboard_ui\/src\/App\.jsx/);
     const badAnswer = [
       "BAD_DOMAIN_OMITTED",
-      `الداتا جاية من ${linkForRef(streamRef)}.`,
-      `والواجهة بتعمل refresh من ${linkForRef(appRef)}.`,
-      "كده تبان realtime."
+      `������ ���� �� ${linkForRef(streamRef)}.`,
+      `�������� ����� refresh �� ${linkForRef(appRef)}.`,
+      "��� ���� realtime."
     ].join(" ");
     const provider = new CapturingExplainProvider([
       { answerMarkdown: badAnswer, usedEvidenceRefs: [streamRef, appRef], unsupportedOrUnclearParts: [] },
       { answerMarkdown: badAnswer, usedEvidenceRefs: [streamRef, appRef], unsupportedOrUnclearParts: [] }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 2);
     assert.match(result.unsupportedOrUnclearParts.join(" "), /project identity\/domain|sentiment analysis/i);
@@ -677,105 +674,89 @@ test("project-context provider answer cannot omit proven sentiment domain", asyn
   }
 });
 
-test("provider failure during Arabic dataset realtime explain returns grounded fallback instead of throwing", async () => {
+test("provider failure during Arabic dataset realtime explain throws instead of synthesizing a local answer", async () => {
   const { workspace, projectMap } = await createBigDataSentimentWorkspace();
 
   try {
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_DATASET_REALTIME_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
-
+    await assert.rejects(
+      explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report }),
+      /project_explain_provider_failed: provider unavailable/
+    );
     assert.equal(provider.requestCount, 1);
-    assert.equal(result.grounding.style, "child_simple");
-    assert.equal(result.grounding.concept.label, "dataset realtime behavior");
-    assert.equal(result.grounding.conceptFound, true);
-    assert.match(result.unsupportedOrUnclearParts.join(" "), /provider unavailable/i);
-    assert.match(result.answerMarkdown, /sentiment analysis|sentiment_pipeline/);
-    assert.match(result.answerMarkdown, /dataset|realtime|داتا|أقوى دلائل/i);
-    assert.doesNotMatch(result.answerMarkdown, /could not find .*طفل|طفل بيقدر|بيقدر يجيب/i);
-    assert.ok(result.usedEvidenceRefs.length >= 2);
-    assert.ok(result.usedEvidenceRefs.some((ref) => ref.includes("sentiment_pipeline.py")));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("notice-only provider failure during Arabic explain does not synthesize a local answer", async () => {
+
+test("notice-only provider failure during Arabic explain is a provider failure, not a local notice answer", async () => {
   const { workspace, projectMap } = await createBigDataSentimentWorkspace();
 
   try {
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_DATASET_REALTIME_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({
-      provider,
-      userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
-      report
-    });
-
+    await assert.rejects(
+      explainProjectWithProviderOnly({
+        provider,
+        userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
+        report
+      }),
+      /project_explain_provider_failed: provider unavailable/
+    );
     assert.equal(provider.requestCount, 1);
-    assert.equal(result.fallbackUsed, true);
-    assert.match(result.fallbackReason ?? "", /Provider failed during project explanation: provider unavailable/);
-    assert.equal(result.usedEvidenceRefs.length, 0);
-    assert.match(result.answerMarkdown, /مش هطلع شرح تخميني/);
-    assert.doesNotMatch(result.answerMarkdown, /أقوى دلائل|strongest local evidence|كده تبان realtime|sentiment_pipeline.*realtime/i);
-    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("project explainer defaults to notice-only on provider failure", async () => {
+
+test("project explainer defaults to provider-required failure on provider failure", async () => {
   const { workspace, projectMap } = await createBigDataSentimentWorkspace();
 
   try {
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_DATASET_REALTIME_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLlm({
-      provider,
-      userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
-      report
-    });
-
+    await assert.rejects(
+      explainProjectWithLlm({
+        provider,
+        userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
+        report
+      }),
+      /project_explain_provider_failed: provider unavailable/
+    );
     assert.equal(provider.requestCount, 1);
-    assert.equal(result.fallbackUsed, true);
-    assert.match(result.fallbackReason ?? "", /Provider failed during project explanation: provider unavailable/);
-    assert.equal(result.usedEvidenceRefs.length, 0);
-    assert.match(result.answerMarkdown, /تخميني|provider failed|grounded project explanation/i);
-    assert.doesNotMatch(result.answerMarkdown, /أقوى دلائل|strongest local evidence|sentiment_pipeline.*realtime/i);
-    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("project explainer defaults to provider authority before concept-not-found answers", async () => {
+
+test("project explainer fails provider-required concept-not-found answers when provider fails", async () => {
   const { beta, projectMapB, cleanup } = await createAlphaBetaWorkspaces();
 
   try {
     const report = buildLargeProjectExplainReport({ workspacePath: beta, message: ARABIC_DATASET_REALTIME_PROMPT, projectMap: projectMapB });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLlm({
-      provider,
-      userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
-      report
-    });
-
+    await assert.rejects(
+      explainProjectWithLlm({
+        provider,
+        userPrompt: ARABIC_DATASET_REALTIME_PROMPT,
+        report
+      }),
+      /project_explain_provider_failed: provider unavailable/
+    );
     assert.equal(provider.requestCount, 1);
-    assert.equal(result.grounding.decision, "concept_not_found");
-    assert.equal(result.fallbackUsed, true);
-    assert.match(result.fallbackReason ?? "", /Provider failed during project explanation: provider unavailable/);
-    assert.equal(result.usedEvidenceRefs.length, 0);
-    assert.doesNotMatch(result.answerMarkdown, /dataset realtime behavior|Requested concept not found|could not find/i);
-    assert.match(result.answerMarkdown, /تخميني|provider failed|grounded project explanation/i);
-    assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await cleanup();
   }
 });
+
 
 test("project explainer can accept natural provider Markdown without structured JSON", async () => {
   const { workspace, projectMap } = await createBigDataSentimentWorkspace();
@@ -869,14 +850,14 @@ test("Arabic dataset realtime prompt returns concept not-found in unrelated todo
     const report = buildLargeProjectExplainReport({ workspacePath: beta, message: ARABIC_DATASET_REALTIME_PROMPT, projectMap: projectMapB });
     const provider = new CapturingExplainProvider([]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
 
     assert.equal(provider.requests.length, 0);
     assert.equal(result.grounding.style, "child_simple");
     assert.equal(result.grounding.concept.label, "dataset realtime behavior");
     assert.equal(result.grounding.decision, "concept_not_found");
     assert.match(result.answerMarkdown, /dataset realtime behavior/i);
-    assert.doesNotMatch(result.answerMarkdown, /could not find .*طفل|طفل بيقدر|بيقدر يجيب/i);
+    assert.doesNotMatch(result.answerMarkdown, /could not find .*���|��� �����|����� ����/i);
     assert.match(result.answerMarkdown, /todo app|checklist|README\.md|src\/todo\.js/i);
   } finally {
     await cleanup();
@@ -894,7 +875,7 @@ test("dataset-only evidence does not allow invented realtime behavior", async ()
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
 
     assert.equal(provider.requests.length, 0);
     assert.equal(result.grounding.decision, "concept_not_found");
@@ -927,12 +908,12 @@ test("dataset realtime provider answer citing only generic package evidence is r
       }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_DATASET_REALTIME_PROMPT, report });
 
     assert.equal(provider.requests.length, 2);
     assert.match(result.unsupportedOrUnclearParts.join(" "), /evidence group/i);
     assert.doesNotMatch(result.answerMarkdown, /PACKAGE_ONLY_SENTINEL/);
-    assert.match(result.answerMarkdown, /dataset|realtime|أقوى دلائل|مش هزود/i);
+    assert.match(result.answerMarkdown, /dataset|realtime|���� �����|�� ����/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -959,7 +940,7 @@ test("LLM project explainer revises invalid citations once", async () => {
       }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 2);
     assert.match(provider.requests[1]!.userPrompt, /failed local validation/i);
@@ -988,7 +969,7 @@ test("concept-specific explain returns deterministic not-found for the wrong wor
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 0);
     assert.equal(result.grounding.decision, "concept_not_found");
@@ -1014,7 +995,7 @@ test("concept-specific explain uses current workspace evidence when the concept 
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 1);
     assert.equal(result.grounding.decision, "concept_found");
@@ -1040,7 +1021,7 @@ test("mixed Arabic style with English sentiment concept stays concept-grounded",
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.concept.label, "sentiment analysis");
     assert.equal(result.grounding.style, "child_simple");
@@ -1061,18 +1042,18 @@ test("Arabic sentiment concept maps to sentiment aliases and child style", async
     const report = buildLargeProjectExplainReport({ workspacePath: alpha, message, projectMap: projectMapA });
     const pipelineRef = requireRef(report, /src\/pipeline\.py/);
     const provider = new CapturingExplainProvider([{
-      answerMarkdown: `تحليل المشاعر هنا مثل فرز رسائل صغيرة حسب الإحساس. الكود ينظر في review ويرجع label بسيط. ${linkForRef(pipelineRef)}`,
+      answerMarkdown: `����� ������� ��� ��� ��� ����� ����� ��� �������. ����� ���� �� review ����� label ����. ${linkForRef(pipelineRef)}`,
       usedEvidenceRefs: [pipelineRef],
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.concept.label, "sentiment analysis");
     assert.equal(result.grounding.style, "child_simple");
-    assert.ok(result.grounding.concept.aliases.includes("تحليل المشاعر"));
+    assert.ok(result.grounding.concept.aliases.includes("����� �������"));
     assert.equal(result.grounding.decision, "concept_found");
-    assert.match(result.answerMarkdown, /تحليل المشاعر|label بسيط/);
+    assert.match(result.answerMarkdown, /����� �������|label ����/);
   } finally {
     await cleanup();
   }
@@ -1082,7 +1063,7 @@ test("sentement typo normalizes to sentiment analysis and finds evidence", async
   const { alpha, projectMapA, cleanup } = await createAlphaBetaWorkspaces();
 
   try {
-    const message = "اشرح sentement analysis ظ‡ظ†ا ببساطة";
+    const message = "���� sentement analysis هن� ������";
     const report = buildLargeProjectExplainReport({ workspacePath: alpha, message, projectMap: projectMapA });
     const pipelineRef = requireRef(report, /src\/pipeline\.py/);
     const provider = new CapturingExplainProvider([{
@@ -1091,7 +1072,7 @@ test("sentement typo normalizes to sentiment analysis and finds evidence", async
       unsupportedOrUnclearParts: []
     }]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.concept.label, "sentiment analysis");
     assert.equal(result.grounding.style, "child_simple");
@@ -1110,12 +1091,12 @@ test("absent mixed-language sentiment concept reports the concept, not child sty
     const report = buildLargeProjectExplainReport({ workspacePath: beta, message, projectMap: projectMapB });
     const provider = new CapturingExplainProvider([]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 0);
     assert.equal(result.grounding.decision, "concept_not_found");
     assert.match(result.answerMarkdown, /sentiment analysis/i);
-    assert.doesNotMatch(result.answerMarkdown, /could not find .*طفل/i);
+    assert.doesNotMatch(result.answerMarkdown, /could not find .*���/i);
     assert.match(result.answerMarkdown, /todo app|checklist|README\.md|src\/todo\.js/i);
   } finally {
     await cleanup();
@@ -1130,13 +1111,13 @@ test("style-only Arabic project explanation has no specific concept", async () =
     const report = buildLargeProjectExplainReport({ workspacePath: beta, message, projectMap: projectMapB });
     const readmeRef = requireRef(report, /README\.md/);
     const simpleAnswer = {
-      answerMarkdown: `المشروع ده is a small checklist app. You can think of it like a paper list for jobs to do. ${linkForRef(readmeRef)}`,
+      answerMarkdown: `������� �� is a small checklist app. You can think of it like a paper list for jobs to do. ${linkForRef(readmeRef)}`,
       usedEvidenceRefs: [readmeRef],
       unsupportedOrUnclearParts: []
     };
     const provider = new CapturingExplainProvider([simpleAnswer, simpleAnswer]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(result.grounding.concept.specific, false);
     assert.equal(result.grounding.style, "child_simple");
@@ -1169,7 +1150,7 @@ test("unsupported project identity claims are rejected even with valid current-w
       }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: message, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: message, report });
 
     assert.equal(provider.requests.length, 2);
     assert.equal(result.grounding.decision, "general_project_explanation");
@@ -1188,7 +1169,7 @@ test("Arabic threshold inventory prompt returns useful grounded numbers when pro
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
 
     assert.equal(provider.requestCount, 1);
     assert.equal(result.grounding.concept.label, "threshold inventory");
@@ -1224,7 +1205,7 @@ test("threshold provider answer citing only generic package evidence is rejected
       { answerMarkdown: badAnswer, usedEvidenceRefs: [genericRef], unsupportedOrUnclearParts: [] }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
 
     assert.equal(provider.requests.length, 2);
     assert.match(result.unsupportedOrUnclearParts.join(" "), /threshold|evidence/i);
@@ -1243,7 +1224,7 @@ test("Arabic forecasting prompt identifies type and customer scope from evidence
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_FORECASTING_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_FORECASTING_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_FORECASTING_PROMPT, report });
 
     assert.equal(provider.requestCount, 1);
     assert.equal(result.grounding.concept.label, "forecasting type and scope");
@@ -1270,7 +1251,7 @@ test("Arabic forecasting logic prompt synthesizes Codex-like assessment instead 
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_FORECASTING_LOGIC_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_FORECASTING_LOGIC_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_FORECASTING_LOGIC_PROMPT, report });
 
     assert.equal(provider.requestCount, 1);
     assert.equal(result.fallbackUsed, true);
@@ -1278,8 +1259,8 @@ test("Arabic forecasting logic prompt synthesizes Codex-like assessment instead 
     assert.match(result.answerMarkdown, /cluster-level|per-cluster|per-segment|predicted_cluster|get_cluster_state/i);
     assert.match(result.answerMarkdown, /trend_multiplier/);
     assert.match(result.answerMarkdown, /normalized_trend[\s\S]*\/\s*1\.25|\/\s*1\.25[\s\S]*normalized_trend/i);
-    assert.match(result.answerMarkdown, /demo|academic|production|أكاديمي|اكاديمي|مقبول|ضعيف|غلط/i);
-    assert.match(result.answerMarkdown, /behavior_period|month|synthetic|period_date|صف ظˆاحد|time-series/i);
+    assert.match(result.answerMarkdown, /demo|academic|production|�������|�������|�����|����|���/i);
+    assert.match(result.answerMarkdown, /behavior_period|month|synthetic|period_date|�� و���|time-series/i);
     assert.doesNotMatch(result.answerMarkdown, /forecasting implementation:\s*The implementation applies forecasting/i);
     assert.doesNotMatch(result.answerMarkdown, /\bbackend\/routes\.py:1\b/);
     assert.doesNotMatch(result.answerMarkdown, /implementation applies forecasting/i);
@@ -1296,7 +1277,7 @@ test("Arabic algorithm inventory prompt uses algorithm/model evidence instead of
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_ALGORITHMS_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_ALGORITHMS_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_ALGORITHMS_PROMPT, report });
 
     assert.equal(result.grounding.workspaceReasoning.intent.actionMode, "answer_only");
     assert.equal(result.grounding.workspaceReasoning.intent.answerGoal, "count");
@@ -1321,7 +1302,7 @@ test("Arabic detailed SVM prompt synthesizes implementation flow instead of dump
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_SVM_DETAIL_PROMPT, projectMap });
     const provider = new ThrowingExplainProvider();
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_SVM_DETAIL_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_SVM_DETAIL_PROMPT, report });
 
     assert.equal(result.grounding.workspaceReasoning.intent.answerGoal, "trace_flow");
     assert.equal(result.grounding.workspaceReasoning.intent.outputShape, "walkthrough");
@@ -1347,9 +1328,9 @@ test("algorithm question stays turn-scoped after threshold and page questions", 
     const pageReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
     const algorithmReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_ALGORITHMS_PROMPT, projectMap });
 
-    const thresholdResult = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
-    const pageResult = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
-    const algorithmResult = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_ALGORITHMS_PROMPT, report: algorithmReport });
+    const thresholdResult = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
+    const pageResult = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
+    const algorithmResult = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_ALGORITHMS_PROMPT, report: algorithmReport });
 
     assert.equal(thresholdResult.grounding.workspaceReasoning.intent.requiredFacets.includes("numeric_logic"), true);
     assert.equal(pageResult.grounding.workspaceReasoning.intent.requiredFacets.includes("ui_structure"), true);
@@ -1370,13 +1351,13 @@ test("Arabic page inventory prompt returns pages instead of threshold inventory"
     const provider = new ThrowingExplainProvider();
     const grounding = analyzeProjectQuestionGrounding(ARABIC_PAGE_INVENTORY_PROMPT, report, []);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.concept.label, "page/screen inventory");
     assert.equal(result.grounding.conceptFound, true);
-    assert.match(result.answerMarkdown, /Agents|Customers|Overview|صفحات|شاشات|views/i);
+    assert.match(result.answerMarkdown, /Agents|Customers|Overview|�����|�����|views/i);
     assert.match(result.answerMarkdown, /frontend\/app\.js|frontend\/index\.html|src\/App\.jsx/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||minimum_score|0\.82|threshold inventory|threshlod/i);
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
@@ -1425,14 +1406,14 @@ test("page inventory ignores CSS and title-only evidence instead of counting fak
     };
 
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
-    const result = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(result.grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.conceptFound, false);
-    assert.match(result.answerMarkdown, /لا أقدر أؤكد|could not confirm/i);
-    assert.doesNotMatch(result.answerMarkdown, /ظ„ظ‚ظٹطھ\s+\d+\s+(route|screen|section|tab|view|صفحة)/i);
-    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
-    assert.doesNotMatch(result.answerMarkdown, /AMARS Pipeline Atlas.*(?:صفحة|screen|view|section|page)/i);
+    assert.match(result.answerMarkdown, /�� ���� ����|could not confirm/i);
+    assert.doesNotMatch(result.answerMarkdown, /لقيت\s+\d+\s+(route|screen|section|tab|view|����)/i);
+    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:����|screen|view|section|page)/i);
+    assert.doesNotMatch(result.answerMarkdown, /AMARS Pipeline Atlas.*(?:����|screen|view|section|page)/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
@@ -1494,16 +1475,16 @@ test("page inventory reports SPA sections with functions and dedupes duplicate s
     };
 
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
-    const result = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(result.grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.conceptFound, true);
-    assert.match(result.answerMarkdown, /single-page|واجهة أقرب لـ single-page|section\/tab/i);
-    assert.match(result.answerMarkdown, /\|\s*الاسم\s*\|\s*النوع\s*\|\s*بتعمل إيه\s*\|/);
+    assert.match(result.answerMarkdown, /single-page|����� ���� �� single-page|section\/tab/i);
+    assert.match(result.answerMarkdown, /\|\s*�����\s*\|\s*�����\s*\|\s*����� ���\s*\|/);
     assert.match(result.answerMarkdown, /Overview.*retention summary|overview.*KPI/i);
     assert.match(result.answerMarkdown, /Customers.*customer risk|customers.*churn/i);
     assert.match(result.answerMarkdown, /Agents.*recommendations|agents.*route decisions/i);
-    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:صفحة|screen|view|section|page)/i);
+    assert.doesNotMatch(result.answerMarkdown, /styles\.css.*(?:����|screen|view|section|page)/i);
     assert.doesNotMatch(result.answerMarkdown, /:root|--bg|overview-section|customers-page|agents-screen/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
@@ -1539,7 +1520,7 @@ test("page inventory can use JSX className sections from real UI source", async 
     };
 
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
-    const result = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(result.grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.conceptFound, true);
@@ -1560,19 +1541,19 @@ test("page inventory validation rejects stale threshold answer and synthesizes p
     const pageRef = requireRef(report, /frontend\/app\.js|frontend\/index\.html/);
     const staleThresholdAnswer = [
       "BAD_STALE_THRESHOLDS",
-      `جدول الـ thresholds: score >= 0.82 and membership < 0.52. ${linkForRef(pageRef)}`
+      `���� ��� thresholds: score >= 0.82 and membership < 0.52. ${linkForRef(pageRef)}`
     ].join(" ");
     const provider = new CapturingExplainProvider([
       { answerMarkdown: staleThresholdAnswer, usedEvidenceRefs: [pageRef], unsupportedOrUnclearParts: [] },
       { answerMarkdown: staleThresholdAnswer, usedEvidenceRefs: [pageRef], unsupportedOrUnclearParts: [] }
     ]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(provider.requests.length, 2);
     assert.match(result.unsupportedOrUnclearParts.join(" "), /page inventory|thresholds|unrelated numeric/i);
     assert.doesNotMatch(result.answerMarkdown, /BAD_STALE_THRESHOLDS|0\.82|membership < 0\.52/i);
-    assert.match(result.answerMarkdown, /Agents|Customers|Overview|صفحات|شاشات|views/i);
+    assert.match(result.answerMarkdown, /Agents|Customers|Overview|�����|�����|views/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1584,8 +1565,8 @@ test("page inventory question stays turn-scoped after a threshold question", asy
   try {
     const thresholdReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_THRESHOLD_PROMPT, projectMap });
     const pageReport = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
-    const thresholdResult = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
-    const pageResult = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
+    const thresholdResult = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_THRESHOLD_PROMPT, report: thresholdReport });
+    const pageResult = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report: pageReport });
 
     assert.equal(thresholdResult.grounding.questionKind, "threshold_inventory");
     assert.equal(pageResult.grounding.questionKind, "page_inventory");
@@ -1610,11 +1591,11 @@ test("backend-only page inventory reports no confirmed frontend pages", async ()
       importantFiles: ["backend/main.py"]
     };
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: ARABIC_PAGE_INVENTORY_PROMPT, projectMap });
-    const result = await explainProjectWithLegacySynthesis({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider: new ThrowingExplainProvider(), userPrompt: ARABIC_PAGE_INVENTORY_PROMPT, report });
 
     assert.equal(result.grounding.questionKind, "page_inventory");
     assert.equal(result.grounding.conceptFound, false);
-    assert.match(result.answerMarkdown, /ماقدرتش|frontend|backend\/API|endpoint/i);
+    assert.match(result.answerMarkdown, /�������|frontend|backend\/API|endpoint/i);
     assert.doesNotMatch(result.answerMarkdown, /\| Signal \||threshold inventory|0\.82/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -1628,7 +1609,7 @@ test("threshold concept absent returns not-found for threshold inventory, not ty
     const report = buildLargeProjectExplainReport({ workspacePath: beta, message: ARABIC_THRESHOLD_PROMPT, projectMap: projectMapB });
     const provider = new CapturingExplainProvider([]);
 
-    const result = await explainProjectWithLegacySynthesis({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
+    const result = await explainProjectWithProviderOnly({ provider, userPrompt: ARABIC_THRESHOLD_PROMPT, report });
 
     assert.equal(provider.requests.length, 0);
     assert.equal(result.grounding.decision, "concept_not_found");
@@ -1637,72 +1618,6 @@ test("threshold concept absent returns not-found for threshold inventory, not ty
     assert.doesNotMatch(result.answerMarkdown, MOJIBAKE_PATTERN);
   } finally {
     await cleanup();
-  }
-});
-
-test("runtime inspect-only stores evidence and does not fake a project explanation in demo mock mode", async () => {
-  const workspace = path.join(os.tmpdir(), `hivo-runtime-explain-${Date.now()}`);
-  const storageDir = path.join(os.tmpdir(), `hivo-runtime-explain-storage-${Date.now()}`);
-  await mkdir(path.join(workspace, "apps", "desktop", "src"), { recursive: true });
-  await mkdir(path.join(workspace, "packages", "protocol", "src"), { recursive: true });
-
-  try {
-    await writeFile(path.join(workspace, "README.md"), "# Runtime explain fixture\n", "utf8");
-    await writeFile(
-      path.join(workspace, "package.json"),
-      JSON.stringify({ name: "runtime-explain", workspaces: ["apps/*", "packages/*"], scripts: { dev: "vite", test: "vitest" } }, null, 2),
-      "utf8"
-    );
-    await writeFile(path.join(workspace, "apps", "desktop", "src", "App.tsx"), "export function App() { return null; }\n", "utf8");
-    await writeFile(path.join(workspace, "packages", "protocol", "src", "index.ts"), "export type Protocol = { ok: true };\n", "utf8");
-
-    const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
-    try {
-      const created = await runtime.createSession({
-        workspacePath: workspace,
-        mode: "demo_mock",
-        userPrompt: "\u0627\u0634\u0631\u062d \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u062f\u0647"
-      });
-      await runtime.runTurn(created.sessionId, "\u0627\u0634\u0631\u062d \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u062f\u0647");
-      const session = runtime.getSession(created.sessionId);
-      const assistantMessage = session?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-
-      assert.equal(session?.runMode, "inspect_only");
-      assert.equal(session?.patchProposals.length, 0);
-      assert.equal(session?.commandRequests.length, 0);
-      assert.ok(session?.explainReport);
-      assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_report"));
-      assert.ok(session?.artifacts.some((artifact) => artifact.type === "project_explain_answer"));
-      assert.match(assistantMessage, /current workspace evidence|workspace|hivo-file/i);
-      assert.match(assistantMessage, /hivo-file:/);
-      assert.doesNotMatch(assistantMessage, /could not safely produce/i);
-      assert.doesNotMatch(assistantMessage, MOJIBAKE_PATTERN);
-      assert.doesNotMatch(assistantMessage, /Agentic AI E-Commerce|shopping\/search request|checkout/i);
-
-      await runtime.runTurn(created.sessionId, "\u0627\u0646\u062a \u062c\u0628\u062a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u062f\u064a \u0645\u0646\u064a\u0646\u061f");
-      const provenanceMessage = runtime.getSession(created.sessionId)?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-      assert.match(provenanceMessage, /Workspace:/);
-      assert.match(provenanceMessage, /hivo-file:/);
-
-      await runtime.runTurn(
-        created.sessionId,
-        "What are the main entrypoint files in this project? Use the detected candidates apps/desktop/src/App.tsx, packages/protocol/src/index.ts."
-      );
-      const entrypointMessage = runtime.getSession(created.sessionId)?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-      assert.doesNotMatch(entrypointMessage, /read-only explain report|external search|Main evidence refs/i);
-
-      await runtime.runTurn(
-        created.sessionId,
-        "What dependency or configuration evidence is visible in README.md, package.json? Answer only from the opened project files."
-      );
-      const dependencyMessage = runtime.getSession(created.sessionId)?.messages.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-      assert.doesNotMatch(dependencyMessage, /read-only explain report|external search|Main evidence refs/i);
-    } finally {
-      await app.close();
-    }
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-    await rm(storageDir, { recursive: true, force: true });
   }
 });
 

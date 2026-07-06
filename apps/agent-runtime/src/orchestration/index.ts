@@ -3,8 +3,30 @@ export * from "./AgentTeamManager.js";
 export * from "./AgentTeamModels.js";
 export * from "./ApprovalGates.js";
 export * from "./CampaignManager.js";
+export * from "./CanonicalCampaignAdapter.js";
+export * from "./CanonicalExecutionAdapter.js";
+export * from "./CanonicalOrchestrationGraph.js";
+export * from "./CanonicalQueueAdapter.js";
+export * from "./CanonicalRecursiveAdapter.js";
+export * from "./CanonicalSwarmAdapter.js";
+export * from "./CanonicalTaskGraphManagerAdapter.js";
+export * from "./CanonicalTaskGraphBuilder.js";
 export * from "./ContextInclusion.js";
 export * from "./ContextPackBuilder.js";
+export * from "./CoreExecutorInvocationService.js";
+export * from "./CoreFinalReportAssemblyService.js";
+export * from "./CoreFinalReportArtifactSummaryService.js";
+export * from "./CoreFinalReportMetadataSummaryService.js";
+export * from "./CoreFinalReportPolicy.js";
+export * from "./CoreMemoryUpdateService.js";
+export * from "./CoreOptionalExecutionPipelineService.js";
+export * from "./CoreReportArtifactHelpers.js";
+export * from "./CoreReadOnlyRoleInvocationService.js";
+export * from "./CoreRunLifecycleService.js";
+export * from "./CoreSafetyVerificationGateService.js";
+export * from "./CoreTaskGraphExecutionService.js";
+export * from "./CoreTaskGraphCreationService.js";
+export * from "./CoreStructuredOutputValidationService.js";
 export * from "./FileLockManager.js";
 export * from "./DurableLockManager.js";
 export * from "./FactoryLockModels.js";
@@ -75,6 +97,7 @@ export * from "./PromptQualityGate.js";
 export * from "./PromptWriterModels.js";
 export * from "./PromptWriterService.js";
 export * from "./ProviderBackedSwarmWorker.js";
+export * from "./QueueDrivenTaskScheduler.js";
 export * from "./ReadOnlySwarmWorkerSchemas.js";
 export * from "./RepairLoop.js";
 export * from "./ReviewLoop.js";
@@ -132,7 +155,6 @@ export type {
   PatchProposalReviewBlocker,
   PatchProposalReviewDecision,
   PatchProposalReviewFinding,
-  PatchProposalReviewProvider,
   PatchProposalReviewProviderInput,
   PatchProposalReviewProviderResult,
   PatchProposalReviewRequest,
@@ -165,7 +187,6 @@ export * from "./ControlledIntegrationApplyManager.js";
 export * from "./IntegrationFinalizationModels.js";
 export * from "./IntegrationMemoryUpdater.js";
 export * from "./IntegrationFinalizationManager.js";
-export * from "./TaskGraphManager.js";
 export * from "./Validation.js";
 export * from "./ValidationRunner.js";
 export * from "./ValidationSemantics.js";

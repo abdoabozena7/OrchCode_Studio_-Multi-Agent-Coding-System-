@@ -107,7 +107,7 @@ test("ConversationUnderstanding carries one cleaned prompt into downstream class
   assert.equal(classifyRunIntent("هاي شغل المشروع", run), "run_to_green");
 });
 
-test("real-provider direct conversation uses provider routing before skipping workspace retrieval", async () => {
+test("real-provider direct conversation uses ReasoningKernel provider routing before skipping workspace retrieval", async () => {
   const storageDir = path.join(os.tmpdir(), `hivo-provider-intent-storage-${Date.now()}`);
   const provider = new DirectConversationProvider();
   const runtime = await createRuntime(storageDir, provider);
@@ -122,11 +122,13 @@ test("real-provider direct conversation uses provider routing before skipping wo
   const session = runtime.getSession(created.sessionId);
   const answer = session?.messages.at(-1)?.content ?? "";
 
-  assert.equal(provider.calls, 1);
+  assert.deepEqual(provider.schemaCalls, ["initial-reasoning-decision", "answer-verification"]);
   assert.equal(session?.status, "completed");
   assert.equal(session?.projectIntake, undefined);
+  assert.equal(session?.latestDecisionPipeline?.finalResponseSource, "provider");
+  assert.equal(session?.providerTelemetry?.providerRequestCount, 2);
   assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake"), false);
-  assert.equal(session?.progressEvents[0]?.taskTitle, "رد مباشر");
+  assert.equal(session?.progressEvents.some((event) => event.taskTitle === "رد المزوّد"), true);
   assert.match(answer, /أهلًا|موجود/);
   assert.doesNotMatch(answer, /Workspace used for this answer/);
   assert.doesNotMatch(answer, MOJIBAKE_PATTERN);
@@ -134,7 +136,7 @@ test("real-provider direct conversation uses provider routing before skipping wo
   await rm(storageDir, { recursive: true, force: true });
 });
 
-test("real-provider direct conversation falls back to the local route guard after provider failure", async () => {
+test("real-provider direct conversation fails closed after provider failure without a local route fallback", async () => {
   const storageDir = path.join(os.tmpdir(), `hivo-provider-intent-fail-storage-${Date.now()}`);
   const provider = new NoProviderCallsFixture(new Error("provider unavailable"));
   const runtime = await createRuntime(storageDir, provider);
@@ -147,18 +149,17 @@ test("real-provider direct conversation falls back to the local route guard afte
 
   await runtime.runTurn(created.sessionId, "هاي");
   const session = runtime.getSession(created.sessionId);
-  const answer = session?.messages.at(-1)?.content ?? "";
+  const assistantMessages = session?.messages.filter((message) => message.role === "assistant") ?? [];
+  const systemMessage = session?.messages.filter((message) => message.role === "system").at(-1)?.content ?? "";
 
-  assert.equal(provider.calls, 1);
-  assert.equal(session?.status, "completed");
+  assert.equal(provider.calls, 4);
+  assert.equal(session?.status, "failed_provider");
   assert.equal(session?.projectIntake, undefined);
   assert.equal(session?.latestDecisionPipeline?.finalResponseSource ?? "none", "none");
   assert.equal(session?.artifacts.some((artifact) => artifact.type === "project_intake" || artifact.type === "project_explain_report"), false);
-  assert.equal(session?.progressEvents.at(-1)?.taskTitle, "رد مباشر");
-  assert.match(session?.progressEvents.at(-1)?.summary ?? "", /لا تطلب كود|مش محتاجة بحث/);
-  assert.match(answer, /أهلًا|موجود/);
-  assert.doesNotMatch(answer, /Workspace used for this answer|لقيت|Workspace snapshot/i);
-  assert.doesNotMatch(answer, MOJIBAKE_PATTERN);
+  assert.equal(assistantMessages.length, 0);
+  assert.match(systemMessage, /provider gate failed|deterministic fallback/i);
+  assert.doesNotMatch(systemMessage, /أهلًا|موجود|Workspace used for this answer|لقيت|Workspace snapshot/i);
   assert.doesNotMatch(session?.progressEvents.at(-1)?.taskTitle ?? "", MOJIBAKE_PATTERN);
   assert.doesNotMatch(session?.progressEvents.at(-1)?.summary ?? "", MOJIBAKE_PATTERN);
   assert.doesNotMatch(session?.runSummary?.summary ?? "", MOJIBAKE_PATTERN);
@@ -195,21 +196,74 @@ class NoProviderCallsFixture implements LlmProvider {
 
 class DirectConversationProvider implements LlmProvider {
   calls = 0;
+  schemaCalls: string[] = [];
 
-  async generateStructured<T>(): Promise<T> {
+  async generateStructured<T>(_input: LlmRequest, schema: unknown): Promise<T> {
     this.calls += 1;
-    return {
-      kind: "direct_conversation",
-      language: "arabic",
-      needsWorkspace: false,
-      confidence: "high",
-      rationale: "The message is a greeting.",
-      workspaceMessage: ""
-    } as T;
+    const schemaName = getSchemaName(schema);
+    this.schemaCalls.push(schemaName);
+    if (schemaName === "initial-reasoning-decision") {
+      return {
+        understanding: {
+          originalRequest: "هاي",
+          cleanedRequest: "هاي",
+          language: "arabic",
+          intentKind: "direct_conversation",
+          route: "chat",
+          needsWorkspace: false,
+          goal: "Answer the greeting directly.",
+          ambiguities: [],
+          requiredEvidence: [],
+          risk: "low",
+          confidence: "high",
+          rationale: "The message is a greeting."
+        },
+        step: {
+          id: "direct_greeting",
+          kind: "final",
+          rationale: "Answer directly without workspace retrieval.",
+          toolRequests: [],
+          missingFacts: [],
+          successCriteria: ["No workspace retrieval is needed."],
+          result: directGreetingResult()
+        }
+      } as T;
+    }
+    if (schemaName === "answer-verification") {
+      return {
+        verdict: "pass",
+        rationale: "The direct greeting answer is provider-authored and requires no workspace evidence.",
+        supportedClaims: [],
+        unsupportedClaims: [],
+        missingFacts: [],
+        evidenceRefs: []
+      } as T;
+    }
+    if (schemaName === "provider-authored-result") {
+      return directGreetingResult() as T;
+    }
+    throw new Error(`Unexpected provider structured call for direct conversation: ${schemaName}`);
   }
 
   async generateText(): Promise<string> {
     this.calls += 1;
     throw new Error("Unexpected provider text call after direct-conversation routing");
   }
+}
+
+function directGreetingResult() {
+  return {
+    decision: "ANSWER",
+    answerMarkdown: "\u0623\u0647\u0644\u064b\u0627\u060c \u0623\u0646\u0627 \u0645\u0648\u062c\u0648\u062f.",
+    claims: [],
+    evidenceRefs: [],
+    unknowns: [],
+    rationale: "Provider-authored direct greeting."
+  };
+}
+
+function getSchemaName(schema: unknown) {
+  return typeof schema === "object" && schema && "name" in schema
+    ? String((schema as { name: string }).name)
+    : "unknown";
 }

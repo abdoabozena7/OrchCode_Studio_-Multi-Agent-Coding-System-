@@ -63,6 +63,37 @@ export class MultiPlanFactory {
 
     const evidenceBundle = await this.resolvePlanningEvidence(input);
     const context = createEvaluationContext(input, trigger, evidenceBundle);
+    if (!hasProviderBackedEvidence(evidenceBundle)) {
+      const reason = evidenceBundle?.items.length
+        ? "Multi-plan factory requires provider-backed planning evidence; repository and context facts were preserved as evidence only."
+        : "Multi-plan factory requires provider-backed planning evidence; no valid provider-backed evidence was available.";
+      await this.traceWriter.write({
+        run_id: input.run.id,
+        task_id: input.taskId,
+        event_type: "multi_plan_skipped",
+        lifecycle_stage: "planning",
+        severity: "warning",
+        reason,
+        summary: `Multi-plan factory skipped: ${reason}`,
+        artifact_refs: [evidenceBundle?.artifact_ref, evidenceBundle?.summary_ref].filter((ref): ref is string => Boolean(ref)),
+        metadata_json: {
+          run_id: input.run.id,
+          task_id: input.taskId,
+          generation_mode: context.generation_mode,
+          evidence_bundle_id: evidenceBundle?.evidence_bundle_id,
+          evidence_item_count: evidenceBundle?.items.length ?? 0,
+          provider_evidence_count: evidenceBundle?.summary.provider_evidence_count ?? 0,
+          provider_required: true
+        }
+      });
+      return {
+        used: false,
+        trigger: { ...trigger, use_multi_plan: false, reason },
+        generation_mode: context.generation_mode,
+        variants: [],
+        evaluations: []
+      };
+    }
     const started = await this.traceWriter.write({
       run_id: input.run.id,
       task_id: input.taskId,
@@ -390,7 +421,6 @@ export function summarizePlanningDecision(input: {
     evidence_used: input.mergedPlan?.evidence_used_summary?.evidence_used ?? false,
     evidence_item_count: input.mergedPlan?.evidence_used_summary?.evidence_item_count ?? 0,
     provider_evidence_count: input.mergedPlan?.evidence_used_summary?.provider_evidence_count ?? 0,
-    mock_evidence_count: input.mergedPlan?.evidence_used_summary?.mock_evidence_count ?? 0,
     low_confidence_count: input.mergedPlan?.evidence_used_summary?.low_confidence_count ?? 0,
     rejected_evidence_count: input.mergedPlan?.evidence_used_summary?.rejected_evidence_count ?? 0,
     evidence_conflict_count: input.mergedPlan?.evidence_used_summary?.evidence_conflict_count ?? 0,
@@ -423,8 +453,8 @@ function createVariant(input: MultiPlanInput, context: MultiPlanEvaluationContex
       {
         id: `assumption_${randomUUID().slice(0, 8)}`,
         statement: context.evidence_bundle?.items.length
-          ? "No planning model prompt was used; this variant was generated deterministically with read-only swarm evidence as advisory input."
-          : "No model prompt was used; this variant was generated from deterministic repository and request signals.",
+          ? "No planning model prompt was used; this variant was generated from provider-backed read-only swarm evidence as advisory input."
+          : "No model prompt was used; this pure helper output is not accepted by the production multi-plan factory without provider-backed evidence.",
         confidence: "high",
         evidence_refs: context.evidence_bundle?.items.map((item) => item.evidence_id) ?? []
       }
@@ -464,6 +494,10 @@ function createEvaluationContext(input: MultiPlanInput, trigger: MultiPlanTrigge
     ]),
     evidence_bundle: evidenceBundle
   };
+}
+
+function hasProviderBackedEvidence(bundle?: PlanningEvidenceBundle) {
+  return Boolean(bundle?.items.some((item) => item.source_type.startsWith("provider_")));
 }
 
 function inferComplexityAndRisk(input: MultiPlanInput) {
@@ -640,7 +674,7 @@ function risksFor(input: MultiPlanInput, context: MultiPlanEvaluationContext, pe
       summary: "Merged plan is advisory and must not authorize new write-capable execution by itself.",
       severity: "high",
       affected_domains: ["orchestration", "task_graph"],
-      mitigation: "Keep existing task graph behavior as fallback and record read-only limits in artifacts.",
+      mitigation: "Keep existing task graph behavior authoritative and record read-only limits in artifacts.",
       approval_required: false
     }
   ];
@@ -695,7 +729,7 @@ function assumptions(input: MultiPlanInput, context: MultiPlanEvaluationContext)
       id: `assumption_${randomUUID().slice(0, 8)}`,
       statement: context.evidence_bundle?.items.length
         ? "Read-only swarm evidence is advisory and must be cross-checked against repository facts."
-        : "No read-only swarm evidence was available; deterministic planning signals are the fallback.",
+        : "No read-only swarm evidence was available; deterministic repository signals are facts only, not semantic planning authority.",
       confidence: context.evidence_bundle?.items.length ? "medium" : "high",
       evidence_refs: context.evidence_bundle?.items.map((item) => item.evidence_id) ?? []
     }
@@ -824,7 +858,7 @@ function evidenceRisks(bundle?: PlanningEvidenceBundle): Array<{ summary: string
 function evidenceRefsForPerspective(bundle: PlanningEvidenceBundle | undefined, perspective: PlanPerspective) {
   if (!bundle) return [];
   const sourceByPerspective: Record<PlanPerspective, PlanningEvidenceSourceType[]> = {
-    mvp_first: ["provider_scout_output", "provider_planner_output", "mock_worker_output"],
+    mvp_first: ["provider_scout_output", "provider_planner_output"],
     architecture_first: ["provider_planner_output", "provider_specialist_output", "provider_reviewer_output"],
     risk_first: ["provider_risk_analyst_output", "provider_reviewer_output", "provider_specialist_output", "prior_failure"],
     test_first: ["provider_tester_planner_output", "validation_history", "provider_reviewer_output"],
@@ -836,7 +870,7 @@ function evidenceRefsForPerspective(bundle: PlanningEvidenceBundle | undefined, 
 }
 
 function evidenceNotesForPerspective(bundle: PlanningEvidenceBundle | undefined, perspective: PlanPerspective) {
-  if (!bundle?.items.length) return ["No provider-backed evidence was available; deterministic/heuristic planning fallback used."];
+  if (!bundle?.items.length) return ["No provider-backed evidence was available; production multi-plan generation should be skipped."];
   const refs = new Set(evidenceRefsForPerspective(bundle, perspective));
   return bundle.items
     .filter((item) => refs.has(item.evidence_id))

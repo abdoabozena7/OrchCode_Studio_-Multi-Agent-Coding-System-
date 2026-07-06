@@ -5,10 +5,11 @@ import path from "node:path";
 import { appendDecision, ensureMemoryLayout, writeJson } from "../memory/ProjectMemory.js";
 import { SqliteMemoryStore } from "../memory/SqliteMemoryStore.js";
 import { assessIndexFreshness } from "../memory/IndexFreshness.js";
-import { CoreOrchestrator } from "./Orchestrator.js";
+import { CoreOrchestrator, type AgenticRunResult } from "./Orchestrator.js";
 import { ORCHESTRATION_SCHEMA_VERSION, type Campaign, type CampaignMetrics, type CampaignMilestone } from "./OrchestrationModels.js";
 import type { ExecutionMode } from "./OrchestrationConfig.js";
 import { FactoryMetadataAdapter } from "./FactoryMetadataStore.js";
+import { runCampaignMilestoneThroughCanonicalGraph } from "./CanonicalCampaignAdapter.js";
 
 export class CampaignManager {
   private readonly metadata: FactoryMetadataAdapter;
@@ -96,18 +97,42 @@ export class CampaignManager {
       memoryDir: this.memoryDir,
       config: { execution_mode: options.mode ?? "deep" }
     });
-    const result = await orchestrator.runAgenticTask(`Campaign ${refreshed.id} milestone ${milestone.id}: ${milestone.objective}`);
-    milestone.run_id = result.run.id;
-    milestone.status = result.run.status === "succeeded" ? "succeeded" : "failed";
+    let result: AgenticRunResult | undefined;
+    const canonical = await runCampaignMilestoneThroughCanonicalGraph<AgenticRunResult>({
+      campaign: refreshed,
+      milestone,
+      executeMilestone: async ({ milestone }) => {
+        result = await orchestrator.runAgenticTask(`Campaign ${refreshed.id} milestone ${milestone.id}: ${milestone.objective}`);
+        return {
+          status: result.run.status === "succeeded" ? "succeeded" : "failed",
+          runId: result.run.id,
+          result
+        };
+      }
+    });
+    if (!result || !canonical.milestoneExecution) {
+      milestone.status = "blocked";
+      milestone.updated_at = new Date().toISOString();
+      refreshed.status = "blocked";
+      refreshed.updated_at = new Date().toISOString();
+      refreshed.decisions.push(`Milestone ${milestone.id} blocked before execution: ${canonical.blockingReasons.join("; ") || "canonical campaign graph did not execute the milestone"}.`);
+      await this.save(refreshed);
+      await this.writeReport(refreshed);
+      await this.writeMetrics(refreshed);
+      await this.appendEvent(refreshed.id, "campaign.run_completed", { milestone_id: milestone.id, status: "blocked", canonical_status: canonical.graph.status });
+      return { campaign: refreshed, run: undefined };
+    }
+    milestone.run_id = canonical.milestoneExecution.runId;
+    milestone.status = canonical.milestoneExecution.status === "succeeded" ? "succeeded" : "failed";
     milestone.updated_at = new Date().toISOString();
     refreshed.runs.push(result.run.id);
     refreshed.status = refreshed.milestones.some((candidate) => candidate.status === "failed") ? "blocked" : refreshed.milestones.every((candidate) => candidate.status === "succeeded") ? "succeeded" : "running";
     refreshed.updated_at = new Date().toISOString();
-    refreshed.decisions.push(`Milestone ${milestone.id} completed through run ${result.run.id} with status ${result.run.status}.`);
+    refreshed.decisions.push(`Milestone ${milestone.id} completed through canonical campaign graph run ${result.run.id} with status ${result.run.status}.`);
     await this.save(refreshed);
     await this.writeReport(refreshed);
     await this.writeMetrics(refreshed);
-    await this.appendEvent(refreshed.id, "campaign.run_completed", { milestone_id: milestone.id, run_id: result.run.id, status: result.run.status });
+    await this.appendEvent(refreshed.id, "campaign.run_completed", { milestone_id: milestone.id, run_id: result.run.id, status: result.run.status, canonical_status: canonical.graph.status });
     return { campaign: refreshed, run: result };
   }
 

@@ -5,11 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { EventBus } from "../runtime/EventBus.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { RunEngine } from "../runtime/RunEngine.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -25,18 +26,23 @@ test("runtime session state is restored from durable snapshots across restarts",
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "persist me\n", "utf8");
 
-  const first = await buildServer({ ...loadConfig(), storageDir });
-  const created = await first.runtime.createSession({
+  const firstSessionManager = new SessionManager(storageDir, new EventBus());
+  await firstSessionManager.load();
+  const firstRuntime = new AgentRuntime({ ...loadConfig(), storageDir }, firstSessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
+  const created = await firstRuntime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: "explain this repo"
   });
-  await first.runtime.runTurn(created.sessionId, "explain this repo");
-  const original = first.runtime.getSession(created.sessionId);
-  await first.app.close();
+  await firstRuntime.runTurn(created.sessionId, "explain this repo");
+  const original = firstRuntime.getSession(created.sessionId);
 
-  const second = await buildServer({ ...loadConfig(), storageDir });
-  const restored = second.runtime.getSession(created.sessionId);
+  const secondSessionManager = new SessionManager(storageDir, new EventBus());
+  await secondSessionManager.load();
+  const restored = secondSessionManager.getSession(created.sessionId);
 
   assert.ok(original);
   assert.ok(restored);
@@ -45,7 +51,6 @@ test("runtime session state is restored from durable snapshots across restarts",
   assert.equal(restored?.taskState.restoreState?.disposition, "terminal");
   assert.equal(restored?.taskState.transitions.some((entry) => entry.type === "session.restored"), true);
 
-  await second.app.close();
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
 });
@@ -60,7 +65,7 @@ test("session manager validates hashed session tokens without storing the raw to
   await sessionManager.load();
   const session = await sessionManager.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "explain this repo",
     sessionToken: "plain-token",
     sessionTokenExpiresAt: new Date(Date.now() + 60_000).toISOString()

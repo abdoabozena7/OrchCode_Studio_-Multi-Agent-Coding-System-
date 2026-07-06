@@ -7,6 +7,8 @@ import type {
   PatchProposalSummary
 } from "./PatchProposalModels.js";
 
+export type OneWriterDryRunArtifactMode = OneWriterDryRunMode;
+
 export type OneWriterDryRunStatus =
   | "not_required"
   | "pending"
@@ -43,7 +45,6 @@ export type OneWriterDryRunBlockerType =
 export type OneWriterDryRunWarningType =
   | "prompt_quality_warning"
   | "stale_context_warning"
-  | "fake_provider"
   | "review_candidate_only"
   | "rollback_limited"
   | "advisory_conflict";
@@ -106,12 +107,6 @@ export type OneWriterDryRunProviderInput = {
   metadata_json: Record<string, unknown>;
 };
 
-export type OneWriterDryRunProvider = {
-  provider_name: string;
-  provider_mode: OneWriterDryRunMode;
-  generatePatchProposal(input: OneWriterDryRunProviderInput): Promise<OneWriterDryRunProviderResult>;
-};
-
 export type OneWriterDryRunProposal = {
   proposal_id: string;
   run_id: string;
@@ -122,7 +117,7 @@ export type OneWriterDryRunProposal = {
   proposed_node_id: string;
   team_id?: string;
   writer_role: AgentRoleName | string;
-  provider_mode: OneWriterDryRunMode;
+  provider_mode: OneWriterDryRunArtifactMode;
   provider_name?: string;
   model_name?: string;
   prompt_id?: string;

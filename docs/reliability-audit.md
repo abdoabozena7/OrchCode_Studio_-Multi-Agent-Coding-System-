@@ -198,9 +198,9 @@ Why this is a blocker:
 
 Evidence:
 - Docs still call out placeholders for agent pool and scheduler pieces in `docs/architecture.md:51`.
-- The scheduler does support async runs and file-lock waiting in `apps/agent-runtime/src/scheduler/TaskScheduler.ts:58-109`.
+- Queue-driven ordinary orchestration now routes task execution through `apps/agent-runtime/src/orchestration/QueueDrivenTaskScheduler.ts` and uses the shared `OrchestrationFileLockManager`.
 - Orchestrated runtime emits `parallel_execution.active` in `apps/agent-runtime/src/runtime/OrchestratedRuntime.ts:216-218`.
-- The same scheduler also collapses some blocked conditions into generic `task.blocked` or `task.failed` states at `apps/agent-runtime/src/scheduler/TaskScheduler.ts:68-85`.
+- Some blocked conditions are still projected into broad task failure/blocker states before final reporting, even though exhausted queue retries are now explicit graph review blockers.
 - There is no durable restore/replay of in-flight orchestration state because runtime state is in-memory only.
 
 Failure mode in real usage:

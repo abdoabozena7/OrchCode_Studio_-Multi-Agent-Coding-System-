@@ -386,7 +386,9 @@ export type AgentRuntimeSwarmNodeKind =
   | "splitter"
   | "executor"
   | "goal_keeper"
-  | "collector";
+  | "collector"
+  | "task_agent"
+  | "repair_agent";
 export type AgentRuntimeSwarmMessageRole = "user" | "agent" | "system";
 
 export type AgentRuntimeSwarmMessage = {
@@ -557,6 +559,35 @@ export type AgentRuntimeSession = {
   progressEvents: RuntimeProgressEvent[];
   agentWorkStatuses: AgentWorkStatus[];
   swarmState?: AgentRuntimeSwarmState;
+  recursiveSwarmRunState?: {
+    schemaVersion: number;
+    runId: string;
+    sessionId: string;
+    goalEnvelope: {
+      originalGoal: string;
+      theme: string;
+      constraints: string[];
+      nonGoals: string[];
+      acceptanceCriteria: string[];
+      workspaceIdentity: string;
+      localTask: string;
+      version: number;
+    };
+    tree: {
+      schemaVersion: number;
+      runId: string;
+      rootGoal: string;
+      rootId: string;
+      nodeCount: number;
+      depth: number;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      nodes?: AgentRuntimeSwarmNode[];
+    };
+    createdAt: string;
+    updatedAt: string;
+  };
   runSummary?: RunSummary;
   verificationResult?: import("./models.js").VerificationResult;
   delegationDecision?: DelegationDecision;

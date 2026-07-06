@@ -79,7 +79,7 @@ export class ReasoningToolDispatcher {
 
   private listFiles(request: ReasoningToolRequest) {
     const files = this.options.tools.workspace.listFiles(clamp(request.limit, 1, 5_000, 500))
-      .filter((entry) => !entry.isDir && !entry.isSecretCandidate)
+      .filter((entry) => !entry.isDir && !entry.isSecretCandidate && !/\.(png|jpg|jpeg|gif|bmp|ico|webp|avif|pdf|zip|tar|gz|rar|7z|exe|dll|wasm|pyc|mp3|wav|mp4|woff2?|ttf|otf)$/i.test(entry.path))
       .map((entry) => entry.path);
     const evidenceFiles = files.slice(0, 20);
     const omittedEvidenceFiles = Math.max(0, files.length - evidenceFiles.length);

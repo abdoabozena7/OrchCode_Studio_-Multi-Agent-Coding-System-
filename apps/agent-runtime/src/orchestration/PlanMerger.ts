@@ -180,7 +180,7 @@ function mergeDecisions(variants: PlanVariant[], rejectedPlanIds: string[]): Pla
 
 function evidenceMergeRationale(context: MultiPlanEvaluationContext) {
   const bundle = context.evidence_bundle;
-  if (!bundle?.items.length) return ["No provider-backed planning evidence was available; deterministic/heuristic fallback signals remain in effect."];
+  if (!bundle?.items.length) return ["No provider-backed planning evidence was available; deterministic repository/context facts were not treated as semantic planning authority."];
   return [
     `Preserved ${bundle.items.length} planning evidence item ref(s) from read-only swarm workers.`,
     `Evidence sources: ${uniqueStrings(bundle.items.map((item) => item.source_type)).join(", ")}.`,

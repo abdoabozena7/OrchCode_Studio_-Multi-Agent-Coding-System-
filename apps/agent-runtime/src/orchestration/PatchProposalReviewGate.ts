@@ -11,7 +11,6 @@ import {
   createPatchProposalReview,
   createPatchProposalReviewBatch,
   createPatchProposalReviewBlocker,
-  createPatchProposalReviewFinding,
   createPatchProposalReviewRequest,
   createPatchProposalReviewResult,
   createPatchProposalReviewSummary,
@@ -20,8 +19,6 @@ import {
   type PatchProposalReviewBatch,
   type PatchProposalReviewBlocker,
   type PatchProposalReviewDecision,
-  type PatchProposalReviewFinding,
-  type PatchProposalReviewProvider,
   type PatchProposalReviewProviderInput,
   type PatchProposalReviewProviderResult,
   type PatchProposalReviewRequest,
@@ -30,13 +27,16 @@ import {
   type PatchProposalReviewWarning
 } from "./PatchProposalReviewModels.js";
 import {
+  patchProposalReviewOutputSchema,
   parsePatchProposalReviewOutput,
   validatePatchProposalReviewOutput,
   type ParsedPatchProposalReviewOutput
 } from "./PatchProposalReviewSchemas.js";
 import { evaluatePromptQuality, isPromptQualityBlocking } from "./PromptQualityGate.js";
 import { hashPromptInput, hashRenderedPrompt, renderRolePrompt, type RenderedPrompt } from "./PromptSystem.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { readJson } from "../memory/ProjectMemory.js";
+import { invokeReasoningProviderStructured } from "../runtime/ReasoningKernel.js";
 
 export type PatchProposalReviewGateOptions = {
   workspacePath: string;
@@ -44,7 +44,7 @@ export type PatchProposalReviewGateOptions = {
   config: OrchestrationSafetyConfig;
   artifactStore?: OrchestrationArtifactStore;
   traceWriter?: FactoryTraceWriter;
-  provider?: PatchProposalReviewProvider;
+  provider?: LlmProvider;
 };
 
 export type PatchProposalReviewBatchOptions = {
@@ -65,7 +65,7 @@ export class PatchProposalReviewGate {
   private readonly artifactStore: OrchestrationArtifactStore;
   private readonly traceWriter: FactoryTraceWriter;
   private readonly metadata: FactoryMetadataAdapter;
-  private readonly provider?: PatchProposalReviewProvider;
+  private readonly provider?: LlmProvider;
 
   constructor(options: PatchProposalReviewGateOptions) {
     this.workspacePath = options.workspacePath;
@@ -171,29 +171,20 @@ export class PatchProposalReviewGate {
     const mode = reviewRequest.mode;
     let parsed: ParsedPatchProposalReviewOutput;
     let rawOutput: string | undefined;
-    if (mode === "deterministic" || (mode === "auto" && !this.provider)) {
-      review.warnings.push(createPatchProposalReviewWarning({
-        review_id: review.review_id,
-        warning_type: "deterministic_review",
-        severity: "info",
-        message: "Deterministic review fallback was used; no provider/API call was made.",
-        refs: []
-      }));
-      parsed = this.deterministicReview(proposal, review.review_id);
-    } else {
+    {
       const provider = this.selectProvider(mode);
       await this.traceWriter.write({
         run_id: proposal.run_id,
         team_id: proposal.team_id,
         event_type: "patch_proposal_review_provider_selected",
         lifecycle_stage: "planning",
-        summary: `Patch proposal review provider selected: ${provider.provider_name}.`,
-        metadata_json: { review_id: review.review_id, proposal_id: proposal.proposal_id, reviewer_mode: provider.reviewer_mode, real_provider_allowed: this.config.allow_real_provider_review ?? false }
+        summary: "Patch proposal review provider selected through ReasoningKernel.",
+        metadata_json: { review_id: review.review_id, proposal_id: proposal.proposal_id, provider_name: "configured_llm_provider", reviewer_mode: mode, real_provider_allowed: this.config.allow_real_provider_review ?? false }
       });
       try {
         const providerResult = await this.callReviewProvider(input, provider);
         rawOutput = providerResult.raw_output;
-        review.provider_name = providerResult.provider_name ?? provider.provider_name;
+        review.provider_name = providerResult.provider_name ?? "configured_llm_provider";
         review.model_name = providerResult.model_name;
         await this.traceWriter.write({
           run_id: proposal.run_id,
@@ -348,6 +339,7 @@ export class PatchProposalReviewGate {
     const mode = this.config.patch_proposal_review_mode ?? "off";
     if (!this.config.enable_patch_proposal_review_gate || mode === "off") add("review_disabled", "Patch proposal review gate is disabled by configuration.");
     if (mode === "provider" && !this.config.allow_real_provider_review) add("provider_unavailable", "Real provider review requires allow_real_provider_review opt-in.");
+    if (mode !== "off" && !this.provider) add("provider_unavailable", "Patch proposal review requires a configured provider; local deterministic and fake reviewers are not runtime fallbacks.");
     if (proposal.status !== "accepted_for_review_candidate") add("ineligible_proposal", `Proposal status ${proposal.status} is not eligible for review.`, [proposal.proposal_id]);
     if (!proposal.scope_check_result || proposal.scope_check_result.status !== "passed" || !proposal.scope_check_result.review_candidate_allowed) add("missing_scope_check", "Proposal scope check did not pass.", [proposal.proposal_id]);
     if (!proposal.patch_artifact_ref || !existsSync(proposal.patch_artifact_ref)) add("missing_patch_artifact", "Patch proposal artifact ref is missing or not file-backed.", [proposal.patch_artifact_ref ?? ""]);
@@ -443,9 +435,18 @@ export class PatchProposalReviewGate {
       event_type: "patch_proposal_review_provider_started",
       lifecycle_stage: "planning",
       summary: `Patch proposal review provider started for ${input.proposal_id}.`,
-      metadata_json: { review_id: input.review_id, proposal_id: input.proposal_id, provider_name: provider.provider_name, reviewer_mode: provider.reviewer_mode }
+      metadata_json: { review_id: input.review_id, proposal_id: input.proposal_id, provider_name: "configured_llm_provider", reviewer_mode: input.request.mode }
     });
-    return provider.reviewPatchProposal(input);
+    const generated = await invokeReasoningProviderStructured<Record<string, unknown>>(
+      provider,
+      this.providerRequest(input),
+      patchProposalReviewOutputSchema
+    );
+    return {
+      raw_output: JSON.stringify(generated, null, 2),
+      provider_name: "reasoning_kernel",
+      metadata_json: { structured_schema: patchProposalReviewOutputSchema.name }
+    };
   }
 
   parseReviewOutput(raw: string, reviewId: string) {
@@ -490,45 +491,6 @@ export class PatchProposalReviewGate {
       high_findings_count: reviews.reduce((sum, review) => sum + review.severity_counts.high, 0),
       metadata_json: { review_only: true, no_validation_run: true, no_apply: true }
     });
-  }
-
-  private deterministicReview(proposal: OneWriterDryRunProposal, reviewId: string): ParsedPatchProposalReviewOutput {
-    const findings: PatchProposalReviewFinding[] = [];
-    const sensitiveFiles = proposal.changed_files.filter(isSensitivePath);
-    if (proposal.scope_check_result?.status !== "passed") {
-      findings.push(reviewFinding(reviewId, "scope", "critical", "Scope check did not pass.", true, proposal.proposal_id));
-    }
-    if (!proposal.validation_plan_ref && !(proposal.patch_proposal?.validation_recommendations.length)) {
-      findings.push(reviewFinding(reviewId, "validation", "high", "Validation plan or recommendations are missing.", true));
-    }
-    if (proposal.risk_level === "critical" || proposal.risk_level === "high") {
-      findings.push(reviewFinding(reviewId, "risk", "high", `Proposal risk level is ${proposal.risk_level}; specialist review is required before validation candidacy.`, this.config.require_specialist_review_for_high_risk ?? true));
-    }
-    if (proposal.changed_files.length > 5) {
-      findings.push(reviewFinding(reviewId, "maintainability", "medium", "Proposal changes too many files for a single validation candidate.", false));
-    }
-    if (sensitiveFiles.length && this.config.require_human_approval_for_risky_files) {
-      findings.push(reviewFinding(reviewId, "security", "high", `Sensitive file changes require human approval scope: ${sensitiveFiles.join(", ")}.`, true, sensitiveFiles[0]));
-    }
-    const blocking = findings.some((finding) => finding.blocking || finding.severity === "critical");
-    const decision: PatchProposalReviewDecision = blocking
-      ? (sensitiveFiles.length ? "require_human_approval" : "block")
-      : proposal.changed_files.length > 5
-        ? "split_further"
-        : "accept_for_validation_candidate";
-    return {
-      decision,
-      findings,
-      required_changes: decision === "split_further" ? ["Split broad proposal into smaller validation candidates."] : [],
-      validation_recommendations: proposal.patch_proposal?.validation_recommendations.length
-        ? proposal.patch_proposal.validation_recommendations
-        : ["Run the prepared validation plan in a later validation gate."],
-      integration_risks: proposal.patch_proposal?.risks ?? [],
-      security_risks: sensitiveFiles.length ? [`Sensitive file review required for ${sensitiveFiles.join(", ")}.`] : [],
-      performance_risks: [],
-      test_coverage_risks: proposal.patch_proposal?.validation_recommendations.length ? [] : ["Validation recommendations were sparse."],
-      confidence: blocking ? 0.68 : 0.82
-    };
   }
 
   private applyParsedReview(review: PatchProposalReview, proposal: OneWriterDryRunProposal, parsed: ParsedPatchProposalReviewOutput) {
@@ -627,12 +589,48 @@ export class PatchProposalReviewGate {
     };
   }
 
-  private selectProvider(mode: PatchProposalReviewRequest["mode"]): PatchProposalReviewProvider {
+  private providerRequest(input: PatchProposalReviewProviderInput): LlmRequest {
+    return {
+      purpose: "verify",
+      reasoningStage: "verify",
+      responseFormat: "json",
+      structuredSchema: patchProposalReviewOutputSchema,
+      maxOutputTokens: 4096,
+      systemPrompt: [
+        "You are the provider-backed semantic reviewer for a dry-run patch proposal.",
+        "Use only the supplied prompt and context. Return strict JSON matching PatchProposalReviewOutput.",
+        "Review correctness, scope, validation, integration, safety, and risk.",
+        "Do not claim validation, patch application, lock acquisition, or integration acceptance happened."
+      ].join("\n"),
+      userPrompt: input.prompt,
+      context: {
+        request: input.request,
+        review_id: input.review_id,
+        run_id: input.run_id,
+        proposal_id: input.proposal_id,
+        preparation_plan_id: input.preparation_plan_id,
+        prompt_id: input.prompt_id,
+        reviewer_role: input.reviewer_role,
+        patch_summary: input.patch_summary,
+        changed_files: input.changed_files,
+        allowed_files: input.allowed_files,
+        forbidden_files: input.forbidden_files,
+        scope_check_status: input.scope_check_status,
+        validation_plan_ref: input.validation_plan_ref,
+        review_policy_ref: input.review_policy_ref,
+        integration_preview_ref: input.integration_preview_ref,
+        risk_level: input.risk_level,
+        metadata_json: input.metadata_json
+      }
+    };
+  }
+
+  private selectProvider(mode: PatchProposalReviewRequest["mode"]): LlmProvider {
     if (this.provider) return this.provider;
     if (mode === "provider" && !(this.config.allow_real_provider_review ?? false)) {
       throw new Error("Real provider review was requested without allow_real_provider_review.");
     }
-    return new FakePatchProposalReviewProvider(mode === "provider" ? "provider" : "fake_provider");
+    throw new Error("Patch proposal review provider is not configured.");
   }
 
   private async loadEligibleProposalsForRun(runId: string, ids?: string[]) {
@@ -702,39 +700,6 @@ export class PatchProposalReviewGate {
   }
 }
 
-class FakePatchProposalReviewProvider implements PatchProposalReviewProvider {
-  provider_name = "fake_patch_proposal_review_provider";
-  reviewer_mode: "fake_provider" | "provider";
-
-  constructor(mode: "fake_provider" | "provider") {
-    this.reviewer_mode = mode;
-  }
-
-  async reviewPatchProposal(input: PatchProposalReviewProviderInput): Promise<PatchProposalReviewProviderResult> {
-    return {
-      provider_name: this.provider_name,
-      model_name: "fake-review-v1",
-      raw_output: JSON.stringify({
-        decision: "accept_for_validation_candidate",
-        findings: [{
-          category: "validation",
-          severity: "low",
-          message: "Validation remains pending for the later validation gate.",
-          blocking: false,
-          evidence_ref: input.validation_plan_ref
-        }],
-        required_changes: [],
-        validation_recommendations: ["Run the prepared validation plan in a later validation gate."],
-        integration_risks: ["IntegrationManager acceptance remains pending."],
-        security_risks: [],
-        performance_risks: [],
-        test_coverage_risks: [],
-        confidence: 0.82
-      }, null, 2)
-    };
-  }
-}
-
 function blocker(reviewId: string, type: PatchProposalReviewBlocker["blocker_type"], reason: string, refs: string[] = []) {
   return createPatchProposalReviewBlocker({
     review_id: reviewId,
@@ -753,26 +718,4 @@ function warning(reviewId: string, type: PatchProposalReviewWarning["warning_typ
     message,
     refs: refs.filter(Boolean)
   });
-}
-
-function reviewFinding(
-  reviewId: string,
-  category: PatchProposalReviewFinding["category"],
-  severity: PatchProposalReviewFinding["severity"],
-  message: string,
-  blocking: boolean,
-  file?: string
-) {
-  return createPatchProposalReviewFinding({
-    review_id: reviewId,
-    category,
-    severity,
-    message,
-    file,
-    blocking
-  });
-}
-
-function isSensitivePath(file: string) {
-  return /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.toml|Cargo\.lock|Dockerfile|docker-compose\.ya?ml|\.github\/workflows\/|migrations?\/|schema\/|schemas\/|openapi|api\/|security\/|auth\/|\.env)/i.test(file);
 }

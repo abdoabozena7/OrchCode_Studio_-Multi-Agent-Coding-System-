@@ -29,7 +29,7 @@ const projectMap: ProjectMap = {
   importantFiles: ["src/index.ts", "src/runtime/kernel.ts"]
 };
 
-test("Project Explain adapter converts kernel output into reusable explain artifacts", async () => {
+test("Project Explain adapter exposes evidence metadata without composing answer prose", async () => {
   const workspace = await createWorkspace("agentic-project-adapter");
   try {
     await mkdir(path.join(workspace, "src", "runtime"), { recursive: true });
@@ -48,15 +48,15 @@ test("Project Explain adapter converts kernel output into reusable explain artif
     const result = await runAgenticTaskKernel(request);
     const output = ProjectExplainAgenticAdapter.fromResult(result);
 
-    assert.match(output.answerMarkdown, /UniversalKernel|kernel|architecture/i);
     assert.ok(output.trace.readPlan.steps.length > 0);
     assert.ok(output.result.evidenceGraph.accepted.some((item) => item.path === "src/runtime/kernel.ts"));
+    assert.equal("answerMarkdown" in output, false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("UniversalProjectQuestionEngine exposes agentic Project Explain debug metadata for complex architecture prompts", async () => {
+test("UniversalProjectQuestionEngine fails without provider prose instead of using agentic debug as an answer", async () => {
   const workspace = await createWorkspace("agentic-project-explain");
   try {
     await mkdir(path.join(workspace, "src", "runtime"), { recursive: true });
@@ -67,19 +67,15 @@ test("UniversalProjectQuestionEngine exposes agentic Project Explain debug metad
     const prompt = "Explain the architecture and how the runtime entrypoint relates to the engine.";
     const report = buildLargeProjectExplainReport({ workspacePath: workspace, message: prompt, projectMap });
 
-    const result = await answerUniversalProjectQuestion({
-      provider: new ThrowingProvider(),
-      tools,
-      userPrompt: prompt,
-      explainReport: report
-    });
-
-    assert.equal(result.agenticTask?.enabled, true);
-    assert.equal(result.agenticTask?.mode, "architecture_explain");
-    assert.ok(result.agenticTask?.readPlan.steps.some((step) => step.kind === "import_follow"));
-    assert.ok(result.agenticTask?.openedFiles.includes("src/index.ts"));
-    assert.ok((result.agenticTask?.evidenceAccepted.length ?? 0) > 0);
-    assert.doesNotMatch(result.answerMarkdown, /\uFFFD|ï؟½|أک|أ™/);
+    await assert.rejects(
+      answerUniversalProjectQuestion({
+        provider: new ThrowingProvider(),
+        tools,
+        userPrompt: prompt,
+        explainReport: report
+      }),
+      /project_explain_provider_failed/
+    );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

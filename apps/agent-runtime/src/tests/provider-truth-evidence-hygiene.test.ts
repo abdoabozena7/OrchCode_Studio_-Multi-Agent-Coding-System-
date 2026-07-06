@@ -211,7 +211,7 @@ test("real provider required without config fails with provider_missing", async 
   }
 });
 
-test("real provider required forbids mock mode and MockProvider factories", async () => {
+test("real provider required forbids legacy mock mode", async () => {
   const fixture = await createDbscanFixture("provider-gate-mock-forbidden");
   try {
     const runtime = await createRuntime(fixture.storageDir);
@@ -222,59 +222,13 @@ test("real provider required forbids mock mode and MockProvider factories", asyn
         activeProviderSource: "runtime_default",
         accessProfile: "full_access",
         userPrompt: "How is DBSCAN applied here?"
-      }),
+      } as unknown as Parameters<typeof runtime.createSession>[0]),
       (error: unknown) => {
         assert.equal((error as { code?: string }).code, "provider_mock_forbidden");
         return true;
       }
     );
 
-    const runtimeWithMockFactory = await createRuntime(fixture.storageDir, () => new ScriptedProvider());
-    const created = await runtimeWithMockFactory.createSession({
-      workspacePath: fixture.workspace,
-      mode: "real_provider",
-      providerConfig: validOllamaConfig,
-      activeProviderSource: "session_override",
-      accessProfile: "full_access",
-      userPrompt: "How is DBSCAN applied here?"
-    });
-    const session = requireSession(runtimeWithMockFactory.getSession(created.sessionId));
-    assert.throws(
-      () => (runtimeWithMockFactory as unknown as { getProvider(session: AgentRuntimeSession): LlmProvider }).getProvider(session),
-      (error: unknown) => {
-        assert.equal((error as { code?: string }).code, "provider_mock_forbidden");
-        return true;
-      }
-    );
-  } finally {
-    await fixture.close();
-  }
-});
-
-test("real provider requested and mock fallback attempt fails the session clearly", async () => {
-  const fixture = await createDbscanFixture("provider-gate-runtime-mock-forbidden");
-  try {
-    const runtime = await createRuntime(fixture.storageDir, () => new ScriptedProvider());
-    const created = await runtime.createSession({
-      workspacePath: fixture.workspace,
-      mode: "real_provider",
-      providerConfig: validOllamaConfig,
-      activeProviderSource: "session_override",
-      accessProfile: "full_access",
-      userPrompt: "How is DBSCAN applied here?"
-    });
-
-    const turn = await runtime.runTurn(created.sessionId, "How is DBSCAN applied here?");
-    const session = requireSession(runtime.getSession(created.sessionId));
-    const answer = session.messages.at(-1)?.content ?? "";
-
-    assert.equal(turn.status, "failed_provider");
-    assert.equal(session.status, "failed_provider");
-    assert.match(answer, /real model provider was required|MockProvider/i);
-    assert.equal(session.providerTelemetry?.activeProviderSource, "session_override");
-    assert.equal(session.providerTelemetry?.providerRequestCount, 0);
-    assert.equal(session.providerTelemetry?.finalResponseSource, "none");
-    assert.match(session.providerTelemetry?.lastError ?? "", /MockProvider is forbidden/i);
   } finally {
     await fixture.close();
   }
@@ -434,28 +388,6 @@ test("real-provider multi-agent questions do not fall back to canned local synth
     assert.doesNotMatch(artifactAnswer, /multi-agentic decision-support|agents متخصصة|orchestrator مركزي|النظام هنا متطبق كـ multi-agentic/i);
     assert.doesNotMatch(visibleAnswer, /local evidence graph synthesis|multi-agentic decision-support|agents متخصصة|orchestrator مركزي/i);
     assert.match(visibleAnswer, /local synthesis was not used/i);
-  } finally {
-    await fixture.close();
-  }
-});
-
-test("mock inspect/explain telemetry is marked as mock, not real", async () => {
-  const fixture = await createDbscanFixture("provider-truth-mock");
-  try {
-    const runtime = await createRuntime(fixture.storageDir);
-    const created = await runtime.createSession({
-      workspacePath: fixture.workspace,
-      mode: "demo_mock",
-      activeProviderSource: "runtime_default",
-      accessProfile: "full_access",
-      userPrompt: "How is DBSCAN applied here?"
-    });
-
-    await runtime.runTurn(created.sessionId, "How is DBSCAN applied here?");
-    const telemetry = requireSession(runtime.getSession(created.sessionId)).providerTelemetry;
-    assert.ok(telemetry);
-    assert.equal(telemetry.providerMode, "real_provider");
-    assert.equal(telemetry.realProviderRequestCount, telemetry.providerRequestCount);
   } finally {
     await fixture.close();
   }

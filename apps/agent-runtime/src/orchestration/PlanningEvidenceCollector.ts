@@ -65,11 +65,10 @@ export class PlanningEvidenceCollector {
     const seen = new Set<string>();
     const maxItems = input.config?.max_evidence_items ?? 20;
     const minConfidence = input.config?.min_evidence_confidence ?? 0.2;
-    const allowMock = input.config?.allow_mock_evidence ?? false;
 
     for (const row of rows) {
       if (items.length >= maxItems) break;
-      const result = await this.itemFromWorkerRow(input, row, { minConfidence, allowMock });
+      const result = await this.itemFromWorkerRow(input, row, { minConfidence });
       if (!result.ok) {
         rejected.push({
           source_ref: row.worker_invocation_id,
@@ -162,7 +161,7 @@ export class PlanningEvidenceCollector {
         causal_parent_event_id: started.trace_event_id,
         severity: "warning",
         reason: rows.length ? "No valid planning evidence survived validation." : "No provider-backed read-only worker outputs were available.",
-        summary: "Planning evidence unavailable; deterministic or heuristic planning remains the fallback.",
+        summary: "Planning evidence unavailable; repository facts may be preserved but cannot author semantic planning.",
         metadata_json: {
           run_id: input.run.id,
           task_id: input.taskId,
@@ -230,11 +229,11 @@ export class PlanningEvidenceCollector {
   private async itemFromWorkerRow(
     input: MultiPlanInput,
     row: WorkerInvocationRow,
-    options: { minConfidence: number; allowMock: boolean }
+    options: { minConfidence: number }
   ): Promise<{ ok: true; item: PlanningEvidenceItem } | { ok: false; reason: string }> {
     if (row.status !== "succeeded") return { ok: false, reason: `Worker invocation status is ${row.status}.` };
     if (row.output_schema_status !== "passed") return { ok: false, reason: `Output schema status is ${row.output_schema_status ?? "missing"}.` };
-    if (row.worker_mode === "mock" && !options.allowMock) return { ok: false, reason: "Mock worker evidence is disabled by config." };
+    if (row.worker_mode === "mock") return { ok: false, reason: "Mock worker evidence is not accepted as planning evidence." };
     if (!row.parsed_output_ref) return { ok: false, reason: "Missing parsed output artifact ref." };
     if (!existsSync(row.parsed_output_ref)) return { ok: false, reason: "Parsed output artifact does not exist." };
     const parsed = JSON.parse(await readFile(row.parsed_output_ref, "utf8")) as unknown;
@@ -279,7 +278,6 @@ export class PlanningEvidenceCollector {
 }
 
 function sourceTypeFor(row: WorkerInvocationRow): PlanningEvidenceSourceType {
-  if (row.worker_mode === "mock") return "mock_worker_output";
   if (row.agent_role === "ScoutAgent") return "provider_scout_output";
   if (row.agent_role === "PlannerAgent" || row.agent_role === "ArchitectAgent") return "provider_planner_output";
   if (row.agent_role === "RiskAnalyzerAgent") return "provider_risk_analyst_output";
@@ -447,7 +445,6 @@ function summarizeEvidence(items: PlanningEvidenceItem[], rejectedCount: number,
     evidence_used: items.length > 0,
     evidence_item_count: items.length,
     provider_evidence_count: items.filter((item) => item.source_type.startsWith("provider_")).length,
-    mock_evidence_count: items.filter((item) => item.source_type === "mock_worker_output").length,
     low_confidence_count: items.filter((item) => item.confidence === "low").length,
     rejected_evidence_count: rejectedCount,
     evidence_conflict_count: conflictCount,
@@ -458,7 +455,7 @@ function summarizeEvidence(items: PlanningEvidenceItem[], rejectedCount: number,
 
 function evidenceLimitations(items: PlanningEvidenceItem[], rejectedCount: number, input: MultiPlanInput) {
   const limitations: string[] = [];
-  if (!items.length) limitations.push("No valid provider-backed read-only swarm evidence was available; planning uses deterministic or heuristic fallback signals.");
+  if (!items.length) limitations.push("No valid provider-backed read-only swarm evidence was available; semantic planning must not be authored from deterministic or heuristic signals.");
   if (rejectedCount) limitations.push(`${rejectedCount} evidence candidate(s) were rejected due to missing refs, schema status, confidence, or config.`);
   if (!input.contextPack) limitations.push("No context pack was provided directly to the evidence collector.");
   if (items.some((item) => item.confidence === "low")) limitations.push("Some evidence is low confidence and should not be treated as ground truth.");

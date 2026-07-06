@@ -419,7 +419,6 @@ export class OrchestrationArtifactStore {
       `- evidence_used: ${persisted.summary.evidence_used}`,
       `- evidence_item_count: ${persisted.summary.evidence_item_count}`,
       `- provider_evidence_count: ${persisted.summary.provider_evidence_count}`,
-      `- mock_evidence_count: ${persisted.summary.mock_evidence_count}`,
       `- low_confidence_count: ${persisted.summary.low_confidence_count}`,
       `- rejected_evidence_count: ${persisted.summary.rejected_evidence_count}`,
       `- evidence_conflict_count: ${persisted.summary.evidence_conflict_count}`,

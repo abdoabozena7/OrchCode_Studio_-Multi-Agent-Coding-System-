@@ -135,7 +135,8 @@ function collectRouteSignals(text: string): RouteSignals {
   const hasCodeAction = /\b(fix|change|changing|edit|modify|implement|add|remove|delete|update|wire|build|write|create|refactor|migrate|replace|insert|overwrite|break|make|perform)\b/i.test(text)
     || /(?:\u0635\u0644\u062d|\u0639\u062f\u0644|\u063a\u064a\u0631|\u0646\u0641\u0630|\u0636\u064a\u0641|\u0623\u0636\u0641|\u0627\u0636\u0641|\u0627\u062d\u0630\u0641|\u0627\u0643\u062a\u0628|\u0627\u0639\u0645\u0644|\u0627\u0628\u0646\u064a|\u0627\u0631\u0628\u0637)/u.test(text);
   const hasRunRequest = /\b(run|start|launch|serve|open|preview|boot|test|build)\b/i.test(text)
-    || /(?:\u0634\u063a\u0644|\u0627\u0641\u062a\u062d|\u0627\u0628\u062f\u0623|\u0627\u0628\u062f\u0627|\u0627\u062e\u062a\u0628\u0631|\u0627\u0628\u0646\u064a).*(?:\u0645\u0634\u0631\u0648\u0639|\u062a\u0637\u0628\u064a\u0642|app|project|site|server)/u.test(text);
+    || /(?:\u0634\u063a\u0644|\u0627\u0641\u062a\u062d|\u0627\u0628\u062f\u0623|\u0627\u0628\u062f\u0627|\u0627\u062e\u062a\u0628\u0631|\u0627\u0628\u0646\u064a).*(?:\u0645\u0634\u0631\u0648\u0639|\u062a\u0637\u0628\u064a\u0642|app|project|site|server)/u.test(text)
+    || /(?:ط´ط؛ظ„|ط§ظپطھط­|ط§ط¨ط¯ط£|ط§ط®طھط¨ط±|ط§ط¨ظ†ظٹ).*(?:ط§ظ„ظ…ط´ط±ظˆط¹|طھط·ط¨ظٹظ‚|app|project|site|server)/u.test(text);
   const hasExplicitSwarmReadOnly = (
     /\b(swarm|whole[- ]repo|repo-wide|read[- ]only audit|audit the whole|scan the whole|broad audit)\b/i.test(text)
       || /(?:\u0633\u0648\u0627\u0631\u0645|\u0627\u0644\u0631\u064a\u0628\u0648 \u0643\u0644\u0647|\u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0643\u0644\u0647|\u0623\u0648\u062f\u062a|\u0627\u0648\u062f\u062a).*(?:read.?only|\u0642\u0631\u0627\u0621\u0629|\u0645\u0646 \u063a\u064a\u0631 \u062a\u0639\u062f\u064a\u0644)/u.test(text)

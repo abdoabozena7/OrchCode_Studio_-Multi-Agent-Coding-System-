@@ -81,8 +81,7 @@ type RunPlanModel = {
   acceptanceCriteria: string[];
   risks: string[];
   suggestedCommands?: Array<{ command: string; reason: string }>;
-  fallbackWarning?: string;
-  planSource?: "provider" | "operator_supplied" | "deterministic_fallback";
+  planSource?: "provider" | "operator_supplied";
 };
 
 type RunVerificationModel = {
@@ -538,23 +537,6 @@ export class RunEngine {
         linkedAgentIds: ["agent_local_codex"]
       });
     }
-    if (plan.fallbackWarning) {
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.reasoningSummaries.push(plan.fallbackWarning!);
-      });
-      await this.addDecisionRecord(sessionId, {
-        category: "risk",
-        finding: "Model returned malformed structured output.",
-        decision: "Use the deterministic fallback plan instead of failing the run.",
-        rationaleSummary: plan.fallbackWarning,
-        evidenceRefs: [],
-        linkedFiles: snapshot.importantFiles.slice(0, 4),
-        uncertainty: plan.fallbackWarning,
-        createdByAgent: "Local Run",
-        createdByAgentId: "agent_local_codex",
-        linkedAgentIds: ["agent_local_codex"]
-      });
-    }
     if (modulePlan) {
       await this.addIntent(sessionId, "module.plan.requested", modulePlan.title, modulePlan.rationale, {
         modulePlanId: modulePlan.id,
@@ -720,7 +702,7 @@ export class RunEngine {
     if (!patchIntentModel.intents.length) {
       const summary = patchIntentModel.summary || "I could not generate a safe file change from the provider output.";
       await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.reasoningSummaries.push(patchIntentModel.fallbackWarning ?? summary);
+        draft.reasoningSummaries.push(summary);
       });
       await this.sessionManager.addMessage(sessionId, {
         role: "system",
@@ -733,7 +715,7 @@ export class RunEngine {
         ].join("\n")
       });
       const verification = await this.createVerification(sessionId, summary, [
-        { name: "Patch intent", status: "failed", detail: patchIntentModel.fallbackWarning ?? summary }
+        { name: "Patch intent", status: "failed", detail: summary }
       ]);
       await this.finish(sessionId, "failed", "FAILED", {
         status: "failed",
@@ -750,38 +732,6 @@ export class RunEngine {
         createdAt: new Date().toISOString()
       });
       return this.requireSession(sessionId);
-    }
-    if (patchIntentModel.fallbackWarning) {
-      await this.sessionManager.updateSession(sessionId, (draft) => {
-        draft.reasoningSummaries.push(patchIntentModel.fallbackWarning!);
-        draft.taskState.version += 1;
-        draft.taskState.transitions.push({
-          id: randomId("transition"),
-          phase: "planning",
-          type: "plan.updated",
-          detail: patchIntentModel.fallbackWarning!,
-          createdAt: new Date().toISOString()
-        });
-      });
-      const isExplicitFileWriteFallback = patchIntentModel.fallbackKind === "simple_file_request";
-      await this.addArtifact(sessionId, "summary", isExplicitFileWriteFallback ? "Explicit file write fallback" : "Patch generation fallback", patchIntentModel.fallbackWarning, {
-        fallbackKind: patchIntentModel.fallbackKind ?? "generic",
-        targetFiles: patchIntentModel.intents.map((intent) => intent.path)
-      });
-      await this.addDecisionRecord(sessionId, {
-        category: "risk",
-        finding: "Provider patch output was invalid for the requested implementation.",
-        decision: isExplicitFileWriteFallback
-          ? "Use only the exact file path and content provided by the user."
-          : "Do not invent an implementation when patch generation is unavailable.",
-        rationaleSummary: patchIntentModel.fallbackWarning,
-        evidenceRefs: [],
-        linkedFiles: patchIntentModel.intents.map((intent) => intent.path).slice(0, 4),
-        uncertainty: patchIntentModel.fallbackWarning,
-        createdByAgent: "Local Run",
-        createdByAgentId: "agent_local_codex",
-        linkedAgentIds: ["agent_local_codex"]
-      });
     }
     const patchInput = compilePatchProposalInput(session.workspacePath, tools, patchIntentModel);
     const patch = tools.patch.propose(patchInput, sessionId);
@@ -1484,15 +1434,7 @@ export class RunEngine {
       if (shouldUseSegmentedCreateProjectPatchIntent(error, snapshot, plan)) {
         return this.createSegmentedCreateProjectPatchIntent(session, message, snapshot, plan, error);
       }
-      const detail = formatProviderError(error);
-      return {
-        title: "Patch unavailable",
-        summary: `Provider could not produce a valid patch intent: ${detail}`,
-        intents: [],
-        suggestedCommands: plan.suggestedCommands,
-        fallbackWarning: `Provider patch intent failed validation: ${detail}`,
-        fallbackKind: "generic"
-      };
+      throw error;
     }
   }
 

@@ -23,8 +23,6 @@ export type RunPatchIntentModel = {
   summary: string;
   intents: RunPatchIntent[];
   suggestedCommands?: Array<{ command: string; reason: string }>;
-  fallbackWarning?: string;
-  fallbackKind?: "single_file_pygame" | "simple_file_request" | "generic";
 };
 
 export type PatchValidationResult = {

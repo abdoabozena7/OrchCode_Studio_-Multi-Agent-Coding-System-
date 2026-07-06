@@ -15,7 +15,9 @@ export const scriptedSwarmWorker: SwarmWorker = async (input) => {
     unknowns: [],
     validation_passed: input.workItem.type === "test" ? !validationFailure : undefined,
     structured_output_valid: !invalid,
-    confidence: input.workItem.risk_level === "critical" ? 0.62 : input.workItem.risk_level === "high" ? 0.72 : 0.86
+    confidence: input.workItem.risk_level === "critical" ? 0.62 : input.workItem.risk_level === "high" ? 0.72 : 0.86,
+    intent_handoff_gate_ref: `scripted-swarm-worker:${input.workItem.id}`,
+    intent_handoff_gate_status: "passed"
   };
 };
 

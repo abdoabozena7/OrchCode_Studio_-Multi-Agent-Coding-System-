@@ -38,7 +38,6 @@ test("provider-backed worker accepts read-only scout planner reviewer and specia
     const provider = new FakeProvider();
     const worker = new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider,
       providerName: "fake",
       modelName: "fake-readonly"
@@ -78,7 +77,6 @@ test("provider-backed worker sends bounded file excerpts as evidence context", a
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     }).run(input);
 
@@ -122,7 +120,6 @@ test("provider-backed worker carries original request and intent ledger refs in 
 
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     }).run(input);
 
@@ -155,7 +152,6 @@ test("provider-backed worker accepts risk tester and reporter roles without clai
     const provider = new FakeProvider();
     const worker = new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     });
     const risk = workerInput(workspace, { role: "RiskAnalyzerAgent", type: "risk_analysis" });
@@ -180,7 +176,6 @@ test("provider-backed worker blocks executor repair and write-requesting work it
     const provider = new FakeProvider();
     const worker = new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     });
     const executor = workerInput(workspace, { role: "ExecutorAgent", type: "execute", writeFiles: ["src/index.ts"] });
@@ -200,15 +195,15 @@ test("provider-backed worker blocks executor repair and write-requesting work it
   }
 });
 
-test("provider-backed worker blocks without a provider and uses an explicit provider factory", async () => {
+test("provider-backed worker blocks without a provider and uses a provider factory", async () => {
   const workspace = await fixtureWorkspace("provider-worker-fallback");
   try {
-    const auto = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "provider_read_only" });
+    const noProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace });
     const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
     await saveSwarmRunWithIntent(workspace, input);
-    const autoResult = await auto.run(input);
-    assert.equal(autoResult.status, "blocked");
-    assert.match(autoResult.summary, /provider/i);
+    const noProviderResult = await noProvider.run(input);
+    assert.equal(noProviderResult.status, "blocked");
+    assert.match(noProviderResult.summary, /provider/i);
     const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: input.run.id });
     assert.equal(trace.events.some((event) => event.event_type === "worker_provider_unavailable"), true);
 
@@ -221,7 +216,7 @@ test("provider-backed worker blocks without a provider and uses an explicit prov
     assert.equal(provider.calls.length, 2);
     assert.doesNotMatch(providerResult.summary, /completed plan work/);
 
-    const explicitProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace, mode: "provider_read_only", providerFactory: () => provider });
+    const explicitProvider = new ProviderBackedSwarmWorker({ workspacePath: workspace, providerFactory: () => provider });
     const secondProviderInput = workerInput(workspace, { role: "PlannerAgent", type: "plan", runId: "swarm_explicit_provider" });
     await saveSwarmRunWithIntent(workspace, secondProviderInput);
     const secondProviderResult = await explicitProvider.run(secondProviderInput);
@@ -244,7 +239,6 @@ test("prompt quality gate blocks unsafe provider prompts before invocation", asy
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     }).run(input);
 
@@ -267,7 +261,6 @@ test("provider prompt quality artifacts are written before provider call and met
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider,
       providerName: "fake",
       modelName: "fake-model"
@@ -324,7 +317,6 @@ test("provider-backed read-only worker receives team context metadata while writ
 
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider,
       providerName: "fake"
     }).run(input);
@@ -337,7 +329,6 @@ test("provider-backed read-only worker receives team context metadata while writ
     blocked.workItem.team_id = team.team_id;
     const blockedResult = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => provider
     }).run(blocked);
     assert.equal(blockedResult.status, "blocked");
@@ -365,7 +356,6 @@ test("provider invalid output and provider errors produce failed worker results 
     await saveSwarmRunWithIntent(workspace, invalid);
     const invalidResult = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => new FakeProvider("invalid")
     }).run(invalid);
     assert.equal(invalidResult.status, "failed");
@@ -375,7 +365,6 @@ test("provider invalid output and provider errors produce failed worker results 
     await saveSwarmRunWithIntent(workspace, error);
     const errorResult = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => new FakeProvider("error")
     }).run(error);
     assert.equal(errorResult.status, "failed");
@@ -397,7 +386,6 @@ test("provider answer-shaped JSON is repaired into read-only schema with audit m
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => new FakeProvider("answer")
     }).run(input);
 
@@ -441,7 +429,6 @@ test("provider single-string array fields are repaired into read-only arrays", a
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => new FakeProvider("stringFindings")
     }).run(input);
 
@@ -460,14 +447,13 @@ test("provider single-string array fields are repaired into read-only arrays", a
   }
 });
 
-test("provider confidence labels are repaired without falling back to mock workers", async () => {
+test("provider confidence labels are repaired without local fallback", async () => {
   const workspace = await fixtureWorkspace("provider-worker-confidence-label-repair");
   try {
     const input = workerInput(workspace, { role: "ScoutAgent", type: "scout" });
     await saveSwarmRunWithIntent(workspace, input);
     const result = await new ProviderBackedSwarmWorker({
       workspacePath: workspace,
-      mode: "provider_read_only",
       providerFactory: () => new FakeProvider("stringFieldsConfidenceLabel")
     }).run(input);
 
@@ -511,7 +497,6 @@ test("SwarmScheduler can run provider-backed read-only worker while preserving s
       new OrchestrationFileLockManager(workspace),
       new ProviderBackedSwarmWorker({
         workspacePath: workspace,
-        mode: "provider_read_only",
         providerFactory: () => new FakeProvider()
       }).asWorker()
     );

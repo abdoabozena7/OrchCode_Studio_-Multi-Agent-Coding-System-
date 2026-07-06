@@ -125,6 +125,247 @@ test("swarm state includes recursive branch coordinators and nested dynamic subt
   }
 });
 
+test("swarm state projects full recursive node tree from recursiveSwarmRunState", async () => {
+  const fixture = await createRuntimeFixture("recursive-tree");
+  try {
+    const updated = await fixture.manager.updateSession(fixture.session.id, (draft) => {
+      draft.recursiveSwarmRunState = {
+        schemaVersion: 2,
+        runId: "rec_run_1",
+        sessionId: fixture.session.id,
+        goalEnvelope: {
+          originalGoal: "Build a login page",
+          theme: "Login page implementation",
+          constraints: [],
+          nonGoals: [],
+          acceptanceCriteria: [],
+          workspaceIdentity: "test",
+          localTask: "",
+          version: 1
+        },
+        tree: {
+          schemaVersion: 2,
+          runId: "rec_run_1",
+          rootGoal: "Build a login page",
+          rootId: "node_root",
+          nodeCount: 4,
+          depth: 2,
+          status: "succeeded",
+          createdAt: "2026-06-25T10:00:00.000Z",
+          updatedAt: "2026-06-25T10:05:00.000Z",
+          nodes: [
+            {
+              id: "node_root",
+              parentId: undefined,
+              kind: "coordinator",
+              nodeKind: "root",
+              name: "Root Agent",
+              role: "Swarm Root",
+              status: "completed",
+              objective: "Build a login page",
+              currentAction: "Run succeeded",
+              summary: "Final output: Login page built",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T10:05:00.000Z"
+            },
+            {
+              id: "node_child1",
+              parentId: "node_root",
+              kind: "worker",
+              nodeKind: "task_agent",
+              name: "UI Agent",
+              role: "Frontend",
+              status: "completed",
+              objective: "Build login form UI",
+              currentAction: "Completed",
+              summary: "Created login form component",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T10:03:00.000Z"
+            },
+            {
+              id: "node_child2",
+              parentId: "node_root",
+              kind: "worker",
+              nodeKind: "task_agent",
+              name: "API Agent",
+              role: "Backend",
+              status: "completed",
+              objective: "Build login API endpoint",
+              currentAction: "Completed",
+              summary: "Created login API route",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T10:04:00.000Z"
+            },
+            {
+              id: "node_grandchild",
+              parentId: "node_child1",
+              kind: "specialist",
+              nodeKind: "task_agent",
+              name: "Validation Agent",
+              role: "Validator",
+              status: "completed",
+              objective: "Add form validation",
+              currentAction: "Completed",
+              summary: "Added email and password validation",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T10:02:00.000Z"
+            }
+          ]
+        },
+        createdAt: "2026-06-25T10:00:00.000Z",
+        updatedAt: "2026-06-25T10:05:00.000Z"
+      };
+    });
+
+    const state = updated.swarmState ?? buildAgentRuntimeSwarmState(updated);
+
+    // Every recursive node must appear in the state
+    assert.ok(state.nodes.some((n) => n.id === "node_root"), "root node must be present");
+    assert.ok(state.nodes.some((n) => n.id === "node_child1"), "child1 must be present");
+    assert.ok(state.nodes.some((n) => n.id === "node_child2"), "child2 must be present");
+    assert.ok(state.nodes.some((n) => n.id === "node_grandchild"), "grandchild must be present");
+
+    // Parent-child relationships must be preserved
+    const child1 = state.nodes.find((n) => n.id === "node_child1");
+    assert.equal(child1?.parentId, "node_root", "child1 parent should be root");
+    const grandchild = state.nodes.find((n) => n.id === "node_grandchild");
+    assert.equal(grandchild?.parentId, "node_child1", "grandchild parent should be child1");
+
+    // Status counts match: session root + 4 recursive nodes = 5
+    assert.equal(state.statusCounts.completed, 5);
+
+    // Source should be recursive_factory (inferred from recursiveSwarmRunState)
+    assert.equal(state.source, "recursive_factory");
+
+    // UI-facing state is not root-only
+    const recursiveNodes = state.nodes.filter((n) =>
+      n.id.startsWith("node_") || n.id === `recursive-swarm:${"rec_run_1"}:root`
+    );
+    assert.ok(recursiveNodes.length >= 4, "at least 4 recursive-related nodes exist");
+
+    // Run summary must be set on the session itself (tested via runSummary in runRecursiveSwarmTurn)
+    // but the buildAgentRuntimeSwarmState does not create runSummary, so we verify nodes only here
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("swarm state handles failed recursive tree with diagnostic info", async () => {
+  const fixture = await createRuntimeFixture("recursive-failed");
+  try {
+    const updated = await fixture.manager.updateSession(fixture.session.id, (draft) => {
+      draft.recursiveSwarmRunState = {
+        schemaVersion: 2,
+        runId: "rec_run_fail",
+        sessionId: fixture.session.id,
+        goalEnvelope: {
+          originalGoal: "Refactor database layer",
+          theme: "DB refactor",
+          constraints: [],
+          nonGoals: [],
+          acceptanceCriteria: [],
+          workspaceIdentity: "test",
+          localTask: "",
+          version: 1
+        },
+        tree: {
+          schemaVersion: 2,
+          runId: "rec_run_fail",
+          rootGoal: "Refactor database layer",
+          rootId: "node_root_fail",
+          nodeCount: 2,
+          depth: 1,
+          status: "failed",
+          createdAt: "2026-06-25T11:00:00.000Z",
+          updatedAt: "2026-06-25T11:10:00.000Z",
+          nodes: [
+            {
+              id: "node_root_fail",
+              parentId: undefined,
+              kind: "coordinator",
+              nodeKind: "root",
+              name: "Root Agent",
+              role: "Swarm Root",
+              status: "failed",
+              objective: "Refactor database layer",
+              currentAction: "Run failed",
+              summary: "Database migration failed",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T11:10:00.000Z"
+            },
+            {
+              id: "node_fail_child",
+              parentId: "node_root_fail",
+              kind: "worker",
+              nodeKind: "task_agent",
+              name: "Migration Agent",
+              role: "DBA",
+              status: "failed",
+              objective: "Run schema migration",
+              currentAction: "Failed",
+              summary: "Migration script error: constraint violation",
+              ownedPaths: [],
+              targetFiles: [],
+              changedFiles: [],
+              artifactRefs: [],
+              workItemRefs: [],
+              evidenceRefs: [],
+              riskRefs: [],
+              updatedAt: "2026-06-25T11:08:00.000Z"
+            }
+          ]
+        },
+        createdAt: "2026-06-25T11:00:00.000Z",
+        updatedAt: "2026-06-25T11:10:00.000Z"
+      };
+    });
+
+    const state = updated.swarmState ?? buildAgentRuntimeSwarmState(updated);
+
+    // Failed nodes must be present
+    assert.ok(state.nodes.some((n) => n.id === "node_root_fail" && n.status === "failed"), "failed root present");
+    assert.ok(state.nodes.some((n) => n.id === "node_fail_child" && n.status === "failed"), "failed child present");
+
+    // Failed status reflected in statusCounts
+    assert.ok(state.statusCounts.failed >= 2, "at least 2 failed nodes counted");
+
+    // Run summary (set externally by runRecursiveSwarmTurn) should include diagnostic info
+    // We test the node tree projection here; the diagnostic message comes from the runtime update
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("swarm state keeps 300 logical agents usable without synthetic expansion", async () => {
   const fixture = await createRuntimeFixture("large");
   try {

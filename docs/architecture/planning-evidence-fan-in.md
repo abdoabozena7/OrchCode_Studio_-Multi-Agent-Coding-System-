@@ -4,9 +4,9 @@ The MultiPlanFactory can optionally consume read-only evidence from swarm worker
 
 ## Sources
 
-The first implementation collects from `factory_worker_invocations` metadata and follows artifact refs to schema-validated parsed provider outputs. Supported source labels include provider scout, planner, risk analyst, reviewer, specialist, tester planner, reporter, mock worker, deterministic context, repo index, context pack, validation history, prior failure, and prior decision evidence.
+The first implementation collects from `factory_worker_invocations` metadata and follows artifact refs to schema-validated parsed provider outputs. Supported source labels include provider scout, planner, risk analyst, reviewer, specialist, tester planner, reporter, deterministic context, repo index, context pack, validation history, prior failure, and prior decision evidence.
 
-Invalid schema output, missing parsed artifacts, disabled mock evidence, duplicate items, and items below the configured confidence floor are rejected and traced.
+Invalid schema output, missing parsed artifacts, mock worker output, duplicate items, and items below the configured confidence floor are rejected and traced.
 
 ## Artifacts
 
@@ -29,7 +29,7 @@ Evidence can influence deterministic plan generation:
 - tester planner output informs validation strategy and testability scoring.
 - architect/planner/specialist output informs module boundary and integration concerns.
 
-If evidence is missing or disabled, the existing deterministic/heuristic behavior remains the fallback and the evidence limitations are recorded.
+If provider-backed evidence is missing or disabled, planning records the evidence limitation and stays within deterministic repository facts. It must not treat missing evidence as permission to invent semantic worker output or bypass provider-required planning gates.
 
 ## Evaluation And Merge
 
@@ -50,6 +50,5 @@ Planning evidence is controlled by:
 - `planning_evidence_mode`: `off`, `available`, or `require_for_provider_mode`
 - `max_evidence_items`
 - `min_evidence_confidence`
-- `allow_mock_evidence`
 
-Defaults keep evidence optional and deterministic fallback available.
+Defaults keep evidence optional while preserving the provider-required boundary for semantic planning.

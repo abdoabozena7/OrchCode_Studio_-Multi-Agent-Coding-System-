@@ -256,7 +256,7 @@ export class SandboxValidationRunner {
       summary: `Sandbox validation command started: ${command.command}`,
       metadata_json: { sandbox_validation_id: sandboxValidationId, command: command.command, cwd }
     });
-    const output = await spawnWithTimeout(command.command, cwd, this.config.sandbox_validation_command_timeout_ms ?? 30_000, this.config.max_validation_log_size);
+    const output = await spawnWithTimeout(command.command, cwd, sandboxValidationTimeoutMs(this.config.sandbox_validation_command_timeout_ms), this.config.max_validation_log_size);
     const finished = Date.now();
     const status: ValidationCommandStatus = output.timedOut ? "timed_out" : output.exitCode === 0 ? "passed" : "failed";
     const log = [
@@ -550,6 +550,10 @@ function spawnWithTimeout(command: string, cwd: string, timeoutMs: number, maxOu
     });
     child.on("close", (code) => finish(code, timedOutRequested));
   });
+}
+
+function sandboxValidationTimeoutMs(configuredTimeoutMs: number | undefined) {
+  return Math.max(configuredTimeoutMs ?? 30_000, 250);
 }
 
 function directNodeEvalSpawnPlan(command: string): { command: string; args: string[]; shell: boolean } {

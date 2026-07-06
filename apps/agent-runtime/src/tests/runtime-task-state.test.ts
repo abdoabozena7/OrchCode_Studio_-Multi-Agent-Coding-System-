@@ -3,11 +3,21 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { buildAttributedReviewGate } from "../runtime/AgentTelemetry.js";
+import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("patch proposal lifecycle is recorded in canonical runtime task state", async () => {
   const fixture = await createPatchFixture("add a README note");
@@ -309,7 +319,7 @@ test("command execution emits an explicit runtime completion event instead of re
   await manager.load();
   const session = await manager.createSession({
     workspacePath: storageDir,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "test event emission"
   });
 
@@ -353,7 +363,7 @@ test("session persistence stores compact snapshots instead of unbounded runtime 
   await manager.load();
   const session = await manager.createSession({
     workspacePath: storageDir,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "compact persistence"
   });
   const hugeText = "x".repeat(250_000);
@@ -398,7 +408,7 @@ test("expired session tokens mark the runtime task state as expired for reconcil
   await manager.load();
   const session = await manager.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "expired token",
     sessionToken: "expired-token",
     sessionTokenExpiresAt: new Date(Date.now() - 5_000).toISOString()
@@ -422,17 +432,22 @@ test("runtime task state restores with explicit restored markers after runtime r
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "persist runtime state\n", "utf8");
 
-  const first = await buildServer({ ...loadConfig(), storageDir });
-  const created = await first.runtime.createSession({
+  const firstManager = new SessionManager(storageDir, new EventBus());
+  await firstManager.load();
+  const firstRuntime = new AgentRuntime({ ...loadConfig(), storageDir }, firstManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
+  const created = await firstRuntime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt: "add a README note"
   });
-  await first.runtime.runTurn(created.sessionId, "add a README note");
-  const patchId = first.runtime.getSession(created.sessionId)?.patchProposals[0]?.id;
+  await firstRuntime.runTurn(created.sessionId, "add a README note");
+  const patchId = firstRuntime.getSession(created.sessionId)?.patchProposals[0]?.id;
   assert.ok(patchId);
-  await first.runtime.approvePatch(created.sessionId, patchId);
-  await first.runtime.reportPatchApplyResult(created.sessionId, patchId, {
+  await firstRuntime.approvePatch(created.sessionId, patchId);
+  await firstRuntime.reportPatchApplyResult(created.sessionId, patchId, {
     status: "applied",
     message: "Patch applied by Rust authority",
     reconciliationSnapshot: {
@@ -440,15 +455,15 @@ test("runtime task state restores with explicit restored markers after runtime r
         available: true,
         isGitRepo: true,
         changedFiles: ["AGENT_PROPOSAL.md"],
-        diffText: first.runtime.getSession(created.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
+        diffText: firstRuntime.getSession(created.sessionId)?.patchProposals[0]?.unifiedDiff ?? "",
         dirty: true,
         checkedAt: new Date().toISOString()
       }
     }
   });
-  const request = first.runtime.getSession(created.sessionId)?.commandRequests[0];
+  const request = firstRuntime.getSession(created.sessionId)?.commandRequests[0];
   assert.ok(request);
-  await first.runtime.reportCommandResult(created.sessionId, request.id, {
+  await firstRuntime.reportCommandResult(created.sessionId, request.id, {
     command: request.command,
     cwd: request.cwd,
     risk: request.risk,
@@ -458,11 +473,14 @@ test("runtime task state restores with explicit restored markers after runtime r
     stderr: "",
     message: "Command executed through Rust"
   });
-  await first.app.close();
 
-  const second = await buildServer({ ...loadConfig(), storageDir });
+  const secondManager = new SessionManager(storageDir, new EventBus());
+  await secondManager.load();
+  const secondRuntime = new AgentRuntime({ ...loadConfig(), storageDir }, secondManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
   try {
-    const restored = second.runtime.getSession(created.sessionId);
+    const restored = secondRuntime.getSession(created.sessionId);
     assert.ok(restored);
     assert.equal((restored?.taskState as { restoreStatus?: string }).restoreStatus, "restored");
     assert.equal(restored?.taskState.restoreState?.source, "snapshot_restored");
@@ -471,7 +489,6 @@ test("runtime task state restores with explicit restored markers after runtime r
     assert.equal((restored?.orchestration?.agentRuns.find((agent) => agent.id === "agent_local_codex")?.testsRun ?? []).includes("git diff --check"), true);
     assert.equal((restored?.reviewGate?.decisionsByAgent?.length ?? 0) >= 1, true);
   } finally {
-    await second.app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -483,7 +500,7 @@ test("review gate marks shared and unattributed files conservatively", async () 
   await manager.load();
   const session = await manager.createSession({
     workspacePath: storageDir,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "attribute diff telemetry"
   });
   await manager.updateSession(session.id, (draft) => {
@@ -588,7 +605,7 @@ test("review gate keeps line totals unknown when unified diff stats are unavaila
   await manager.load();
   const session = await manager.createSession({
     workspacePath: storageDir,
-    mode: "demo_mock",
+    mode: "real_provider",
     userPrompt: "unknown diff telemetry"
   });
   await manager.updateSession(session.id, (draft) => {
@@ -726,19 +743,23 @@ async function createPatchFixture(userPrompt: string) {
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "fixture\n", "utf8");
 
-  const server = await buildServer({ ...loadConfig(), storageDir });
-  const created = await server.runtime.createSession({
+  const sessionManager = new SessionManager(storageDir, new EventBus());
+  await sessionManager.load();
+  const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
+  const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt
   });
-  await server.runtime.runTurn(created.sessionId, userPrompt);
+  await runtime.runTurn(created.sessionId, userPrompt);
 
   return {
-    runtime: server.runtime,
+    runtime,
     sessionId: created.sessionId,
     close: async () => {
-      await server.app.close();
       await rm(workspace, { recursive: true, force: true });
       await rm(storageDir, { recursive: true, force: true });
     }

@@ -3,11 +3,20 @@ import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { AppEvent } from "@hivo/protocol";
+import type { AppEvent, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { SessionManager } from "../runtime/SessionManager.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+
+const validProviderConfig: SanitizedProviderConfig = {
+  providerType: "ollama",
+  providerName: "Ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  selectedModel: "test-model",
+  isValid: true
+};
 
 test("patch apply reports verification handoff events after Rust apply is acknowledged", async () => {
   const fixture = await createRuntimeFixture("add a README note");
@@ -201,10 +210,13 @@ async function createRuntimeFixture(userPrompt: string) {
   const eventBus = new EventBus();
   const sessionManager = new SessionManager(storageDir, eventBus);
   await sessionManager.load();
-  const runtime = new AgentRuntime(loadConfig(), sessionManager);
+  const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
   const created = await runtime.createSession({
     workspacePath: workspace,
-    mode: "demo_mock",
+    mode: "real_provider",
+    providerConfig: validProviderConfig,
     userPrompt
   });
 

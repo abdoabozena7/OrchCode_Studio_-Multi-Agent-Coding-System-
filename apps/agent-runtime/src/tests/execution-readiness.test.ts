@@ -11,7 +11,6 @@ import {
   FactoryMetadataStore,
   ORCHESTRATION_SCHEMA_VERSION,
   OrchestrationArtifactStore,
-  TaskGraphManager,
   createExecutionPromotionBlocker,
   createExecutionReadinessBatch,
   createExecutionReadinessDecision,
@@ -31,6 +30,7 @@ import {
   type Run,
   type Task
 } from "../orchestration/index.js";
+import { TaskGraphManager } from "../orchestration/TaskGraphManager.js";
 
 test("execution readiness models create decisions approval requirements batches and blockers", () => {
   const request = createExecutionReadinessRequest({

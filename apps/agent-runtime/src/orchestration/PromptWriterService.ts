@@ -29,9 +29,9 @@ import {
   validatePromptWriterOutput,
   type PromptWriterAdoptionDecision,
   type PromptWriterInput,
+  type PromptWriterObservedProviderMode,
   type PromptWriterMode,
   type PromptWriterOutput,
-  type PromptWriterProviderMode,
   type PromptWriterRunResult
 } from "./PromptWriterModels.js";
 
@@ -130,9 +130,9 @@ export class PromptWriterService {
     });
 
     const providerMode = this.options.config.prompt_writer_provider_mode;
-    const provider = providerMode === "deterministic" ? undefined : this.options.providerFactory?.("PromptWriterAgent");
+    const provider = this.options.providerFactory?.("PromptWriterAgent");
     let rawOutput: unknown;
-    let usedProviderMode: PromptWriterProviderMode | "fallback" = provider ? "provider_read_only" : "fallback";
+    let usedProviderMode: PromptWriterObservedProviderMode = provider ? "provider_read_only" : "provider_unavailable";
     if (provider) {
       await this.traceWriter.write({
         run_id: writerInput.run_id,
@@ -161,59 +161,38 @@ export class PromptWriterService {
           context: writerInput
         }, promptWriterOutputSchemaHint());
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         await this.traceWriter.write({
           run_id: writerInput.run_id,
           task_id: writerInput.task_id,
           event_type: "prompt_writer_provider_unavailable",
           lifecycle_stage: "executing",
-          severity: providerMode === "auto" ? "warning" : "error",
+          severity: "error",
           causal_parent_event_id: startedTrace.trace_event_id,
-          summary: error instanceof Error ? error.message : String(error),
-          reason: "Provider failed or was unavailable; deterministic fallback will be used.",
+          summary: reason,
+          reason: "Provider failed or was unavailable; PromptWriter output is blocked. No deterministic fallback is used.",
           metadata_json: traceMetadata(writerInput, {
             prompt_writer_output_id: outputId,
             provider_name: this.options.providerName,
             model_name: this.options.modelName
           })
         });
-        rawOutput = deterministicPromptWriterOutput(writerInput, outputId);
-        usedProviderMode = "fallback";
-        await this.traceWriter.write({
-          run_id: writerInput.run_id,
-          task_id: writerInput.task_id,
-          event_type: "prompt_writer_fallback_used",
-          lifecycle_stage: "executing",
-          severity: "warning",
-          causal_parent_event_id: startedTrace.trace_event_id,
-          summary: "Deterministic PromptWriter fallback used.",
-          metadata_json: traceMetadata(writerInput, { prompt_writer_output_id: outputId })
-        });
+        rawOutput = blockedPromptWriterOutput(writerInput, outputId, reason, providerMode);
+        usedProviderMode = "provider_failed";
       }
     } else {
-      if (providerMode !== "deterministic") {
-        await this.traceWriter.write({
-          run_id: writerInput.run_id,
-          task_id: writerInput.task_id,
-          event_type: "prompt_writer_provider_unavailable",
-          lifecycle_stage: "executing",
-          severity: "warning",
-          causal_parent_event_id: startedTrace.trace_event_id,
-          summary: "PromptWriter provider unavailable.",
-          reason: "No PromptWriter provider was configured.",
-          metadata_json: traceMetadata(writerInput, { prompt_writer_output_id: outputId, mode })
-        });
-      }
-      rawOutput = deterministicPromptWriterOutput(writerInput, outputId);
       await this.traceWriter.write({
         run_id: writerInput.run_id,
         task_id: writerInput.task_id,
-        event_type: "prompt_writer_fallback_used",
+        event_type: "prompt_writer_provider_unavailable",
         lifecycle_stage: "executing",
-        severity: providerMode === "deterministic" ? "info" : "warning",
+        severity: providerMode === "auto" ? "warning" : "error",
         causal_parent_event_id: startedTrace.trace_event_id,
-        summary: "Deterministic PromptWriter fallback used.",
-        metadata_json: traceMetadata(writerInput, { prompt_writer_output_id: outputId })
+        summary: "PromptWriter provider unavailable.",
+        reason: "No PromptWriter provider was configured.",
+        metadata_json: traceMetadata(writerInput, { prompt_writer_output_id: outputId, mode, provider_mode: providerMode })
       });
+      rawOutput = blockedPromptWriterOutput(writerInput, outputId, "PromptWriter provider unavailable.", providerMode);
     }
 
     await writeFile(artifacts.rawOutput, typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput, null, 2), "utf8");
@@ -258,6 +237,7 @@ export class PromptWriterService {
     if (schemaValidation.schema_status === "passed") {
       output = {
         ...(parsedOutput as PromptWriterOutput),
+        prompt_writer_output_id: outputId,
         artifact_ref: artifacts.parsedOutput
       };
       await writeJson(artifacts.parsedOutput, output);
@@ -374,9 +354,9 @@ export class PromptWriterService {
     await this.traceWriter.write({
       run_id: writerInput.run_id,
       task_id: writerInput.task_id,
-      event_type: adoption.adopted ? "prompt_writer_adopted" : mode === "shadow" ? "prompt_writer_shadow_recorded" : "prompt_writer_rejected",
+      event_type: adoption.adopted ? "prompt_writer_adopted" : adoption.decision === "shadow_recorded" ? "prompt_writer_shadow_recorded" : "prompt_writer_rejected",
       lifecycle_stage: "executing",
-      severity: adoption.adopted || mode === "shadow" ? "info" : "warning",
+      severity: adoption.adopted || adoption.decision === "shadow_recorded" ? "info" : "warning",
       causal_parent_event_id: adoptionTrace.trace_event_id,
       summary: adoption.reason,
       artifact_refs: [artifacts.adoptionDecision],
@@ -555,6 +535,9 @@ export class PromptWriterService {
       created_at: now,
       metadata_json: {}
     };
+    if (!input.schemaPassed) {
+      return { ...base, decision: "rejected", adopted: false, reason: "PromptWriter output schema or safety validation failed." };
+    }
     if (input.mode === "shadow") {
       return { ...base, decision: "shadow_recorded", adopted: false, reason: "Shadow mode records PromptWriter output without changing execution prompts." };
     }
@@ -563,9 +546,6 @@ export class PromptWriterService {
     }
     if (input.mode !== "gated_adopt") {
       return { ...base, decision: "off", adopted: false, reason: "PromptWriter mode is off." };
-    }
-    if (!input.schemaPassed) {
-      return { ...base, decision: "rejected", adopted: false, reason: "PromptWriter output schema or safety validation failed." };
     }
     if (!input.output || !input.candidate || !input.quality) {
       return { ...base, decision: "rejected", adopted: false, reason: "PromptWriter did not produce a complete candidate prompt." };
@@ -594,72 +574,21 @@ export class PromptWriterService {
   }
 }
 
-export function deterministicPromptWriterOutput(input: PromptWriterInput, outputId = `prompt_writer_output_${randomUUID()}`): PromptWriterOutput {
-  const validation = uniqueStrings([
-    ...input.validation_requirements,
-    ...(input.expected_output_schema ? [`Return strict structured output matching ${input.expected_output_schema}.`] : [])
-  ]);
+function blockedPromptWriterOutput(
+  input: PromptWriterInput,
+  outputId: string,
+  reason: string,
+  configuredProviderMode: string
+) {
   return {
     schema_version: PROMPT_WRITER_SCHEMA_VERSION,
     prompt_writer_output_id: outputId,
     run_id: input.run_id,
     task_id: input.task_id,
-    target_agent_role: input.target_agent_role,
-    target_prompt_type: input.target_prompt_type,
-    recommended_template_id: input.template_id,
-    recommended_template_version: input.template_version,
-    prompt_draft: {
-      summary: "Deterministic PromptWriter suggestions derived from task scope, context inclusion metadata, and validation requirements.",
-      sections: [
-        {
-          section_id: "objective",
-          title: "Objective",
-          content: `Clarify the task objective around: ${input.task_objective}`,
-          source_refs: uniqueStrings([input.context_pack_ref, input.original_request_ref ?? ""])
-        },
-        ...(input.original_request_ref ? [{
-          section_id: "intent",
-          title: "Canonical Intent",
-          content: "Preserve the original user request and locked intent definitions when refining this prompt.",
-          source_refs: uniqueStrings([input.original_request_ref, ...(input.intent_ledger_refs ?? [])])
-        }] : []),
-        {
-          section_id: "scope",
-          title: "Scope",
-          content: `Keep allowed files and forbidden files exactly as supplied. Allowed count: ${input.allowed_files.length}; forbidden count: ${input.forbidden_files.length}.`,
-          source_refs: [input.context_pack_ref]
-        },
-        {
-          section_id: "validation",
-          title: "Validation",
-          content: validation.length ? validation.join("\n") : "Record when validation is unavailable and keep the result honest.",
-          source_refs: input.planning_evidence_refs
-        }
-      ]
-    },
-    template_input_patch: {
-      task_objective: `${input.task_objective}\n\nPromptWriter advisory focus: preserve scope, use the provided context pack, return ${input.expected_output_schema}, and report unresolved risks honestly.`,
-      validation_requirements: validation,
-      metadata_json: {
-        prompt_writer_mode: input.mode,
-        prompt_writer_advisory: true,
-        prompt_writer_missing_context_count: input.risk_summary.length,
-        original_request_ref: input.original_request_ref,
-        intent_ledger_refs: input.intent_ledger_refs ?? [],
-        locked_intent_definition_count: input.locked_intent_definitions?.length ?? 0
-      }
-    },
-    rationale: [
-      "The existing PromptSystem template remains the base.",
-      "Suggestions emphasize scope, validation, and honest limitations."
-    ],
-    risks: input.risk_summary,
-    missing_context: input.risk_summary.length ? input.risk_summary : [],
-    suggested_success_criteria: input.success_criteria,
-    suggested_stop_conditions: input.stop_conditions,
-    suggested_validation_requirements: validation,
-    confidence: input.context_pack_ref ? 0.78 : 0.45,
-    adoption_recommendation: input.mode === "gated_adopt" ? "adopt_if_gated" : "advisory_only",
+    status: "blocked",
+    reason,
+    configured_provider_mode: configuredProviderMode,
+    semantic_output_created: false,
     created_at: new Date().toISOString()
   };
 }

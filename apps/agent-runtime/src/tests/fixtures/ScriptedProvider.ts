@@ -1,7 +1,7 @@
 import type { AgentPlan, PatchProposal } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../../llm/LlmProvider.js";
 import { createHash } from "node:crypto";
-import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../../mock/threeJsSnake.js";
+import { createThreeJsSnakeProposal, isThreeJsSnakePrompt } from "../../curatedProposals/threeJsSnake.js";
 import { routeConversation } from "../../runtime/ConversationRouter.js";
 
 export class ScriptedProvider implements LlmProvider {
@@ -22,6 +22,12 @@ export class ScriptedProvider implements LlmProvider {
     if (schemaName === "run-patch-intent") {
       return this.createRunPatchIntent(input.userPrompt) as T;
     }
+    if (schemaName === "conversation-intent-decision") {
+      return this.createConversationIntentDecision(input.userPrompt) as T;
+    }
+    if (schemaName === "turn-understanding") {
+      return this.createTurnUnderstanding(input.userPrompt) as T;
+    }
     if (schemaName === "initial-reasoning-decision") {
       return this.createInitialReasoningDecision(input.userPrompt) as T;
     }
@@ -37,6 +43,9 @@ export class ScriptedProvider implements LlmProvider {
         missingFacts: [],
         evidenceRefs: []
       } as T;
+    }
+    if (schemaName === "provider-authored-result") {
+      return this.createProviderAuthoredResult(input) as T;
     }
     if (schemaName === "intent-contract") {
       return this.createIntentContract(input) as T;
@@ -75,7 +84,7 @@ export class ScriptedProvider implements LlmProvider {
   }
 
   async generateText(input: LlmRequest): Promise<string> {
-    return `Mock analysis complete for: ${input.userPrompt}`;
+    return directAnswerMarkdown(input.userPrompt, routeConversation(input.userPrompt).language);
   }
 
   async embed(input: { inputs: string[]; model?: string }) {
@@ -217,7 +226,32 @@ export class ScriptedProvider implements LlmProvider {
   }
 
   private createRunPatchIntent(userPrompt: string) {
-    if (!/recursive validation repair|recursive repair/i.test(userPrompt) || !userPrompt.includes("HIVO_REPAIR_VALUE = \\\"broken\\\"")) {
+    const recursiveRepair = /recursive validation repair|recursive repair/i.test(userPrompt);
+    if (!recursiveRepair) {
+      const request = extractUserRequest(userPrompt);
+      const summaryFile = "AGENT_PROPOSAL.md";
+      const content = [
+        "# Agent Proposal",
+        "",
+        `Request: ${request.replaceAll("\n", " ")}`,
+        "",
+        "This provider-authored fixture patch keeps the edit reviewable and approval-gated.",
+        "Suggested validation: git diff --check"
+      ].join("\n");
+      return {
+        title: "Provider-authored implementation note",
+        summary: `Creates a reviewable implementation note for: ${request}`,
+        intents: [{
+          path: summaryFile,
+          operation: "create_file",
+          replacementText: `${content}\n`,
+          reason: "Create a narrow provider-authored artifact for the requested edit flow.",
+          risk: "low"
+        }],
+        suggestedCommands: [{ command: "git diff --check", reason: "Validate the approved diff." }]
+      };
+    }
+    if (!userPrompt.includes("HIVO_REPAIR_VALUE = \\\"broken\\\"")) {
       return {
         title: "No repair",
         summary: "Mock mode did not find a deterministic repair sentinel.",
@@ -254,6 +288,38 @@ export class ScriptedProvider implements LlmProvider {
     };
   }
 
+  private createConversationIntentDecision(userPrompt: string) {
+    const request = extractClassifiedUserMessage(userPrompt);
+    const route = routeConversation(request);
+    return {
+      kind: intentKindForRoute(route.route),
+      language: route.language,
+      needsWorkspace: isWorkspaceRouteName(route.route),
+      confidence: route.confidence,
+      rationale: route.rationale,
+      workspaceMessage: route.workspacePrompt || request
+    };
+  }
+
+  private createTurnUnderstanding(userPrompt: string) {
+    const request = extractClassifiedUserMessage(userPrompt);
+    const route = routeConversation(request);
+    return {
+      originalRequest: request,
+      cleanedRequest: route.workspacePrompt || request,
+      language: route.language,
+      intentKind: intentKindForRoute(route.route),
+      route: route.route,
+      needsWorkspace: isWorkspaceRouteName(route.route),
+      goal: isWorkspaceRouteName(route.route) ? route.rationale : "Answer the user directly.",
+      ambiguities: [],
+      requiredEvidence: isWorkspaceRouteName(route.route) ? ["workspace context"] : [],
+      risk: route.route === "recursive_factory" || route.route === "swarm_readonly" ? "high" : isWorkspaceRouteName(route.route) ? "medium" : "low",
+      confidence: route.confidence,
+      rationale: route.rationale
+    };
+  }
+
   private createInitialReasoningDecision(userPrompt: string) {
     const request = extractReasoningUserTurn(userPrompt);
     const route = routeConversation(request);
@@ -280,18 +346,45 @@ export class ScriptedProvider implements LlmProvider {
         confidence: route.confidence,
         rationale: route.rationale
       },
-      step: {
-        id: "scripted_initial_step",
-        kind: "final",
-        rationale: "Scripted provider selected the deterministic fixture route.",
-        toolRequests: [],
-        missingFacts: [],
-        successCriteria: ["Continue through the selected runtime path."]
-      }
+      step: needsWorkspace && intentKind === "workspace_question"
+        ? {
+            id: "scripted_initial_investigation",
+            kind: "tool_batch",
+            rationale: "Scripted provider requested read-only workspace evidence before answering.",
+            toolRequests: [{
+              id: "scripted_investigate_project",
+              kind: "investigate_project",
+              query: route.workspacePrompt || request,
+              limit: 8,
+              reason: "Collect bounded workspace evidence for the provider-authored answer."
+            }],
+            missingFacts: ["Workspace evidence for the requested explanation."],
+            successCriteria: ["Answer only from cited workspace evidence."]
+          }
+        : {
+            id: "scripted_initial_step",
+            kind: "final",
+            rationale: "Scripted provider selected the deterministic fixture route.",
+            toolRequests: [],
+            missingFacts: [],
+            successCriteria: ["Continue through the selected runtime path."]
+          }
     };
   }
 
   private createReasoningStep(userPrompt: string) {
+    const request = extractReasoningUserTurn(userPrompt);
+    const route = routeConversation(request);
+    if (route.route !== "chat") {
+      return {
+        id: "scripted_final_step",
+        kind: "final",
+        rationale: "Scripted provider is ready for the compose stage to use current evidence.",
+        toolRequests: [],
+        missingFacts: [],
+        successCriteria: ["Return a provider-authored fixture answer from supplied evidence."]
+      };
+    }
     return {
       id: "scripted_final_step",
       kind: "final",
@@ -301,12 +394,48 @@ export class ScriptedProvider implements LlmProvider {
       successCriteria: ["Return a provider-authored fixture answer."],
       result: {
         decision: "ANSWER",
-        answerMarkdown: `Mock analysis complete for: ${extractReasoningUserTurn(userPrompt)}`,
+        answerMarkdown: directAnswerMarkdown(request, route.language),
         claims: [],
         evidenceRefs: [],
         unknowns: [],
         rationale: "Scripted fixture response."
       }
+    };
+  }
+
+  private createProviderAuthoredResult(input: LlmRequest) {
+    const context = asRecord(input.context);
+    const understanding = asRecord(context?.understanding);
+    const needsWorkspace = understanding?.needsWorkspace === true;
+    const language = understanding?.language === "arabic" ? "arabic" : "english";
+    const evidenceRefs = Array.isArray(context?.allowedEvidenceRefs)
+      ? context.allowedEvidenceRefs.filter((ref): ref is string => typeof ref === "string")
+      : [];
+    if (needsWorkspace && evidenceRefs.length === 0) {
+      return {
+        decision: "FOLLOW_UP",
+        answerMarkdown: `I need workspace evidence before I can complete: ${extractReasoningUserTurn(input.userPrompt)}`,
+        claims: [],
+        evidenceRefs: [],
+        unknowns: ["No workspace evidence refs were available to support a material answer."],
+        rationale: "Scripted fixture refused to answer a workspace turn without evidence."
+      };
+    }
+    return {
+      decision: "ANSWER",
+      answerMarkdown: directAnswerMarkdown(extractReasoningUserTurn(input.userPrompt), language),
+      claims: evidenceRefs.length
+        ? [{
+            id: "scripted_claim_1",
+            text: "The scripted provider completed the schema-valid response using supplied evidence.",
+            material: false,
+            evidenceIds: evidenceRefs,
+            confidence: "medium"
+          }]
+        : [],
+      evidenceRefs,
+      unknowns: [],
+      rationale: "Scripted fixture response."
     };
   }
 
@@ -367,6 +496,30 @@ function extractUserRequest(prompt: string) {
 function extractReasoningUserTurn(prompt: string) {
   const match = prompt.match(/Understand this user turn and choose its first reasoning step:\s*([\s\S]*?)\n\nReturn \{ understanding, step \}\./i);
   return (match?.[1] ?? extractUserRequest(prompt)).trim();
+}
+
+function extractClassifiedUserMessage(prompt: string) {
+  const classifyMatch = prompt.match(/Classify this single user message before retrieval:\n([\s\S]*?)\n\nReturn JSON/i);
+  if (classifyMatch?.[1]) return classifyMatch[1].trim();
+  return extractReasoningUserTurn(prompt);
+}
+
+function intentKindForRoute(route: string) {
+  if (route === "chat") return "direct_conversation";
+  if (route === "inspect_explain" || route === "swarm_readonly") return "workspace_question";
+  if (route === "simple_run") return "run_request";
+  return "workspace_action";
+}
+
+function isWorkspaceRouteName(route: string) {
+  return route !== "chat";
+}
+
+function directAnswerMarkdown(request: string, language: "arabic" | "english") {
+  if (language === "arabic") {
+    return `\u062a\u0645 \u0625\u0646\u062c\u0627\u0632 \u0627\u0633\u062a\u062c\u0627\u0628\u0629 \u0627\u0644\u0645\u0632\u0648\u062f \u0627\u0644\u0645\u0628\u0631\u0645\u062c \u0644\u0640: ${request}`;
+  }
+  return `Scripted provider response complete for: ${request}`;
 }
 
 function getSchemaName(schema: unknown) {

@@ -30,8 +30,11 @@ import {
   reconstructFactoryRunTrace,
   summarizeContextInclusions,
   createProjectGoalSpec,
+  type PromptWriterInput,
   type Task
 } from "../orchestration/index.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { scriptedPromptWriterOutput } from "./fixtures/PromptWriterFixtureOutput.js";
 
 test("context pack includes explainable inclusion metadata without removing legacy fields", async () => {
   const workspace = await fixtureWorkspace("context-inclusion-model");
@@ -362,8 +365,9 @@ test("team context reaches prompt metadata PromptWriter input and PromptQualityG
       config: {
         ...DEFAULT_ORCHESTRATION_CONFIG,
         prompt_writer_mode: "shadow",
-        prompt_writer_provider_mode: "deterministic"
-      }
+        prompt_writer_provider_mode: "provider_read_only"
+      },
+      providerFactory: () => promptWriterProviderFromContext()
     }).run({
       runId,
       task,
@@ -394,6 +398,17 @@ test("team context reaches prompt metadata PromptWriter input and PromptQualityG
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+function promptWriterProviderFromContext(): LlmProvider {
+  return {
+    async generateStructured<T>(input: LlmRequest) {
+      return scriptedPromptWriterOutput(input.context as PromptWriterInput) as T;
+    },
+    async generateText(input: LlmRequest) {
+      return JSON.stringify(scriptedPromptWriterOutput(input.context as PromptWriterInput));
+    }
+  };
+}
 
 async function fixtureWorkspace(prefix: string) {
   const root = await mkdtemp(path.join(os.tmpdir(), `${prefix}-`));

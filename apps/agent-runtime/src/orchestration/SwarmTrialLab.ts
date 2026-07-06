@@ -7,7 +7,7 @@ import { createSwarmAgentTemplates } from "./SwarmAgentTemplates.js";
 import { SwarmArtifactStore } from "./SwarmArtifactStore.js";
 import { SwarmScheduler, createAgentInstancesForPlan } from "./SwarmScheduler.js";
 import { SwarmStaffingPlanner } from "./SwarmStaffingPlanner.js";
-import type { RoleCounts, StaffingPlan, SwarmMetrics, SwarmRiskLevel, SwarmRun, SwarmRunMode, TaskComplexity, WorkItem } from "./SwarmModels.js";
+import type { RoleCounts, StaffingPlan, SwarmMetrics, SwarmRiskLevel, SwarmRun, SwarmRunMode, TaskComplexity, WorkItem, WorkItemResult } from "./SwarmModels.js";
 import { SWARM_SCHEMA_VERSION } from "./SwarmModels.js";
 import { SwarmAutopilotRuntime } from "./SwarmRuntime.js";
 import { SwarmTrialArtifactStore } from "./SwarmTrialArtifactStore.js";
@@ -202,7 +202,20 @@ export class SwarmTrialLab {
     await swarmStore.saveSwarmRun(run);
     await swarmStore.saveStaffingPlan(plan);
     await swarmStore.saveAgentTemplates(run.id, templates);
-    const scheduled = await new SwarmScheduler(this.workspacePath, swarmStore, new OrchestrationFileLockManager(this.workspacePath)).run({
+    const scheduled = await new SwarmScheduler(
+      this.workspacePath,
+      swarmStore,
+      new OrchestrationFileLockManager(this.workspacePath),
+      schedulerScaleTrialWorker,
+      {
+        resourceMonitor: () => ({
+          available_parallelism: 300,
+          recommended_parallelism: 300,
+          cpu_pressure: 0,
+          reason: "scheduler_scale_trial_fixed_capacity"
+        })
+      }
+    ).run({
       run,
       staffingPlan: plan,
       agentTemplates: templates,
@@ -961,6 +974,25 @@ function fakeWorkItem(runId: string, id: string, type: WorkItem["type"], role: s
     max_attempts: 1,
     created_at: now,
     updated_at: now
+  };
+}
+
+async function schedulerScaleTrialWorker(input: {
+  workItem: WorkItem;
+}): Promise<WorkItemResult> {
+  return {
+    schema_version: SWARM_SCHEMA_VERSION,
+    work_item_id: input.workItem.id,
+    status: "succeeded",
+    summary: `Scheduler scale fixture completed ${input.workItem.id}.`,
+    relevant_files: input.workItem.read_files,
+    findings: ["scheduler_scale_fixture_completed"],
+    risks: [],
+    unknowns: [],
+    structured_output_valid: true,
+    confidence: 1,
+    intent_handoff_gate_ref: "scheduler-scale-trial-fixture",
+    intent_handoff_gate_status: "passed"
   };
 }
 

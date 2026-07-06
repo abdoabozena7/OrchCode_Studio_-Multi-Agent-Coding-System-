@@ -209,7 +209,7 @@ test("legacy demo sessions cannot be created", async () => {
         mode: "demo_mock",
         providerConfig,
         userPrompt: "hello"
-      }),
+      } as unknown as Parameters<typeof runtime.createSession>[0]),
       /Demo and mock sessions are no longer supported/
     );
   } finally {

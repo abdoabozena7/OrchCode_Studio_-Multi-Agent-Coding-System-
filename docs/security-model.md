@@ -33,7 +33,7 @@ Provider validation is handled in the Rust backend.
 - Ollama validation checks that `baseUrl` is reachable, `/api/tags` returns models, and `selectedModel` exists in that list.
 - OpenAI-compatible validation checks required fields and attempts `GET /v1/models` when possible. Some custom providers may not support that endpoint reliably, so endpoint validation is limited in Module 1.
 
-The legacy Module 1 backend mock-session command blocks unless a saved provider config is valid. Module 2 and Module 3 mock runtime modes intentionally run without API keys so the app can be tested offline. Real provider sessions must use validated provider settings.
+The runtime creates real-provider sessions only. Legacy mock-session commands and persisted `demo_mock` sessions are rejected or restored as non-resumable compatibility records. Test suites may still use private scripted provider fixtures, but those fixtures are not runtime-selectable modes. Real provider sessions must use validated provider settings.
 
 ## API Key Handling
 

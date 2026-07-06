@@ -44,6 +44,50 @@ const CATEGORIES: ReviewCategory[] = [
 
 const SEVERITIES: ReviewSeverity[] = ["info", "low", "medium", "high", "critical"];
 
+export const patchProposalReviewOutputSchema = {
+  name: "PatchProposalReviewOutput",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "decision",
+    "findings",
+    "required_changes",
+    "validation_recommendations",
+    "integration_risks",
+    "security_risks",
+    "performance_risks",
+    "test_coverage_risks",
+    "confidence"
+  ],
+  properties: {
+    decision: { type: "string", enum: DECISIONS },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["category", "severity", "message", "blocking"],
+        properties: {
+          category: { type: "string", enum: CATEGORIES },
+          severity: { type: "string", enum: SEVERITIES },
+          message: { type: "string", minLength: 1 },
+          file: { type: "string" },
+          suggested_change: { type: "string" },
+          blocking: { type: "boolean" },
+          evidence_ref: { type: "string" }
+        }
+      }
+    },
+    required_changes: { type: "array", items: { type: "string" } },
+    validation_recommendations: { type: "array", items: { type: "string" } },
+    integration_risks: { type: "array", items: { type: "string" } },
+    security_risks: { type: "array", items: { type: "string" } },
+    performance_risks: { type: "array", items: { type: "string" } },
+    test_coverage_risks: { type: "array", items: { type: "string" } },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
+  }
+} as const;
+
 export function parsePatchProposalReviewOutput(raw: string, reviewId: string): ParsedPatchProposalReviewOutput {
   let value: unknown;
   try {

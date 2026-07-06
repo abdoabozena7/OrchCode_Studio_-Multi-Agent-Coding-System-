@@ -15,7 +15,7 @@ The default mode is `shadow`.
 
 PromptWriter output is structured JSON. Invalid schema, unsafe language, protected template input changes, weakened validation requirements, or blocked PromptQualityGate results prevent adoption. PromptWriter agents cannot modify allowed or forbidden file policy, run commands, write files, create patches, mark tasks complete, or claim validation passed.
 
-Provider-backed PromptWriter execution uses the read-only provider path when configured. If the provider is unavailable in auto mode, deterministic fallback produces conservative suggestions from the task, context pack metadata, and validation requirements.
+PromptWriter semantic output must come from the configured provider through `ReasoningKernel`. Provider mode is limited to `provider_read_only` or `auto`; there is no runtime deterministic PromptWriter mode. If the provider is missing or fails, the run records a blocked raw artifact, schema failure, and rejected adoption decision; it does not synthesize deterministic prompt suggestions.
 
 ## Artifacts And Metadata
 

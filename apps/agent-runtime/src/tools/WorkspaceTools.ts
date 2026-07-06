@@ -9,6 +9,13 @@ export type WorkspaceFileEntry = {
   isSecretCandidate: boolean;
 };
 
+const BINARY_FILE_RE = /\.(png|jpg|jpeg|gif|bmp|ico|webp|avif|heic|heif|psd|ai|eps|tiff|tif|raw|cr2|nef|orf|sr2|woff|woff2|ttf|otf|eot|mp3|wav|ogg|mp4|avi|mov|mkv|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|tar|gz|rar|7z|exe|dll|so|dylib|wasm|o|obj|class|pyc)$/i;
+function assertTextFile(filePath: string) {
+  if (BINARY_FILE_RE.test(filePath)) {
+    throw new Error(`Cannot read "${filePath}" — binary/image files are not supported as text.`);
+  }
+}
+
 export class WorkspaceTools {
   constructor(private readonly workspacePath: string, private readonly grant?: WorkerCapabilityGrant) {}
 
@@ -24,6 +31,7 @@ export class WorkspaceTools {
     if (isSecretCandidate(filePath)) {
       throw new Error("Secret-like files are blocked");
     }
+    assertTextFile(filePath);
     if (!fs.statSync(filePath).isFile()) {
       throw new Error("Path is not a file");
     }
@@ -37,6 +45,7 @@ export class WorkspaceTools {
     if (isSecretCandidate(filePath)) {
       throw new Error("Secret-like files are blocked");
     }
+    assertTextFile(filePath);
     if (!fs.existsSync(filePath)) {
       throw new Error("Path does not exist");
     }

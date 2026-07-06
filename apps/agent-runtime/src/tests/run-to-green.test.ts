@@ -6,7 +6,6 @@ import test from "node:test";
 import type { SanitizedProviderConfig } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { loadConfig } from "../config.js";
-import { buildServer } from "../server.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { AgentRuntime } from "../runtime/AgentRuntime.js";
 import { SessionManager } from "../runtime/SessionManager.js";
@@ -16,6 +15,7 @@ import { selectRunToGreenCommands } from "../runtime/RunToGreen.js";
 import { runPatchIntentSchema, runPlanSchema } from "../schemas/sessionSchemas.js";
 import { normalizeStructuredOutputCandidate, validateStructuredOutput } from "../schemas/validators.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -25,7 +25,7 @@ const validProviderConfig: SanitizedProviderConfig = {
   isValid: true
 };
 
-test("run this project initializes run_to_green before provider task planning", async () => {
+test("provider-backed run request reaches run_to_green instead of recursive swarm", async () => {
   const fixture = await createStaticFixture();
   const provider = new CountingProvider();
   const runtime = await createRuntimeWithProvider(fixture.storageDir, provider);
@@ -41,10 +41,12 @@ test("run this project initializes run_to_green before provider task planning", 
 
     assert.equal(session?.runIntent, "run_to_green");
     assert.equal(session?.runMode, "run_to_green");
-    assert.equal(provider.structuredCalls, 1);
+    assert.equal(session?.resolvedExecutionMode, "simple_mode");
+    assert.equal(provider.runPlanCalls, 1);
     assert.equal(session?.runToGreen?.status, "blocked");
     assert.equal(session?.status, "completed");
     assert.equal(session?.verificationResult?.status, "unavailable");
+    assert.doesNotMatch(session?.runSummary?.summary ?? "", /Recursive swarm/i);
   } finally {
     await fixture.close();
   }
@@ -52,40 +54,47 @@ test("run this project initializes run_to_green before provider task planning", 
 
 test("run_to_green selects explicit command first", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run", dev: "vite" } });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "make it run with `npm test`"
     });
-    await runtime.runTurn(created.sessionId, "make it run with `npm test`");
+    const turn = await runtime.runTurn(created.sessionId, "make it run with `npm test`");
     const session = runtime.getSession(created.sessionId);
 
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(session?.runMode, "run_to_green");
     assert.equal(session?.runToGreen?.selectedCommands[0]?.command, "npm test");
     assert.equal(session?.commandRequests[0]?.command, "npm test");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
 
 test("run_to_green falls back to module verification commands", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run", dev: "vite" }, withSource: true });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
-    await runtime.runTurn(created.sessionId, "make it run");
+    const turn = await runtime.runTurn(created.sessionId, "make it run");
     const session = runtime.getSession(created.sessionId);
 
+    assert.equal(turn.status, "needs_approval");
+    assert.equal(session?.status, "needs_approval");
+    assert.equal(session?.runMode, "run_to_green");
     assert.equal(session?.runToGreen?.selectedCommands[0]?.command, "npm test");
     assert.equal(session?.commandRequests[0]?.command, "npm test");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
@@ -116,16 +125,19 @@ test("run_to_green prefers package launch command for local URL requests", async
 
 test("run_to_green completes safely when no known command can be selected", async () => {
   const fixture = await createStaticFixture();
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "run this project"
     });
-    await runtime.runTurn(created.sessionId, "run this project");
+    const turn = await runtime.runTurn(created.sessionId, "run this project");
     const session = runtime.getSession(created.sessionId);
 
+    assert.equal(turn.status, "completed");
     assert.equal(session?.runToGreen?.status, "blocked");
     assert.equal(session?.commandRequests.length, 0);
     assert.equal(session?.runToGreen?.finalStatus, "blocked");
@@ -137,8 +149,8 @@ test("run_to_green completes safely when no known command can be selected", asyn
     assert.equal(session?.status, "completed");
     assert.equal(session?.lifecycleStage, "DONE");
     assert.equal(session?.runSummary?.status, "completed");
+    assert.equal(session?.nextAction?.kind, "preview_ready");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
@@ -276,12 +288,13 @@ test("malformed provider task JSON stops implementation instead of inventing a d
     const turn = await runtime.runTurn(created.sessionId, "add a small note");
     const session = runtime.getSession(created.sessionId);
 
-    assert.equal(turn.status, "failed");
-    assert.equal(session?.status, "failed");
+    assert.equal(turn.status, "failed_provider");
+    assert.equal(session?.status, "failed_provider");
     assert.equal(session?.tasks.length, 0);
-    assert.match(session?.messages.at(-1)?.content ?? "", /no deterministic implementation plan was invented|stopped here instead of creating a canned plan/i);
+    assert.match(session?.messages.at(-1)?.content ?? "", /did not use MockProvider or a deterministic fallback/i);
     assert.equal((session?.providerTelemetry?.providerRequestCount ?? 0) > 0, true);
-    assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Planning provider request" && gate.status === "failed"));
+    assert.equal(session?.runSummary?.status, "failed");
+    assert.match(session?.runSummary?.summary ?? "", /provider_failed_after_retries|Unexpected schema/i);
   } finally {
     await fixture.close();
   }
@@ -314,7 +327,7 @@ test("read-only planning questions bypass implementation planner fallback", asyn
   }
 });
 
-test("planner gate reports not attempted instead of provider failure when no request is recorded", async () => {
+test("direct RunEngine rejects malformed implementation plans without deterministic fallback", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
   const sessionManager = new SessionManager(fixture.storageDir, new EventBus());
   await sessionManager.load();
@@ -325,23 +338,23 @@ test("planner gate reports not attempted instead of provider failure when no req
       providerConfig: validProviderConfig,
       userPrompt: "add a small note"
     });
-    const result = await new RunEngine(new InvalidPlanProvider(), sessionManager).runTurn(session.id, "add a small note", {
-      resolvedMode: "simple_mode",
-      projectMap: {
-        stack: ["TypeScript"],
-        packageManagers: ["npm"],
-        testCommands: ["npm test"],
-        entryPoints: ["src/main.ts"],
-        importantFiles: ["src/main.ts", "package.json"]
-      }
-    });
-    const answer = result.messages.at(-1)?.content ?? "";
-
-    assert.equal(result.status, "failed");
-    assert.equal(result.providerTelemetry, undefined);
-    assert.match(answer, /No planning provider request was recorded/i);
-    assert.doesNotMatch(answer, /provider planner failed/i);
-    assert.ok(result.runSummary?.gates.some((gate) => gate.name === "Planning provider request" && gate.status === "blocked"));
+    await assert.rejects(
+      new RunEngine(new InvalidPlanProvider(), sessionManager).runTurn(session.id, "add a small note", {
+        resolvedMode: "simple_mode",
+        projectMap: {
+          stack: ["TypeScript"],
+          packageManagers: ["npm"],
+          testCommands: ["npm test"],
+          entryPoints: ["src/main.ts"],
+          importantFiles: ["src/main.ts", "package.json"]
+        }
+      }),
+      /provider_implementation_plan_invalid_after_repairs/
+    );
+    const updated = sessionManager.getSession(session.id);
+    assert.equal(updated?.tasks.length, 0);
+    assert.equal(updated?.patchProposals.length, 0);
+    assert.doesNotMatch(JSON.stringify(updated?.decisionLedger ?? []), /deterministic fallback plan/i);
   } finally {
     await fixture.close();
   }
@@ -440,15 +453,17 @@ test("operator-supplied plan still blocks when provider patch intent is malforme
 
 test("successful first run marks run_to_green as passed", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
-    await runtime.runTurn(created.sessionId, "make it run");
+    const turn = await runtime.runTurn(created.sessionId, "make it run");
     const request = runtime.getSession(created.sessionId)?.commandRequests[0];
+    assert.equal(turn.status, "needs_approval");
     assert.ok(request);
 
     await runtime.reportCommandResult(created.sessionId, request.id, {
@@ -469,7 +484,6 @@ test("successful first run marks run_to_green as passed", async () => {
     assert.equal(session?.reviewGate?.runToGreen?.status, "passed");
     assert.equal(session?.verificationResult?.status, "passed");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
@@ -479,15 +493,18 @@ test("failed run records conservative diagnosis", async () => {
   const storageDir = path.join(os.tmpdir(), `hivo-run2g-bare-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# bare\n", "utf8");
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createRuntimeWithProvider(storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "make it run with `vite`"
     });
-    await runtime.runTurn(created.sessionId, "make it run with `vite`");
+    const turn = await runtime.runTurn(created.sessionId, "make it run with `vite`");
     const request = runtime.getSession(created.sessionId)?.commandRequests[0];
+    assert.equal(turn.status, "needs_approval");
     assert.ok(request);
 
     await runtime.reportCommandResult(created.sessionId, request.id, {
@@ -506,7 +523,6 @@ test("failed run records conservative diagnosis", async () => {
     assert.equal(session?.runToGreen?.attempts[0]?.diagnosis?.confidence, "high");
     assert.equal(session?.runToGreen?.status, "blocked");
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -514,15 +530,18 @@ test("failed run records conservative diagnosis", async () => {
 
 test("unknown error stays unknown and low confidence", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" } });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "make it run"
     });
-    await runtime.runTurn(created.sessionId, "make it run");
+    const turn = await runtime.runTurn(created.sessionId, "make it run");
     const request = runtime.getSession(created.sessionId)?.commandRequests[0];
+    assert.equal(turn.status, "needs_approval");
     assert.ok(request);
 
     await runtime.reportCommandResult(created.sessionId, request.id, {
@@ -541,7 +560,6 @@ test("unknown error stays unknown and low confidence", async () => {
     assert.equal(session?.runToGreen?.attempts[0]?.diagnosis?.confidence, "low");
     assert.equal(session?.runToGreen?.status, "blocked");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
@@ -551,11 +569,13 @@ test("git status outside a repository keeps the diagnosis informative", async ()
   const storageDir = path.join(os.tmpdir(), `hivo-run2g-git-status-storage-${Date.now()}`);
   await mkdir(workspace, { recursive: true });
   await writeFile(path.join(workspace, "README.md"), "# no git\n", "utf8");
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir });
+  const runtime = await createRuntimeWithProvider(storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "make it run with `git status`"
     });
     await runtime.runTurn(created.sessionId, "make it run with `git status`");
@@ -584,7 +604,6 @@ test("git status outside a repository keeps the diagnosis informative", async ()
     assert.equal(session?.runToGreen?.attempts[0]?.diagnosis?.reason, "This workspace is not a Git repository.");
     assert.equal(session?.commandExecutions.at(-1)?.diagnosis?.category, "not_git_repository");
   } finally {
-    await app.close();
     await rm(workspace, { recursive: true, force: true });
     await rm(storageDir, { recursive: true, force: true });
   }
@@ -604,7 +623,8 @@ test("small in-scope repair can trigger rerun and pass", async () => {
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
     await runtime.runTurn(created.sessionId, "make it run");
@@ -682,7 +702,8 @@ test("out-of-scope repair is blocked instead of proposed", async () => {
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
     await runtime.runTurn(created.sessionId, "make it run");
@@ -711,11 +732,13 @@ test("out-of-scope repair is blocked instead of proposed", async () => {
 
 test("background running command does not count as green", async () => {
   const fixture = await createPackageFixture({ scripts: { dev: "vite" }, withSource: true });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "run this project"
     });
     await runtime.runTurn(created.sessionId, "run this project");
@@ -746,30 +769,35 @@ test("background running command does not count as green", async () => {
     assert.equal(session?.runToGreen?.status, "blocked");
     assert.notEqual(session?.runToGreen?.finalStatus, "green");
   } finally {
-    await app.close();
     await fixture.close();
   }
 });
 
 test("run_to_green stops at max attempts", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
-  const server = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const sessionManager = new SessionManager(fixture.storageDir, new EventBus());
+  await sessionManager.load();
+  const runtime = new AgentRuntime({ ...loadConfig(), storageDir: fixture.storageDir }, sessionManager, {
+    providerFactory: () => new ScriptedProvider()
+  });
   try {
-    const created = await server.runtime.createSession({
+    const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      accessProfile: "full_access",
       userPrompt: "make it run"
     });
-    await server.runtime.runTurn(created.sessionId, "make it run");
-    await server.sessionManager.updateSession(created.sessionId, (draft) => {
+    await runtime.runTurn(created.sessionId, "make it run");
+    await sessionManager.updateSession(created.sessionId, (draft) => {
       if (draft.runToGreen) {
         draft.runToGreen.maxAttempts = 1;
       }
     });
-    const request = server.runtime.getSession(created.sessionId)?.commandRequests[0];
+    const request = runtime.getSession(created.sessionId)?.commandRequests[0];
     assert.ok(request);
 
-    await server.runtime.reportCommandResult(created.sessionId, request.id, {
+    await runtime.reportCommandResult(created.sessionId, request.id, {
       command: request.command,
       cwd: request.cwd,
       risk: request.risk,
@@ -779,12 +807,11 @@ test("run_to_green stops at max attempts", async () => {
       stderr: "kaboom",
       message: "Command failed"
     });
-    const session = server.runtime.getSession(created.sessionId);
+    const session = runtime.getSession(created.sessionId);
 
     assert.equal(session?.runToGreen?.status, "max_attempts_reached");
     assert.equal(session?.runToGreen?.finalStatus, "not_green");
   } finally {
-    await server.app.close();
     await fixture.close();
   }
 });
@@ -803,7 +830,8 @@ test("repeated same diagnosis stops the bounded loop", async () => {
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
     await runtime.runTurn(created.sessionId, "make it run");
@@ -861,15 +889,15 @@ test("repeated same diagnosis stops the bounded loop", async () => {
 
 test("restored in-flight run_to_green becomes reconciliation-required and blocked", async () => {
   const fixture = await createPackageFixture({ scripts: { test: "vitest run" }, withSource: true });
-  const { runtime, app } = await buildServer({ ...loadConfig(), storageDir: fixture.storageDir });
+  const runtime = await createRuntimeWithProvider(fixture.storageDir, new ScriptedProvider());
   try {
     const created = await runtime.createSession({
       workspacePath: fixture.workspace,
-      mode: "demo_mock",
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
       userPrompt: "make it run"
     });
     await runtime.runTurn(created.sessionId, "make it run");
-    await app.close();
 
     const restoredManager = new SessionManager(fixture.storageDir, new EventBus());
     await restoredManager.load();
@@ -947,7 +975,7 @@ async function createRuntimeWithProvider(storageDir: string, provider: LlmProvid
   });
 }
 
-class RepairProvider implements LlmProvider {
+class RepairProvider extends ScriptedProvider {
   constructor(
     private readonly config: {
       path: string;
@@ -955,13 +983,12 @@ class RepairProvider implements LlmProvider {
       preimage?: string;
       operation?: "create_file" | "replace_range";
     }
-  ) {}
+  ) {
+    super();
+  }
 
-  async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+  override async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     const schemaName = typeof schema === "object" && schema && "name" in schema ? String((schema as { name: string }).name) : "";
-    if (schemaName === "conversation-intent-decision") {
-      return intentDecisionForPrompt(input.userPrompt) as T;
-    }
     if (schemaName === "run-plan") {
       return {
         summary: "Repair plan",
@@ -994,16 +1021,13 @@ class RepairProvider implements LlmProvider {
         }]
       } as T;
     }
-    throw new Error(`Unexpected schema ${schemaName} for prompt ${input.userPrompt}`);
-  }
-
-  async generateText(): Promise<string> {
-    return "repair";
+    return super.generateStructured(input, schema);
   }
 }
 
 class CountingProvider implements LlmProvider {
   structuredCalls = 0;
+  runPlanCalls = 0;
 
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     this.structuredCalls += 1;
@@ -1011,7 +1035,41 @@ class CountingProvider implements LlmProvider {
     if (schemaName === "conversation-intent-decision") {
       return intentDecisionForPrompt(input.userPrompt) as T;
     }
-    throw new Error("provider should not be called after intent classification");
+    if (schemaName === "turn-understanding") {
+      return turnUnderstandingForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName === "initial-reasoning-decision") {
+      return {
+        understanding: turnUnderstandingForPrompt(input.userPrompt),
+        step: reasoningStepForPrompt(input.userPrompt)
+      } as T;
+    }
+    if (schemaName === "intent-contract") {
+      const original = typeof input.context === "object" && input.context && "original_user_request" in input.context
+        ? String((input.context as { original_user_request?: unknown }).original_user_request ?? input.userPrompt)
+        : input.userPrompt;
+      return intentContractForPrompt(original) as T;
+    }
+    if (schemaName === "run-plan") {
+      this.runPlanCalls += 1;
+      return {
+        summary: "Prepare the local project run.",
+        reasoningSummary: "The provider classified this as a run request, so the runtime should initialize the bounded run-to-green lifecycle.",
+        mode: "edit_project",
+        tasks: [{
+          id: "task_run_to_green",
+          title: "Select run command",
+          objective: "Find a grounded project command or safe preview.",
+          roleTitle: "Run Coordinator",
+          targetFiles: [],
+          verification: "Rust command execution remains approval-gated."
+        }],
+        acceptanceCriteria: ["Run-to-green state is initialized.", "No recursive swarm summary is produced."],
+        risks: ["No grounded command may exist for static workspaces."],
+        suggestedCommands: []
+      } as T;
+    }
+    throw new Error(`Unexpected schema ${schemaName}`);
   }
 
   async generateText(): Promise<string> {

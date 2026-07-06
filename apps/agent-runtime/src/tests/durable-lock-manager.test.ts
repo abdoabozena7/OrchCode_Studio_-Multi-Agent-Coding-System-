@@ -23,11 +23,14 @@ import {
   semanticLocksForTask,
   type AgentTemplate,
   type ContextPack,
+  type PromptWriterInput,
   type StaffingPlan,
   type SwarmRun,
   type Task,
   type WorkItem
 } from "../orchestration/index.js";
+import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
+import { scriptedPromptWriterOutput } from "./fixtures/PromptWriterFixtureOutput.js";
 import { ContextPackBuilder } from "../orchestration/ContextPackBuilder.js";
 import { SWARM_SCHEMA_VERSION } from "../orchestration/SwarmModels.js";
 import { scriptedSwarmWorker } from "./fixtures/ScriptedSwarmWorker.js";
@@ -200,9 +203,11 @@ test("CoreOrchestrator refuses executor work without a provider before acquiring
         enable_multi_plan_factory: false
       }
     }).runAgenticTask("Change src/index.ts in a small safe way.");
+    assert.equal(clean.run.status, "blocked");
+    assert.equal(clean.run.intent_contract_status, "provider_unavailable");
+    assert.equal(clean.tasks.length, 0);
     assert.equal(clean.report.locks_acquired ?? 0, 0);
     assert.equal(clean.report.active_locks_at_end, 0);
-    assert.equal(clean.tasks.some((task) => task.status === "failed" || task.status === "blocked"), true);
     const trace = await reconstructFactoryRunTrace({ workspacePath: workspace, runId: clean.run.id });
     assert.equal(trace.events.some((event) => event.event_type === "lock_acquired"), false);
   } finally {
@@ -256,8 +261,9 @@ test("PromptWriter does not acquire write locks or weaken future lock metadata",
       config: {
         ...baseConfig(),
         prompt_writer_mode: "gated_adopt",
-        prompt_writer_provider_mode: "deterministic"
-      }
+        prompt_writer_provider_mode: "provider_read_only"
+      },
+      providerFactory: () => promptWriterProviderFromContext()
     }).run({
       runId: task.run_id,
       task,
@@ -338,6 +344,17 @@ async function fixtureWorkspace(prefix: string) {
   return root;
 }
 
+function promptWriterProviderFromContext(): LlmProvider {
+  return {
+    async generateStructured<T>(input: LlmRequest) {
+      return scriptedPromptWriterOutput(input.context as PromptWriterInput) as T;
+    },
+    async generateText(input: LlmRequest) {
+      return JSON.stringify(scriptedPromptWriterOutput(input.context as PromptWriterInput));
+    }
+  };
+}
+
 function baseConfig() {
   return {
     execution_mode: "deep" as const,
@@ -369,11 +386,10 @@ function baseConfig() {
     planning_evidence_mode: "available" as const,
     max_evidence_items: 20,
     min_evidence_confidence: 0.2,
-    allow_mock_evidence: false,
     prompt_writer_mode: "shadow" as const,
-    prompt_writer_provider_mode: "deterministic" as const,
+    prompt_writer_provider_mode: "provider_read_only" as const,
     enable_team_sub_planning: true,
-    team_sub_planning_mode: "deterministic" as const,
+    team_sub_planning_mode: "auto" as const,
     max_team_sub_plans_per_run: 12,
     max_team_sub_plan_tasks: 6,
     max_team_sub_plan_depth: 2,
@@ -396,7 +412,19 @@ function baseConfig() {
     allow_write_future_candidates: true,
     require_human_approval_for_write: true,
     allow_auto_approval_for_low_risk_read_only: true,
-    max_nodes_evaluated_per_run: 48
+    max_nodes_evaluated_per_run: 48,
+    enable_task_queue: true,
+    task_queue_db_path: ".agent_memory",
+    task_queue_max_attempts: 3,
+    task_queue_lease_ttl_ms: 300_000,
+    task_queue_poll_timeout_ms: 5_000,
+    enable_suspend_hydrate: true,
+    suspend_hydrate_ttl_ms: 86_400_000,
+    max_snapshot_size_bytes: 10_485_760,
+    enable_circuit_breaker: true,
+    max_bankruptcy_attempts: 5,
+    max_circuit_breaker_duplicate_outputs: 2,
+    max_circuit_breaker_stagnant_rounds: 3
   };
 }
 
