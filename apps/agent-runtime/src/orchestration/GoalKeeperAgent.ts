@@ -43,6 +43,8 @@ export class GoalKeeperAgent {
 Your ONLY responsibility is to verify that a given agent's task remains aligned with the original project goal.
 Do not evaluate code quality, correctness, or completeness.
 Only check for goal drift, scope creep, or conflicting objectives.
+A task is aligned when it is a necessary intermediate step toward the original goal, including requirement extraction, visual design constraints, implementation, validation, repair, collection, or final packaging.
+Do not mark a task as drift merely because it is narrower than the original goal; mark major drift only when it cannot plausibly contribute to the original goal.
 Respond with strict JSON only.${ctxBlock ? `\n\n${ctxBlock}` : ""}`,
           userPrompt: `Compare the ORIGINAL GOAL against the CURRENT TASK and determine alignment.
 

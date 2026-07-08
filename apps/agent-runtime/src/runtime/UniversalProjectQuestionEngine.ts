@@ -77,6 +77,10 @@ import {
 } from "./WorkspaceReasoningPipeline.js";
 import { projectUnderstandingKernelMode, runProjectUnderstandingKernel } from "./ProjectUnderstandingKernel.js";
 import { runReadOnlyUnderstandingEscalation } from "./ProjectUnderstandingEscalation.js";
+import {
+  analyzeProjectQuestionGrounding,
+  type GroundingEvidenceItem
+} from "./ProjectQuestionGrounding.js";
 
 export type UniversalInspectTopic =
   | "frontend"
@@ -288,13 +292,16 @@ export type UniversalProjectQuestionResult = ProjectQuestionEvidencePack & {
 
 export type ProjectAnswerStrategyName =
   | "provider_final"
-  | "provider_revision_final";
+  | "provider_revision_final"
+  | "provider_failed_notice"
+  | "provider_validation_notice"
+  | "insufficient_evidence_notice";
 
 export type ProjectAnswerStrategy = {
   strategy: ProjectAnswerStrategyName;
-  finalAnswerSource: "provider";
-  providerDraftStatus: "accepted_first" | "accepted_revision";
-  fallbackUsed: false;
+  finalAnswerSource: "provider" | "local_notice";
+  providerDraftStatus: "accepted_first" | "accepted_revision" | "failed" | "failed_local_validation";
+  fallbackUsed: boolean;
   reason?: string;
 };
 
@@ -533,83 +540,132 @@ export async function answerUniversalProjectQuestion(input: {
     augmentExplainReport(input.explainReport, positiveEvidence, questionUnderstanding),
     agenticKernelResult
   );
-  const explainResult = await explainProjectWithLlm({
-    provider: input.provider,
-    userPrompt: understandingPrompt,
-    report: augmentedReport,
-    providerAnswerMode: "natural_text"
-  });
-
-  let answerMarkdown = explainResult.answerMarkdown;
-  let evidenceRefs = uniqueStrings([
-    ...explainResult.usedEvidenceRefs,
-    ...positiveEvidence.slice(0, 20).map((item) => item.ref)
-  ]);
-  const validationErrors = [
-    ...explainResult.unsupportedOrUnclearParts
-  ];
-  let fallbackUsed = false;
-  let fallbackReason: string | undefined;
-  let agenticUsedForFinalAnswer = false;
-  let answerShapeValidation = validateAnswer({
-    question: understandingPrompt,
-    answerMarkdown,
-    intent,
-    questionUnderstanding,
-    topic,
-    positiveEvidence,
-    structuredFacts,
-    implementationEvidence,
-    conceptFlow,
-    conceptResolution
-  });
-  let coverageValidation = validateConceptCoverage({
-    answerMarkdown,
-    targetConcept: questionUnderstanding.targetConcept,
-    requestedFacets: questionUnderstanding.requestedFacets,
-    implementationEvidence,
-    conceptFlow
-  });
-  let languageValidation = validateAnswerLanguage({
-    answerMarkdown,
-    expected: intent.language
-  });
-  let targetEvidenceValidation = validateTargetEvidence({
-    answerMarkdown,
-    questionUnderstanding,
-    conceptResolution,
-    conceptFlow
-  });
-  let mechanismCoverageValidation = validateMechanismCoverage({
-    targetConcept: questionUnderstanding.targetConcept,
-    mechanismChain,
-    graph: projectIntelligenceGraph,
-    answerMarkdown
-  });
-  let readLaneAnswerValidation = validateAnswerAgainstReadLaneEvidence({
-    answerMarkdown,
-    targetConcept: questionUnderstanding.targetConcept,
-    readLaneRun
-  });
-  validationErrors.push(...coverageValidation.errors);
-  validationErrors.push(...roleClassificationValidation.errors, ...languageValidation.errors, ...dedupeValidation.errors, ...outputCleanupValidation.errors);
-  validationErrors.push(...answerShapeValidation.errors, ...targetEvidenceValidation.errors, ...mechanismCoverageValidation.errors, ...readLaneAnswerValidation.errors);
-  validationErrors.push(...detectStaleCannedOuterloopAnswer(answerMarkdown, questionUnderstanding));
-
-  if (validationErrors.length) {
-    throw new Error(`provider_answer_failed_local_validation_after_repair: ${uniqueStrings(validationErrors).slice(0, 8).join("; ")}`);
+  const fallbackGrounding = analyzeProjectQuestionGrounding(
+    understandingPrompt,
+    augmentedReport,
+    createGroundingEvidenceItemsFromReport(augmentedReport)
+  );
+  let explainResult: Awaited<ReturnType<typeof explainProjectWithLlm>> | undefined;
+  let answerStrategy: ProjectAnswerStrategy | undefined;
+  try {
+    explainResult = await explainProjectWithLlm({
+      provider: input.provider,
+      userPrompt: understandingPrompt,
+      report: augmentedReport,
+      providerAnswerMode: "natural_text"
+    });
+  } catch (error) {
+    answerStrategy = createProviderNoticeAnswerStrategy(error, isProviderValidationFailure(error) ? "provider_validation" : "provider_failure");
   }
 
-  const finalCitationGuard = guardFinalAnswerCitations({
-    answerMarkdown,
-    evidenceRefs,
-    prompt: understandingPrompt,
-    language: intent.language,
-    fileExists: input.tools.workspace.fileExists.bind(input.tools.workspace)
-  });
+  let answerMarkdown = answerStrategy
+    ? createProviderFailureNoticeMarkdown({
+        language: intent.language,
+        strategy: answerStrategy.strategy,
+        reason: answerStrategy.reason
+      })
+    : explainResult?.answerMarkdown ?? "";
+  let evidenceRefs = answerStrategy
+    ? uniqueStrings(positiveEvidence.slice(0, 20).map((item) => item.ref))
+    : uniqueStrings([
+        ...(explainResult?.usedEvidenceRefs ?? []),
+        ...positiveEvidence.slice(0, 20).map((item) => item.ref)
+      ]);
+  const validationErrors = answerStrategy?.reason ? [answerStrategy.reason] : [
+    ...(explainResult?.unsupportedOrUnclearParts ?? [])
+  ];
+  let fallbackUsed = Boolean(answerStrategy);
+  let fallbackReason: string | undefined = answerStrategy?.reason;
+  let agenticUsedForFinalAnswer = false;
+  let answerShapeValidation = answerStrategy
+    ? createNoticeAnswerShapeValidation(answerMarkdown)
+    : validateAnswer({
+        question: understandingPrompt,
+        answerMarkdown,
+        intent,
+        questionUnderstanding,
+        topic,
+        positiveEvidence,
+        structuredFacts,
+        implementationEvidence,
+        conceptFlow,
+        conceptResolution
+      });
+  let coverageValidation = answerStrategy
+    ? createNoticeCoverageValidation()
+    : validateConceptCoverage({
+        answerMarkdown,
+        targetConcept: questionUnderstanding.targetConcept,
+        requestedFacets: questionUnderstanding.requestedFacets,
+        implementationEvidence,
+        conceptFlow
+      });
+  let languageValidation = answerStrategy
+    ? createNoticeLanguageValidation(intent.language)
+    : validateAnswerLanguage({
+        answerMarkdown,
+        expected: intent.language
+      });
+  let targetEvidenceValidation = answerStrategy
+    ? createNoticeTargetEvidenceValidation()
+    : validateTargetEvidence({
+        answerMarkdown,
+        questionUnderstanding,
+        conceptResolution,
+        conceptFlow
+      });
+  let mechanismCoverageValidation = answerStrategy
+    ? createNoticeMechanismCoverageValidation(mechanismChain.missingLinks)
+    : validateMechanismCoverage({
+        targetConcept: questionUnderstanding.targetConcept,
+        mechanismChain,
+        graph: projectIntelligenceGraph,
+        answerMarkdown
+      });
+  let readLaneAnswerValidation = answerStrategy
+    ? createNoticeReadLaneAnswerValidation()
+    : validateAnswerAgainstReadLaneEvidence({
+        answerMarkdown,
+        targetConcept: questionUnderstanding.targetConcept,
+        readLaneRun
+      });
+  if (!answerStrategy) {
+    validationErrors.push(...coverageValidation.errors);
+    validationErrors.push(...roleClassificationValidation.errors, ...languageValidation.errors, ...dedupeValidation.errors, ...outputCleanupValidation.errors);
+    validationErrors.push(...answerShapeValidation.errors, ...targetEvidenceValidation.errors, ...mechanismCoverageValidation.errors, ...readLaneAnswerValidation.errors);
+    validationErrors.push(...detectStaleCannedOuterloopAnswer(answerMarkdown, questionUnderstanding));
+
+    if (validationErrors.length) {
+      const validationFailure = new Error(`provider_answer_failed_local_validation_after_repair: ${uniqueStrings(validationErrors).slice(0, 8).join("; ")}`);
+      answerStrategy = createProviderNoticeAnswerStrategy(validationFailure, "provider_validation");
+      answerMarkdown = createProviderFailureNoticeMarkdown({
+        language: intent.language,
+        strategy: answerStrategy.strategy,
+        reason: answerStrategy.reason
+      });
+      fallbackUsed = true;
+      fallbackReason = answerStrategy.reason;
+      answerShapeValidation = createNoticeAnswerShapeValidation(answerMarkdown);
+      coverageValidation = createNoticeCoverageValidation();
+      languageValidation = createNoticeLanguageValidation(intent.language);
+      targetEvidenceValidation = createNoticeTargetEvidenceValidation();
+      mechanismCoverageValidation = createNoticeMechanismCoverageValidation(mechanismChain.missingLinks);
+      readLaneAnswerValidation = createNoticeReadLaneAnswerValidation();
+    }
+  }
+
+  const finalCitationGuard = answerStrategy
+    ? { answerMarkdown, evidenceRefs, warnings: [] as string[] }
+    : guardFinalAnswerCitations({
+        answerMarkdown,
+        evidenceRefs,
+        prompt: understandingPrompt,
+        language: intent.language,
+        fileExists: input.tools.workspace.fileExists.bind(input.tools.workspace)
+      });
   answerMarkdown = finalCitationGuard.answerMarkdown;
   evidenceRefs = finalCitationGuard.evidenceRefs;
-  if (projectUnderstanding?.mode === "on") {
+  if (!answerStrategy && projectUnderstanding?.mode === "on") {
     answerMarkdown = projectUnderstanding.finalAnswerMarkdown;
     evidenceRefs = projectUnderstanding.evidenceRefs;
     fallbackUsed = projectUnderstanding.decision !== "ANSWER";
@@ -723,11 +779,11 @@ export async function answerUniversalProjectQuestion(input: {
     evidenceRefs,
     usedEvidenceRefs: evidenceRefs,
     unsupportedOrUnclearParts: uniqueStrings(validationErrors),
-    revisionCount: explainResult.revisionCount,
-    validationWarnings: uniqueStrings([...explainResult.validationWarnings, ...conceptResolution.userVisibleNegativeEvidence, ...finalCitationGuard.warnings]),
-    grounding: explainResult.grounding,
+    revisionCount: explainResult?.revisionCount ?? 0,
+    validationWarnings: uniqueStrings([...(explainResult?.validationWarnings ?? []), ...conceptResolution.userVisibleNegativeEvidence, ...finalCitationGuard.warnings]),
+    grounding: explainResult?.grounding ?? fallbackGrounding,
     augmentedReport,
-    answerStrategy: createProjectAnswerStrategy(explainResult)
+    answerStrategy: answerStrategy ?? createProjectAnswerStrategy(explainResult!)
   };
 }
 
@@ -738,6 +794,136 @@ function createProjectAnswerStrategy(explainResult: Awaited<ReturnType<typeof ex
     providerDraftStatus: explainResult.revisionCount > 0 ? "accepted_revision" : "accepted_first",
     fallbackUsed: false
   };
+}
+
+function createProviderNoticeAnswerStrategy(error: unknown, kind: "provider_failure" | "provider_validation"): ProjectAnswerStrategy {
+  const reason = formatProviderNoticeError(error);
+  return {
+    strategy: kind === "provider_validation" ? "provider_validation_notice" : "provider_failed_notice",
+    finalAnswerSource: "local_notice",
+    providerDraftStatus: kind === "provider_validation" ? "failed_local_validation" : "failed",
+    fallbackUsed: true,
+    reason
+  };
+}
+
+function createProviderFailureNoticeMarkdown(input: {
+  language: WorkspaceIntentUnderstanding["language"];
+  strategy: ProjectAnswerStrategyName;
+  reason?: string;
+}) {
+  const validation = input.strategy === "provider_validation_notice";
+  const heading = validation
+    ? "The provider answer failed validation before it could be trusted."
+    : "The configured provider failed before it could produce a trusted answer.";
+  void input.language;
+  return [
+    heading,
+    "",
+    `Reason: ${input.reason ?? "provider failure"}`,
+    "",
+    "I will not synthesize a local answer from repository heuristics. Local synthesis was not used.",
+    "The evidence artifacts still record what was inspected so the provider issue can be fixed and the request retried."
+  ].join("\n");
+}
+
+function formatProviderNoticeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 700 ? `${message.slice(0, 700)}...` : message;
+}
+
+function isProviderValidationFailure(error: unknown) {
+  return /provider_answer_failed_local_validation|local_validation|failed validation/i.test(formatProviderNoticeError(error));
+}
+
+function createNoticeAnswerShapeValidation(answerMarkdown: string): AnswerShapeValidation {
+  return {
+    valid: true,
+    errors: [],
+    tooShallow: false,
+    charCount: answerMarkdown.trim().length,
+    sectionCount: countAnswerSections(answerMarkdown),
+    citationCount: (answerMarkdown.match(/hivo-file:/gi) ?? []).length,
+    codeFenceCount: (answerMarkdown.match(/```/g) ?? []).length / 2,
+    minCharCount: 0,
+    minSectionCount: 0
+  };
+}
+
+function createNoticeCoverageValidation(): CoverageValidation {
+  return { valid: true, coveredFacets: [], missingFacets: [], errors: [] };
+}
+
+function createNoticeLanguageValidation(expected: WorkspaceIntentUnderstanding["language"]): LanguageValidation {
+  return { valid: true, expected, errors: [] };
+}
+
+function createNoticeTargetEvidenceValidation(): TargetEvidenceValidation {
+  return { valid: true, errors: [] };
+}
+
+function createNoticeMechanismCoverageValidation(missingLinks: string[]): MechanismCoverageValidation {
+  return { valid: true, errors: [], warnings: [], missingLinks };
+}
+
+function createNoticeReadLaneAnswerValidation() {
+  return { valid: true, errors: [], warnings: [] };
+}
+
+function createGroundingEvidenceItemsFromReport(report: ProjectExplainReport): GroundingEvidenceItem[] {
+  const byRef = new Map<string, GroundingEvidenceItem>();
+  const add = (input: {
+    path: string;
+    line?: number;
+    title?: string;
+    reason?: string;
+    snippet?: string;
+  }) => {
+    const line = input.line ?? 1;
+    const ref = `${input.path}:${line}`;
+    if (byRef.has(ref)) return;
+    byRef.set(ref, {
+      ref,
+      markdownLink: link(input.path, line),
+      path: input.path,
+      line,
+      title: input.title ?? input.path,
+      reason: input.reason ?? "Workspace evidence candidate.",
+      snippet: input.snippet
+    });
+  };
+  for (const evidence of report.evidence) {
+    if (evidence.type === "directory") continue;
+    add({
+      path: evidence.path,
+      line: evidence.lineStart,
+      title: evidence.symbol ?? evidence.type,
+      reason: evidence.reason,
+      snippet: evidence.snippet ?? evidence.excerpt
+    });
+  }
+  for (const section of report.sections) {
+    add({
+      path: section.filePath,
+      line: section.lineStart,
+      title: section.title,
+      reason: section.whyItMatters || section.explanation,
+      snippet: section.snippet
+    });
+  }
+  for (const module of report.moduleMap) {
+    for (const evidence of module.evidence) {
+      if (evidence.type === "directory") continue;
+      add({
+        path: evidence.path,
+        line: evidence.lineStart,
+        title: evidence.symbol ?? evidence.type,
+        reason: evidence.reason,
+        snippet: evidence.snippet ?? evidence.excerpt
+      });
+    }
+  }
+  return [...byRef.values()].slice(0, SEARCH_LIMITS.maxEvidenceItems);
 }
 
 function createAgenticDebug(result: AgenticTaskResult, usedForFinalAnswer: boolean): AgenticProjectExplainDebug {

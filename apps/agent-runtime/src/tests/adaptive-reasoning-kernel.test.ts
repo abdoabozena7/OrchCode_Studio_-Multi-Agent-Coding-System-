@@ -604,7 +604,7 @@ test("repair stage budget exhaustion preserves the original provider failure", a
   Date.now = () => now;
   try {
     const provider = new RepairBudgetMasksProviderFailureProvider(() => {
-      now += 86_000;
+      now += 596_000;
     });
     await assert.rejects(
       runAdaptiveReasoningTurn({

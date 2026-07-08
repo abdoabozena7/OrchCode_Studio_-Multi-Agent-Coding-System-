@@ -953,7 +953,16 @@ async function generateWithProviderRepair<T>(input: {
   let firstProviderError: unknown;
   const maxRepairAttempts = input.maxOperationalRepairAttempts ?? input.state.budget.maxRepairAttempts;
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
-    assertReasoningBudget(input.state);
+    try {
+      assertReasoningBudget(input.state);
+    } catch (error) {
+      lastProviderError = error;
+      if (!firstProviderError && !isRepairStageBudgetExhaustion(error)) {
+        firstProviderError = error;
+      }
+      recordRepairError(input.state, "provider_failure", request.reasoningStage ?? stageForPurpose(request.purpose), formatError(error));
+      break;
+    }
     input.state.providerCalls += 1;
     let generated: T;
     try {
@@ -1263,7 +1272,7 @@ function createTrace(
   evidenceRefs: ReasoningEvidenceRef[],
   terminalFailure?: string
 ): ReasoningTurnTrace {
-  // Build purpose-built compact trace with tool queries, candidate paths, evidence refs, verdicts, and failures
+  // Keep final traces complete. Prompt context has its own compaction path below.
   const compactSteps = state.steps.map((s) => ({
     id: s.id,
     kind: s.kind,
@@ -1274,36 +1283,24 @@ function createTrace(
     resultDecision: s.result?.decision,
     resultEvidenceCount: s.result?.evidenceRefs?.length ?? 0
   }));
-  const compactToolResults = state.toolResults.map((r) => ({
-    requestId: r.requestId,
-    kind: r.kind,
-    status: r.status,
-    summary: r.summary.slice(0, 300),
-    candidateCount: Array.isArray((r.data as Record<string, unknown> | undefined)?.candidatePaths) ? (r.data as { candidatePaths: unknown[] }).candidatePaths.length : undefined,
-    evidenceCount: r.evidenceRefs.length,
-    error: r.error,
-    coverageStatus: r.data && typeof r.data === "object" ? (r.data as Record<string, unknown>).coverageStatus as string : undefined
-  }));
-  const compactVerificationResults = state.verificationResults.map((v) => ({
-    verdict: v.verdict,
-    rationale: v.rationale.slice(0, 300),
-    supportedCount: v.supportedClaims.length,
-    unsupportedCount: v.unsupportedClaims.length,
-    missingFactCount: v.missingFacts.length,
-    verifierModelId: v.verifierModelId
-  }));
   return {
     id: state.id,
     understanding,
     steps: compactSteps as unknown as ReasoningStep[],
-    toolResults: compactToolResults as unknown as ReasoningToolResult[],
+    toolResults: state.toolResults.map((result) => ({ ...result, evidenceRefs: [...result.evidenceRefs] })),
     evidenceRefs,
     budget: state.budget,
     providerCalls: state.providerCalls,
     reasoningAttempts: state.reasoningAttempts,
     repairAttempts: state.repairAttempts,
     toolRounds: state.toolRounds,
-    verificationResults: compactVerificationResults as unknown as ReasoningVerificationResult[],
+    verificationResults: state.verificationResults.map((result) => ({
+      ...result,
+      supportedClaims: [...result.supportedClaims],
+      unsupportedClaims: [...result.unsupportedClaims],
+      missingFacts: [...result.missingFacts],
+      evidenceRefs: [...result.evidenceRefs]
+    })),
     contextOmissions: state.contextOmissions,
     stageBudgets: reasoningStageBudgets(),
     progress: state.progress,

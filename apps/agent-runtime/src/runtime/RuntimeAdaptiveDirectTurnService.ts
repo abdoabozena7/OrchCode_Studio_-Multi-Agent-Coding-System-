@@ -153,7 +153,7 @@ function shouldUseDirectProviderTurn(
   decisionPipeline: DirectDecisionPipeline,
   modelCertification: ProviderTruthTelemetry["modelCertification"]
 ) {
-  return ["direct_conversation", "workspace_question"].includes(conversationUnderstanding.intentDecision.kind)
+  return conversationUnderstanding.intentDecision.kind === "direct_conversation"
     || modelCertification.certifiedGates?.includes("action_reasoning")
     || ["ask_user", "cannot_answer", "refuse"].includes(decisionPipeline.state.reasoningDirective?.action ?? "");
 }

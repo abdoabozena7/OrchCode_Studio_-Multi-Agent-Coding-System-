@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -20,7 +20,14 @@ import type {
   GoalCheckResult,
   AtomicTaskAssessment,
   SteeringMessage,
-  RecursiveNodeOutput
+  RecursiveNodeOutput,
+  ExpandedGoalSpec,
+  RecursiveRunBudget,
+  RunActivityProjection,
+  RecursiveRunCheckpoint,
+  DurableActivityRow,
+  SplitResult,
+  SplitSubTask
 } from "./RecursiveSwarmModels.js";
 import {
   RECURSIVE_SWARM_SCHEMA_VERSION,
@@ -82,6 +89,8 @@ export class RecursiveSwarmOrchestrator {
   private goalCheckHistory: GoalCheckResult[] = [];
   private durableEvents: DurableSwarmEvent[] = [];
   private sessionId: string = "";
+  private expandedGoalSpec?: ExpandedGoalSpec;
+  private budget?: RecursiveRunBudget;
   private contextSourceCounts: Record<RecursiveContextSource, number> = {
     memory_evidence: 0,
     partial_context: 0,
@@ -114,8 +123,13 @@ export class RecursiveSwarmOrchestrator {
   async createRootAndGoalKeeper(goal: string, sessionId: string): Promise<{ root: RecursiveSwarmNode; goalKeeperNode: RecursiveSwarmNode }> {
     this.sessionId = sessionId;
     const runId = `recursive_swarm_${randomUUID()}`;
+    const expandedGoalSpec = await this.expandGoalSpec(goal);
+    const budget = this.planRunBudget(expandedGoalSpec);
+    this.expandedGoalSpec = expandedGoalSpec;
+    this.budget = budget;
     const goalEnvelope = createGoalEnvelope({
       originalGoal: goal,
+      expandedGoalSpec,
       workspaceIdentity: this.workspacePath,
       localTask: goal
     });
@@ -153,13 +167,27 @@ export class RecursiveSwarmOrchestrator {
       runId,
       sessionId,
       goalEnvelope,
+      expandedGoalSpec,
+      budget,
       tree: this.tree,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       durableEvents: [],
+      activityProjection: undefined,
+      checkpoint: undefined,
       contextSourceCounts: { memory_evidence: 0, partial_context: 0, prompt_only_fallback: 0 }
     };
     this.emitDurableEvent("run_created", undefined, { goal, rootId: rootNode.id });
+    this.emitDurableEvent("intent_expanded", rootNode.id, {
+      originalPromptHash: expandedGoalSpec.originalPromptHash,
+      isAlreadyDetailed: expandedGoalSpec.isAlreadyDetailed,
+      requirementCount: expandedGoalSpec.requirements.length,
+      deliverableContract: expandedGoalSpec.deliverableContract,
+      generatedBy: expandedGoalSpec.generatedBy,
+      warnings: expandedGoalSpec.warnings
+    });
+    this.emitDurableEvent("budget_planned", rootNode.id, budget);
+    this.writeCheckpoint("intent_expanded");
     this.emitNodeCreated(rootNode);
     this.emitNodeCreated(goalKeeperNode);
     this.emitTreeUpdated();
@@ -193,12 +221,18 @@ export class RecursiveSwarmOrchestrator {
     const rawOutput = structuredText ?? rootNode.collectResult?.mergedOutput
       ?? rootNode.outputSummary
       ?? "No output produced.";
+    const generatedArtifactLines = collectGeneratedArtifactSummaries(this.tree.nodes);
+    const artifactSuffix = generatedArtifactLines.length > 0
+      ? `\n\nGenerated artifact(s):\n${generatedArtifactLines.map((line) => `- ${line}`).join("\n")}`
+      : "";
     const blockerSuffix = blockers.length > 0 ? `\n\n[Blockers: ${blockers.join("; ")}]` : "";
-    const finalOutput = `${rawOutput}${blockerSuffix}\n\n[Context-source summary: ${sourceSummary}]`;
+    const finalOutput = `${rawOutput}${artifactSuffix}${blockerSuffix}\n\n[Context-source summary: ${sourceSummary}]`;
     this.runState.contextSourceCounts = { ...this.contextSourceCounts };
     this.tree.status = this.hasAnyFailed() ? "failed" : "succeeded";
     this.tree.updatedAt = new Date().toISOString();
     this.emitDurableEvent("run_completed", undefined, { status: this.tree.status });
+    this.writeCheckpoint("run_completed", false);
+    this.runState.activityProjection = this.getActivityProjection();
     this.emitTreeUpdated();
     return {
       tree: this.tree,
@@ -235,6 +269,7 @@ export class RecursiveSwarmOrchestrator {
         prompt: recursiveNode.taskPrompt,
         taskPrompt: recursiveNode.taskPrompt,
         originalGoal: recursiveNode.goalEnvelope.originalGoal,
+        expandedGoal: recursiveNode.goalEnvelope.expandedGoal,
         depth: recursiveNode.depth,
         complexity: recursiveNode.complexity?.score,
         complexityRationale: recursiveNode.complexity?.rationale,
@@ -275,10 +310,24 @@ export class RecursiveSwarmOrchestrator {
         failed: nodeList.filter((n) => n.status === "failed").length
       },
       staffingPlan: {
-        summary: `Recursive tree: ${this.tree.totalNodes} nodes across ${this.tree.maxDepth + 1} depth levels with ${this.totalSplits} splits and ${this.totalExecutions} executions`,
+        summary: this.budget
+          ? `Recursive tree: ${this.tree.totalNodes} nodes across ${this.tree.maxDepth + 1} depth levels with ${this.totalSplits} splits and ${this.totalExecutions} executions. Soft budget ${this.budget.softMaxAgents}/${this.budget.hardMaxAgents}; ${this.budget.reason}`
+          : `Recursive tree: ${this.tree.totalNodes} nodes across ${this.tree.maxDepth + 1} depth levels with ${this.totalSplits} splits and ${this.totalExecutions} executions`,
+        recommendedTotalLogicalAgents: this.budget?.softMaxAgents,
+        maxParallelAgents: this.budget?.maxWriteExecutors ?? this.runOptions.maxWriteExecutors,
+        writeAgentLimit: this.budget?.maxWriteExecutors ?? this.runOptions.maxWriteExecutors,
+        validationLevel: this.budget?.taskClass === "audit" || this.budget?.taskClass === "campaign" ? "broad" : "focused",
+        riskLevel: this.budget?.taskClass === "campaign" || this.budget?.taskClass === "audit" ? "high" : "medium",
         roleCounts: rollup as Record<string, number>,
         specialists: []
       },
+      activityProjection: this.getActivityProjection(),
+      metrics: this.budget ? {
+        softMaxAgents: this.budget.softMaxAgents,
+        hardMaxAgents: this.budget.hardMaxAgents,
+        maxChildrenPerParent: this.budget.maxChildrenPerParent,
+        budgetTaskClass: this.budget.taskClass
+      } : undefined,
       nodes,
       messages: []
     };
@@ -300,20 +349,197 @@ export class RecursiveSwarmOrchestrator {
     return msg;
   }
 
+  getActivityProjection(): RunActivityProjection {
+    return buildActivityProjection(this.tree, this.durableEvents);
+  }
+
+  private async expandGoalSpec(goal: string): Promise<ExpandedGoalSpec> {
+    const hash = hashPrompt(goal);
+    if (!this.provider) {
+      return unavailableGoalSpec(goal, hash, "Goal expansion requires a configured provider.");
+    }
+    try {
+      const response = await invokeReasoningProviderStructured<Record<string, unknown>>(
+        this.provider,
+        {
+          purpose: "reason",
+          reasoningStage: "reason",
+          responseFormat: "json",
+          systemPrompt: `You are the Recursive Swarm Intent Expansion Gate.
+Preserve the user's original prompt verbatim. If the prompt is short, expand it into a detailed implementation specification. If it is already detailed, do not summarize it destructively; extract requirements while keeping the expandedGoal close to the original.
+Return structured JSON only. Never replace an artifact request with a small plan.`,
+          userPrompt: `Original prompt:\n${goal}\n\nReturn a goal spec for recursive agents.`,
+          maxOutputTokens: 4096
+        },
+        {
+          name: "expanded_goal_spec",
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "isAlreadyDetailed",
+            "expandedGoal",
+            "requirements",
+            "acceptanceCriteria",
+            "deliverableContract",
+            "constraints",
+            "nonGoals",
+            "qualityBar"
+          ],
+          properties: {
+            isAlreadyDetailed: { type: "boolean" },
+            expandedGoal: { type: "string" },
+            requirements: { type: "array", items: { type: "string" } },
+            acceptanceCriteria: { type: "array", items: { type: "string" } },
+            deliverableContract: { type: "string" },
+            constraints: { type: "array", items: { type: "string" } },
+            nonGoals: { type: "array", items: { type: "string" } },
+            qualityBar: { type: "array", items: { type: "string" } }
+          }
+        }
+      );
+      return normalizeExpandedGoalSpec(goal, hash, response, "provider");
+    } catch (error) {
+      return unavailableGoalSpec(
+        goal,
+        hash,
+        `Provider-backed goal expansion failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private planRunBudget(spec: ExpandedGoalSpec): RecursiveRunBudget {
+    const text = `${spec.originalPrompt}\n${spec.expandedGoal}\n${spec.deliverableContract}`.toLowerCase();
+    const explicitHuge = /\b(whole[-\s]?repo|entire repository|exhaustive|campaign|all files|large audit|security audit)\b/.test(text);
+    const isAudit = /\b(audit|review all|security|performance audit)\b/.test(text);
+    const isCreativeArtifact = /\b(3d|three\.js|game|single[-\s]?file|self[-\s]?contained|html|canvas|playable|polished)\b/.test(text);
+    const isSmall = text.length < 700 && !isCreativeArtifact && !isAudit;
+    const taskClass: RecursiveRunBudget["taskClass"] = explicitHuge
+      ? "campaign"
+      : isAudit
+        ? "audit"
+        : isCreativeArtifact
+          ? "large"
+          : isSmall
+            ? "small"
+            : "medium";
+    const defaults: Record<RecursiveRunBudget["taskClass"], Pick<RecursiveRunBudget, "softMaxAgents" | "maxDepth" | "maxChildrenPerParent">> = {
+      small: { softMaxAgents: 8, maxDepth: 3, maxChildrenPerParent: 4 },
+      medium: { softMaxAgents: 24, maxDepth: 5, maxChildrenPerParent: 6 },
+      large: { softMaxAgents: 48, maxDepth: 6, maxChildrenPerParent: 8 },
+      audit: { softMaxAgents: 120, maxDepth: 7, maxChildrenPerParent: 10 },
+      campaign: { softMaxAgents: 220, maxDepth: 10, maxChildrenPerParent: 12 }
+    };
+    const chosen = defaults[taskClass];
+    const hardMaxAgents = Math.max(1, this.runOptions.maxAgents);
+    const softMaxAgents = Math.min(this.runOptions.softMaxAgents ?? chosen.softMaxAgents, hardMaxAgents);
+    const maxDepth = Math.min(this.runOptions.maxDepth, this.runOptions.taskClass ? this.runOptions.maxDepth : chosen.maxDepth);
+    const maxChildrenPerParent = Math.max(1, Math.min(
+      this.runOptions.maxChildrenPerParent ?? chosen.maxChildrenPerParent,
+      hardMaxAgents
+    ));
+    return {
+      hardMaxAgents,
+      softMaxAgents,
+      maxDepth,
+      maxChildrenPerParent,
+      maxWriteExecutors: this.runOptions.maxWriteExecutors,
+      taskClass: this.runOptions.taskClass ?? taskClass,
+      reason: `Task classified as ${this.runOptions.taskClass ?? taskClass}; soft budget prevents unbounded recursive splitting while preserving hard capacity.`
+    };
+  }
+
+  private getBudget(): RecursiveRunBudget {
+    if (this.budget) return this.budget;
+    const goal = this.tree?.rootGoal ?? "";
+    this.budget = this.planRunBudget(this.expandedGoalSpec ?? unavailableGoalSpec(goal, hashPrompt(goal), "Goal expansion has not run yet."));
+    return this.budget;
+  }
+
+  private applySplitBudget(node: RecursiveSwarmNode, splitResult: SplitResult): SplitResult {
+    const budget = this.getBudget();
+    const usefulSubTasks = splitResult.subTasks.filter(isUsefulSplitSubTask);
+    const requestedChildren = splitResult.subTasks.length;
+    const remainingHardBudget = Math.max(0, budget.hardMaxAgents - this.tree.totalNodes - 1);
+    const remainingSoftBudget = Math.max(0, budget.softMaxAgents - this.tree.totalNodes - 1);
+    const acceptedChildren = Math.min(
+      usefulSubTasks.length,
+      budget.maxChildrenPerParent,
+      remainingHardBudget,
+      remainingSoftBudget
+    );
+    const accepted = usefulSubTasks.slice(0, acceptedChildren);
+    const reasonParts: string[] = [];
+    if (usefulSubTasks.length !== requestedChildren) reasonParts.push(`${requestedChildren - usefulSubTasks.length} low-value child task(s) removed`);
+    if (accepted.length < usefulSubTasks.length) reasonParts.push(`clamped from ${usefulSubTasks.length} to ${accepted.length} by recursive run budget`);
+    if (!reasonParts.length) reasonParts.push("accepted provider split within recursive run budget");
+    if (accepted.length !== requestedChildren) {
+      this.emitDurableEvent("budget_gate", node.id, {
+        action: "clamp_split_children",
+        requestedChildren,
+        acceptedChildren: accepted.length,
+        maxChildrenPerParent: budget.maxChildrenPerParent,
+        remainingSoftBudget,
+        remainingHardBudget,
+        reason: reasonParts.join("; ")
+      });
+    }
+    return {
+      ...splitResult,
+      subTasks: accepted,
+      desiredChildCount: splitResult.desiredChildCount ?? requestedChildren,
+      splitReason: splitResult.splitReason ?? splitResult.rationale,
+      budgetDecision: {
+        requestedChildren,
+        acceptedChildren: accepted.length,
+        remainingSoftBudget,
+        remainingHardBudget,
+        reason: reasonParts.join("; ")
+      }
+    };
+  }
+
+  private writeCheckpoint(lastStablePhase: string, resumable = true): void {
+    if (!this.runState || !this.tree) return;
+    const checkpoint = buildRecursiveRunCheckpoint({
+      sessionId: this.sessionId,
+      tree: this.tree,
+      expandedGoalSpec: this.expandedGoalSpec,
+      budget: this.budget,
+      activityProjection: this.getActivityProjection(),
+      lastStablePhase,
+      resumable
+    });
+    this.runState.checkpoint = checkpoint;
+    this.runState.activityProjection = this.getActivityProjection();
+    this.runState.updatedAt = new Date().toISOString();
+    this.emitDurableEvent("checkpoint_written", undefined, {
+      lastStablePhase,
+      resumable,
+      pendingNodes: checkpoint.pendingQueue.length,
+      completedNodes: checkpoint.completedNodeIds.length,
+      failedNodes: checkpoint.failedNodeIds.length
+    });
+  }
+
   private async processNode(node: RecursiveSwarmNode): Promise<void> {
     await this.processSteeringQueue(node);
     await this.checkGoalAt(node, "pre_split");
     if (node.status === "blocked" || node.status === "failed" || node.status === "escalated") return;
 
-    if (node.depth >= this.runOptions.maxDepth) {
-      node.status = "blocked";
-      node.errorSummary = `Max depth (${this.runOptions.maxDepth}) reached; task too complex.`;
-      this.emitNodeStatusChanged(node);
+    const budget = this.getBudget();
+    if (node.depth >= budget.maxDepth) {
+      this.emitDurableEvent("budget_gate", node.id, {
+        action: "execute_at_depth_limit",
+        depth: node.depth,
+        maxDepth: budget.maxDepth,
+        reason: "Depth budget reached; executing the current node instead of recursively splitting again."
+      });
+      await this.enqueueNodeExecution(node);
       return;
     }
-    if (this.tree.totalNodes >= this.runOptions.maxAgents) {
+    if (this.tree.totalNodes >= budget.hardMaxAgents) {
       node.status = "escalated";
-      node.errorSummary = `Max agents (${this.runOptions.maxAgents}) reached; cannot split further.`;
+      node.errorSummary = `Hard agent capacity (${budget.hardMaxAgents}) reached; cannot split further.`;
       this.emitNodeStatusChanged(node);
       return;
     }
@@ -336,6 +562,17 @@ export class RecursiveSwarmOrchestrator {
       node.status = "blocked";
       node.errorSummary = assessment.rationale;
       this.emitNodeStatusChanged(node);
+      return;
+    }
+
+    if (assessment.recommendation === "split" && this.tree.totalNodes >= budget.softMaxAgents) {
+      this.emitDurableEvent("budget_gate", node.id, {
+        action: "execute_at_soft_budget",
+        totalNodes: this.tree.totalNodes,
+        softMaxAgents: budget.softMaxAgents,
+        reason: "Soft agent budget reached; executing this node directly."
+      });
+      await this.enqueueNodeExecution(node);
       return;
     }
 
@@ -448,6 +685,7 @@ A task is atomic ONLY when ALL of these conditions are met:
 3. LIMITED SCOPE: The task touches at most one file/component/module
 4. RESOLVED DEPS: All dependencies are satisfied or none needed
 5. VERIFIABLE DOD: Definition of Done is concrete and testable
+6. CONCRETE ARTIFACT: The node can produce one concrete artifact, patch intent, validation report, review decision, evidence report, or merge decision in one pass
 
 Score 1-10. Score >= 5 or any condition failure means NOT atomic.
 If score >= 8 AND depth >= 5, recommend "escalate".
@@ -456,7 +694,11 @@ If score >= 5 but not salvageable, recommend "block".${contextBlock ? `\n\n${con
 
 TASK: ${node.taskPrompt}
 ORIGINAL GOAL: ${node.goalEnvelope.originalGoal}
+EXPANDED GOAL: ${node.goalEnvelope.expandedGoal ?? node.goalEnvelope.originalGoal}
+DELIVERABLE CONTRACT: ${node.goalEnvelope.expandedGoalSpec?.deliverableContract ?? "Not specified"}
 DEPTH: ${node.depth}
+SOFT AGENT BUDGET: ${this.getBudget().softMaxAgents}
+MAX CHILDREN PER PARENT: ${this.getBudget().maxChildrenPerParent}
 
 Return { isAtomic, score, rationale, failures } where failures lists which atomicity conditions failed.`,
           maxOutputTokens: 512
@@ -500,12 +742,16 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     } catch (error) {
       node.status = "blocked";
       node.errorSummary = error instanceof Error ? error.message : String(error);
-      this.emitDurableEvent("error", node.id, { stage: "task_split", reason: node.errorSummary });
+      this.emitDurableEvent(isProviderRateLimitError(node.errorSummary) ? "provider_backoff" : "error", node.id, { stage: "task_split", reason: node.errorSummary });
       this.emitNodeStatusChanged(node);
+      this.writeCheckpoint(`split_failed:${node.id}`);
       this.emitTreeUpdated();
       return;
     }
+    splitResult = this.applySplitBudget(node, splitResult);
     node.splitResult = splitResult;
+    node.splitJustification = splitResult.budgetDecision;
+    this.writeCheckpoint(`post_split:${node.id}`);
 
     // Bug 3 fix: detect self-similar split that would cause infinite recursion
     if (splitResult.subTasks.length === 0) {
@@ -513,13 +759,18 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
       await this.executeWithVerification(node);
       return;
     }
-    if (splitResult.subTasks.length === 1 && splitResult.subTasks[0].taskPrompt.trim() === node.taskPrompt.trim()) {
+    if (splitResult.subTasks.length === 1 && isSelfSimilarSplit(node.taskPrompt, splitResult.subTasks[0].taskPrompt)) {
       this.emitDurableEvent("task_split", node.id, { subTaskCount: 1, note: "self-similar split detected, executing directly" });
       await this.executeWithVerification(node);
       return;
     }
 
-    this.emitDurableEvent("task_split", node.id, { subTaskCount: splitResult.subTasks.length });
+    this.emitDurableEvent("task_split", node.id, {
+      subTaskCount: splitResult.subTasks.length,
+      desiredChildCount: splitResult.desiredChildCount ?? splitResult.subTasks.length,
+      splitReason: splitResult.splitReason ?? splitResult.rationale,
+      budgetDecision: splitResult.budgetDecision
+    });
     this.emitNodeStatusChanged(node);
 
     const childNodes: RecursiveSwarmNode[] = [];
@@ -564,11 +815,13 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     // Collect — Bug 1 fix: use stable parentId lookup, not object references
     node.status = "collecting";
     this.emitNodeStatusChanged(node);
+    this.writeCheckpoint(`pre_collect:${node.id}`);
 
     const freshChildren = Object.values(this.tree.nodes).filter((n) => n.parentId === node.id && n.kind === "task_agent");
     const collectResult = await this.collector.collect(freshChildren, node.goalEnvelope.originalGoal, { pack: node.evidencePack });
     node.collectResult = collectResult;
     node.outputSummary = collectResult.mergedOutput;
+    this.writeCheckpoint(`post_collect:${node.id}`);
 
     // Create repair agent if needed
     if (collectResult.unresolvedErrors.length > 0 && this.runOptions.enableErrorRecovery) {
@@ -666,6 +919,7 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     this.totalExecutions++;
     node.status = "executing";
     this.emitNodeStatusChanged(node);
+    this.writeCheckpoint(`pre_execute:${node.id}`);
 
     const pack = node.evidencePack;
     const contextBlock = this.formatPackForPrompt(pack);
@@ -678,12 +932,15 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     const structuredPrompt = `Produce a structured JSON output with exactly one of these kinds:
 - "evidence_report": findings[], files[], symbols[], evidence_refs[], unknowns[], confidence (0-1)
 - "task_plan": tasks[{name, description, dependencies[], risk(low|medium|high)}], validation_strategy, confidence
+- "generated_artifact": path, content, artifact_type(html|javascript|css|json|markdown|text|other), description, validation_steps[], completeness_notes[], confidence
 - "edit_intent": target_file, target_symbol_or_range, operation(create|modify|delete|refactor), reason, expected_behavior, risk(low|medium|high), evidence_refs[]
 - "validation_plan": commands[], smoke_checks[], expected_results[], blockers[]
 - "review_decision": decision(approve|block|needs_changes), findings[], required_changes[], risks[]
 - "integration_summary": child_outputs_used, conflicts[], merged_findings[], unresolved_items[]
 - "final_summary": summary, blockers[], edit_intents[], validation_plans[], confidence
 
+If the task asks to create a complete self-contained file, game, demo, page, or other final deliverable, prefer "generated_artifact" and put the complete file contents in "content". Do not summarize the deliverable instead of generating it.
+The original user goal is authoritative. If the deliverable contract requires code, source, or an artifact, produce that artifact or return a blocked/review decision with explicit evidence. A short plan or summary is not a valid substitute for the requested deliverable.
 Return valid JSON with a "kind" field matching one of the above.`;
 
     if (this.provider) {
@@ -692,9 +949,9 @@ Return valid JSON with a "kind" field matching one of the above.`;
         const raw = await invokeReasoningProviderStructured<Record<string, unknown>>(
           this.provider,
           {
-            systemPrompt: `You are an executor agent.\nOriginal goal: ${node.goalEnvelope.originalGoal}\nTheme: ${node.goalEnvelope.theme}\nConstraints: ${node.goalEnvelope.constraints.join(", ")}\nComplete the following task.${contextBlock ? `\n\n${contextBlock}` : ""}${contextNote}\n\n${structuredPrompt}`,
+            systemPrompt: `You are an executor agent.\nOriginal goal (full, authoritative): ${node.goalEnvelope.originalGoal}\nExpanded goal/spec: ${node.goalEnvelope.expandedGoal ?? node.goalEnvelope.originalGoal}\nDeliverable contract: ${node.goalEnvelope.expandedGoalSpec?.deliverableContract ?? "Not specified"}\nTheme: ${node.goalEnvelope.theme}\nConstraints: ${node.goalEnvelope.constraints.join(", ")}\nAcceptance criteria: ${node.goalEnvelope.acceptanceCriteria.join(" | ")}\nComplete the following task without replacing the required artifact with a summary.${contextBlock ? `\n\n${contextBlock}` : ""}${contextNote}\n\n${structuredPrompt}`,
             userPrompt: node.taskPrompt,
-            maxOutputTokens: 4096
+            maxOutputTokens: 16384
           },
           {
             name: "structured_node_output",
@@ -715,6 +972,12 @@ Return valid JSON with a "kind" field matching one of the above.`;
               validation_plans: { type: "array", items: { type: "object" } },
               tasks: { type: "array", items: { type: "object" } },
               validation_strategy: { type: "string" },
+              path: { type: "string" },
+              content: { type: "string" },
+              artifact_type: { type: "string" },
+              description: { type: "string" },
+              validation_steps: { type: "array", items: { type: "string" } },
+              completeness_notes: { type: "array", items: { type: "string" } },
               target_file: { type: "string" },
               target_symbol_or_range: { type: "string" },
               operation: { type: "string" },
@@ -742,9 +1005,9 @@ Return valid JSON with a "kind" field matching one of the above.`;
         // Fallback: try plain text invocation
         try {
           const result = await invokeReasoningProviderText(this.provider, {
-            systemPrompt: `You are an executor agent.\nOriginal goal: ${node.goalEnvelope.originalGoal}\nTheme: ${node.goalEnvelope.theme}\nConstraints: ${node.goalEnvelope.constraints.join(", ")}\nComplete the following task.${contextBlock ? `\n\n${contextBlock}` : ""}${contextNote}`,
+            systemPrompt: `You are an executor agent.\nOriginal goal (full, authoritative): ${node.goalEnvelope.originalGoal}\nExpanded goal/spec: ${node.goalEnvelope.expandedGoal ?? node.goalEnvelope.originalGoal}\nDeliverable contract: ${node.goalEnvelope.expandedGoalSpec?.deliverableContract ?? "Not specified"}\nTheme: ${node.goalEnvelope.theme}\nConstraints: ${node.goalEnvelope.constraints.join(", ")}\nComplete the following task without replacing the required artifact with a summary.${contextBlock ? `\n\n${contextBlock}` : ""}${contextNote}`,
             userPrompt: node.taskPrompt,
-            maxOutputTokens: 4096
+            maxOutputTokens: 16384
           });
           const { output, summary } = wrapTextFallback(result);
           node.structuredOutput = output;
@@ -774,6 +1037,7 @@ Return valid JSON with a "kind" field matching one of the above.`;
     node.status = "succeeded";
     this.emitDurableEvent("node_completed", node.id, { outputLength: node.outputSummary?.length ?? 0 });
     this.emitNodeStatusChanged(node);
+    this.writeCheckpoint(`post_execute:${node.id}`);
     this.emitTreeUpdated();
   }
 
@@ -849,7 +1113,17 @@ Return valid JSON with a "kind" field matching one of the above.`;
     node.goalChecks.push(result);
     this.goalCheckHistory.push(result);
     this.emitDurableEvent("goal_check", node.id, { checkpoint, aligned: result.aligned, status: result.status });
-    if (!result.aligned && (result.status === "major_drift" || result.status === "unknown")) {
+    if (!result.aligned && isGoalCheckOperationalFailure(result)) {
+      node.status = "blocked";
+      node.errorSummary = `Goal check unavailable at ${checkpoint}: ${[...result.findings, ...result.warnings].join("; ")}`;
+      return;
+    }
+    if (!result.aligned && result.status === "unknown") {
+      node.status = "blocked";
+      node.errorSummary = `Goal alignment unknown at ${checkpoint}: ${result.findings.join("; ")}`;
+      return;
+    }
+    if (!result.aligned && result.status === "major_drift") {
       node.status = "blocked";
       node.errorSummary = `Goal drift at ${checkpoint}: ${result.findings.join("; ")}`;
     }
@@ -992,4 +1266,318 @@ Return valid JSON with a "kind" field matching one of the above.`;
   private emitTreeUpdated(): void {
     this.onTreeUpdated?.(this.tree);
   }
+}
+
+function isGoalCheckOperationalFailure(result: GoalCheckResult): boolean {
+  return result.status === "unknown"
+    && result.findings.some((finding) => finding === "provider_failed" || finding === "provider_unavailable");
+}
+
+function hashPrompt(prompt: string): string {
+  return createHash("sha256").update(prompt).digest("hex");
+}
+
+function normalizeExpandedGoalSpec(
+  originalPrompt: string,
+  originalPromptHash: string,
+  raw: Record<string, unknown>,
+  generatedBy: ExpandedGoalSpec["generatedBy"]
+): ExpandedGoalSpec {
+  return {
+    originalPrompt,
+    originalPromptHash,
+    isAlreadyDetailed: raw.isAlreadyDetailed === true,
+    expandedGoal: stringValue(raw.expandedGoal, originalPrompt),
+    requirements: stringArray(raw.requirements),
+    acceptanceCriteria: stringArray(raw.acceptanceCriteria),
+    deliverableContract: stringValue(raw.deliverableContract, "Complete the requested deliverable or report a blocker with evidence."),
+    constraints: stringArray(raw.constraints),
+    nonGoals: stringArray(raw.nonGoals),
+    qualityBar: stringArray(raw.qualityBar),
+    generatedBy,
+    warnings: []
+  };
+}
+
+function unavailableGoalSpec(originalPrompt: string, originalPromptHash: string, warning: string): ExpandedGoalSpec {
+  return {
+    originalPrompt,
+    originalPromptHash,
+    isAlreadyDetailed: false,
+    expandedGoal: originalPrompt,
+    requirements: [],
+    acceptanceCriteria: [],
+    deliverableContract: "Provider goal expansion unavailable; preserve the original prompt verbatim and do not summarize the deliverable.",
+    constraints: [],
+    nonGoals: [],
+    qualityBar: [],
+    generatedBy: "unavailable",
+    warnings: [warning]
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function isUsefulSplitSubTask(subTask: SplitSubTask): boolean {
+  const task = normalizeTaskText(subTask.taskPrompt);
+  const output = normalizeTaskText(subTask.expectedOutput);
+  if (task.length < 16 || output.length < 8) return false;
+  const generic = /^(completed work|do the task|handle this|work on this|retrieve context|search files|check again)$/i;
+  return !generic.test(subTask.expectedOutput.trim()) && !generic.test(subTask.taskPrompt.trim());
+}
+
+function isProviderRateLimitError(value: string | undefined): boolean {
+  return /\b(429|rate limit|too many requests|provider.*unreachable|temporar(?:y|ily))\b/i.test(value ?? "");
+}
+
+function buildRecursiveRunCheckpoint(input: {
+  sessionId: string;
+  tree: RecursiveSwarmTree;
+  expandedGoalSpec?: ExpandedGoalSpec;
+  budget?: RecursiveRunBudget;
+  activityProjection: RunActivityProjection;
+  lastStablePhase: string;
+  resumable: boolean;
+}): RecursiveRunCheckpoint {
+  const nodes = Object.values(input.tree.nodes);
+  const pendingStatuses = new Set<RecursiveSwarmNode["status"]>([
+    "created",
+    "assessing",
+    "splitting",
+    "waiting_children",
+    "executing",
+    "verifying",
+    "collecting",
+    "queued"
+  ]);
+  return {
+    sessionId: input.sessionId,
+    runId: input.tree.runId,
+    originalPrompt: input.tree.rootGoal,
+    expandedGoalSpec: input.expandedGoalSpec,
+    budget: input.budget,
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      parentId: node.parentId,
+      status: node.status,
+      name: node.name,
+      kind: node.kind,
+      taskPrompt: node.taskPrompt,
+      depth: node.depth,
+      childIds: [...node.children],
+      updatedAt: node.updatedAt
+    })),
+    pendingQueue: nodes.filter((node) => pendingStatuses.has(node.status)).map((node) => node.id),
+    completedNodeIds: nodes.filter((node) => node.status === "succeeded" || node.status === "superseded").map((node) => node.id),
+    failedNodeIds: nodes.filter((node) => node.status === "failed" || node.status === "blocked" || node.status === "escalated").map((node) => node.id),
+    generatedArtifacts: nodes
+      .filter((node) => node.structuredOutput?.kind === "generated_artifact")
+      .map((node) => node.structuredOutput),
+    durableActivityRows: input.activityProjection.durableRows,
+    lastStablePhase: input.lastStablePhase,
+    resumable: input.resumable,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildActivityProjection(tree: RecursiveSwarmTree, durableEvents: DurableSwarmEvent[]): RunActivityProjection {
+  const rows: DurableActivityRow[] = durableEvents
+    .filter((event) => isActivityEvent(event))
+    .slice(-96)
+    .map((event) => activityRowFromEvent(event));
+  const nodes = Object.values(tree.nodes);
+  const activeNode = nodes.find((node) => ["executing", "splitting", "collecting", "verifying", "assessing", "waiting_children", "queued"].includes(node.status));
+  return {
+    durableRows: rows,
+    ephemeralStatus: activeNode ? {
+      text: ephemeralTextForNode(activeNode),
+      phase: ephemeralPhaseForNode(activeNode),
+      nodeId: activeNode.id,
+      updatedAt: activeNode.updatedAt
+    } : tree.status === "running" ? {
+      text: "Syncing recursive agents...",
+      phase: "syncing",
+      updatedAt: tree.updatedAt
+    } : null,
+    counters: {
+      thoughts: Math.max(0, durableEvents.filter((event) => event.type === "complexity_assessed" || event.type === "goal_check").length),
+      filesViewed: 0,
+      commandsRun: 0,
+      agentsActive: nodes.filter((node) => ["executing", "splitting", "collecting", "verifying", "assessing", "waiting_children", "queued"].includes(node.status)).length,
+      agentsDone: nodes.filter((node) => node.status === "succeeded" || node.status === "superseded").length,
+      agentsFailed: nodes.filter((node) => node.status === "failed" || node.status === "blocked" || node.status === "escalated").length
+    }
+  };
+}
+
+function isActivityEvent(event: DurableSwarmEvent): boolean {
+  return [
+    "intent_expanded",
+    "budget_planned",
+    "task_split",
+    "budget_gate",
+    "collect_completed",
+    "node_completed",
+    "run_completed",
+    "checkpoint_written",
+    "provider_backoff",
+    "error"
+  ].includes(event.type);
+}
+
+function activityRowFromEvent(event: DurableSwarmEvent): DurableActivityRow {
+  switch (event.type) {
+    case "intent_expanded":
+      return {
+        id: event.id,
+        kind: "thought",
+        title: "Expanded goal",
+        summary: `Goal preserved with ${Number(event.data.requirementCount ?? 0)} extracted requirement(s).`,
+        status: event.data.generatedBy === "unavailable" ? "blocked" : "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "budget_planned":
+      return {
+        id: event.id,
+        kind: "thought",
+        title: "Planned staffing budget",
+        summary: `Soft ${event.data.softMaxAgents ?? "?"}/${event.data.hardMaxAgents ?? "?"}; max children ${event.data.maxChildrenPerParent ?? "?"}.`,
+        status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "task_split":
+      return {
+        id: event.id,
+        kind: "split",
+        title: `Split into ${event.data.subTaskCount ?? 0} child task(s)`,
+        summary: String(event.data.splitReason ?? event.data.note ?? "Recursive split recorded."),
+        status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "budget_gate":
+      return {
+        id: event.id,
+        kind: "thought",
+        title: "Budget gate",
+        summary: String(event.data.reason ?? event.data.action ?? "Recursive budget gate applied."),
+        status: "queued",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "collect_completed":
+      return {
+        id: event.id,
+        kind: "merge",
+        title: "Collected child results",
+        summary: `${event.data.childCount ?? 0} child result(s), ${event.data.errors ?? 0} unresolved error(s).`,
+        status: Number(event.data.errors ?? 0) > 0 ? "failed" : "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "node_completed":
+      return {
+        id: event.id,
+        kind: "thought",
+        title: "Node completed",
+        summary: `${event.data.outputLength ?? 0} output character(s).`,
+        status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "run_completed":
+      return {
+        id: event.id,
+        kind: "merge",
+        title: "Recursive swarm completed",
+        summary: `Run status: ${String(event.data.status ?? "unknown")}.`,
+        status: event.data.status === "succeeded" ? "completed" : "failed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "checkpoint_written":
+      return {
+        id: event.id,
+        kind: "checkpoint",
+        title: "Checkpoint saved",
+        summary: `${String(event.data.lastStablePhase ?? "runtime")} | ${event.data.pendingNodes ?? 0} pending node(s).`,
+        status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "provider_backoff":
+      return {
+        id: event.id,
+        kind: "blocker",
+        title: "Provider backoff",
+        summary: String(event.data.reason ?? "Provider is rate limited or unreachable."),
+        status: "blocked",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    default:
+      return {
+        id: event.id,
+        kind: "error",
+        title: "Recursive error",
+        summary: String(event.data.reason ?? "Recursive swarm error."),
+        status: "failed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+  }
+}
+
+function ephemeralTextForNode(node: RecursiveSwarmNode): string {
+  switch (node.status) {
+    case "assessing": return `Thinking about ${node.name}...`;
+    case "splitting": return `Splitting ${node.name}...`;
+    case "waiting_children": return `Syncing ${node.children.length} child agent(s)...`;
+    case "executing": return `Working on ${node.name}...`;
+    case "verifying": return `Verifying ${node.name}...`;
+    case "collecting": return `Collecting ${node.name}...`;
+    case "queued": return `Queued ${node.name}...`;
+    default: return "Syncing recursive agents...";
+  }
+}
+
+function ephemeralPhaseForNode(node: RecursiveSwarmNode): NonNullable<RunActivityProjection["ephemeralStatus"]>["phase"] {
+  switch (node.status) {
+    case "assessing": return "thinking";
+    case "splitting": return "splitting";
+    case "executing":
+    case "queued": return "executing";
+    case "collecting":
+    case "verifying": return "collecting";
+    case "waiting_children": return "syncing";
+    default: return "syncing";
+  }
+}
+
+function isSelfSimilarSplit(parentTask: string, childTask: string): boolean {
+  const parent = normalizeTaskText(parentTask);
+  const child = normalizeTaskText(childTask);
+  return child === parent || child.includes(`child task: ${parent}`) || child.includes(`parent task: ${parent}`);
+}
+
+function normalizeTaskText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function collectGeneratedArtifactSummaries(nodes: Record<string, RecursiveSwarmNode>): string[] {
+  const summaries: string[] = [];
+  for (const node of Object.values(nodes)) {
+    if (node.structuredOutput?.kind !== "generated_artifact") continue;
+    const artifact = node.structuredOutput;
+    summaries.push(`${artifact.path} (${artifact.content.length} character(s)) from ${node.name}: ${artifact.description.slice(0, 160)}`);
+  }
+  return summaries;
 }

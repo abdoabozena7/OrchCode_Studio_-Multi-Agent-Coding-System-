@@ -62,6 +62,16 @@ Ordinary queue worker execution is now a contract, not a built-in local semantic
 
 Provider-backed swarm and recursive workers keep their own provider-required contracts, context packs, structured outputs, and safety gates. Role names such as `ArchitectAgent`, `ReviewerAgent`, or specialist reviewer names may still appear in task graphs, staffing plans, prompts, and durable artifacts, but role names are not runtime permission to invoke a local deterministic implementation.
 
+Recursive executor outputs may use `generated_artifact` for complete provider-authored deliverables such as a self-contained HTML file. The runtime may deterministically convert that artifact content into a reviewable create-file `PatchProposal`, but it must not write the file directly or synthesize missing content locally.
+
+Recursive swarm runs now start with an `ExpandedGoalSpec`. The provider preserves the exact original prompt, expands short goals into a concrete spec, and extracts requirements from detailed prompts without replacing them with a short summary. Every recursive child prompt must carry the original prompt, expanded goal/spec, deliverable contract, parent task, local child task, expected output, and child acceptance criteria.
+
+Recursive splitting is governed by a deterministic `RecursiveRunBudget`. The hard maximum remains capacity only; the soft budget, maximum children per parent, and maximum depth control ordinary decomposition. A parent split must include a child-count rationale, expected outputs, dependencies, stop conditions, and useful work for every child. Low-value retrieve/check-again children and oversized fan-outs are clamped before child nodes are created.
+
+Recursive run projection exposes two UI channels: durable activity rows for meaningful facts such as splits, budget gates, artifacts, validation, collection, failures, and checkpoints; and one ephemeral status line for live syncing/thinking/working text. UI surfaces should render the projection instead of flooding one row per node status change.
+
+Recursive checkpoints are the source of truth for same-chat continuation. If the user says `continue`, `resume`, `كمل`, or an equivalent continuation phrase and the session has a resumable checkpoint, the runtime must build the next provider prompt from the checkpoint's original goal, expanded spec, budget, pending nodes, completed/failed nodes, generated artifacts, recent durable activity, and any new user note.
+
 Any legacy local worker class that remains for compatibility must behave as a blocked adapter only: it may report the missing provider-backed executor, but it must not propose patches, commands, previews, canned implementation notes, or mock task results.
 
 ### SecurityAgent

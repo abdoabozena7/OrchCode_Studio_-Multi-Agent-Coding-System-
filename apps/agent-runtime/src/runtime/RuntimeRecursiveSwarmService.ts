@@ -5,7 +5,7 @@ import type {
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import type { ProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { bridgeEditIntents, collectIntentsFromTree } from "../orchestration/RecursiveEditIntentBridge.js";
-import type { MemoryEvidencePack } from "../orchestration/RecursiveSwarmModels.js";
+import type { MemoryEvidencePack, RecursiveSwarmRunState } from "../orchestration/RecursiveSwarmModels.js";
 import { RecursiveSwarmOrchestrator } from "../orchestration/RecursiveSwarmOrchestrator.js";
 import type { RuntimeDirectTurnService } from "./RuntimeDirectTurnService.js";
 import { SessionManager } from "./SessionManager.js";
@@ -44,7 +44,33 @@ export class RuntimeRecursiveSwarmService {
       summary: "Starting recursive tree decomposition and execution."
     });
 
-    const orchestrator = new RecursiveSwarmOrchestrator({
+    let liveProjectionQueue = Promise.resolve();
+    let projectionQueuedAt = 0;
+    let quietStatusChanges = 0;
+    let orchestrator: RecursiveSwarmOrchestrator;
+    const queueLiveProjection = (reason: string) => {
+      const now = Date.now();
+      if (now - projectionQueuedAt < 350 && reason === "node_status_changed") {
+        quietStatusChanges++;
+        if (quietStatusChanges < 20) return;
+      }
+      quietStatusChanges = 0;
+      projectionQueuedAt = now;
+      liveProjectionQueue = liveProjectionQueue
+        .catch(() => {})
+        .then(() => this.projectLiveRecursiveTree(sessionId, orchestrator, reason));
+    };
+
+    const addDurableProgress = (title: string, summary: string, status: "running" | "completed" | "blocked" | "failed" = "running") => {
+      this.directTurnService.addProviderProgressEvent(sessionId, {
+        stage: "planning",
+        status,
+        title,
+        summary
+      }).catch(() => {});
+    };
+
+    orchestrator = new RecursiveSwarmOrchestrator({
       buildPack,
       provider,
       workspacePath: session.workspacePath,
@@ -57,42 +83,46 @@ export class RuntimeRecursiveSwarmService {
         enableErrorRecovery: true
       },
       onNodeCreated: (node) => {
-        this.directTurnService.addProviderProgressEvent(sessionId, {
-          stage: "planning",
-          status: node.status === "failed" ? "failed" : node.status === "blocked" ? "blocked" : "running",
-          title: `Recursive node created: ${node.name}`,
-          summary: `Node ${node.id} (${node.kind}) at depth ${node.depth}: ${node.taskPrompt.slice(0, 120)}`
-        }).catch(() => {});
+        queueLiveProjection("node_created");
       },
       onNodeStatusChanged: (node) => {
-        this.directTurnService.addProviderProgressEvent(sessionId, {
-          stage: "planning",
-          status: node.status === "failed"
-            ? "failed"
-            : node.status === "blocked"
-              ? "blocked"
-              : node.status === "succeeded"
-                ? "completed"
-                : "running",
-          title: `Recursive node ${node.status}: ${node.name}`,
-          summary: `Node ${node.id} status changed to ${node.status}`
-        }).catch(() => {});
+        queueLiveProjection("node_status_changed");
       },
-      onDurableEvent: () => {}
+      onDurableEvent: (event) => {
+        queueLiveProjection(event.type);
+        if (event.type === "intent_expanded") {
+          addDurableProgress("Expanded recursive goal", `Preserved original prompt and extracted ${event.data.requirementCount ?? 0} requirement(s).`);
+        } else if (event.type === "budget_planned") {
+          addDurableProgress("Planned recursive staffing", `Soft budget ${event.data.softMaxAgents ?? "?"}/${event.data.hardMaxAgents ?? "?"}; max children ${event.data.maxChildrenPerParent ?? "?"}.`);
+        } else if (event.type === "task_split") {
+          addDurableProgress("Recursive split", `Parent created ${event.data.subTaskCount ?? 0} child task(s).`);
+        } else if (event.type === "budget_gate") {
+          addDurableProgress("Recursive budget gate", String(event.data.reason ?? "Budget gate applied."));
+        } else if (event.type === "provider_backoff") {
+          addDurableProgress("Provider backoff", String(event.data.reason ?? "Provider is rate limited or unreachable."), "blocked");
+        } else if (event.type === "error") {
+          addDurableProgress("Recursive node error", String(event.data.reason ?? "Recursive swarm error."), "failed");
+        } else if (event.type === "collect_completed") {
+          addDurableProgress("Collected recursive child results", `${event.data.childCount ?? 0} child result(s), ${event.data.errors ?? 0} unresolved error(s).`);
+        }
+      }
     });
 
     const result = await orchestrator.run(message, sessionId);
+    await liveProjectionQueue.catch(() => {});
     const swarmState = orchestrator.toSwarmState();
     const state = result.runState;
+    state.activityProjection = swarmState.activityProjection;
     const completedAt = new Date().toISOString();
     const terminalStatus = mapRecursiveSwarmStatus(state.tree.status);
     const failedNodes = swarmState.statusCounts.failed;
     const blockedNodes = swarmState.statusCounts.blocked;
-    const { intents, validationPlans } = collectIntentsFromTree(state.tree.nodes);
+    const { intents, generatedArtifacts, validationPlans } = collectIntentsFromTree(state.tree.nodes);
     const bridgeResult = bridgeEditIntents({
       sessionId,
       workspacePath: session.workspacePath,
       intents,
+      generatedArtifacts,
       validationPlans,
       allowedPaths: [],
       forbiddenPaths: []
@@ -110,25 +140,10 @@ export class RuntimeRecursiveSwarmService {
     const bridgeNotes = buildRecursiveBridgeNotes(bridgeResult);
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
-      draft.recursiveSwarmRunState = {
-        schemaVersion: state.schema_version,
-        runId: state.runId,
-        sessionId: state.sessionId,
-        goalEnvelope: state.goalEnvelope,
-        tree: {
-          schemaVersion: state.tree.schema_version,
-          runId: state.tree.runId,
-          rootGoal: state.tree.rootGoal,
-          rootId: state.tree.rootId,
-          nodeCount: state.tree.totalNodes,
-          depth: state.tree.maxDepth,
-          status: state.tree.status,
-          createdAt: state.tree.createdAt,
-          updatedAt: state.tree.updatedAt,
-          nodes: swarmState.nodes
-        },
-        createdAt: state.createdAt,
-        updatedAt: state.updatedAt
+      draft.recursiveSwarmRunState = buildRecursiveSwarmRunSnapshot(state, swarmState.nodes);
+      draft.swarmState = {
+        ...swarmState,
+        activityProjection: state.activityProjection ?? swarmState.activityProjection
       };
       draft.status = terminalStatus;
       draft.lifecycleStage = terminalStatus === "completed"
@@ -185,11 +200,73 @@ export class RuntimeRecursiveSwarmService {
     return this.sessionManager.getSession(sessionId) ?? session;
   }
 
+  private async projectLiveRecursiveTree(
+    sessionId: string,
+    orchestrator: RecursiveSwarmOrchestrator,
+    reason: string
+  ): Promise<void> {
+    const state = orchestrator.getRunState();
+    const swarmState = orchestrator.toSwarmState();
+    state.activityProjection = swarmState.activityProjection;
+    await this.sessionManager.updateSession(sessionId, (draft) => {
+      if (draft.status === "completed" || draft.status === "failed" || draft.status === "blocked") return;
+      draft.recursiveSwarmRunState = buildRecursiveSwarmRunSnapshot(state, swarmState.nodes);
+      draft.swarmState = {
+        ...swarmState,
+        activityProjection: state.activityProjection ?? swarmState.activityProjection
+      };
+      draft.agentName = "Recursive Swarm";
+      draft.status = "running";
+      draft.lifecycleStage = "PLAN";
+      draft.runSummary = {
+        status: "pending",
+        summary: `Recursive swarm running: ${state.tree.totalNodes} node(s), depth ${state.tree.maxDepth + 1}. Latest update: ${reason.replaceAll("_", " ")}.`,
+        filesChanged: [],
+        appliedPatchIds: [],
+        proposedPatchIds: [],
+        commandResults: [],
+        gates: [],
+        nextAction: "Recursive parent agents are still deciding child tasks, prompts, and execution order.",
+        createdAt: new Date().toISOString()
+      };
+    });
+  }
+
   private requireSession(sessionId: string) {
     const session = this.sessionManager.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     return session;
   }
+}
+
+function buildRecursiveSwarmRunSnapshot(
+  state: RecursiveSwarmRunState,
+  nodes: NonNullable<AgentRuntimeSession["recursiveSwarmRunState"]>["tree"]["nodes"]
+): NonNullable<AgentRuntimeSession["recursiveSwarmRunState"]> {
+  return {
+    schemaVersion: state.schema_version,
+    runId: state.runId,
+    sessionId: state.sessionId,
+    goalEnvelope: state.goalEnvelope,
+    expandedGoalSpec: state.expandedGoalSpec,
+    budget: state.budget,
+    activityProjection: state.activityProjection,
+    checkpoint: state.checkpoint,
+    tree: {
+      schemaVersion: state.tree.schema_version,
+      runId: state.tree.runId,
+      rootGoal: state.tree.rootGoal,
+      rootId: state.tree.rootId,
+      nodeCount: state.tree.totalNodes,
+      depth: state.tree.maxDepth,
+      status: state.tree.status,
+      createdAt: state.tree.createdAt,
+      updatedAt: state.tree.updatedAt,
+      nodes
+    },
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt
+  };
 }
 
 function mapRecursiveSwarmStatus(status: string): RecursiveSwarmTerminalStatus {

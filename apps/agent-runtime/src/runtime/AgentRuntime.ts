@@ -274,7 +274,7 @@ export class AgentRuntime {
       if (directTurn) {
         return directTurn;
       }
-      return this.planningTurnService.run({
+      return await this.planningTurnService.run({
         sessionId,
         session,
         prompt: promptForExecution,

@@ -32,6 +32,7 @@ import {
 import type {
   AccessProfile,
   AgentRiskRef,
+  AgentRuntimeSwarmNode,
   AgentRun,
   AppEvent,
   AgentWorkJournalEntry,
@@ -55,7 +56,7 @@ import type {
   WorkspaceInfo
 } from "@hivo/protocol";
 import { accessProfileDefaults, defaultSafetySettings } from "@hivo/protocol";
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   approveRuntimePatch,
   assertRuntimeAvailable,
@@ -3058,6 +3059,7 @@ function ThreadFeed({
           <small title={session.workspacePath}>{session.workspacePath}</small>
         </section>
       ) : null}
+      <RecursiveThoughtChain session={session} onOpenActivity={onOpenActivity} />
       {session.messages.map((message) => {
         const isUserMessage = message.role === "user";
         const shouldAnimateAssistantMessage =
@@ -3996,6 +3998,375 @@ function PlanClarificationCard({
       }
     />
   );
+}
+
+type ThoughtChainStatus = AgentRuntimeSwarmNode["status"];
+
+type ThoughtChainRow = {
+  id: string;
+  title: string;
+  subtitle: string;
+  summary: string;
+  prompt?: string;
+  status: ThoughtChainStatus;
+  thoughtCount: number;
+  fileNames: string[];
+  commandCount: number;
+  children: ThoughtChainRow[];
+};
+
+function RecursiveThoughtChain({
+  session,
+  onOpenActivity
+}: {
+  session: AgentRuntimeSession;
+  onOpenActivity: () => void;
+}) {
+  const activityProjection = getRunActivityProjection(session);
+  const rows = useMemo(() => buildThoughtChainRows(session), [
+    session.commandExecutions,
+    session.commandRequests,
+    session.id,
+    session.progressEvents,
+    session.recursiveSwarmRunState,
+    session.status,
+    session.swarmState
+  ]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  if (!rows.length) return null;
+
+  const active = Boolean(activityProjection?.ephemeralStatus)
+    || session.status === "running"
+    || hasActiveThoughtRows(rows);
+  const visibleRows = flattenThoughtRows(rows, expandedIds).slice(0, 14);
+  const hiddenCount = Math.max(0, countThoughtRows(rows, 96) - visibleRows.length);
+  const liveLabel = activityProjection?.ephemeralStatus?.text ?? (active ? "Thinking..." : "Chain settled.");
+
+  function toggleRow(rowId: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  return (
+    <section className="thought-chain-panel" aria-label="Recursive thought and action chain">
+      <div className="thought-chain-header">
+        <div>
+          <strong>Thought chain</strong>
+          <span>Recursive parent agents add child tasks, prompts, and actions as they run.</span>
+        </div>
+        <button className="activity-link" onClick={onOpenActivity} type="button">Details</button>
+      </div>
+      <div className="thought-chain-list">
+        {visibleRows.map(({ row, depth }) => {
+          const expanded = expandedIds.has(row.id);
+          const hasChildren = row.children.length > 0;
+          return (
+            <div
+              key={row.id}
+              className={`thought-chain-node ${row.status}`}
+              style={{ "--thought-depth": depth } as CSSProperties}
+            >
+              <button
+                className="thought-chain-row"
+                onClick={() => hasChildren ? toggleRow(row.id) : undefined}
+                type="button"
+                aria-expanded={hasChildren ? expanded : undefined}
+              >
+                {hasChildren ? (
+                  expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />
+                ) : (
+                  <span className="thought-chain-spacer" />
+                )}
+                <span className={`thought-chain-status ${row.status}`} />
+                <span className="thought-chain-copy">
+                  <strong>{formatThoughtMetricLabel(row)}</strong>
+                  <small>{row.subtitle}</small>
+                </span>
+              </button>
+              {expanded ? (
+                <div className="thought-chain-detail">
+                  <p>{row.summary}</p>
+                  {row.prompt ? <pre>{truncateThoughtText(row.prompt, 900)}</pre> : null}
+                  <div className="thought-chain-tags">
+                    {row.fileNames.slice(0, 4).map((file) => <span key={file}>{file}</span>)}
+                    {row.fileNames.length > 4 ? <span>+{row.fileNames.length - 4} file(s)</span> : null}
+                    {row.children.length ? <span>{row.children.length} child node(s)</span> : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+        {hiddenCount ? <div className="thought-chain-more">+{hiddenCount} more node(s) in the tree</div> : null}
+        <div className={`thought-chain-live-row ${active ? "running" : "completed"}`}>
+          <span><Bot size={14} /></span>
+          <small>{liveLabel}</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function buildThoughtChainRows(session: AgentRuntimeSession): ThoughtChainRow[] {
+  const activityProjection = getRunActivityProjection(session);
+  if (activityProjection?.durableRows.length) {
+    return activityProjection.durableRows.slice(-12).map((row) => ({
+      id: `activity:${row.id}`,
+      title: row.title,
+      subtitle: row.kind.replaceAll("_", " "),
+      summary: row.summary,
+      status: mapActivityStatusToThoughtStatus(row.status),
+      thoughtCount: row.kind === "thought" || row.kind === "split" ? 1 : 0,
+      fileNames: [],
+      commandCount: row.kind === "command" ? 1 : 0,
+      children: []
+    }));
+  }
+  const recursiveTree = session.recursiveSwarmRunState?.tree;
+  if (recursiveTree?.nodes?.length) {
+    if (recursiveTree.nodes.length > 80) {
+      return buildCompactThoughtRowsFromNodes(session, recursiveTree.nodes);
+    }
+    const byParent = new Map<string, AgentRuntimeSwarmNode[]>();
+    const byId = new Map(recursiveTree.nodes.map((node) => [node.id, node]));
+    for (const node of recursiveTree.nodes) {
+      if (!node.parentId) continue;
+      const children = byParent.get(node.parentId) ?? [];
+      children.push(node);
+      byParent.set(node.parentId, children);
+    }
+    for (const children of byParent.values()) {
+      children.sort(compareThoughtNodes);
+    }
+    const root = byId.get(recursiveTree.rootId) ?? recursiveTree.nodes[0];
+    if (root) {
+      return [buildThoughtRowFromNode(session, root, byParent, new Set(), true)];
+    }
+  }
+  const swarm = session.swarmState;
+  if (swarm?.nodes.length) {
+    if (swarm.nodes.length > 80) {
+      return buildCompactThoughtRowsFromNodes(session, swarm.nodes);
+    }
+    const byParent = new Map<string, AgentRuntimeSwarmNode[]>();
+    const byId = new Map(swarm.nodes.map((node) => [node.id, node]));
+    for (const node of swarm.nodes) {
+      if (!node.parentId) continue;
+      const children = byParent.get(node.parentId) ?? [];
+      children.push(node);
+      byParent.set(node.parentId, children);
+    }
+    for (const children of byParent.values()) {
+      children.sort(compareThoughtNodes);
+    }
+    const root = byId.get(swarm.rootId) ?? swarm.nodes[0];
+    if (root) {
+      return [buildThoughtRowFromNode(session, root, byParent, new Set(), true)];
+    }
+  }
+  return session.progressEvents.slice(-8).map((event) => ({
+    id: `progress:${event.id}`,
+    title: event.taskTitle ?? event.stage.replaceAll("_", " "),
+    subtitle: event.agentName ? `${event.agentName} | ${event.stage}` : event.stage.replaceAll("_", " "),
+    summary: event.summary,
+    status: mapProgressStatusToThoughtStatus(event.status),
+    thoughtCount: 1,
+    fileNames: event.targetFiles,
+    commandCount: /command/i.test(`${event.taskTitle ?? ""} ${event.summary}`) ? 1 : 0,
+    children: []
+  }));
+}
+
+function buildThoughtRowFromNode(
+  session: AgentRuntimeSession,
+  node: AgentRuntimeSwarmNode,
+  byParent: Map<string, AgentRuntimeSwarmNode[]>,
+  seen: Set<string>,
+  root = false
+): ThoughtChainRow {
+  if (seen.has(node.id)) {
+    return {
+      id: node.id,
+      title: node.name,
+      subtitle: `${node.name} | ${node.role}`,
+      summary: "Cycle detected while projecting the recursive chain.",
+      status: "blocked",
+      thoughtCount: 1,
+      fileNames: [],
+      commandCount: 0,
+      children: []
+    };
+  }
+  const nextSeen = new Set(seen);
+  nextSeen.add(node.id);
+  const childNodes = byParent.get(node.id) ?? [];
+  const children = childNodes.map((child) => buildThoughtRowFromNode(session, child, byParent, nextSeen));
+  const descendantRows = collectThoughtDescendants(children);
+  const fileNames = uniqueThoughtValues([
+    ...node.targetFiles,
+    ...node.changedFiles,
+    ...node.ownedPaths,
+    ...descendantRows.flatMap((row) => row.fileNames)
+  ]);
+  const directThoughtCount = isThoughtAgentNode(node) ? 1 : 0;
+  const thoughtCount = Math.max(1, directThoughtCount + descendantRows.filter((row) => row.thoughtCount > 0).length);
+  const commandCount = root ? session.commandRequests.length + session.commandExecutions.length : commandCountForNode(session, node);
+  return {
+    id: node.id,
+    title: node.name,
+    subtitle: `${node.name} | ${node.role} | ${humanizeSwarmNodeStatus(node.status)}`,
+    summary: node.currentAction ?? node.summary ?? node.objective,
+    prompt: node.taskPrompt ?? node.prompt,
+    status: node.status,
+    thoughtCount,
+    fileNames,
+    commandCount,
+    children
+  };
+}
+
+function flattenThoughtRows(rows: ThoughtChainRow[], expandedIds: Set<string>, depth = 0): Array<{ row: ThoughtChainRow; depth: number }> {
+  const result: Array<{ row: ThoughtChainRow; depth: number }> = [];
+  for (const row of rows) {
+    result.push({ row, depth });
+    if (expandedIds.has(row.id)) {
+      result.push(...flattenThoughtRows(row.children, expandedIds, depth + 1));
+    }
+  }
+  return result;
+}
+
+function collectThoughtDescendants(rows: ThoughtChainRow[]): ThoughtChainRow[] {
+  return rows.flatMap((row) => [row, ...collectThoughtDescendants(row.children)]);
+}
+
+function countThoughtRows(rows: ThoughtChainRow[], cap = Number.POSITIVE_INFINITY): number {
+  let count = 0;
+  const stack = [...rows];
+  while (stack.length && count < cap) {
+    const row = stack.pop()!;
+    count += 1;
+    stack.push(...row.children);
+  }
+  return count;
+}
+
+function formatThoughtMetricLabel(row: ThoughtChainRow) {
+  const parts = [`Thought ${Math.max(1, row.thoughtCount)} time(s)`];
+  if (row.fileNames.length) parts.push(`Viewed ${row.fileNames.length} file(s)`);
+  if (row.commandCount) parts.push(`Ran ${row.commandCount} command(s)`);
+  return parts.join(", ");
+}
+
+function compareThoughtNodes(left: AgentRuntimeSwarmNode, right: AgentRuntimeSwarmNode) {
+  return thoughtStatusRank(left.status) - thoughtStatusRank(right.status)
+    || thoughtKindRank(left.kind) - thoughtKindRank(right.kind)
+    || left.name.localeCompare(right.name)
+    || left.id.localeCompare(right.id);
+}
+
+function thoughtStatusRank(status: ThoughtChainStatus) {
+  if (status === "running") return 0;
+  if (status === "queued") return 1;
+  if (status === "blocked" || status === "failed") return 2;
+  if (status === "idle") return 3;
+  return 4;
+}
+
+function thoughtKindRank(kind: AgentRuntimeSwarmNode["kind"]) {
+  if (kind === "root") return 0;
+  if (kind === "group") return 1;
+  if (kind === "coordinator" || kind === "splitter") return 2;
+  if (kind === "worker" || kind === "specialist" || kind === "executor" || kind === "task_agent") return 3;
+  if (kind === "collector" || kind === "aggregator") return 4;
+  if (kind === "gate" || kind === "goal_keeper") return 5;
+  return 6;
+}
+
+function isThoughtAgentNode(node: AgentRuntimeSwarmNode) {
+  return node.kind !== "group" && node.kind !== "work_item" && node.kind !== "gate";
+}
+
+function commandCountForNode(session: AgentRuntimeSession, node: AgentRuntimeSwarmNode) {
+  const needles = [node.id, node.name, node.role, ...node.workItemRefs].filter(Boolean).map((value) => value.toLowerCase());
+  if (!needles.length) return 0;
+  const records = [...session.commandRequests, ...session.commandExecutions];
+  return records.filter((record) => {
+    const haystack = [
+      "command" in record ? String(record.command) : "",
+      "reason" in record ? String(record.reason) : "",
+      "message" in record ? String(record.message ?? "") : ""
+    ].join(" ").toLowerCase();
+    return needles.some((needle) => haystack.includes(needle));
+  }).length;
+}
+
+function mapProgressStatusToThoughtStatus(status: AgentRuntimeSession["progressEvents"][number]["status"]): ThoughtChainStatus {
+  if (status === "completed") return "completed";
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "queued") return "queued";
+  return "running";
+}
+
+function mapActivityStatusToThoughtStatus(status: NonNullable<NonNullable<AgentRuntimeSession["swarmState"]>["activityProjection"]>["durableRows"][number]["status"]): ThoughtChainStatus {
+  if (status === "completed") return "completed";
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "queued") return "queued";
+  return "running";
+}
+
+function getRunActivityProjection(session: AgentRuntimeSession) {
+  return session.swarmState?.activityProjection ?? session.recursiveSwarmRunState?.activityProjection;
+}
+
+function hasActiveThoughtRows(rows: ThoughtChainRow[]) {
+  const stack = [...rows];
+  let visited = 0;
+  while (stack.length && visited < 80) {
+    const row = stack.pop()!;
+    visited += 1;
+    if (row.status === "queued" || row.status === "running" || row.status === "idle") return true;
+    stack.push(...row.children);
+  }
+  return false;
+}
+
+function buildCompactThoughtRowsFromNodes(session: AgentRuntimeSession, nodes: AgentRuntimeSwarmNode[]): ThoughtChainRow[] {
+  const ranked = [...nodes]
+    .sort(compareThoughtNodes)
+    .slice(0, 12);
+  const totalFiles = uniqueThoughtValues(nodes.flatMap((node) => [...node.targetFiles, ...node.changedFiles, ...node.ownedPaths]));
+  return ranked.map((node, index) => ({
+    id: `compact:${node.id}`,
+    title: node.name,
+    subtitle: `${node.name} | ${node.role} | ${humanizeSwarmNodeStatus(node.status)}`,
+    summary: node.currentAction ?? node.summary ?? node.objective,
+    prompt: node.taskPrompt ?? node.prompt,
+    status: node.status,
+    thoughtCount: index === 0 ? Math.max(1, nodes.filter(isThoughtAgentNode).length) : 1,
+    fileNames: index === 0 ? totalFiles : uniqueThoughtValues([...node.targetFiles, ...node.changedFiles, ...node.ownedPaths]),
+    commandCount: index === 0 ? session.commandRequests.length + session.commandExecutions.length : commandCountForNode(session, node),
+    children: []
+  }));
+}
+
+function humanizeSwarmNodeStatus(status: ThoughtChainStatus) {
+  if (status === "completed") return "Done";
+  return status.replaceAll("_", " ");
+}
+
+function truncateThoughtText(value: string, max: number) {
+  return value.length > max ? `${value.slice(0, max - 3).trimEnd()}...` : value;
+}
+
+function uniqueThoughtValues(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function InlineAgentOverview({

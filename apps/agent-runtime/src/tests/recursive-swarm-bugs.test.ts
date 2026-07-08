@@ -3,7 +3,9 @@ import test from "node:test";
 import { RecursiveTaskSplitter } from "../orchestration/RecursiveTaskSplitter.js";
 import { HierarchicalCollector } from "../orchestration/HierarchicalCollector.js";
 import { GoalKeeperAgent } from "../orchestration/GoalKeeperAgent.js";
+import { bridgeEditIntents, collectIntentsFromTree } from "../orchestration/RecursiveEditIntentBridge.js";
 import { RecursiveSwarmOrchestrator } from "../orchestration/RecursiveSwarmOrchestrator.js";
+import { buildRecursiveCheckpointResumePrompt } from "../runtime/RuntimePendingActionService.js";
 import {
   RECURSIVE_SWARM_SCHEMA_VERSION,
   DEFAULT_RECURSIVE_SWARM_OPTIONS,
@@ -78,6 +80,18 @@ function recursiveProvider(input: {
         const next = atomicity.shift() ?? { isAtomic: true, score: 2, rationale: "Atomic fixture.", failures: [] };
         return next as T;
       }
+      if (name === "expanded_goal_spec") {
+        return {
+          isAlreadyDetailed: true,
+          expandedGoal: request.userPrompt,
+          requirements: ["Preserve the original prompt", "Produce the requested deliverable"],
+          acceptanceCriteria: ["The final output matches the user's deliverable contract"],
+          deliverableContract: "Produce the requested artifact or report a blocker with evidence.",
+          constraints: ["Do not summarize away the deliverable"],
+          nonGoals: [],
+          qualityBar: ["Complete, usable, and validated"]
+        } as T;
+      }
       if (name === "split_result") {
         return (splitResults.shift() ?? { subTasks: [], rationale: "No fixture split." }) as T;
       }
@@ -144,6 +158,178 @@ test("splitTask rejects missing provider instead of using local decomposition fa
     () => splitter.splitTask(node, DEFAULT_RECURSIVE_SWARM_OPTIONS),
     /configured provider/
   );
+});
+
+test("splitTask preserves the full original goal in every child prompt", async () => {
+  const originalGoal = [
+    "Create a single-file self-contained 3D Crossy Road-style game using Three.js from CDN.",
+    "The final game must be complete, playable, polished, visually rich, performant, and validated in browser."
+  ].join("\n");
+  const provider = recursiveProvider({
+    splitResults: [{
+      rationale: "Split into implementation work.",
+      subTasks: [{
+        title: "Implement lanes",
+        taskPrompt: "Build road lanes and obstacle spawning.",
+        expectedOutput: "Lane implementation details",
+        dependencies: []
+      }]
+    }]
+  });
+  const splitter = new RecursiveTaskSplitter({ provider, complexityThreshold: 4 });
+  const node = makeTestNode({
+    taskPrompt: "Build the game from the detailed request.",
+    goalEnvelope: createGoalEnvelope({
+      originalGoal,
+      workspaceIdentity: "test",
+      localTask: "Build the game from the detailed request."
+    })
+  });
+
+  const result = await splitter.splitTask(node, DEFAULT_RECURSIVE_SWARM_OPTIONS);
+  assert.equal(result.subTasks.length, 1);
+  assert.match(result.subTasks[0]!.taskPrompt, /ORIGINAL GOAL \(full, authoritative\):/);
+  assert.match(result.subTasks[0]!.taskPrompt, /EXPANDED GOAL \/ SPEC:/);
+  assert.match(result.subTasks[0]!.taskPrompt, /DELIVERABLE CONTRACT:/);
+  assert.match(result.subTasks[0]!.taskPrompt, /PARENT TASK:/);
+  assert.match(result.subTasks[0]!.taskPrompt, /CHILD TASK:/);
+  assert.ok(result.subTasks[0]!.taskPrompt.includes(originalGoal));
+  assert.ok(result.subTasks[0]!.taskPrompt.includes("Build road lanes and obstacle spawning."));
+});
+
+test("orchestrator clamps single-file 3D game splits to a sane per-parent budget", async () => {
+  const manySubtasks = Array.from({ length: 24 }, (_, index) => ({
+    title: `Game subtask ${index + 1}`,
+    taskPrompt: `Implement concrete 3D game subsystem ${index + 1} with verifiable output.`,
+    expectedOutput: `Concrete subsystem ${index + 1} result`,
+    dependencies: []
+  }));
+  const orchestrator = new RecursiveSwarmOrchestrator({
+    provider: recursiveProvider({
+      atomicity: [
+        { isAtomic: false, score: 6, rationale: "Large creative artifact needs decomposition.", failures: ["broad_scope"] }
+      ],
+      splitResults: [{
+        rationale: "Provider proposed too many children.",
+        subTasks: manySubtasks
+      }]
+    }),
+    options: {
+      maxDepth: 10,
+      maxAgents: 300,
+      enableGoalKeeper: false,
+      enableParallelExecution: false,
+      enableErrorRecovery: false
+    }
+  });
+  const result = await orchestrator.run("Create a complete polished single-file 3D Crossy Road game using Three.js from CDN.");
+  const rootChildren = Object.values(result.runState.tree.nodes)
+    .filter((node) => node.parentId === result.runState.tree.rootId && node.kind === "task_agent");
+
+  assert.equal(result.runState.budget?.taskClass, "large");
+  assert.equal(result.runState.budget?.softMaxAgents, 48);
+  assert.equal(result.runState.budget?.maxChildrenPerParent, 8);
+  assert.equal(rootChildren.length, 8);
+  assert.ok(result.runState.activityProjection?.durableRows.some((row) => row.title === "Budget gate"));
+  assert.ok(result.runState.checkpoint?.resumable === false);
+});
+
+test("continue and Arabic كمل build a recursive checkpoint resume prompt", () => {
+  const session = {
+    id: "session_resume",
+    userPrompt: "Build the game",
+    recursiveSwarmRunState: {
+      checkpoint: {
+        sessionId: "session_resume",
+        runId: "recursive_swarm_test",
+        originalPrompt: "Build a polished 3D Crossy Road game",
+        expandedGoalSpec: {
+          originalPrompt: "Build a polished 3D Crossy Road game",
+          originalPromptHash: "hash",
+          isAlreadyDetailed: false,
+          expandedGoal: "Build a complete playable Three.js game.",
+          requirements: ["playable"],
+          acceptanceCriteria: ["complete"],
+          deliverableContract: "single-file index.html",
+          constraints: [],
+          nonGoals: [],
+          qualityBar: ["polished"],
+          generatedBy: "provider",
+          warnings: []
+        },
+        budget: {
+          hardMaxAgents: 300,
+          softMaxAgents: 48,
+          maxDepth: 6,
+          maxChildrenPerParent: 8,
+          maxWriteExecutors: 6,
+          reason: "large artifact",
+          taskClass: "large"
+        },
+        nodes: [],
+        pendingQueue: ["node_pending"],
+        completedNodeIds: ["node_done"],
+        failedNodeIds: [],
+        generatedArtifacts: [],
+        durableActivityRows: [{
+          id: "row_1",
+          kind: "split",
+          title: "Split into 8 child task(s)",
+          summary: "Root split recorded.",
+          status: "completed",
+          createdAt: new Date().toISOString()
+        }],
+        lastStablePhase: "post_split:root",
+        resumable: true,
+        createdAt: new Date().toISOString()
+      }
+    }
+  } as unknown as import("@hivo/protocol").AgentRuntimeSession;
+
+  const english = buildRecursiveCheckpointResumePrompt(session, "continue");
+  const arabic = buildRecursiveCheckpointResumePrompt(session, "كمل");
+
+  assert.match(english ?? "", /Resume the previous recursive swarm run/);
+  assert.match(english ?? "", /node_pending/);
+  assert.match(arabic ?? "", /Build a polished 3D Crossy Road game/);
+});
+
+test("generated artifact outputs become real create-file patch proposals", () => {
+  const html = "<!doctype html>\n<html><body><canvas id=\"game\"></canvas><script type=\"module\">console.log('playable');</script></body></html>\n";
+  const targetPath = `tmp/recursive-generated-artifact-${Date.now()}.html`;
+  const node = makeTestNode({
+    id: "artifact_node",
+    structuredOutput: {
+      kind: "generated_artifact",
+      path: targetPath,
+      content: html,
+      artifact_type: "html",
+      description: "Complete self-contained Three.js game HTML.",
+      validation_steps: ["Open crossy-road.html in a browser."],
+      completeness_notes: ["Contains HTML and module script in one file."],
+      confidence: 0.9
+    }
+  });
+
+  const collected = collectIntentsFromTree({ [node.id]: node });
+  assert.equal(collected.generatedArtifacts.length, 1);
+
+  const bridged = bridgeEditIntents({
+    sessionId: "session_artifact",
+    workspacePath: process.cwd(),
+    intents: collected.intents,
+    generatedArtifacts: collected.generatedArtifacts,
+    validationPlans: collected.validationPlans,
+    allowedPaths: [],
+    forbiddenPaths: [],
+    fileContents: { [targetPath]: "" }
+  });
+
+  assert.equal(bridged.summaryCounts.realDiff, 1);
+  assert.equal(bridged.summaryCounts.needsGeneration, 0);
+  assert.equal(bridged.patchCandidates[0]?.filesChanged[0]?.path, targetPath);
+  assert.ok(bridged.patchCandidates[0]?.unifiedDiff.includes("+<!doctype html>"));
+  assert.equal(bridged.patchCandidates[0]?.artifacts?.find((artifact) => artifact.path === targetPath)?.content, html);
 });
 
 test("orchestrator self-similar provider split detection executes atomically", async () => {

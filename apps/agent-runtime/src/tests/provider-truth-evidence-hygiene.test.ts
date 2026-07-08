@@ -16,6 +16,12 @@ import { buildServer } from "../server.js";
 
 class TimeoutProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    if (schemaName(schema) === "initial-reasoning-decision") {
+      return initialReasoningForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName(schema) === "intent-contract") {
+      return intentContractForPrompt(input) as T;
+    }
     if (schemaName(schema) === "conversation-intent-decision") {
       return intentDecisionForPrompt(input.userPrompt) as T;
     }
@@ -150,6 +156,12 @@ test("provider user prompt includes serialized context so real models can inspec
 
 class UngroundedProvider implements LlmProvider {
   async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    if (schemaName(schema) === "initial-reasoning-decision") {
+      return initialReasoningForPrompt(input.userPrompt) as T;
+    }
+    if (schemaName(schema) === "intent-contract") {
+      return intentContractForPrompt(input) as T;
+    }
     if (schemaName(schema) === "conversation-intent-decision") {
       return intentDecisionForPrompt(input.userPrompt) as T;
     }
@@ -178,6 +190,60 @@ function intentDecisionForPrompt(prompt: string) {
     confidence: "high",
     rationale: "The provider classified this as a project explanation question.",
     workspaceMessage: message
+  };
+}
+
+function initialReasoningForPrompt(prompt: string) {
+  const intent = intentDecisionForPrompt(prompt);
+  const message = intent.workspaceMessage;
+  return {
+    understanding: {
+      originalRequest: message,
+      cleanedRequest: message,
+      language: intent.language,
+      intentKind: "workspace_question",
+      route: "inspect_explain",
+      needsWorkspace: true,
+      goal: message,
+      ambiguities: [],
+      requiredEvidence: ["current workspace evidence"],
+      risk: "medium",
+      confidence: "high",
+      rationale: intent.rationale
+    },
+    step: {
+      id: "provider_truth_inspect_explain",
+      kind: "final",
+      rationale: "Route the workspace question to inspect/explain.",
+      toolRequests: [],
+      missingFacts: [],
+      successCriteria: ["Answer only from provider-authored project explanation or report a provider failure."]
+    }
+  };
+}
+
+function intentContractForPrompt(input: LlmRequest) {
+  const original = typeof input.context === "object" && input.context && "original_user_request" in input.context
+    ? String((input.context as { original_user_request?: unknown }).original_user_request)
+    : intentDecisionForPrompt(input.userPrompt).workspaceMessage;
+  const priority = (score: number, rationale: string) => ({ score, rationale });
+  return {
+    original_user_request: original,
+    precise_rewrite: original,
+    assumptions: ["Answer from current workspace evidence only."],
+    missing_questions: [],
+    tradeoffs: [{ name: "Provider truth over local synthesis", options: ["provider answer", "provider failure notice"], preferred: "provider failure notice when provider fails", rationale: "The runtime must not synthesize semantic answers locally." }],
+    priorities: {
+      speed: priority(50, "Keep the inspect/explain run bounded."),
+      quality: priority(90, "Prefer verified provider-authored answers."),
+      realism: priority(90, "Use current workspace files and provider telemetry."),
+      fun: priority(10, "No special presentation requirement."),
+      security: priority(80, "Avoid fabricated local answers."),
+      cost: priority(60, "Do not over-read beyond the bounded evidence report.")
+    },
+    definition_of_done: ["Return a provider-authored project answer or a clear provider failure notice artifact."],
+    non_goals: ["Do not fabricate a local semantic answer."],
+    conflict_rules: ["Provider truth and evidence hygiene override convenience."]
   };
 }
 

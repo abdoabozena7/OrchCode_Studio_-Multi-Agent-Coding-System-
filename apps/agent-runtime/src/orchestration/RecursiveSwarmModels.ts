@@ -37,8 +37,37 @@ export type AtomicTaskAssessment = {
   recommendation: "split" | "execute" | "block" | "escalate";
 };
 
+export type RecursiveTaskClass = "small" | "medium" | "large" | "campaign" | "audit";
+
+export type ExpandedGoalSpec = {
+  originalPrompt: string;
+  originalPromptHash: string;
+  isAlreadyDetailed: boolean;
+  expandedGoal: string;
+  requirements: string[];
+  acceptanceCriteria: string[];
+  deliverableContract: string;
+  constraints: string[];
+  nonGoals: string[];
+  qualityBar: string[];
+  generatedBy: "provider" | "unavailable";
+  warnings: string[];
+};
+
+export type RecursiveRunBudget = {
+  hardMaxAgents: number;
+  softMaxAgents: number;
+  maxDepth: number;
+  maxChildrenPerParent: number;
+  maxWriteExecutors: number;
+  reason: string;
+  taskClass: RecursiveTaskClass;
+};
+
 export type GoalEnvelope = {
   originalGoal: string;
+  expandedGoal?: string;
+  expandedGoalSpec?: ExpandedGoalSpec;
   theme: string;
   constraints: string[];
   nonGoals: string[];
@@ -54,15 +83,18 @@ export function createGoalEnvelope(input: {
   constraints?: string[];
   nonGoals?: string[];
   acceptanceCriteria?: string[];
+  expandedGoalSpec?: ExpandedGoalSpec;
   workspaceIdentity: string;
   localTask: string;
 }): GoalEnvelope {
   return {
     originalGoal: input.originalGoal,
-    theme: input.theme ?? input.originalGoal.slice(0, 120),
-    constraints: input.constraints ?? [],
-    nonGoals: input.nonGoals ?? [],
-    acceptanceCriteria: input.acceptanceCriteria ?? [],
+    expandedGoal: input.expandedGoalSpec?.expandedGoal,
+    expandedGoalSpec: input.expandedGoalSpec,
+    theme: input.theme ?? input.expandedGoalSpec?.expandedGoal.slice(0, 120) ?? input.originalGoal.slice(0, 120),
+    constraints: input.constraints ?? input.expandedGoalSpec?.constraints ?? [],
+    nonGoals: input.nonGoals ?? input.expandedGoalSpec?.nonGoals ?? [],
+    acceptanceCriteria: input.acceptanceCriteria ?? input.expandedGoalSpec?.acceptanceCriteria ?? [],
     workspaceIdentity: input.workspaceIdentity,
     localTask: input.localTask,
     version: 1
@@ -75,11 +107,38 @@ export type SplitSubTask = {
   taskPrompt: string;
   expectedOutput: string;
   dependencies: string[];
+  canWrite?: boolean;
+  acceptanceCriteria?: string[];
 };
 
 export type SplitResult = {
   subTasks: SplitSubTask[];
   rationale: string;
+  desiredChildCount?: number;
+  splitReason?: string;
+  stopConditions?: string[];
+  budgetDecision?: {
+    requestedChildren: number;
+    acceptedChildren: number;
+    remainingSoftBudget: number;
+    remainingHardBudget: number;
+    reason: string;
+  };
+};
+
+export type RecursiveSplitDecision = {
+  shouldSplit: boolean;
+  desiredChildCount: number;
+  splitReason: string;
+  childTasks: Array<{
+    title: string;
+    prompt: string;
+    expectedOutput: string;
+    dependencies: string[];
+    canWrite: boolean;
+    acceptanceCriteria: string[];
+  }>;
+  stopConditions: string[];
 };
 
 export type CollectResult = {
@@ -124,6 +183,7 @@ export type SteeringMessage = {
 export type RecursiveOutputKind =
   | "evidence_report"
   | "task_plan"
+  | "generated_artifact"
   | "edit_intent"
   | "validation_plan"
   | "review_decision"
@@ -144,6 +204,17 @@ export type TaskPlan = {
   kind: "task_plan";
   tasks: { name: string; description: string; dependencies: string[]; risk: "low" | "medium" | "high" }[];
   validation_strategy: string;
+  confidence: number;
+};
+
+export type GeneratedArtifact = {
+  kind: "generated_artifact";
+  path: string;
+  content: string;
+  artifact_type: "html" | "javascript" | "css" | "json" | "markdown" | "text" | "other";
+  description: string;
+  validation_steps: string[];
+  completeness_notes: string[];
   confidence: number;
 };
 
@@ -194,6 +265,7 @@ export type FinalSummary = {
 export type RecursiveNodeOutput =
   | EvidenceReport
   | TaskPlan
+  | GeneratedArtifact
   | EditIntent
   | ValidationPlan
   | SwarmReviewDecision
@@ -202,7 +274,7 @@ export type RecursiveNodeOutput =
 
 /** All output kind values for validation */
 export const RECURSIVE_OUTPUT_KINDS: RecursiveOutputKind[] = [
-  "evidence_report", "task_plan", "edit_intent", "validation_plan",
+  "evidence_report", "task_plan", "generated_artifact", "edit_intent", "validation_plan",
   "review_decision", "integration_summary", "final_summary"
 ];
 
@@ -263,6 +335,7 @@ export type RecursiveSwarmNode = {
   depth: number;
   complexity?: AtomicTaskAssessment;
   splitResult?: SplitResult;
+  splitJustification?: SplitResult["budgetDecision"];
   collectResult?: CollectResult;
   goalChecks: GoalCheckResult[];
   steeringQueue: SteeringMessage[];
@@ -296,12 +369,75 @@ export type RecursiveSwarmRunState = {
   runId: string;
   sessionId: string;
   goalEnvelope: GoalEnvelope;
+  expandedGoalSpec?: ExpandedGoalSpec;
+  budget?: RecursiveRunBudget;
   tree: RecursiveSwarmTree;
   createdAt: string;
   updatedAt: string;
   durableEvents: DurableSwarmEvent[];
+  activityProjection?: RunActivityProjection;
+  checkpoint?: RecursiveRunCheckpoint;
   /** Count of nodes per context source type */
   contextSourceCounts: Record<RecursiveContextSource, number>;
+};
+
+export type DurableActivityRow = {
+  id: string;
+  kind: "thought" | "split" | "command" | "file" | "artifact" | "validation" | "merge" | "blocker" | "error" | "checkpoint";
+  title: string;
+  summary: string;
+  status: "running" | "completed" | "blocked" | "failed" | "queued";
+  nodeId?: string;
+  createdAt: string;
+};
+
+export type EphemeralStatus = {
+  text: string;
+  phase: "thinking" | "syncing" | "splitting" | "executing" | "collecting" | "backoff" | "idle";
+  nodeId?: string;
+  updatedAt: string;
+};
+
+export type RunActivityProjection = {
+  durableRows: DurableActivityRow[];
+  ephemeralStatus: EphemeralStatus | null;
+  counters: {
+    thoughts: number;
+    filesViewed: number;
+    commandsRun: number;
+    agentsActive: number;
+    agentsDone: number;
+    agentsFailed: number;
+  };
+};
+
+export type RecursiveNodeSnapshot = {
+  id: string;
+  parentId?: string;
+  status: RecursiveSwarmNodeStatus;
+  name: string;
+  kind: RecursiveSwarmNodeKind;
+  taskPrompt: string;
+  depth: number;
+  childIds: string[];
+  updatedAt: string;
+};
+
+export type RecursiveRunCheckpoint = {
+  sessionId: string;
+  runId: string;
+  originalPrompt: string;
+  expandedGoalSpec?: ExpandedGoalSpec;
+  budget?: RecursiveRunBudget;
+  nodes: RecursiveNodeSnapshot[];
+  pendingQueue: string[];
+  completedNodeIds: string[];
+  failedNodeIds: string[];
+  generatedArtifacts: unknown[];
+  durableActivityRows: DurableActivityRow[];
+  lastStablePhase: string;
+  resumable: boolean;
+  createdAt: string;
 };
 
 export type DurableSwarmEvent = {
@@ -318,6 +454,11 @@ export type DurableSwarmEvent = {
     | "repair_agent_created"
     | "node_completed"
     | "run_completed"
+    | "intent_expanded"
+    | "budget_planned"
+    | "budget_gate"
+    | "checkpoint_written"
+    | "provider_backoff"
     | "error";
   nodeId?: string;
   data: Record<string, unknown>;
@@ -330,7 +471,10 @@ export type RecursiveSwarmRunOptions = {
   complexityThreshold: number;
   maxDepth: number;
   maxAgents: number;
+  softMaxAgents?: number;
+  maxChildrenPerParent?: number;
   maxWriteExecutors: number;
+  taskClass?: RecursiveTaskClass;
   enableGoalKeeper: boolean;
   goalCheckIntervalMs: number;
   enableErrorRecovery: boolean;
@@ -423,6 +567,27 @@ export function normalizeRecursiveNodeOutput(raw: unknown): { output: RecursiveN
       confidence: clampConfidence(obj.confidence)
     };
     return { output, summary: `Plan with ${tasks.length} task(s).` };
+  }
+
+  if (kind === "generated_artifact") {
+    const output: GeneratedArtifact = {
+      kind: "generated_artifact",
+      path: asString(obj.path, "generated.html"),
+      content: asString(obj.content, ""),
+      artifact_type: pickOne(
+        obj.artifact_type,
+        ["html", "javascript", "css", "json", "markdown", "text", "other"] as const,
+        "other"
+      ),
+      description: asString(obj.description, "Generated artifact."),
+      validation_steps: asArray(obj.validation_steps),
+      completeness_notes: asArray(obj.completeness_notes),
+      confidence: clampConfidence(obj.confidence)
+    };
+    return {
+      output,
+      summary: `Generated artifact ${output.path} (${output.content.length} character(s)): ${output.description.slice(0, 160)}`
+    };
   }
 
   if (kind === "edit_intent") {

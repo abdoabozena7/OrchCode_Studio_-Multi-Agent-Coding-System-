@@ -181,10 +181,14 @@ function SwarmDockModal({
   const [animationRun, setAnimationRun] = useState(0);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const initialFitRef = useRef(false);
+  const graphSwarm = useMemo(
+    () => prepareSwarmForGraph(swarm, selectedId, query, statusFilter),
+    [query, selectedId, statusFilter, swarm]
+  );
 
   const layout = useMemo(
-    () => layoutSwarm(swarm, collapsed, query, statusFilter),
-    [swarm, collapsed, query, statusFilter]
+    () => layoutSwarm(graphSwarm, collapsed, query, statusFilter),
+    [graphSwarm, collapsed, query, statusFilter]
   );
   const selected = layout.nodes.find((node) => node.sourceId === selectedId)?.node
     ?? swarm.nodes.find((node) => node.id === selectedId)
@@ -286,6 +290,7 @@ function SwarmDockModal({
             <span>
               {swarm.effectiveTotalLogicalAgents} agent(s) | {swarm.maxSupportedLogicalAgents} capacity | {swarm.source.replaceAll("_", " ")}
               {swarm.source === "recursive_factory" ? " | recursive tree" : ""}
+              {graphSwarm.nodes.length < swarm.nodes.length ? ` | clustered ${graphSwarm.nodes.length}/${swarm.nodes.length}` : ""}
               {swarm.swarmRunId ? ` | ${swarm.swarmRunId}` : ""}
             </span>
           </div>
@@ -338,6 +343,11 @@ function SwarmDockModal({
           <div className="swarm-graph-shell">
             <div className="swarm-graph-label top">Groups</div>
             <div className="swarm-graph-label bottom">Agents / work items</div>
+            {graphSwarm.nodes.length < swarm.nodes.length ? (
+              <div className="swarm-cluster-note">
+                Clustered overview. Use search or status filters to inspect individual agents.
+              </div>
+            ) : null}
             <div ref={scrollerRef} className="swarm-graph-scroll">
               <div className="swarm-graph-stage" style={{ width: layout.width * zoom, height: layout.height * zoom }}>
                 <div className="swarm-graph-world" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
@@ -428,6 +438,7 @@ function SwarmEdgeCanvas({
         if (!isEdgeVisible(edge, current.viewport)) continue;
         const onPath = current.pathIds.has(edge.fromId) && current.pathIds.has(edge.toId);
         const dimmed = (current.selectedId || current.hoverId) && !onPath;
+        const denseLayout = current.layout.edges.length > 420;
         const color = STATUS_COLORS[edge.status];
         const controls = radialControls(current.layout, edge);
         context.lineCap = "round";
@@ -437,7 +448,7 @@ function SwarmEdgeCanvas({
         context.moveTo(edge.fromX, edge.fromY);
         context.bezierCurveTo(controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, edge.toX, edge.toY);
         context.stroke();
-        if (!prefersReduced && !dimmed && current.zoom > 0.44 && frame % 2 === 0) {
+        if (!prefersReduced && !denseLayout && !dimmed && current.zoom > 0.44 && frame % 2 === 0) {
           const phase = (elapsed * 0.42 + edge.toRadius / Math.max(current.layout.outerRadius, 1)) % 1;
           const point = sampleBezier(edge.fromX, edge.fromY, controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, edge.toX, edge.toY, phase);
           context.fillStyle = withAlpha(color, onPath ? 0.9 : 0.48);
@@ -748,6 +759,78 @@ function SwarmMinimap({
       }}
     />
   );
+}
+
+const SWARM_GRAPH_CLUSTER_THRESHOLD = 220;
+
+function prepareSwarmForGraph(
+  swarm: AgentRuntimeSwarmState,
+  selectedId: string,
+  query: string,
+  statusFilter: AgentRuntimeSwarmNodeStatus | "all"
+): AgentRuntimeSwarmState {
+  if (swarm.nodes.length <= SWARM_GRAPH_CLUSTER_THRESHOLD || query.trim() || statusFilter !== "all") return swarm;
+  const root = swarm.nodes.find((node) => node.id === swarm.rootId) ?? swarm.nodes[0];
+  if (!root) return swarm;
+  const byId = new Map(swarm.nodes.map((node) => [node.id, node]));
+  const keepIds = new Set<string>([root.id, selectedId]);
+  let cursor = byId.get(selectedId);
+  while (cursor?.parentId) {
+    keepIds.add(cursor.parentId);
+    cursor = byId.get(cursor.parentId);
+  }
+  const directChildren = swarm.nodes
+    .filter((node) => node.parentId === root.id)
+    .sort(compareSwarmNodes)
+    .slice(0, 32);
+  for (const child of directChildren) keepIds.add(child.id);
+
+  const visible = swarm.nodes.filter((node) => keepIds.has(node.id));
+  const hidden = swarm.nodes.filter((node) => !keepIds.has(node.id));
+  const clusters = new Map<string, AgentRuntimeSwarmNode[]>();
+  for (const node of hidden) {
+    const key = `${node.depth ?? 0}:${node.status}:${node.kind}`;
+    const items = clusters.get(key) ?? [];
+    items.push(node);
+    clusters.set(key, items);
+  }
+  const clusterNodes: AgentRuntimeSwarmNode[] = [...clusters.entries()].map(([key, items], index) => {
+    const [depth, status, kind] = key.split(":");
+    const sample = items[0]!;
+    const clusterId = `cluster:${swarm.swarmRunId ?? swarm.sessionId}:${index}:${key}`;
+    return {
+      id: clusterId,
+      parentId: root.id,
+      kind: "group",
+      nodeKind: `cluster:${kind}`,
+      name: `${items.length} ${STATUS_LABELS[sample.status].toLowerCase()} ${kind?.replaceAll("_", " ") ?? "nodes"}`,
+      role: "Cluster",
+      status: sample.status,
+      objective: `${items.length} hidden node(s) grouped for graph performance.`,
+      currentAction: "Clustered overview node.",
+      summary: `Depth ${depth}; sample: ${sample.name}. Use search/filter to inspect exact nodes.`,
+      prompt: sample.prompt,
+      taskPrompt: sample.taskPrompt,
+      originalGoal: sample.originalGoal,
+      expandedGoal: sample.expandedGoal,
+      depth: Number(depth),
+      ownedPaths: [],
+      targetFiles: [],
+      changedFiles: [],
+      artifactRefs: [],
+      workItemRefs: items.slice(0, 20).map((item) => item.id),
+      evidenceRefs: [],
+      riskRefs: items.filter((item) => item.status === "failed" || item.status === "blocked").slice(0, 10).map((item) => item.id),
+      updatedAt: items.reduce((latest, item) => latest > item.updatedAt ? latest : item.updatedAt, sample.updatedAt)
+    };
+  });
+
+  return {
+    ...swarm,
+    effectiveTotalLogicalAgents: swarm.effectiveTotalLogicalAgents,
+    nodes: [...visible, ...clusterNodes],
+    messages: swarm.messages
+  };
 }
 
 function layoutSwarm(

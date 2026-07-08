@@ -402,6 +402,84 @@ export type AgentRuntimeSwarmMessage = {
   error?: string;
 };
 
+export type AgentRuntimeExpandedGoalSpec = {
+  originalPrompt: string;
+  originalPromptHash: string;
+  isAlreadyDetailed: boolean;
+  expandedGoal: string;
+  requirements: string[];
+  acceptanceCriteria: string[];
+  deliverableContract: string;
+  constraints: string[];
+  nonGoals: string[];
+  qualityBar: string[];
+  generatedBy: "provider" | "unavailable";
+  warnings: string[];
+};
+
+export type AgentRuntimeRecursiveRunBudget = {
+  hardMaxAgents: number;
+  softMaxAgents: number;
+  maxDepth: number;
+  maxChildrenPerParent: number;
+  maxWriteExecutors: number;
+  reason: string;
+  taskClass: "small" | "medium" | "large" | "campaign" | "audit";
+};
+
+export type AgentRuntimeActivityProjection = {
+  durableRows: Array<{
+    id: string;
+    kind: "thought" | "split" | "command" | "file" | "artifact" | "validation" | "merge" | "blocker" | "error" | "checkpoint";
+    title: string;
+    summary: string;
+    status: "running" | "completed" | "blocked" | "failed" | "queued";
+    nodeId?: string;
+    createdAt: string;
+  }>;
+  ephemeralStatus: {
+    text: string;
+    phase: "thinking" | "syncing" | "splitting" | "executing" | "collecting" | "backoff" | "idle";
+    nodeId?: string;
+    updatedAt: string;
+  } | null;
+  counters: {
+    thoughts: number;
+    filesViewed: number;
+    commandsRun: number;
+    agentsActive: number;
+    agentsDone: number;
+    agentsFailed: number;
+  };
+};
+
+export type AgentRuntimeRecursiveRunCheckpoint = {
+  sessionId: string;
+  runId: string;
+  originalPrompt: string;
+  expandedGoalSpec?: AgentRuntimeExpandedGoalSpec;
+  budget?: AgentRuntimeRecursiveRunBudget;
+  nodes: Array<{
+    id: string;
+    parentId?: string;
+    status: string;
+    name: string;
+    kind: string;
+    taskPrompt: string;
+    depth: number;
+    childIds: string[];
+    updatedAt: string;
+  }>;
+  pendingQueue: string[];
+  completedNodeIds: string[];
+  failedNodeIds: string[];
+  generatedArtifacts: unknown[];
+  durableActivityRows: AgentRuntimeActivityProjection["durableRows"];
+  lastStablePhase: string;
+  resumable: boolean;
+  createdAt: string;
+};
+
 export type AgentRuntimeSwarmNode = {
   id: string;
   parentId?: string;
@@ -420,6 +498,8 @@ export type AgentRuntimeSwarmNode = {
   taskPrompt?: string;
   /** Original goal passed down from root */
   originalGoal?: string;
+  /** Expanded root goal/spec excerpt passed down from the parent orchestrator */
+  expandedGoal?: string;
   /** Recursion depth level */
   depth?: number;
   /** Self-assessed complexity score 1-10 */
@@ -470,6 +550,7 @@ export type AgentRuntimeSwarmState = {
       readOnly: boolean;
     }>;
   };
+  activityProjection?: AgentRuntimeActivityProjection;
   metrics?: Record<string, number | string | boolean>;
   nodes: AgentRuntimeSwarmNode[];
   messages: AgentRuntimeSwarmMessage[];
@@ -565,6 +646,8 @@ export type AgentRuntimeSession = {
     sessionId: string;
     goalEnvelope: {
       originalGoal: string;
+      expandedGoal?: string;
+      expandedGoalSpec?: AgentRuntimeExpandedGoalSpec;
       theme: string;
       constraints: string[];
       nonGoals: string[];
@@ -573,6 +656,10 @@ export type AgentRuntimeSession = {
       localTask: string;
       version: number;
     };
+    expandedGoalSpec?: AgentRuntimeExpandedGoalSpec;
+    budget?: AgentRuntimeRecursiveRunBudget;
+    activityProjection?: AgentRuntimeActivityProjection;
+    checkpoint?: AgentRuntimeRecursiveRunCheckpoint;
     tree: {
       schemaVersion: number;
       runId: string;

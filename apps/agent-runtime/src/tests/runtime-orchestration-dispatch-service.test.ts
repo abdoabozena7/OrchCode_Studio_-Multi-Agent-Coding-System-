@@ -41,6 +41,18 @@ test("runtime orchestration dispatch routes provider-authored orchestrated runs 
   assert.deepEqual(calls, ["provider_backed_swarm"]);
 });
 
+test("runtime orchestration dispatch routes explicit recursive child action to recursive swarm", async () => {
+  const calls: string[] = [];
+  const result = await new RuntimeOrchestrationDispatchService().dispatch({
+    ...input("recursive_factory", "recursive_tree", calls),
+    prompt: "Enable recursive adding new child agents where the parent LLM decides numbers, tasks, prompts, and action execution.",
+    conversationUnderstanding: routeUnderstanding("recursive_factory")
+  });
+
+  assert.equal(result.branch, "recursive_swarm");
+  assert.deepEqual(calls, ["recursive_swarm"]);
+});
+
 test("runtime orchestration dispatch routes provider-classified run requests to simple run-to-green", async () => {
   const calls: string[] = [];
   let observed: SimpleRuntimeDispatchOptions | undefined;
@@ -179,7 +191,7 @@ const runRequestUnderstanding = {
   }
 } as ConversationUnderstanding;
 
-function routeUnderstanding(route: "swarm_readonly" | "orchestrated_run") {
+function routeUnderstanding(route: "swarm_readonly" | "orchestrated_run" | "recursive_factory") {
   return {
     intentDecision: {
       kind: route === "swarm_readonly" ? "workspace_question" : "workspace_action",

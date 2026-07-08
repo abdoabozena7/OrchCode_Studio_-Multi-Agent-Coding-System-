@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { PatchProposal, PatchRiskLevel, CommandRequest, CommandRisk } from "@hivo/protocol";
-import type { EditIntent, ValidationPlan, RecursiveSwarmNode, MemoryEvidencePack } from "./RecursiveSwarmModels.js";
+import type { EditIntent, GeneratedArtifact, ValidationPlan, RecursiveSwarmNode, MemoryEvidencePack } from "./RecursiveSwarmModels.js";
 import { classifyCommandRisk } from "../tools/CommandPolicy.js";
 import { buildSurgicalPatch, type SurgicalPatchInput } from "./SurgicalPatchBuilder.js";
 import { evaluateEditIntentQuality, type EditIntentQualityResult } from "./EditIntentQualityGate.js";
@@ -13,6 +15,11 @@ export const MAX_EXPANSION_ATTEMPTS = 2;
 export type BridgeEditIntent = {
   nodeId: string;
   intent: EditIntent;
+};
+
+export type BridgeGeneratedArtifact = {
+  nodeId: string;
+  artifact: GeneratedArtifact;
 };
 
 export type BlockedEditIntent = {
@@ -56,6 +63,7 @@ export type BridgeInput = {
   sessionId: string;
   workspacePath: string;
   intents: BridgeEditIntent[];
+  generatedArtifacts?: BridgeGeneratedArtifact[];
   validationPlans: { nodeId: string; plan: ValidationPlan }[];
   allowedPaths: string[];
   forbiddenPaths: string[];
@@ -83,10 +91,122 @@ function copyOverrides(src: BridgeInput["builderOverrides"] | undefined, file: s
   return o ? { exactOldText: o.exactOldText, replacementText: o.replacementText, anchorLine: o.anchorLine, insertAfterAnchor: o.insertAfterAnchor, insertBeforeAnchor: o.insertBeforeAnchor } : undefined;
 }
 
+type GeneratedArtifactPatchResult = {
+  proposal?: PatchProposal;
+  blockedReason?: string;
+  needsGenerationReason?: string;
+  diagnostics: string[];
+};
+
+function buildGeneratedArtifactPatch(input: {
+  sessionId: string;
+  workspacePath: string;
+  nodeId: string;
+  artifact: GeneratedArtifact;
+  allowedPaths: string[];
+  forbiddenPaths: string[];
+  existingContent?: string;
+}): GeneratedArtifactPatchResult {
+  const diagnostics: string[] = [];
+  const targetPath = normalizeArtifactPath(input.artifact.path);
+  if (!targetPath) {
+    return { blockedReason: `Generated artifact path is unsafe: ${input.artifact.path}`, diagnostics: ["Generated artifact blocked: unsafe path"] };
+  }
+  if (!isGeneratedPathAllowed(targetPath, input.allowedPaths)) {
+    return { blockedReason: `Generated artifact path is not in allowed paths: ${targetPath}`, diagnostics: [`Generated artifact blocked: ${targetPath} not allowed`] };
+  }
+  if (isGeneratedPathForbidden(targetPath, input.forbiddenPaths) || isGeneratedSecretPath(targetPath)) {
+    return { blockedReason: `Generated artifact path is forbidden or sensitive: ${targetPath}`, diagnostics: [`Generated artifact blocked: ${targetPath} forbidden/sensitive`] };
+  }
+  const workspaceRoot = path.resolve(input.workspacePath || ".");
+  const resolvedTarget = path.resolve(workspaceRoot, targetPath);
+  if (resolvedTarget !== workspaceRoot && !resolvedTarget.startsWith(`${workspaceRoot}${path.sep}`)) {
+    return { blockedReason: `Generated artifact escapes workspace: ${targetPath}`, diagnostics: [`Generated artifact blocked: ${targetPath} escapes workspace`] };
+  }
+  const content = input.artifact.content;
+  if (!content.trim()) {
+    return { needsGenerationReason: `Generated artifact ${targetPath} has empty content`, diagnostics: [`Generated artifact needs generation: ${targetPath} empty content`] };
+  }
+  if (Buffer.byteLength(content, "utf8") > 1_000_000) {
+    return { needsGenerationReason: `Generated artifact ${targetPath} is too large to propose safely`, diagnostics: [`Generated artifact needs generation: ${targetPath} too large`] };
+  }
+  const knownExistingContent = input.existingContent ?? "";
+  if (knownExistingContent.trim().length > 0 || existsSync(resolvedTarget)) {
+    return { blockedReason: `Generated artifact target already exists: ${targetPath}`, diagnostics: [`Generated artifact blocked: ${targetPath} already exists`] };
+  }
+
+  const lines = content.split("\n");
+  const unifiedDiff = [
+    "--- /dev/null",
+    `+++ b/${targetPath}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map((line) => `+${line}`)
+  ].join("\n") + "\n";
+  const now = new Date().toISOString();
+  const proposal: PatchProposal = {
+    id: `rs_artifact_${randomUUID().slice(0, 8)}`,
+    sessionId: input.sessionId,
+    title: `create ${targetPath}`,
+    summary: `Generated artifact from recursive swarm node ${input.nodeId}: ${input.artifact.description.slice(0, 220)}`,
+    riskLevel: input.artifact.confidence >= 0.75 ? "medium" : "high",
+    filesChanged: [{
+      path: targetPath,
+      changeType: "create",
+      explanation: input.artifact.description.slice(0, 220)
+    }],
+    artifacts: [
+      { path: targetPath, content },
+      { path: "_generated_artifact_node", content: input.nodeId },
+      { path: "_generated_artifact_validation", content: input.artifact.validation_steps.join("\n") },
+      { path: "_generated_artifact_notes", content: input.artifact.completeness_notes.join("\n") }
+    ],
+    unifiedDiff,
+    requiresApproval: true,
+    status: "proposed",
+    createdAt: now
+  };
+  diagnostics.push(`Generated artifact patch proposed for ${targetPath} (${content.length} character(s), ${lines.length} line(s))`);
+  return { proposal, diagnostics };
+}
+
+function generatedArtifactToIntent(artifact: GeneratedArtifact): EditIntent {
+  return {
+    kind: "edit_intent",
+    target_file: normalizeArtifactPath(artifact.path) ?? artifact.path,
+    target_symbol_or_range: "full file",
+    operation: "create",
+    reason: artifact.description,
+    expected_behavior: artifact.completeness_notes.join("; "),
+    risk: artifact.confidence >= 0.75 ? "medium" : "high",
+    evidence_refs: []
+  };
+}
+
+function normalizeArtifactPath(value: string): string | null {
+  const normalized = value.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!normalized || path.isAbsolute(normalized) || normalized.startsWith("/") || normalized.split("/").includes("..")) return null;
+  return normalized;
+}
+
+function isGeneratedPathAllowed(filePath: string, allowed: string[]): boolean {
+  if (allowed.length === 0) return true;
+  return allowed.some((prefix) => filePath.startsWith(prefix));
+}
+
+function isGeneratedPathForbidden(filePath: string, forbidden: string[]): boolean {
+  return forbidden.some((prefix) => filePath.startsWith(prefix));
+}
+
+function isGeneratedSecretPath(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return [".env", ".pem", ".key", ".cert", "credentials", "secrets/", "node_modules/"]
+    .some((secret) => lower.includes(secret));
+}
+
 // ── Main bridge ─────────────────────────────────────────────
 
 export function bridgeEditIntents(input: BridgeInput): BridgeResult {
-  const { sessionId, workspacePath, intents, validationPlans, allowedPaths, forbiddenPaths, fileContents, builderOverrides, evidencePacks } = input;
+  const { sessionId, workspacePath, intents, generatedArtifacts = [], validationPlans, allowedPaths, forbiddenPaths, fileContents, builderOverrides, evidencePacks } = input;
 
   const patchCandidates: PatchProposal[] = [];
   const blockedIntents: BlockedEditIntent[] = [];
@@ -280,6 +400,35 @@ export function bridgeEditIntents(input: BridgeInput): BridgeResult {
     }
   }
 
+  for (const item of generatedArtifacts) {
+    const result = buildGeneratedArtifactPatch({
+      sessionId,
+      workspacePath,
+      nodeId: item.nodeId,
+      artifact: item.artifact,
+      allowedPaths,
+      forbiddenPaths,
+      existingContent: fileContents?.[item.artifact.path]
+    });
+    diagnostics.push(...result.diagnostics);
+    if (result.proposal) {
+      patchCandidates.push(result.proposal);
+    } else if (result.blockedReason) {
+      blockedIntents.push({
+        nodeId: item.nodeId,
+        intent: generatedArtifactToIntent(item.artifact),
+        reason: result.blockedReason
+      });
+    } else {
+      needsGenerationIntents.push({
+        nodeId: item.nodeId,
+        intent: generatedArtifactToIntent(item.artifact),
+        reason: result.needsGenerationReason ?? "Generated artifact could not be converted to a patch.",
+        requiredEvidence: [item.artifact.path]
+      });
+    }
+  }
+
   // Handle validation commands
   const validationCommandRequests: CommandRequest[] = [];
   for (const vp of validationPlans) {
@@ -352,9 +501,11 @@ export function collectIntentsFromTree(
   nodes: Record<string, Pick<RecursiveSwarmNode, "id" | "structuredOutput">>
 ): {
   intents: BridgeEditIntent[];
+  generatedArtifacts: BridgeGeneratedArtifact[];
   validationPlans: { nodeId: string; plan: ValidationPlan }[];
 } {
   const intents: BridgeEditIntent[] = [];
+  const generatedArtifacts: BridgeGeneratedArtifact[] = [];
   const validationPlans: { nodeId: string; plan: ValidationPlan }[] = [];
 
   for (const node of Object.values(nodes)) {
@@ -362,6 +513,8 @@ export function collectIntentsFromTree(
     const output = node.structuredOutput;
     if (output.kind === "edit_intent") {
       intents.push({ nodeId: node.id, intent: output as EditIntent });
+    } else if (output.kind === "generated_artifact") {
+      generatedArtifacts.push({ nodeId: node.id, artifact: output as GeneratedArtifact });
     } else if (output.kind === "validation_plan") {
       validationPlans.push({ nodeId: node.id, plan: output as ValidationPlan });
     } else if (output.kind === "final_summary") {
@@ -375,5 +528,5 @@ export function collectIntentsFromTree(
     }
   }
 
-  return { intents, validationPlans };
+  return { intents, generatedArtifacts, validationPlans };
 }

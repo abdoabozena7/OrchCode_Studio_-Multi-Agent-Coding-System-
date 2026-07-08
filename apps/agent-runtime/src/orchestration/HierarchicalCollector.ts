@@ -6,6 +6,7 @@ import type {
   RecursiveSwarmNode,
   RecursiveNodeOutput,
   EvidenceReport,
+  GeneratedArtifact,
   EditIntent,
   ValidationPlan,
   IntegrationSummary
@@ -33,13 +34,14 @@ export class HierarchicalCollector {
 
     // Collect structured outputs from children
     const evidenceReports: EvidenceReport[] = [];
+    const generatedArtifacts: GeneratedArtifact[] = [];
     const editIntents: EditIntent[] = [];
     const validationPlans: ValidationPlan[] = [];
     const childOutputCount = children.filter((c) => c.structuredOutput || c.outputSummary).length;
 
     for (const child of children) {
       if (child.structuredOutput) {
-        this.collectTypedOutput(child.structuredOutput, evidenceReports, editIntents, validationPlans);
+        this.collectTypedOutput(child.structuredOutput, evidenceReports, generatedArtifacts, editIntents, validationPlans);
       }
       if (child.outputSummary) {
         childResults[child.id] = child.outputSummary;
@@ -69,7 +71,7 @@ export class HierarchicalCollector {
     }
 
     // Merge structured outputs into an auditable integration summary.
-    const mergedFindings = this.mergeFindings(evidenceReports, editIntents);
+    const mergedFindings = this.mergeFindings(evidenceReports, generatedArtifacts, editIntents);
 
     // Build conflicts from edit intents that target the same file
     const conflicts = this.detectConflicts(editIntents);
@@ -118,6 +120,7 @@ export class HierarchicalCollector {
   private collectTypedOutput(
     output: RecursiveNodeOutput,
     evidenceReports: EvidenceReport[],
+    generatedArtifacts: GeneratedArtifact[],
     editIntents: EditIntent[],
     validationPlans: ValidationPlan[]
   ): void {
@@ -133,6 +136,9 @@ export class HierarchicalCollector {
         break;
       case "task_plan":
         // Task plans are informational — store as merged findings via summary
+        break;
+      case "generated_artifact":
+        generatedArtifacts.push(output);
         break;
       case "review_decision":
         // Review decisions feed into integration but are tracked separately
@@ -157,10 +163,13 @@ export class HierarchicalCollector {
     }
   }
 
-  private mergeFindings(evidenceReports: EvidenceReport[], editIntents: EditIntent[]): string[] {
+  private mergeFindings(evidenceReports: EvidenceReport[], generatedArtifacts: GeneratedArtifact[], editIntents: EditIntent[]): string[] {
     const findings: string[] = [];
     for (const er of evidenceReports) {
       findings.push(...er.findings);
+    }
+    for (const artifact of generatedArtifacts) {
+      findings.push(`Generated artifact: ${artifact.path} (${artifact.content.length} character(s)) - ${artifact.description.slice(0, 160)}`);
     }
     for (const ei of editIntents) {
       findings.push(`Edit intent: ${ei.operation} ${ei.target_file} (${ei.risk} risk) — ${ei.reason.slice(0, 120)}`);

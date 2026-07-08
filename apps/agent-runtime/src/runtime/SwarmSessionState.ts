@@ -359,6 +359,7 @@ export function buildAgentRuntimeSwarmState(
   const swarmRunId = inferSwarmRunId(session);
   const roleCounts = countRoles(agentNodes);
   const effectiveTotal = Math.max(0, Number(session.delegationDecision?.selectedAgentCount ?? agentNodes.length));
+  const recursiveBudget = session.recursiveSwarmRunState?.budget;
 
   return {
     schemaVersion: 1,
@@ -372,8 +373,14 @@ export function buildAgentRuntimeSwarmState(
     activeAgentCount,
     statusCounts,
     staffingPlan: agentNodes.length ? {
-      summary: session.delegationDecision?.rationale ?? `${agentNodes.length} runtime agent(s) reported across ${Object.keys(roleCounts).length} group(s).`,
-      recommendedTotalLogicalAgents: session.delegationDecision?.selectedAgentCount,
+      summary: recursiveBudget
+        ? `Recursive budget: ${recursiveBudget.taskClass}, soft ${recursiveBudget.softMaxAgents}/${recursiveBudget.hardMaxAgents}; ${recursiveBudget.reason}`
+        : session.delegationDecision?.rationale ?? `${agentNodes.length} runtime agent(s) reported across ${Object.keys(roleCounts).length} group(s).`,
+      recommendedTotalLogicalAgents: recursiveBudget?.softMaxAgents ?? session.delegationDecision?.selectedAgentCount,
+      maxParallelAgents: recursiveBudget?.maxWriteExecutors,
+      writeAgentLimit: recursiveBudget?.maxWriteExecutors,
+      validationLevel: recursiveBudget?.taskClass === "audit" || recursiveBudget?.taskClass === "campaign" ? "broad" : recursiveBudget ? "focused" : undefined,
+      riskLevel: recursiveBudget?.taskClass === "audit" || recursiveBudget?.taskClass === "campaign" ? "high" : recursiveBudget ? "medium" : undefined,
       roleCounts,
       specialists: agentNodes
         .filter((node) => node.kind === "specialist")
@@ -384,7 +391,16 @@ export function buildAgentRuntimeSwarmState(
           readOnly: !/executor|write/i.test(node.role)
         }))
     } : undefined,
-    metrics: extractSwarmMetrics(session),
+    activityProjection: session.recursiveSwarmRunState?.activityProjection,
+    metrics: {
+      ...(extractSwarmMetrics(session) ?? {}),
+      ...(recursiveBudget ? {
+        softMaxAgents: recursiveBudget.softMaxAgents,
+        hardMaxAgents: recursiveBudget.hardMaxAgents,
+        maxChildrenPerParent: recursiveBudget.maxChildrenPerParent,
+        recursiveTaskClass: recursiveBudget.taskClass
+      } : {})
+    },
     nodes,
     messages: messages.filter((message) => nodeMap.has(message.agentId) && isLogicalAgentNode(nodeMap.get(message.agentId)!)).slice(-200)
   };
@@ -564,6 +580,7 @@ function inferSwarmSource(session: AgentRuntimeSession, nodes: AgentRuntimeSwarm
 }
 
 function inferSwarmRunId(session: AgentRuntimeSession) {
+  if (session.recursiveSwarmRunState?.runId) return session.recursiveSwarmRunState.runId;
   for (const agent of session.orchestration?.agentRuns ?? []) {
     const id = extractStringFromUnknown(agent.artifactJson, "swarmRunId");
     if (id) return id;

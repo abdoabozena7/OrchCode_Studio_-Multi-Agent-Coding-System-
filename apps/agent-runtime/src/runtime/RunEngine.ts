@@ -4,8 +4,11 @@ import type {
   AgentPlan,
   AgentRuntimeSession,
   Artifact,
+  AnswerVerificationReport,
   CommandRequest,
   DecisionRecord,
+  DecisionOutcome,
+  DecisionPipelineState,
   EvidenceRef,
   EvidenceTruthReport,
   PatchFileChange,
@@ -984,19 +987,31 @@ export class RunEngine {
     if (!initialDecisionPipeline) {
       throw new Error("reasoning_kernel.initial_decision_pipeline_required");
     }
-    let decisionPipeline = await finalizeAnswerDecisionPipeline({
-      state: initialDecisionPipeline,
-      provider: this.provider,
-      answerMarkdown: questionResult.answerMarkdown,
-      evidenceRefs: questionResult.evidenceRefs,
-      validationErrors: questionResult.validationErrors,
-      finalAnswerSource: "provider",
-      confidence: questionResult.confidence
-    });
+    const finalAnswerSource = questionResult.answerStrategy.finalAnswerSource;
+    const providerAuthored = finalAnswerSource === "provider";
+    const noticeReason = questionResult.answerStrategy.reason ?? questionResult.validationErrors[0] ?? "Provider failed before a trusted answer was available.";
+    if (!providerAuthored) {
+      this.options.providerTelemetry?.markTerminalFailure(noticeReason);
+    }
+    let decisionPipeline = providerAuthored
+      ? await finalizeAnswerDecisionPipeline({
+          state: initialDecisionPipeline,
+          provider: this.provider,
+          answerMarkdown: questionResult.answerMarkdown,
+          evidenceRefs: questionResult.evidenceRefs,
+          validationErrors: questionResult.validationErrors,
+          finalAnswerSource: "provider",
+          confidence: questionResult.confidence
+        })
+      : finalizeLocalNoticeDecisionPipeline({
+          state: initialDecisionPipeline,
+          reason: noticeReason,
+          evidenceRefs: questionResult.evidenceRefs
+        });
     if (questionResult.projectUnderstanding) {
       decisionPipeline = applyProjectUnderstandingDecisionPipeline(decisionPipeline, questionResult.projectUnderstanding);
     }
-    if (questionResult.fallbackUsed) {
+    if (questionResult.fallbackUsed && finalAnswerSource !== "local_notice") {
       throw new Error(`provider_only_answer_required: ${questionResult.fallbackReason ?? "local answer synthesis attempted"}`);
     }
     const answerMarkdown = addWorkspaceIdentityBanner(questionResult.answerMarkdown, session.workspacePath);
@@ -1006,7 +1021,7 @@ export class RunEngine {
     const evidenceReport = questionResult.evidenceReport;
     const answerContract = {
       answerStrategy: questionResult.answerStrategy,
-      finalResponseSource: "provider",
+      finalResponseSource: finalAnswerSource,
       providerRequestRefs: providerTelemetry?.providerRequestRefs ?? [],
       reasoningAttempts: providerTelemetry?.reasoningAttempts ?? 0,
       repairAttempts: providerTelemetry?.repairAttempts ?? 0,
@@ -1031,14 +1046,16 @@ export class RunEngine {
       sessionId,
       "EXECUTION_DRAFT",
       "working",
-      "completed",
+      providerAuthored ? "completed" : "failed",
       progressCopy.answerDraft.title,
-      progressCopy.arabic
+      providerAuthored && progressCopy.arabic
         ? "جهزت رد المزوّد بعد ما عدى تحقق الأدلة."
-        : "Drafted the provider-authored answer after it passed evidence validation.",
+        : providerAuthored
+          ? "Drafted the provider-authored answer after it passed evidence validation."
+          : "Provider answer was unavailable or failed validation; recorded a notice instead of synthesizing a local answer.",
       evidenceRefs.slice(0, 8).map((ref) => ref.replace(/:\d+$/, ""))
     );
-    await this.updateStage(sessionId, "DONE", "completed", "running", progressCopy.finalReport.title, progressCopy.finalReport.summary, evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8));
+    await this.updateStage(sessionId, providerAuthored ? "DONE" : "FAILED", "completed", "running", progressCopy.finalReport.title, progressCopy.finalReport.summary, evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8));
 
     await this.sessionManager.updateSession(sessionId, (draft) => {
       draft.explainReport = createSessionExplainReportSummary(questionResult.augmentedReport);
@@ -1107,7 +1124,7 @@ export class RunEngine {
       wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
-      finalResponseSource: "provider",
+      finalResponseSource: finalAnswerSource,
       answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       concept_resolution: questionResult.conceptResolution,
@@ -1179,14 +1196,14 @@ export class RunEngine {
       decisionPipelineId: decisionPipeline.id
     });
 
-    const verification = await this.createVerification(sessionId, "Read-only project explanation completed.", [
+    const verification = await this.createVerification(sessionId, providerAuthored ? "Read-only project explanation completed." : "Read-only project explanation could not be provider-authored.", [
       { name: "Workspace inventory", status: "passed", detail: `Scanned ${questionResult.augmentedReport.contextPack.inventory.scannedFiles} file(s), ignored ${questionResult.augmentedReport.contextPack.inventory.ignoredDirectories.length} generated/vendor folder(s).` },
       { name: "Inspect read lanes", status: "passed", detail: `Ran ${questionResult.readLaneArtifacts.length} read lane(s); synthesized graph is ${questionResult.laneSynthesizedGraph.status} with ${questionResult.laneSynthesizedGraph.provenLinks.length} proven link(s) and ${questionResult.laneSynthesizedGraph.missingLinks.length} missing link(s).` },
       { name: "Universal evidence search", status: "passed", detail: `Ran ${questionResult.searchIterations.length} bounded search iteration(s), opened ${questionResult.openedFiles.length} file(s), collected ${questionResult.positiveEvidence.length} evidence item(s).` },
       { name: "Evidence hygiene", status: "passed", detail: `Used ${evidenceReport.finalEvidenceFilesActuallyUsed.length} final evidence file(s); excluded ${evidenceReport.generatedEvidenceExcludedCount} generated/runtime candidate(s).` },
       { name: "Module map", status: "passed", detail: `Mapped ${questionResult.augmentedReport.moduleMap.length} module(s) with ${questionResult.augmentedReport.contextPack.readBudget.sampledFiles} sampled file(s).` },
-      { name: "Provider truth", status: "passed", detail: providerTelemetry ? describeProviderTruth(providerTelemetry) : "Provider telemetry was not attached to this RunEngine invocation." },
-      { name: "Evidence-grounded answer", status: "passed", detail: "Generated by the configured provider from the evidence report." },
+      { name: "Provider truth", status: providerAuthored ? "passed" : "failed", detail: providerTelemetry ? describeProviderTruth(providerTelemetry) : "Provider telemetry was not attached to this RunEngine invocation." },
+      { name: "Evidence-grounded answer", status: providerAuthored ? "passed" : "failed", detail: providerAuthored ? "Generated by the configured provider from the evidence report." : "Provider answer was unavailable or failed validation; local synthesis was not used." },
       { name: "Patch required", status: "passed", detail: "No patch was required for this request." }
     ]);
 
@@ -1246,7 +1263,7 @@ export class RunEngine {
       wantsComparisons: questionResult.questionUnderstanding.wantsComparisons,
       answerShapeValidation: questionResult.answerShapeValidation,
       validationErrors,
-      finalResponseSource: "provider",
+      finalResponseSource: finalAnswerSource,
       answerStrategy: questionResult.answerStrategy,
       confidence: questionResult.confidence,
       usedEvidenceRefs: evidenceRefs,
@@ -1269,25 +1286,27 @@ export class RunEngine {
 
     await this.updateStage(
       sessionId,
-      "DONE",
+      providerAuthored ? "DONE" : "FAILED",
       "completed",
-      "completed",
+      providerAuthored ? "completed" : "failed",
       progressCopy.finalReport.title,
       progressCopy.arabic
         ? "ليه الخطوة دي: حفظت تقرير الأدلة والرد النهائي في جلسة التشغيل."
-        : "Why this step: saved the evidence report and final answer in the run session.",
+        : providerAuthored
+          ? "Why this step: saved the evidence report and final answer in the run session."
+          : "Why this step: saved the evidence report and provider failure notice in the run session.",
       evidenceReport.finalEvidenceFilesActuallyUsed.slice(0, 8)
     );
 
-    await this.finish(sessionId, "completed", "DONE", {
-      status: "completed",
+    await this.finish(sessionId, providerAuthored ? "completed" : "failed_provider", providerAuthored ? "DONE" : "FAILED", {
+      status: providerAuthored ? "completed" : "failed",
       summary: answerMarkdown.slice(0, 500),
       filesChanged: [],
       appliedPatchIds: [],
       proposedPatchIds: [],
       commandResults: [],
       gates: verification.checks.map((check) => ({ name: check.name, status: check.status === "failed" ? "failed" : "passed", notes: [check.detail] })),
-      nextAction: "Ask for a concrete edit or creation task when you want code changes.",
+      nextAction: providerAuthored ? "Ask for a concrete edit or creation task when you want code changes." : "Fix the provider/runtime issue, then retry the request.",
       createdAt: new Date().toISOString()
     });
 
@@ -1296,7 +1315,7 @@ export class RunEngine {
       finding: questionResult.grounding.concept.specific
         ? `Requested concept "${questionResult.grounding.concept.label}" was ${questionResult.positiveEvidence.length ? "found by universal local search" : questionResult.grounding.conceptFound ? "found" : "not found"} in current workspace evidence.`
         : "Project answer was grounded in the current workspace evidence report and universal local search.",
-      decision: "Use the provider answer because it passed current-workspace evidence validation.",
+      decision: providerAuthored ? "Use the provider answer because it passed current-workspace evidence validation." : "Do not synthesize a local answer; report the provider failure notice and retry after the provider is fixed.",
       rationaleSummary: questionResult.positiveEvidence.length
         ? `Universal search collected ${questionResult.positiveEvidence.length} evidence item(s) across ${questionResult.candidateFiles.length} candidate file(s).`
         : questionResult.grounding.foundInstead,
@@ -1307,7 +1326,7 @@ export class RunEngine {
           path: match?.[1] ?? ref,
           lineStart: match?.[2] ? Number(match[2]) : undefined,
           category: "project-explain-grounding",
-          reason: "Supported the accepted project explanation."
+          reason: providerAuthored ? "Supported the accepted project explanation." : "Inspected before provider failure notice; not used for local semantic synthesis."
         };
       }),
       linkedFiles: questionResult.openedFiles.slice(0, 8),
@@ -1317,16 +1336,18 @@ export class RunEngine {
       linkedAgentIds: ["agent_local_codex"]
     });
 
-    await this.updateRunPhase(sessionId, "agents_running", "completed", `Read-only explanation completed from evidence report.`);
-    await this.updateRunPhase(sessionId, "final_report", "completed", "Inspection-only report is ready.");
+    await this.updateRunPhase(sessionId, "agents_running", providerAuthored ? "completed" : "failed", providerAuthored ? `Read-only explanation completed from evidence report.` : "Provider failed before a trusted explanation could be authored.");
+    await this.updateRunPhase(sessionId, "final_report", providerAuthored ? "completed" : "failed", providerAuthored ? "Inspection-only report is ready." : "Provider failure notice is ready.");
     
-    this.options.providerTelemetry?.markProviderAuthoredResponse();
+    if (providerAuthored) {
+      this.options.providerTelemetry?.markProviderAuthoredResponse();
+    }
     const finalTelemetry = this.options.providerTelemetry?.snapshot();
     if (finalTelemetry) {
       await this.sessionManager.updateSession(sessionId, (draft) => {
         draft.providerTelemetry = finalTelemetry;
         if (draft.latestDecisionPipeline) {
-          draft.latestDecisionPipeline.finalResponseSource = "provider";
+          draft.latestDecisionPipeline.finalResponseSource = providerAuthored ? "provider" : "none";
           draft.latestDecisionPipeline.providerRequestRefs = finalTelemetry.providerRequestRefs;
           draft.latestDecisionPipeline.reasoningAttempts = finalTelemetry.reasoningAttempts;
           draft.latestDecisionPipeline.repairAttempts = finalTelemetry.repairAttempts;
@@ -1728,7 +1749,7 @@ export class RunEngine {
       draft.lifecycleStage = stage;
       updateAgentRunRecord(draft, "agent_local_codex", (agent) => {
         agent.status =
-          status === "failed"
+          status === "failed" || status === "failed_provider"
             ? "failed"
             : status === "blocked"
               ? "blocked"
@@ -1751,6 +1772,47 @@ export class RunEngine {
     if (!session) throw new Error("Session not found");
     return session;
   }
+}
+
+function finalizeLocalNoticeDecisionPipeline(input: {
+  state: DecisionPipelineState;
+  reason: string;
+  evidenceRefs: string[];
+}): DecisionPipelineState {
+  const now = new Date().toISOString();
+  const verification: AnswerVerificationReport = {
+    status: "unavailable",
+    supportedClaims: [],
+    unsupportedClaims: [],
+    missingFacts: [input.reason],
+    hardErrors: [input.reason],
+    repairableErrors: [],
+    evidenceRefs: uniqueStrings(input.evidenceRefs),
+    verifierSource: "deterministic_only",
+    createdAt: now
+  };
+  const outcome: DecisionOutcome = {
+    action: "REFUSE",
+    reason: input.reason,
+    confidence: "low",
+    createdAt: now
+  };
+  return {
+    ...input.state,
+    stages: input.state.stages.map((record) => {
+      if (record.stage === "retrieve") return { ...record, status: "completed", source: "deterministic", detail: `${input.evidenceRefs.length} evidence ref(s) inspected before provider failure.`, updatedAt: now };
+      if (record.stage === "curate") return { ...record, status: "skipped", source: "deterministic", detail: "No provider-authored answer was available to curate.", updatedAt: now };
+      if (record.stage === "compose") return { ...record, status: "blocked", source: "provider", detail: `Provider-authored composition unavailable: ${input.reason}`, updatedAt: now };
+      if (record.stage === "verify") return { ...record, status: "blocked", source: "deterministic", detail: "Verification skipped because no trusted provider-authored answer exists.", updatedAt: now };
+      if (record.stage === "decide") return { ...record, status: "completed", source: "deterministic", detail: `REFUSE: ${input.reason}`, updatedAt: now };
+      return record;
+    }),
+    verification,
+    outcome,
+    finalResponseSource: "none",
+    terminalFailure: input.reason,
+    updatedAt: now
+  };
 }
 
 function isReadOnlyAnswerRequest(snapshot: RepoSnapshot) {

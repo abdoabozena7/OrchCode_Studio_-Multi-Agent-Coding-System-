@@ -44,6 +44,26 @@ export class RuntimeOrchestrationDispatchService {
         })
       };
     }
+    if (
+      input.conversationUnderstanding?.intentDecision.kind === "workspace_question"
+      && input.conversationUnderstanding.routeDecision.route === "inspect_explain"
+    ) {
+      return {
+        branch: "simple",
+        session: await input.branches.simple({
+          resolvedMode: input.modeResolution.mode,
+          projectMap: input.projectMap,
+          thinkFirst: input.thinkFirst,
+          conversationUnderstanding: input.conversationUnderstanding
+        })
+      };
+    }
+    if (shouldUseRecursiveActionTree(input)) {
+      return {
+        branch: "recursive_swarm",
+        session: await input.branches.recursiveSwarm()
+      };
+    }
     if (input.modeResolution.mode === "recursive_factory") {
       return {
         branch: "recursive_factory",
@@ -72,6 +92,15 @@ export class RuntimeOrchestrationDispatchService {
       })
     };
   }
+}
+
+function shouldUseRecursiveActionTree(input: RuntimeOrchestrationDispatchInput) {
+  if (input.swarmMode !== "recursive_tree") return false;
+  const normalized = input.prompt.toLowerCase();
+  return /\brecursive\b[\s\S]{0,80}\b(child|children|childs|sub[- ]?tasks?|agents?|action|execute|execution|tree)\b/.test(normalized)
+    || /\b(child|children|childs|sub[- ]?tasks?|agents?)\b[\s\S]{0,80}\brecursive\b/.test(normalized)
+    || /\b(parent|llm)\b[\s\S]{0,100}\b(decide|decides|choose|chooses|split|splits)\b[\s\S]{0,100}\b(number|numbers|tasks?|prompts?|children|childs)\b/.test(normalized)
+    || /\bchain of thou(?:gh)?t\b[\s\S]{0,100}\b(action|recursive|children|childs)\b/.test(normalized);
 }
 
 function shouldUseProviderBackedSwarm(input: RuntimeOrchestrationDispatchInput) {

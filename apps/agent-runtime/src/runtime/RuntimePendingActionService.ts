@@ -13,8 +13,19 @@ export class RuntimePendingActionService {
   constructor(private readonly sessionManager: SessionManager) {}
 
   async handle(session: AgentRuntimeSession, message: string): Promise<RuntimePendingActionResult> {
-    if (!session.nextAction) return { handled: false };
     const normalized = message.trim().toLowerCase();
+    if (!session.nextAction) {
+      const resumePrompt = buildRecursiveCheckpointResumePrompt(session, message, normalized);
+      if (resumePrompt) {
+        await this.sessionManager.updateSession(session.id, (draft) => {
+          draft.reasoningSummaries.push("Continuation request resolved to the latest recursive swarm checkpoint.");
+          draft.status = "running";
+          draft.lifecycleStage = "PLAN";
+        });
+        return { handled: false, resumePrompt };
+      }
+      return { handled: false };
+    }
     if (session.nextAction.kind === "clarify_request") {
       const isDismissive = /^(no\s+)?just\s+(start|do\s+it|go|proceed)\b/i.test(normalized)
         || /\b(defaults?|whatever|i don'?t care|fine|anyway)\b/i.test(normalized);
@@ -158,4 +169,56 @@ export class RuntimePendingActionService {
       approvalRef: `session:${session.id}:${term}`
     }).catch(() => undefined);
   }
+}
+
+export function buildRecursiveCheckpointResumePrompt(session: AgentRuntimeSession, message: string, normalized = message.trim().toLowerCase()): string | undefined {
+  if (!isContinuationRequest(message, normalized)) return undefined;
+  const checkpoint = session.recursiveSwarmRunState?.checkpoint;
+  if (!checkpoint?.resumable) return undefined;
+  const pending = checkpoint.pendingQueue.slice(0, 30);
+  const failed = checkpoint.failedNodeIds.slice(0, 20);
+  const artifactCount = checkpoint.generatedArtifacts.length;
+  const activity = checkpoint.durableActivityRows.slice(-8).map((row) => `- ${row.title}: ${row.summary}`).join("\n");
+  const userAddition = stripContinuationWords(message).trim();
+  return [
+    "Resume the previous recursive swarm run from its latest checkpoint.",
+    "Do not reinterpret this as a brand-new unrelated request unless the user explicitly changed the goal.",
+    "",
+    "ORIGINAL GOAL (authoritative):",
+    checkpoint.originalPrompt || session.userPrompt,
+    "",
+    "EXPANDED GOAL / SPEC:",
+    checkpoint.expandedGoalSpec?.expandedGoal ?? session.recursiveSwarmRunState?.expandedGoalSpec?.expandedGoal ?? checkpoint.originalPrompt,
+    "",
+    "LAST STABLE PHASE:",
+    checkpoint.lastStablePhase,
+    "",
+    "RUN BUDGET:",
+    checkpoint.budget
+      ? `taskClass=${checkpoint.budget.taskClass}; soft=${checkpoint.budget.softMaxAgents}; hard=${checkpoint.budget.hardMaxAgents}; maxChildren=${checkpoint.budget.maxChildrenPerParent}; maxDepth=${checkpoint.budget.maxDepth}`
+      : "No budget snapshot recorded.",
+    "",
+    "CHECKPOINT SUMMARY:",
+    `pending=${pending.length ? pending.join(", ") : "none"}`,
+    `completed=${checkpoint.completedNodeIds.length}`,
+    `failedOrBlocked=${failed.length ? failed.join(", ") : "none"}`,
+    `generatedArtifacts=${artifactCount}`,
+    "",
+    "RECENT DURABLE ACTIVITY:",
+    activity || "No durable activity rows recorded.",
+    "",
+    userAddition ? `USER CONTINUATION NOTE:\n${userAddition}` : "USER CONTINUATION NOTE:\nContinue from the saved checkpoint."
+  ].join("\n");
+}
+
+function isContinuationRequest(message: string, normalized: string): boolean {
+  const compact = normalized.replace(/[.!؟?،,\s]+/g, " ").trim();
+  if (/^(continue|resume|go on|keep going|carry on|continue from here|resume from here)$/i.test(compact)) return true;
+  return /^(كمل|كمّل|كمل من هنا|كمّل من هنا|كمل اللي كنت بتعمله|كمّل اللي كنت بتعمله)$/i.test(message.trim());
+}
+
+function stripContinuationWords(message: string): string {
+  return message
+    .replace(/^\s*(continue|resume|go on|keep going|carry on|continue from here|resume from here)\b[:\s-]*/i, "")
+    .replace(/^\s*(كمل|كمّل)(\s+من\s+هنا|\s+اللي\s+كنت\s+بتعمله)?[:\s-]*/i, "");
 }

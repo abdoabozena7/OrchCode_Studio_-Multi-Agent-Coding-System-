@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { AgentRuntime } from "../src/runtime/AgentRuntime.js";
 import { EventBus } from "../src/runtime/EventBus.js";
 import { SessionManager } from "../src/runtime/SessionManager.js";
+import { createRealProvider } from "../src/runtime/RuntimeProviderFactory.js";
 
 async function main() {
   const fixture = await createFixture();
@@ -19,13 +20,17 @@ async function main() {
     assert.ok(providerConfig, "smoke:inspect-provider-truth requires OLLAMA_MODEL or HIVO_OLLAMA_MODEL with a reachable Ollama server.");
     const sessionManager = new SessionManager(fixture.storageDir, new EventBus());
     await sessionManager.load();
+    const runtimeConfig = loadConfig();
     const runtime = new AgentRuntime(
       {
-        ...loadConfig(),
+        ...runtimeConfig,
         storageDir: fixture.storageDir,
         defaultMode: "real_provider"
       },
-      sessionManager
+      sessionManager,
+      {
+        providerFactory: () => createRealProvider(providerConfig, runtimeConfig.providerRequestTimeoutMs)
+      }
     );
     const prompt = "How is DBSCAN applied here?";
     const created = await runtime.createSession({
@@ -69,10 +74,9 @@ function assertSmoke(report: ReturnType<typeof createReport>) {
   assert.equal(report.evidenceReport.finalEvidenceFilesActuallyUsed.some((file) => file.includes("tmp/")), false, "tmp artifacts must not be used as final source proof");
   assert.equal(report.evidenceReport.evidenceFilesByTier.source_code.some((file) => file === "src/clustering.py"), true, "real source evidence should be used");
   assert.equal(report.evidenceReport.excludedEvidenceCandidates.some((file) => file.includes("tmp/root-cause-audit/explain-repro-results.json")), true, "generated audit artifact should be excluded");
-  if (report.providerTelemetry.mockProviderUsed) {
-    assert.equal(report.providerTelemetry.realProviderUsed, false, "mock provider must not be reported as real");
-  }
-  assert.equal(report.providerTelemetry.mockProviderUsed, false, "inspect-provider-truth smoke must not use mock/demo providers");
+  assert.notEqual(report.providerTelemetry.providerMode, "demo_mock", "inspect-provider-truth smoke must not use mock/demo providers");
+  assert.ok((report.providerTelemetry.realProviderRequestCount ?? 0) > 0, "inspect-provider-truth smoke must make real provider requests");
+  assert.equal(report.providerTelemetry.finalResponseSource, "provider", "inspect-provider-truth smoke must finish with provider-authored output");
 }
 
 async function resolveProviderConfig(): Promise<SanitizedProviderConfig | undefined> {
