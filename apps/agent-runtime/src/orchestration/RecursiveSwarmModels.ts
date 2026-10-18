@@ -39,6 +39,15 @@ export type AtomicTaskAssessment = {
 
 export type RecursiveTaskClass = "small" | "medium" | "large" | "campaign" | "audit";
 
+export type RecursiveRuntimeRunStatus =
+  | "running"
+  | "pausing"
+  | "paused"
+  | "resuming"
+  | "completed"
+  | "failed"
+  | "blocked";
+
 export type ExpandedGoalSpec = {
   originalPrompt: string;
   originalPromptHash: string;
@@ -114,6 +123,7 @@ export type SplitSubTask = {
 export type SplitResult = {
   subTasks: SplitSubTask[];
   rationale: string;
+  shouldSplit?: boolean;
   desiredChildCount?: number;
   splitReason?: string;
   stopConditions?: string[];
@@ -377,6 +387,7 @@ export type RecursiveSwarmRunState = {
   durableEvents: DurableSwarmEvent[];
   activityProjection?: RunActivityProjection;
   checkpoint?: RecursiveRunCheckpoint;
+  runtimeStatus: RecursiveRuntimeRunStatus;
   /** Count of nodes per context source type */
   contextSourceCounts: Record<RecursiveContextSource, number>;
 };
@@ -437,6 +448,15 @@ export type RecursiveRunCheckpoint = {
   durableActivityRows: DurableActivityRow[];
   lastStablePhase: string;
   resumable: boolean;
+  runtimeStatus: RecursiveRuntimeRunStatus;
+  /** Full state needed to hydrate the recursive runtime without replaying completed work. */
+  tree?: RecursiveSwarmTree;
+  goalEnvelope?: GoalEnvelope;
+  durableEvents?: DurableSwarmEvent[];
+  contextSourceCounts?: ContextSourceCounts;
+  goalCheckHistory?: GoalCheckResult[];
+  totalSplits?: number;
+  totalExecutions?: number;
   createdAt: string;
 };
 
@@ -458,6 +478,9 @@ export type DurableSwarmEvent = {
     | "budget_planned"
     | "budget_gate"
     | "checkpoint_written"
+    | "run_pausing"
+    | "run_paused"
+    | "run_resuming"
     | "provider_backoff"
     | "error";
   nodeId?: string;

@@ -87,6 +87,23 @@ export type ProviderPromptLatency = {
   maxOutputTokens?: number;
 };
 
+export type ProviderFailureClass =
+  | "invalid_json"
+  | "schema_validation"
+  | "unreachable"
+  | "malformed_response"
+  | "timeout"
+  | "unknown";
+
+export type ProviderFailureDetails = {
+  failureClass: ProviderFailureClass;
+  stage?: import("./project-understanding.js").ReasoningStage;
+  attempts: number;
+  elapsedMs: number;
+  responseExcerpt?: string;
+  retryable: boolean;
+};
+
 export type ProviderTruthTelemetry = {
   providerMode: AgentRuntimeMode;
   providerName: string;
@@ -108,6 +125,7 @@ export type ProviderTruthTelemetry = {
   providerRequestRefs: string[];
   finalResponseSource: "provider" | "none";
   terminalFailure?: string;
+  lastFailure?: ProviderFailureDetails;
   modelCertification: {
     status: "certified" | "uncertified";
     routerModel?: string;
@@ -296,6 +314,9 @@ export type RuntimeSessionStatus =
   | "created"
   | "restored"
   | "running"
+  | "pausing"
+  | "paused"
+  | "resuming"
   | "completed"
   | "needs_approval"
   | "blocked"
@@ -427,6 +448,15 @@ export type AgentRuntimeRecursiveRunBudget = {
   taskClass: "small" | "medium" | "large" | "campaign" | "audit";
 };
 
+export type AgentRuntimeRecursiveRunStatus =
+  | "running"
+  | "pausing"
+  | "paused"
+  | "resuming"
+  | "completed"
+  | "failed"
+  | "blocked";
+
 export type AgentRuntimeActivityProjection = {
   durableRows: Array<{
     id: string;
@@ -477,6 +507,14 @@ export type AgentRuntimeRecursiveRunCheckpoint = {
   durableActivityRows: AgentRuntimeActivityProjection["durableRows"];
   lastStablePhase: string;
   resumable: boolean;
+  runtimeStatus?: AgentRuntimeRecursiveRunStatus;
+  tree?: unknown;
+  goalEnvelope?: unknown;
+  durableEvents?: unknown[];
+  contextSourceCounts?: Record<string, number>;
+  goalCheckHistory?: unknown[];
+  totalSplits?: number;
+  totalExecutions?: number;
   createdAt: string;
 };
 
@@ -658,6 +696,7 @@ export type AgentRuntimeSession = {
     };
     expandedGoalSpec?: AgentRuntimeExpandedGoalSpec;
     budget?: AgentRuntimeRecursiveRunBudget;
+    runtimeStatus?: AgentRuntimeRecursiveRunStatus;
     activityProjection?: AgentRuntimeActivityProjection;
     checkpoint?: AgentRuntimeRecursiveRunCheckpoint;
     tree: {

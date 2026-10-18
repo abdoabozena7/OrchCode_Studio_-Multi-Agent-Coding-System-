@@ -489,11 +489,15 @@ function deterministicVector(text: string) {
 }
 
 function extractUserRequest(prompt: string) {
+  const quoted = prompt.match(/BEGIN QUOTED SOURCE REQUEST\s*([\s\S]*?)\s*END QUOTED SOURCE REQUEST/i);
+  if (quoted?.[1]) return quoted[1].trim();
   const match = prompt.match(/User request:\s*([\s\S]*?)(?:\n(?:Workspace snapshot|Plan):|$)/i);
   return (match?.[1] ?? prompt).trim();
 }
 
 function extractReasoningUserTurn(prompt: string) {
+  const quoted = prompt.match(/BEGIN QUOTED SOURCE REQUEST\s*([\s\S]*?)\s*END QUOTED SOURCE REQUEST/i);
+  if (quoted?.[1]) return quoted[1].trim();
   const match = prompt.match(/Understand this user turn and choose its first reasoning step:\s*([\s\S]*?)\n\nReturn \{ understanding, step \}\./i);
   return (match?.[1] ?? extractUserRequest(prompt)).trim();
 }

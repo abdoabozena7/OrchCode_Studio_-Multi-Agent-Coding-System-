@@ -315,6 +315,14 @@ export class AgentRuntime {
     return result;
   }
 
+  async pauseRecursiveSwarm(sessionId: string): Promise<AgentRuntimeSession> {
+    return this.recursiveSwarmService.pause(sessionId);
+  }
+
+  async resumeRecursiveSwarm(sessionId: string, message = "continue"): Promise<RuntimeTurnResponse> {
+    return this.runTurn(sessionId, message);
+  }
+
   async rejectPatch(sessionId: string, patchId: string) {
     const result = await this.approvalBoundaryService.rejectPatch(sessionId, patchId);
     await this.recursiveBranchProgressService.projectPatchStatus(sessionId, patchId);

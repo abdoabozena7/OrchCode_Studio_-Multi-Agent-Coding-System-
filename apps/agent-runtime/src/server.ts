@@ -32,6 +32,7 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
   const sessionManager = new SessionManager(config.storageDir, eventBus);
   await sessionManager.load();
   const runtime = new AgentRuntime(config, sessionManager);
+  const eventSequences = new Map<string, number>();
 
   // Compute workspace fingerprint for runtime identity checking
   const workspaceFingerprint = computeWorkspaceFingerprint(config.storageDir);
@@ -80,6 +81,29 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
       return reply.status(400).send({ error: "message is required" });
     }
     return runtime.runTurn(id, body.message);
+  });
+
+  app.post("/sessions/:id/recursive/pause", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    try {
+      return await runtime.pauseRecursiveSwarm(id);
+    } catch (error) {
+      return reply.status(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/sessions/:id/recursive/resume", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const auth = authorizeSessionRequest(sessionManager, id, request);
+    if (!auth.ok) return sendSessionAuthFailure(reply, auth);
+    const body = request.body as { message?: string } | undefined;
+    try {
+      return await runtime.resumeRecursiveSwarm(id, body?.message?.trim() || "continue");
+    } catch (error) {
+      return reply.status(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.get("/sessions/:id", async (request, reply) => {
@@ -162,9 +186,20 @@ export async function buildServer(config: RuntimeConfig = loadConfig()): Promise
       connection: "keep-alive",
       "access-control-allow-origin": "*"
     });
+    reply.raw.write("retry: 1500\n\n");
+    const currentSession = runtime.getSession(id);
+    if (currentSession) {
+      const sequence = eventSequences.get(id) ?? 0;
+      reply.raw.write(`id: ${sequence}\n`);
+      reply.raw.write("event: runtime.session.updated\n");
+      reply.raw.write(`data: ${JSON.stringify({ type: "runtime.session.updated", session: currentSession })}\n\n`);
+    }
     const unsubscribe = eventBus.subscribe((event) => {
       if ("sessionId" in event && event.sessionId !== id) return;
       if (event.type === "runtime.session.updated" && event.session.id !== id) return;
+      const sequence = (eventSequences.get(id) ?? 0) + 1;
+      eventSequences.set(id, sequence);
+      reply.raw.write(`id: ${sequence}\n`);
       reply.raw.write(`event: ${event.type}\n`);
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });

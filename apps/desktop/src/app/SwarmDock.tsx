@@ -1,10 +1,16 @@
 import {
+  Activity,
+  AlertTriangle,
   Bot,
   ChevronRight,
   GitBranch,
   GitMerge,
+  LayoutDashboard,
+  Map as MapIcon,
   Maximize2,
   MessageSquarePlus,
+  Pause,
+  Play,
   Search,
   ShieldCheck,
   Workflow,
@@ -20,13 +26,14 @@ import type {
   AgentRuntimeSwarmNodeStatus,
   AgentRuntimeSwarmState
 } from "@hivo/protocol";
-import { sendRuntimeAgentMessage } from "../lib/agentRuntime";
+import { getRuntimeSession, pauseRuntimeSession, resumeRuntimeSession, sendRuntimeAgentMessage } from "../lib/agentRuntime";
 
 type SwarmDockProps = {
   session: AgentRuntimeSession | null;
   sessionToken: string;
   onSessionUpdate: (session: AgentRuntimeSession) => void;
   onSelectAgent?: (agentId: string) => void;
+  onStartNewSession?: () => void;
 };
 
 type LayoutNode = {
@@ -114,7 +121,7 @@ const ZOOM_MIN = 0.32;
 const ZOOM_MAX = 1.7;
 const RADIAL_MARGIN = 180;
 
-export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgent }: SwarmDockProps) {
+export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgent, onStartNewSession }: SwarmDockProps) {
   const swarm = session?.swarmState;
   const [open, setOpen] = useState(false);
   const totalAgents = Math.max(0, swarm?.effectiveTotalLogicalAgents ?? 0);
@@ -150,6 +157,7 @@ export function SwarmDock({ session, sessionToken, onSessionUpdate, onSelectAgen
           onClose={() => setOpen(false)}
           onSessionUpdate={onSessionUpdate}
           onSelectAgent={onSelectAgent}
+          onStartNewSession={onStartNewSession}
         />
       ) : null}
     </>
@@ -162,7 +170,8 @@ function SwarmDockModal({
   sessionToken,
   onClose,
   onSessionUpdate,
-  onSelectAgent
+  onSelectAgent,
+  onStartNewSession
 }: {
   session: AgentRuntimeSession;
   swarm: AgentRuntimeSwarmState;
@@ -170,7 +179,9 @@ function SwarmDockModal({
   onClose: () => void;
   onSessionUpdate: (session: AgentRuntimeSession) => void;
   onSelectAgent?: (agentId: string) => void;
+  onStartNewSession?: () => void;
 }) {
+  const [view, setView] = useState<"overview" | "map">("overview");
   const [selectedId, setSelectedId] = useState(swarm.rootId);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -179,16 +190,21 @@ function SwarmDockModal({
   const [statusFilter, setStatusFilter] = useState<AgentRuntimeSwarmNodeStatus | "all">("all");
   const [query, setQuery] = useState("");
   const [animationRun, setAnimationRun] = useState(0);
+  const [controlBusy, setControlBusy] = useState(false);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const initialFitRef = useRef(false);
   const graphSwarm = useMemo(
-    () => prepareSwarmForGraph(swarm, selectedId, query, statusFilter),
-    [query, selectedId, statusFilter, swarm]
+    () => view === "map" ? prepareSwarmForGraph(swarm, selectedId, query, statusFilter) : swarm,
+    [query, selectedId, statusFilter, swarm, view]
+  );
+  const listNodes = useMemo(
+    () => [...filterSourceNodes(swarm.nodes, swarm.rootId, query, statusFilter)].sort(compareSwarmNodes),
+    [query, statusFilter, swarm.nodes, swarm.rootId]
   );
 
   const layout = useMemo(
-    () => layoutSwarm(graphSwarm, collapsed, query, statusFilter),
-    [graphSwarm, collapsed, query, statusFilter]
+    () => view === "map" ? layoutSwarm(graphSwarm, collapsed, query, statusFilter) : emptySwarmLayout(),
+    [graphSwarm, collapsed, query, statusFilter, view]
   );
   const selected = layout.nodes.find((node) => node.sourceId === selectedId)?.node
     ?? swarm.nodes.find((node) => node.id === selectedId)
@@ -225,9 +241,10 @@ function SwarmDockModal({
   }, [layout.width, layout.height, updateViewport]);
 
   useEffect(() => {
+    if (view !== "map") return;
     if (layout.nodes.some((node) => node.sourceId === selectedId)) return;
     setSelectedId(layout.nodes[0]?.sourceId ?? swarm.rootId);
-  }, [layout.nodes, selectedId, swarm.rootId]);
+  }, [layout.nodes, selectedId, swarm.rootId, view]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -281,26 +298,60 @@ function SwarmDockModal({
     });
   }, []);
 
+  const runtimeStatus = session.recursiveSwarmRunState?.runtimeStatus;
+  const canPause = runtimeStatus === "running" || runtimeStatus === "resuming";
+  const canResume = runtimeStatus === "paused";
+  const handleRunControl = useCallback(async (action: "pause" | "resume") => {
+    setControlBusy(true);
+    try {
+      if (action === "pause") {
+        onSessionUpdate(await pauseRuntimeSession(session.id, sessionToken || undefined));
+      } else {
+        await resumeRuntimeSession(session.id, "continue", sessionToken || undefined);
+        onSessionUpdate(await getRuntimeSession(session.id, sessionToken || undefined));
+      }
+    } finally {
+      setControlBusy(false);
+    }
+  }, [onSessionUpdate, session.id, sessionToken]);
+
   return (
     <div className="swarm-modal-backdrop">
       <section className="swarm-modal" aria-label="Swarm dock">
         <header className="swarm-modal-header">
           <div>
-            <strong>Swarm dock</strong>
+            <strong>Run overview</strong>
             <span>
-              {swarm.effectiveTotalLogicalAgents} agent(s) | {swarm.maxSupportedLogicalAgents} capacity | {swarm.source.replaceAll("_", " ")}
+              {swarm.effectiveTotalLogicalAgents} agent(s) | {swarm.source.replaceAll("_", " ")}
               {swarm.source === "recursive_factory" ? " | recursive tree" : ""}
               {graphSwarm.nodes.length < swarm.nodes.length ? ` | clustered ${graphSwarm.nodes.length}/${swarm.nodes.length}` : ""}
-              {swarm.swarmRunId ? ` | ${swarm.swarmRunId}` : ""}
             </span>
           </div>
           <div className="swarm-modal-actions">
-            <button className="swarm-utility-button" onClick={() => setAnimationRun((current) => current + 1)} type="button">
-              Replay
-            </button>
+            {runtimeStatus ? (
+              <span className={`swarm-runtime-status ${runtimeStatus}`} aria-live="polite">{runtimeStatus}</span>
+            ) : null}
+            {canPause ? (
+              <button className="frame-icon-button" disabled={controlBusy} onClick={() => void handleRunControl("pause")} title="Pause recursive run" type="button">
+                <Pause size={15} />
+              </button>
+            ) : null}
+            {canResume ? (
+              <button className="frame-icon-button" disabled={controlBusy} onClick={() => void handleRunControl("resume")} title="Resume recursive run" type="button">
+                <Play size={15} />
+              </button>
+            ) : null}
+            <div className="swarm-view-switcher" role="tablist" aria-label="Swarm view">
+              <button className={view === "overview" ? "selected" : ""} onClick={() => setView("overview")} role="tab" aria-selected={view === "overview"} type="button">
+                <LayoutDashboard size={14} /> Overview
+              </button>
+              <button className={view === "map" ? "selected" : ""} onClick={() => setView("map")} role="tab" aria-selected={view === "map"} type="button">
+                <MapIcon size={14} /> Map
+              </button>
+            </div>
             <div className="swarm-search">
               <Search size={14} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find agent, work item, file" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find agents or files" />
             </div>
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as AgentRuntimeSwarmNodeStatus | "all")}>
               <option value="all">All status</option>
@@ -308,15 +359,22 @@ function SwarmDockModal({
                 <option key={status} value={status}>{label}</option>
               ))}
             </select>
-            <button className="frame-icon-button" onClick={() => setZoom((current) => clampZoom(current - 0.12))} title="Zoom out" type="button">
-              <ZoomOut size={15} />
-            </button>
-            <button className="frame-icon-button" onClick={() => setZoom((current) => clampZoom(current + 0.12))} title="Zoom in" type="button">
-              <ZoomIn size={15} />
-            </button>
-            <button className="frame-icon-button" onClick={fitToScreen} title="Fit graph" type="button">
-              <Maximize2 size={15} />
-            </button>
+            {view === "map" ? (
+              <>
+                <button className="frame-icon-button" onClick={() => setZoom((current) => clampZoom(current - 0.12))} title="Zoom out" type="button">
+                  <ZoomOut size={15} />
+                </button>
+                <button className="frame-icon-button" onClick={() => setZoom((current) => clampZoom(current + 0.12))} title="Zoom in" type="button">
+                  <ZoomIn size={15} />
+                </button>
+                <button className="frame-icon-button" onClick={fitToScreen} title="Fit map" type="button">
+                  <Maximize2 size={15} />
+                </button>
+                <button className="frame-icon-button" onClick={() => setAnimationRun((current) => current + 1)} title="Replay map animation" type="button">
+                  <Activity size={15} />
+                </button>
+              </>
+            ) : null}
             <button className="frame-icon-button" onClick={onClose} title="Close swarm dock" type="button">
               <X size={16} />
             </button>
@@ -340,46 +398,58 @@ function SwarmDockModal({
         </div>
 
         <div className="swarm-modal-body">
-          <div className="swarm-graph-shell">
-            <div className="swarm-graph-label top">Groups</div>
-            <div className="swarm-graph-label bottom">Agents / work items</div>
-            {graphSwarm.nodes.length < swarm.nodes.length ? (
-              <div className="swarm-cluster-note">
-                Clustered overview. Use search or status filters to inspect individual agents.
+          {view === "overview" ? (
+            <SwarmOverview
+              session={session}
+              swarm={swarm}
+              nodes={listNodes}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setSelectedId(id);
+                const node = swarm.nodes.find((candidate) => candidate.id === id);
+                if (node && isMessageableNode(node)) onSelectAgent?.(id);
+              }}
+              onStartNewSession={onStartNewSession}
+            />
+          ) : (
+            <div className="swarm-graph-shell swarm-map-shell">
+              <div className="swarm-map-toolbar">
+                <strong>Agent map</strong>
+                <span>{graphSwarm.nodes.length < swarm.nodes.length ? `Clustered ${graphSwarm.nodes.length} of ${swarm.nodes.length}` : `${graphSwarm.nodes.length} nodes`}</span>
               </div>
-            ) : null}
-            <div ref={scrollerRef} className="swarm-graph-scroll">
-              <div className="swarm-graph-stage" style={{ width: layout.width * zoom, height: layout.height * zoom }}>
-                <div className="swarm-graph-world" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
-                  <SwarmEdgeCanvas layout={layout} viewport={viewport} selectedId={selectedId} hoverId={hoverId} pathIds={pathIds} zoom={zoom} />
-                  {layout.nodes
-                    .filter((node) => isNodeVisible(node, viewport))
-                    .map((node) => (
-                      <SwarmRadialNode
-                        key={`${animationRun}:${node.id}`}
-                        layoutNode={node}
-                        selected={selectedId === node.sourceId}
-                        onSelect={() => {
-                          setSelectedId(node.sourceId);
-                          if (isMessageableNode(node.node)) onSelectAgent?.(node.sourceId);
-                        }}
-                        onHover={setHoverId}
-                        onToggleCollapse={toggleCollapse}
-                        onPath={pathIds.has(node.id)}
-                        zoom={zoom}
-                      />
-                    ))}
+              <div ref={scrollerRef} className="swarm-graph-scroll">
+                <div className="swarm-graph-stage" style={{ width: layout.width * zoom, height: layout.height * zoom }}>
+                  <div className="swarm-graph-world" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
+                    <SwarmEdgeCanvas layout={layout} viewport={viewport} selectedId={selectedId} hoverId={hoverId} pathIds={pathIds} zoom={zoom} />
+                    {layout.nodes
+                      .filter((node) => isNodeVisible(node, viewport))
+                      .map((node) => (
+                        <SwarmRadialNode
+                          key={`${animationRun}:${node.id}`}
+                          layoutNode={node}
+                          selected={selectedId === node.sourceId}
+                          onSelect={() => {
+                            setSelectedId(node.sourceId);
+                            if (isMessageableNode(node.node)) onSelectAgent?.(node.sourceId);
+                          }}
+                          onHover={setHoverId}
+                          onToggleCollapse={toggleCollapse}
+                          onPath={pathIds.has(node.id)}
+                          zoom={zoom}
+                        />
+                      ))}
+                  </div>
                 </div>
               </div>
+              <SwarmMinimap layout={layout} viewport={viewport} pathIds={pathIds} onJump={(x, y) => {
+                const element = scrollerRef.current;
+                if (!element) return;
+                element.scrollLeft = Math.max(0, x * zoom - element.clientWidth / 2);
+                element.scrollTop = Math.max(0, y * zoom - element.clientHeight / 2);
+                updateViewport();
+              }} />
             </div>
-            <SwarmMinimap layout={layout} viewport={viewport} pathIds={pathIds} onJump={(x, y) => {
-              const element = scrollerRef.current;
-              if (!element) return;
-              element.scrollLeft = Math.max(0, x * zoom - element.clientWidth / 2);
-              element.scrollTop = Math.max(0, y * zoom - element.clientHeight / 2);
-              updateViewport();
-            }} />
-          </div>
+          )}
 
           <SwarmAgentInspector
             session={session}
@@ -391,6 +461,178 @@ function SwarmDockModal({
         </div>
       </section>
     </div>
+  );
+}
+
+function SwarmOverview({
+  session,
+  swarm,
+  nodes,
+  selectedId,
+  onSelect,
+  onStartNewSession
+}: {
+  session: AgentRuntimeSession;
+  swarm: AgentRuntimeSwarmState;
+  nodes: AgentRuntimeSwarmNode[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onStartNewSession?: () => void;
+}) {
+  const projection = swarm.activityProjection ?? session.recursiveSwarmRunState?.activityProjection;
+  const activityRows = projection?.durableRows.slice(-12).reverse() ?? [];
+  const counters = projection?.counters ?? {
+    thoughts: 0,
+    filesViewed: 0,
+    commandsRun: 0,
+    agentsActive: swarm.activeAgentCount,
+    agentsDone: swarm.statusCounts.completed ?? 0,
+    agentsFailed: (swarm.statusCounts.failed ?? 0) + (swarm.statusCounts.blocked ?? 0)
+  };
+  const attention = intentAttentionForSession(session);
+
+  return (
+    <div className="swarm-overview">
+      {attention ? (
+        <section className="swarm-attention-card" aria-live="polite">
+          <div className="swarm-attention-heading">
+            <span><AlertTriangle size={16} /></span>
+            <div>
+              <strong>{attention.title}</strong>
+              <p>{attention.summary}</p>
+            </div>
+          </div>
+          {attention.errors.length ? (
+            <ul>
+              {attention.errors.slice(0, 3).map((error) => <li key={error}>{error}</li>)}
+            </ul>
+          ) : null}
+          <div className="swarm-attention-actions">
+            {onStartNewSession ? (
+              <button className="swarm-primary-action" onClick={onStartNewSession} type="button">Start new run</button>
+            ) : null}
+            {attention.errors.length > 3 ? (
+              <details>
+                <summary>Show all {attention.errors.length} errors</summary>
+                <ul>{attention.errors.slice(3).map((error) => <li key={error}>{error}</li>)}</ul>
+              </details>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="swarm-overview-stats" aria-label="Run summary">
+        <SwarmStat label="Agents" value={swarm.effectiveTotalLogicalAgents} detail={`${swarm.maxSupportedLogicalAgents} capacity`} />
+        <SwarmStat label="Active" value={counters.agentsActive} detail="working now" tone="running" />
+        <SwarmStat label="Done" value={counters.agentsDone} detail="completed" tone="completed" />
+        <SwarmStat label="Needs review" value={counters.agentsFailed} detail="blocked or failed" tone="blocked" />
+      </section>
+
+      <div className="swarm-overview-columns">
+        <section className="swarm-activity-panel" aria-label="Activity">
+          <header>
+            <div>
+              <strong>Activity</strong>
+              <span>Important events stay here; live status changes in place.</span>
+            </div>
+            {projection?.ephemeralStatus ? (
+              <span className={`swarm-ephemeral-status ${projection.ephemeralStatus.phase}`} aria-live="polite">
+                {projection.ephemeralStatus.text}
+              </span>
+            ) : null}
+          </header>
+          <div className="swarm-activity-rows">
+            {activityRows.length ? activityRows.map((row) => (
+              <div className="swarm-activity-row" key={row.id}>
+                <span className="swarm-activity-dot" data-status={row.status} />
+                <div>
+                  <strong>{row.title}</strong>
+                  <span>{row.summary}</span>
+                </div>
+                <time>{formatActivityTime(row.createdAt)}</time>
+              </div>
+            )) : (
+              <div className="swarm-activity-empty">No durable activity yet.</div>
+            )}
+          </div>
+        </section>
+
+        <VirtualizedSwarmList nodes={nodes} selectedId={selectedId} onSelect={onSelect} />
+      </div>
+    </div>
+  );
+}
+
+function SwarmStat({ label, value, detail, tone }: { label: string; value: number; detail: string; tone?: AgentRuntimeSwarmNodeStatus }) {
+  return (
+    <div className={`swarm-stat-card ${tone ? `tone-${tone}` : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function intentAttentionForSession(session: AgentRuntimeSession) {
+  const contractStatus = session.intent_contract_status ?? session.intentContract?.status;
+  const blocked = contractStatus === "invalid" || session.status === "blocked" || session.lifecycleStage === "BLOCKED";
+  if (!blocked) return null;
+  const metadataErrors = session.intentContract?.metadata_json?.validation_errors;
+  const errors = Array.isArray(metadataErrors)
+    ? metadataErrors.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    : [];
+  return {
+    title: contractStatus === "invalid" ? "Intent contract invalid" : "Session blocked",
+    summary: contractStatus === "invalid"
+      ? "This run used an incomplete provider contract. Start a new run to use the repaired compiler."
+      : session.runSummary?.summary ?? "The run needs attention before it can continue.",
+    errors
+  };
+}
+
+function formatActivityTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(timestamp);
+}
+
+function VirtualizedSwarmList({
+  nodes,
+  selectedId,
+  onSelect
+}: {
+  nodes: AgentRuntimeSwarmNode[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  const rowHeight = 42;
+  const viewportHeight = 168;
+  const [scrollTop, setScrollTop] = useState(0);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 2);
+  const visible = nodes.slice(start, start + Math.ceil(viewportHeight / rowHeight) + 4);
+  return (
+    <section className="swarm-agent-list" aria-label="Virtualized agent list">
+      <header><strong>Agents</strong><span>{nodes.length} matching</span></header>
+      <div className="swarm-agent-list-scroll" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+        <div style={{ height: nodes.length * rowHeight, position: "relative" }}>
+          <div style={{ position: "absolute", inset: 0, transform: `translateY(${start * rowHeight}px)` }}>
+            {visible.map((node) => (
+              <button
+                className={`swarm-agent-list-row ${selectedId === node.id ? "selected" : ""}`}
+                key={node.id}
+                onClick={() => onSelect(node.id)}
+                style={{ height: rowHeight }}
+                type="button"
+              >
+                <span className="swarm-list-status" style={{ backgroundColor: STATUS_COLORS[node.status] }} />
+                <span className="swarm-list-copy"><strong>{node.name}</strong><small>{node.role}</small></span>
+                <span className="swarm-list-state">{STATUS_LABELS[node.status]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -607,42 +849,44 @@ function SwarmAgentInspector({
 
   return (
     <aside className="swarm-agent-inspector">
-      <div className="swarm-agent-title">
-        <span style={{ "--swarm-node-color": STATUS_COLORS[node.status] } as CSSProperties} />
-        <div>
-          <strong>{node.name}</strong>
-          <small>{node.role} | {node.kind.replaceAll("_", " ")} | {STATUS_LABELS[node.status]}</small>
+      <div className="swarm-inspector-scroll">
+        <div className="swarm-agent-title">
+          <span style={{ "--swarm-node-color": STATUS_COLORS[node.status] } as CSSProperties} />
+          <div>
+            <strong>{node.name}</strong>
+            <small>{node.role} | {node.kind.replaceAll("_", " ")} | {STATUS_LABELS[node.status]}</small>
+          </div>
         </div>
-      </div>
-      <div className="swarm-agent-summary">
-        <strong>Objective</strong>
-        <span>{node.objective}</span>
-      </div>
-      {node.originalGoal ? (
-        <div className="swarm-agent-summary goal">
-          <strong>Original Goal</strong>
-          <span>{node.originalGoal}</span>
+        <div className="swarm-agent-summary">
+          <strong>Objective</strong>
+          <span>{node.objective}</span>
         </div>
-      ) : null}
-      {node.taskPrompt ? (
-        <details className="swarm-agent-detail">
-          <summary>Task Prompt ({node.taskPrompt.length} chars)</summary>
-          <pre className="swarm-agent-pre">{node.taskPrompt}</pre>
-        </details>
-      ) : null}
-      <div className="swarm-agent-grid">
-        <div><strong>Action</strong><span>{node.currentAction ?? "Not reported yet."}</span></div>
-        <div><strong>Summary</strong><span>{node.summary ?? node.output ?? "Not reported yet."}</span></div>
-        {node.depth !== undefined ? <div><strong>Depth</strong><span>Level {node.depth}</span></div> : null}
-        {node.complexity !== undefined ? (
-          <div><strong>Complexity</strong><span>{node.complexity}/10 {node.complexity >= 5 ? "(needs split)" : "(executable)"}</span></div>
+        {node.originalGoal ? (
+          <details className="swarm-agent-summary goal">
+            <summary>Original Goal</summary>
+            <span>{node.originalGoal}</span>
+          </details>
         ) : null}
-        {node.complexityRationale ? <div><strong>Why</strong><span>{node.complexityRationale}</span></div> : null}
-        <div><strong>Children</strong><span>{stats ? `${stats.directChildren} direct | ${stats.agentCount} agent(s) | ${stats.workItemCount} work item(s)` : "None"}</span></div>
-        <div><strong>Work items</strong><span>{node.workItemRefs.length ? node.workItemRefs.slice(0, 8).join(", ") : "None"}</span></div>
-        <div><strong>Artifacts</strong><span>{node.artifactRefs.length ? node.artifactRefs.slice(0, 8).join(", ") : "None"}</span></div>
-        <div><strong>Target files</strong><span>{node.targetFiles.length ? node.targetFiles.slice(0, 8).join(", ") : "None"}</span></div>
-        <div><strong>Changed files</strong><span>{node.changedFiles.length ? node.changedFiles.slice(0, 8).join(", ") : "None"}</span></div>
+        {node.taskPrompt ? (
+          <details className="swarm-agent-detail">
+            <summary>Task Prompt ({node.taskPrompt.length} chars)</summary>
+            <pre className="swarm-agent-pre">{node.taskPrompt}</pre>
+          </details>
+        ) : null}
+        <div className="swarm-agent-grid">
+          <div><strong>Action</strong><span>{node.currentAction ?? "Not reported yet."}</span></div>
+          <div><strong>Summary</strong><span>{node.summary ?? node.output ?? "Not reported yet."}</span></div>
+          {node.depth !== undefined ? <div><strong>Depth</strong><span>Level {node.depth}</span></div> : null}
+          {node.complexity !== undefined ? (
+            <div><strong>Complexity</strong><span>{node.complexity}/10 {node.complexity >= 5 ? "(needs split)" : "(executable)"}</span></div>
+          ) : null}
+          {node.complexityRationale ? <div><strong>Why</strong><span>{node.complexityRationale}</span></div> : null}
+          <div><strong>Children</strong><span>{stats ? `${stats.directChildren} direct | ${stats.agentCount} agent(s) | ${stats.workItemCount} work item(s)` : "None"}</span></div>
+          <div><strong>Work items</strong><span>{node.workItemRefs.length ? node.workItemRefs.slice(0, 8).join(", ") : "None"}</span></div>
+          <div><strong>Artifacts</strong><span>{node.artifactRefs.length ? node.artifactRefs.slice(0, 8).join(", ") : "None"}</span></div>
+          <div><strong>Target files</strong><span>{node.targetFiles.length ? node.targetFiles.slice(0, 8).join(", ") : "None"}</span></div>
+          <div><strong>Changed files</strong><span>{node.changedFiles.length ? node.changedFiles.slice(0, 8).join(", ") : "None"}</span></div>
+        </div>
       </div>
 
       {canMessage ? (
@@ -763,30 +1007,46 @@ function SwarmMinimap({
 
 const SWARM_GRAPH_CLUSTER_THRESHOLD = 220;
 
+function emptySwarmLayout(): SwarmLayout {
+  return {
+    nodes: [],
+    edges: [],
+    width: 0,
+    height: 0,
+    centerX: 0,
+    centerY: 0,
+    rings: [],
+    outerRadius: 0
+  };
+}
+
 function prepareSwarmForGraph(
   swarm: AgentRuntimeSwarmState,
   selectedId: string,
   query: string,
   statusFilter: AgentRuntimeSwarmNodeStatus | "all"
 ): AgentRuntimeSwarmState {
-  if (swarm.nodes.length <= SWARM_GRAPH_CLUSTER_THRESHOLD || query.trim() || statusFilter !== "all") return swarm;
-  const root = swarm.nodes.find((node) => node.id === swarm.rootId) ?? swarm.nodes[0];
+  const sourceNodes = filterSourceNodes(swarm.nodes, swarm.rootId, query, statusFilter);
+  if (sourceNodes.length <= SWARM_GRAPH_CLUSTER_THRESHOLD) {
+    return query.trim() || statusFilter !== "all" ? { ...swarm, nodes: sourceNodes } : swarm;
+  }
+  const root = sourceNodes.find((node) => node.id === swarm.rootId) ?? sourceNodes[0];
   if (!root) return swarm;
-  const byId = new Map(swarm.nodes.map((node) => [node.id, node]));
+  const byId = new Map(sourceNodes.map((node) => [node.id, node]));
   const keepIds = new Set<string>([root.id, selectedId]);
   let cursor = byId.get(selectedId);
   while (cursor?.parentId) {
     keepIds.add(cursor.parentId);
     cursor = byId.get(cursor.parentId);
   }
-  const directChildren = swarm.nodes
+  const directChildren = sourceNodes
     .filter((node) => node.parentId === root.id)
     .sort(compareSwarmNodes)
     .slice(0, 32);
   for (const child of directChildren) keepIds.add(child.id);
 
-  const visible = swarm.nodes.filter((node) => keepIds.has(node.id));
-  const hidden = swarm.nodes.filter((node) => !keepIds.has(node.id));
+  const visible = sourceNodes.filter((node) => keepIds.has(node.id));
+  const hidden = sourceNodes.filter((node) => !keepIds.has(node.id));
   const clusters = new Map<string, AgentRuntimeSwarmNode[]>();
   for (const node of hidden) {
     const key = `${node.depth ?? 0}:${node.status}:${node.kind}`;

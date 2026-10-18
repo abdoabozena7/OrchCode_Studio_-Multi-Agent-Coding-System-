@@ -2,11 +2,14 @@ import type {
   AgentRuntimeSession,
   ProjectMap
 } from "@hivo/protocol";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { LlmProvider } from "../llm/LlmProvider.js";
 import type { ProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { bridgeEditIntents, collectIntentsFromTree } from "../orchestration/RecursiveEditIntentBridge.js";
-import type { MemoryEvidencePack, RecursiveSwarmRunState } from "../orchestration/RecursiveSwarmModels.js";
+import type { MemoryEvidencePack, RecursiveRunCheckpoint, RecursiveSwarmRunState } from "../orchestration/RecursiveSwarmModels.js";
 import { RecursiveSwarmOrchestrator } from "../orchestration/RecursiveSwarmOrchestrator.js";
+import { SuspendHydrateManager } from "../orchestration/SuspendHydrateManager.js";
 import type { RuntimeDirectTurnService } from "./RuntimeDirectTurnService.js";
 import { SessionManager } from "./SessionManager.js";
 
@@ -20,7 +23,14 @@ export type RuntimeRecursiveSwarmInput = {
 
 type RecursiveSwarmTerminalStatus = "completed" | "blocked" | "failed";
 
+type ActiveRecursiveRun = {
+  orchestrator: RecursiveSwarmOrchestrator;
+};
+
 export class RuntimeRecursiveSwarmService {
+  private readonly activeRuns = new Map<string, ActiveRecursiveRun>();
+  private readonly persistedCheckpointAt = new Map<string, string>();
+
   constructor(
     private readonly sessionManager: SessionManager,
     private readonly directTurnService: RuntimeDirectTurnService
@@ -29,6 +39,11 @@ export class RuntimeRecursiveSwarmService {
   async run(input: RuntimeRecursiveSwarmInput): Promise<AgentRuntimeSession> {
     const { sessionId, message, provider, providerTelemetry, projectMap } = input;
     const session = this.requireSession(sessionId);
+    const checkpoint = await this.loadCheckpoint(session);
+    const active = this.activeRuns.get(sessionId);
+    if (active && ["running", "pausing", "resuming"].includes(active.orchestrator.getRuntimeStatus())) {
+      return this.sessionManager.getSession(sessionId) ?? session;
+    }
     const buildPack = (taskPrompt: string, nodeId: string) =>
       buildMemoryEvidencePack(taskPrompt, nodeId, session, projectMap);
 
@@ -108,11 +123,43 @@ export class RuntimeRecursiveSwarmService {
       }
     });
 
-    const result = await orchestrator.run(message, sessionId);
+    if (checkpoint?.resumable && checkpoint.runtimeStatus === "paused") {
+      orchestrator.hydrateFromCheckpoint(checkpoint);
+    }
+    this.activeRuns.set(sessionId, { orchestrator });
+
+    const result = await orchestrator.run(checkpoint?.resumable && checkpoint.runtimeStatus === "paused"
+      ? checkpoint.originalPrompt
+      : message, sessionId);
     await liveProjectionQueue.catch(() => {});
     const swarmState = orchestrator.toSwarmState();
     const state = result.runState;
     state.activityProjection = swarmState.activityProjection;
+
+    if (state.runtimeStatus === "paused" || state.runtimeStatus === "pausing") {
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.recursiveSwarmRunState = buildRecursiveSwarmRunSnapshot(state, swarmState.nodes);
+        draft.swarmState = {
+          ...swarmState,
+          activityProjection: state.activityProjection ?? swarmState.activityProjection
+        };
+        draft.status = state.runtimeStatus;
+        draft.lifecycleStage = "PLAN";
+        draft.agentName = "Recursive Swarm";
+        draft.runSummary = {
+          status: "blocked",
+          summary: "Recursive swarm paused at a durable checkpoint; no new child work will start.",
+          filesChanged: [],
+          appliedPatchIds: [],
+          proposedPatchIds: [],
+          commandResults: [],
+          gates: [{ name: "Recursive swarm checkpoint", status: "blocked", notes: [state.checkpoint?.lastStablePhase ?? "paused"] }],
+          nextAction: "Use continue or resume to hydrate and continue the pending queue.",
+          createdAt: new Date().toISOString()
+        };
+      });
+      return this.sessionManager.getSession(sessionId) ?? session;
+    }
     const completedAt = new Date().toISOString();
     const terminalStatus = mapRecursiveSwarmStatus(state.tree.status);
     const failedNodes = swarmState.statusCounts.failed;
@@ -145,7 +192,10 @@ export class RuntimeRecursiveSwarmService {
         ...swarmState,
         activityProjection: state.activityProjection ?? swarmState.activityProjection
       };
-      draft.status = terminalStatus;
+      const runtimeStatus = state.runtimeStatus;
+      draft.status = runtimeStatus === "paused" || runtimeStatus === "pausing"
+        ? runtimeStatus
+        : terminalStatus;
       draft.lifecycleStage = terminalStatus === "completed"
         ? "DONE"
         : terminalStatus === "blocked"
@@ -153,7 +203,7 @@ export class RuntimeRecursiveSwarmService {
           : "FAILED";
       draft.agentName = "Recursive Swarm";
       draft.runSummary = {
-        status: terminalStatus,
+        status: runtimeStatus === "paused" || runtimeStatus === "pausing" ? "blocked" : terminalStatus,
         summary: `Recursive swarm completed: ${state.tree.totalNodes} nodes across ${state.tree.maxDepth + 1} depth levels, ${result.totalSplits} splits, ${result.totalExecutions} executions.${result.unresolvedErrors.length ? ` ${result.unresolvedErrors.length} unresolved error(s).` : ""} | ${sc.realDiff} real diff(s), ${sc.needsGeneration} need(s) generation, ${sc.blocked} blocked.`,
         filesChanged: [],
         appliedPatchIds: [],
@@ -174,7 +224,9 @@ export class RuntimeRecursiveSwarmService {
             ...bridgeNotes
           ]
         }],
-        nextAction: sc.realDiff > 0
+        nextAction: runtimeStatus === "paused" || runtimeStatus === "pausing"
+          ? "Recursive swarm is paused at a checkpoint. Continue or resume to hydrate the pending queue."
+          : sc.realDiff > 0
           ? `Recursive swarm completed with ${sc.realDiff} real patch proposal(s) awaiting approval.${sc.needsGeneration > 0 ? ` ${sc.needsGeneration} intent(s) need patch generation.` : ""}${sc.blocked > 0 ? ` ${sc.blocked} intent(s) blocked.` : ""}`
           : sc.needsGeneration > 0
             ? `Recursive swarm completed with no real patches; ${sc.needsGeneration} intent(s) need patch generation.`
@@ -184,6 +236,10 @@ export class RuntimeRecursiveSwarmService {
         createdAt: completedAt
       };
     });
+
+    if (["completed", "failed", "blocked"].includes(state.runtimeStatus)) {
+      this.activeRuns.delete(sessionId);
+    }
 
     const telemetrySnapshot = providerTelemetry.snapshot();
     await this.sessionManager.addMessage(sessionId, {
@@ -200,6 +256,44 @@ export class RuntimeRecursiveSwarmService {
     return this.sessionManager.getSession(sessionId) ?? session;
   }
 
+  async pause(sessionId: string): Promise<AgentRuntimeSession> {
+    const session = this.requireSession(sessionId);
+    const active = this.activeRuns.get(sessionId);
+    if (active) {
+      active.orchestrator.requestPause("operator_requested");
+      await this.sessionManager.updateSession(sessionId, (draft) => {
+        draft.status = "pausing";
+        draft.lifecycleStage = "PLAN";
+        draft.runSummary = draft.runSummary ? {
+          ...draft.runSummary,
+          status: "blocked",
+          summary: "Recursive swarm is pausing at the next stable checkpoint.",
+          nextAction: "Resume after the checkpoint is saved."
+        } : undefined;
+      });
+      return this.sessionManager.getSession(sessionId) ?? session;
+    }
+    const checkpoint = await this.loadCheckpoint(session);
+    if (!checkpoint?.resumable) throw new Error("recursive_run_not_resumable");
+    return this.sessionManager.updateSession(sessionId, (draft) => {
+      draft.status = "paused";
+      draft.lifecycleStage = "PLAN";
+      if (draft.recursiveSwarmRunState) draft.recursiveSwarmRunState.runtimeStatus = "paused";
+    });
+  }
+
+  async resume(input: RuntimeRecursiveSwarmInput): Promise<AgentRuntimeSession> {
+    const session = this.requireSession(input.sessionId);
+    const checkpoint = await this.loadCheckpoint(session);
+    if (!checkpoint?.resumable) throw new Error("recursive_run_not_resumable");
+    await this.sessionManager.updateSession(input.sessionId, (draft) => {
+      draft.status = "resuming";
+      draft.lifecycleStage = "PLAN";
+      if (draft.recursiveSwarmRunState) draft.recursiveSwarmRunState.runtimeStatus = "resuming";
+    });
+    return this.run(input);
+  }
+
   private async projectLiveRecursiveTree(
     sessionId: string,
     orchestrator: RecursiveSwarmOrchestrator,
@@ -208,6 +302,7 @@ export class RuntimeRecursiveSwarmService {
     const state = orchestrator.getRunState();
     const swarmState = orchestrator.toSwarmState();
     state.activityProjection = swarmState.activityProjection;
+    await this.persistCheckpoint(sessionId, state);
     await this.sessionManager.updateSession(sessionId, (draft) => {
       if (draft.status === "completed" || draft.status === "failed" || draft.status === "blocked") return;
       draft.recursiveSwarmRunState = buildRecursiveSwarmRunSnapshot(state, swarmState.nodes);
@@ -237,6 +332,52 @@ export class RuntimeRecursiveSwarmService {
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     return session;
   }
+
+  private async persistCheckpoint(sessionId: string, state: RecursiveSwarmRunState): Promise<void> {
+    const checkpoint = state.checkpoint;
+    if (!checkpoint || this.persistedCheckpointAt.get(sessionId) === checkpoint.createdAt) return;
+    const session = this.requireSession(sessionId);
+    const manager = await this.checkpointManagerFor(session);
+    try {
+      await manager.suspend({
+        sessionId,
+        orchestratorName: "recursive_swarm",
+        phase: checkpoint.lastStablePhase,
+        state: checkpoint,
+        context: {
+          runId: checkpoint.runId,
+          originalPrompt: checkpoint.originalPrompt,
+          runtimeStatus: checkpoint.runtimeStatus
+        },
+        pendingJobIds: checkpoint.pendingQueue
+      });
+      this.persistedCheckpointAt.set(sessionId, checkpoint.createdAt);
+    } finally {
+      manager.close();
+    }
+  }
+
+  private async loadCheckpoint(session: AgentRuntimeSession): Promise<RecursiveRunCheckpoint | undefined> {
+    const inSession = session.recursiveSwarmRunState?.checkpoint as unknown as RecursiveRunCheckpoint | undefined;
+    if (inSession?.resumable && inSession.tree) return inSession;
+    const manager = await this.checkpointManagerFor(session);
+    try {
+      const snapshot = await manager.hydrateLatest(session.id, "recursive_swarm");
+      if (!snapshot) return inSession;
+      const parsed = JSON.parse(snapshot.state_json) as RecursiveRunCheckpoint;
+      return parsed.tree ? parsed : inSession;
+    } catch {
+      return inSession;
+    } finally {
+      manager.close();
+    }
+  }
+
+  private async checkpointManagerFor(session: AgentRuntimeSession): Promise<SuspendHydrateManager> {
+    const memoryDir = path.join(session.workspacePath || process.cwd(), ".agent_memory");
+    await mkdir(memoryDir, { recursive: true });
+    return new SuspendHydrateManager(memoryDir);
+  }
 }
 
 function buildRecursiveSwarmRunSnapshot(
@@ -250,6 +391,7 @@ function buildRecursiveSwarmRunSnapshot(
     goalEnvelope: state.goalEnvelope,
     expandedGoalSpec: state.expandedGoalSpec,
     budget: state.budget,
+    runtimeStatus: state.runtimeStatus,
     activityProjection: state.activityProjection,
     checkpoint: state.checkpoint,
     tree: {

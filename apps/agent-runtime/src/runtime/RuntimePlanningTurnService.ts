@@ -41,6 +41,25 @@ export class RuntimePlanningTurnService {
   async run(input: RuntimePlanningTurnInput): Promise<RuntimeTurnResponse> {
     const { sessionId, session, prompt, conversationUnderstanding, providerContext } = input;
     const { provider, telemetry: providerTelemetry } = providerContext;
+
+    // A continuation of a paused recursive run is a checkpoint hydration, not a fresh intent compilation.
+    const checkpoint = session.recursiveSwarmRunState?.checkpoint;
+    if (checkpoint?.resumable && checkpoint.runtimeStatus === "paused") {
+      const prelude = this.preludeService.build({
+        session,
+        prompt: checkpoint.originalPrompt,
+        conversationUnderstanding,
+        swarmMode: input.swarmMode
+      });
+      const resumed = await this.services.recursiveSwarm.run({
+        sessionId,
+        message: checkpoint.originalPrompt,
+        provider,
+        providerTelemetry,
+        projectMap: prelude.projectMap
+      });
+      return { sessionId, status: resumed.status };
+    }
     const intentCompilation = await this.services.intentContract.compile({
       sessionId,
       originalRequest: prompt,

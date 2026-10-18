@@ -27,7 +27,9 @@ import type {
   RecursiveRunCheckpoint,
   DurableActivityRow,
   SplitResult,
-  SplitSubTask
+  SplitSubTask,
+  RecursiveRuntimeRunStatus,
+  ContextSourceCounts
 } from "./RecursiveSwarmModels.js";
 import {
   RECURSIVE_SWARM_SCHEMA_VERSION,
@@ -69,6 +71,13 @@ export type RecursiveSwarmResult = {
   contextSourceCounts: Record<RecursiveContextSource, number>;
 };
 
+export class RecursiveRunPausedError extends Error {
+  constructor(readonly phase: string) {
+    super(`Recursive swarm paused at ${phase}.`);
+    this.name = "RecursiveRunPausedError";
+  }
+}
+
 export class RecursiveSwarmOrchestrator {
   private readonly provider?: LlmProvider;
   private readonly workspacePath: string;
@@ -91,6 +100,9 @@ export class RecursiveSwarmOrchestrator {
   private sessionId: string = "";
   private expandedGoalSpec?: ExpandedGoalSpec;
   private budget?: RecursiveRunBudget;
+  private pauseRequested = false;
+  private runtimeStatus: RecursiveRuntimeRunStatus = "running";
+  private readonly providerFailureGroups = new Map<string, number>();
   private contextSourceCounts: Record<RecursiveContextSource, number> = {
     memory_evidence: 0,
     partial_context: 0,
@@ -175,6 +187,7 @@ export class RecursiveSwarmOrchestrator {
       durableEvents: [],
       activityProjection: undefined,
       checkpoint: undefined,
+      runtimeStatus: "running",
       contextSourceCounts: { memory_evidence: 0, partial_context: 0, prompt_only_fallback: 0 }
     };
     this.emitDurableEvent("run_created", undefined, { goal, rootId: rootNode.id });
@@ -198,8 +211,38 @@ export class RecursiveSwarmOrchestrator {
     if (!this.tree) {
       await this.createRootAndGoalKeeper(goal, sessionId ?? "");
     }
+    if (this.runState.runtimeStatus === "paused") {
+      this.runtimeStatus = "resuming";
+      this.runState.runtimeStatus = "resuming";
+      this.emitDurableEvent("run_resuming", undefined, { lastStablePhase: this.runState.checkpoint?.lastStablePhase });
+    }
+    if (this.runtimeStatus !== "pausing") this.pauseRequested = false;
+    this.runtimeStatus = "running";
+    this.runState.runtimeStatus = "running";
     const rootNode = this.tree.nodes[this.tree.rootId];
-    await this.processNode(rootNode);
+    try {
+      await this.processNode(rootNode);
+    } catch (error) {
+      if (!(error instanceof RecursiveRunPausedError)) throw error;
+    }
+    const runtimeStatusAfterRun = String(this.runState.runtimeStatus) as RecursiveRuntimeRunStatus;
+    if (runtimeStatusAfterRun === "paused" || this.pauseRequested) {
+      this.runtimeStatus = "paused";
+      this.runState.runtimeStatus = "paused";
+      this.writeCheckpoint(this.runState.checkpoint?.lastStablePhase ?? "paused", true);
+      this.emitDurableEvent("run_paused", undefined, { lastStablePhase: this.runState.checkpoint?.lastStablePhase ?? "paused" });
+      this.emitTreeUpdated();
+      return {
+        tree: this.tree,
+        runState: this.runState,
+        finalOutput: "Recursive swarm paused at a durable checkpoint. Resume to continue pending nodes.",
+        goalCheckHistory: this.goalCheckHistory,
+        totalSplits: this.totalSplits,
+        totalExecutions: this.totalExecutions,
+        unresolvedErrors: this.collectUnresolvedErrors(),
+        contextSourceCounts: { ...this.contextSourceCounts }
+      };
+    }
     // Build context-source summary
     const totalNodes = Object.values(this.tree.nodes).length;
     const evidenceCount = this.contextSourceCounts.memory_evidence;
@@ -228,7 +271,11 @@ export class RecursiveSwarmOrchestrator {
     const blockerSuffix = blockers.length > 0 ? `\n\n[Blockers: ${blockers.join("; ")}]` : "";
     const finalOutput = `${rawOutput}${artifactSuffix}${blockerSuffix}\n\n[Context-source summary: ${sourceSummary}]`;
     this.runState.contextSourceCounts = { ...this.contextSourceCounts };
-    this.tree.status = this.hasAnyFailed() ? "failed" : "succeeded";
+    this.validateFinalDeliverableContract(rootNode);
+    const finalTreeStatus: RecursiveSwarmTree["status"] = this.hasAnyFailed() ? "failed" : "succeeded";
+    this.tree.status = finalTreeStatus;
+    this.runtimeStatus = finalTreeStatus === "succeeded" ? "completed" : "failed";
+    this.runState.runtimeStatus = this.runtimeStatus;
     this.tree.updatedAt = new Date().toISOString();
     this.emitDurableEvent("run_completed", undefined, { status: this.tree.status });
     this.writeCheckpoint("run_completed", false);
@@ -248,6 +295,58 @@ export class RecursiveSwarmOrchestrator {
 
   getRunState(): RecursiveSwarmRunState {
     return this.runState;
+  }
+
+  getRuntimeStatus(): RecursiveRuntimeRunStatus {
+    return this.runState?.runtimeStatus ?? this.runtimeStatus;
+  }
+
+  requestPause(reason = "operator_requested"): RecursiveSwarmRunState {
+    if (this.runtimeStatus === "completed" || this.runtimeStatus === "failed" || this.runtimeStatus === "blocked") {
+      return this.runState;
+    }
+    this.pauseRequested = true;
+    this.runtimeStatus = "pausing";
+    if (!this.runState) return this.runState;
+    this.runState.runtimeStatus = "pausing";
+    this.emitDurableEvent("run_pausing", undefined, { reason });
+    this.writeCheckpoint("pause_requested", true);
+    return this.runState;
+  }
+
+  hydrateFromCheckpoint(checkpoint: RecursiveRunCheckpoint): void {
+    if (!checkpoint.tree) {
+      throw new Error("Recursive checkpoint does not contain a hydrateable tree.");
+    }
+    this.sessionId = checkpoint.sessionId;
+    this.tree = checkpoint.tree;
+    this.expandedGoalSpec = checkpoint.expandedGoalSpec;
+    this.budget = checkpoint.budget;
+    this.durableEvents = [...(checkpoint.durableEvents ?? [])];
+    this.goalCheckHistory = [...(checkpoint.goalCheckHistory ?? [])];
+    this.totalSplits = checkpoint.totalSplits ?? 0;
+    this.totalExecutions = checkpoint.totalExecutions ?? 0;
+    this.contextSourceCounts = { ...this.contextSourceCounts, ...(checkpoint.contextSourceCounts ?? {}) };
+    const goalEnvelope = checkpoint.goalEnvelope ?? this.tree.nodes[this.tree.rootId]?.goalEnvelope;
+    if (!goalEnvelope) throw new Error("Recursive checkpoint is missing its goal envelope.");
+    this.runtimeStatus = "paused";
+    this.runState = {
+      schema_version: RECURSIVE_SWARM_SCHEMA_VERSION,
+      runId: this.tree.runId,
+      sessionId: checkpoint.sessionId,
+      goalEnvelope,
+      expandedGoalSpec: checkpoint.expandedGoalSpec,
+      budget: checkpoint.budget,
+      tree: this.tree,
+      createdAt: this.tree.createdAt,
+      updatedAt: new Date().toISOString(),
+      durableEvents: this.durableEvents,
+      activityProjection: { durableRows: checkpoint.durableActivityRows, ephemeralStatus: null, counters: emptyActivityCounters() },
+      checkpoint,
+      runtimeStatus: "paused",
+      contextSourceCounts: this.contextSourceCounts
+    };
+    this.emitDurableEvent("run_resuming", undefined, { hydratedFrom: checkpoint.lastStablePhase });
   }
 
   toSwarmState(): AgentRuntimeSwarmState {
@@ -326,7 +425,8 @@ export class RecursiveSwarmOrchestrator {
         softMaxAgents: this.budget.softMaxAgents,
         hardMaxAgents: this.budget.hardMaxAgents,
         maxChildrenPerParent: this.budget.maxChildrenPerParent,
-        budgetTaskClass: this.budget.taskClass
+        budgetTaskClass: this.budget.taskClass,
+        runtimeStatus: this.runtimeStatus
       } : undefined,
       nodes,
       messages: []
@@ -350,7 +450,7 @@ export class RecursiveSwarmOrchestrator {
   }
 
   getActivityProjection(): RunActivityProjection {
-    return buildActivityProjection(this.tree, this.durableEvents);
+    return buildActivityProjection(this.tree, this.durableEvents, this.runtimeStatus);
   }
 
   private async expandGoalSpec(goal: string): Promise<ExpandedGoalSpec> {
@@ -507,7 +607,14 @@ Return structured JSON only. Never replace an artifact request with a small plan
       budget: this.budget,
       activityProjection: this.getActivityProjection(),
       lastStablePhase,
-      resumable
+      resumable,
+      runtimeStatus: this.runtimeStatus,
+      goalEnvelope: this.runState.goalEnvelope,
+      durableEvents: this.durableEvents,
+      contextSourceCounts: this.contextSourceCounts,
+      goalCheckHistory: this.goalCheckHistory,
+      totalSplits: this.totalSplits,
+      totalExecutions: this.totalExecutions
     });
     this.runState.checkpoint = checkpoint;
     this.runState.activityProjection = this.getActivityProjection();
@@ -522,9 +629,26 @@ Return structured JSON only. Never replace an artifact request with a small plan
   }
 
   private async processNode(node: RecursiveSwarmNode): Promise<void> {
+    this.throwIfPauseRequested(`before:${node.id}`);
+    if (["succeeded", "superseded", "failed", "blocked", "escalated"].includes(node.status)) return;
     await this.processSteeringQueue(node);
     await this.checkGoalAt(node, "pre_split");
     if (node.status === "blocked" || node.status === "failed" || node.status === "escalated") return;
+
+    // Hydrated parents already have their child graph. Continue it instead of splitting again.
+    if (node.children.length > 0 && node.splitResult) {
+      const childNodes = node.splitResult.subTasks
+        .map((_subTask, index) => this.tree.nodes[node.children[index]])
+        .filter((child): child is RecursiveSwarmNode => Boolean(child));
+      if (childNodes.length > 0) {
+        node.status = "waiting_children";
+        this.emitNodeStatusChanged(node);
+        await this.executeChildren(childNodes, node.splitResult);
+        this.throwIfPauseRequested(`after_children:${node.id}`);
+        await this.collectExistingChildren(node);
+        return;
+      }
+    }
 
     const budget = this.getBudget();
     if (node.depth >= budget.maxDepth) {
@@ -618,6 +742,13 @@ Return structured JSON only. Never replace an artifact request with a small plan
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       await queue.nack(dequeued.job.id, dequeued.lease_id, msg);
+      if (error instanceof RecursiveRunPausedError) {
+        node.status = "created";
+        node.errorSummary = undefined;
+        this.emitNodeStatusChanged(node);
+        queue.close();
+        throw error;
+      }
       node.status = "failed";
       node.errorSummary = msg;
       this.emitNodeStatusChanged(node);
@@ -740,9 +871,15 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     try {
       splitResult = await this.splitter.splitTask(node, this.runOptions, { pack: node.evidencePack });
     } catch (error) {
-      node.status = "blocked";
       node.errorSummary = error instanceof Error ? error.message : String(error);
-      this.emitDurableEvent(isProviderRateLimitError(node.errorSummary) ? "provider_backoff" : "error", node.id, { stage: "task_split", reason: node.errorSummary });
+      if (isProviderRateLimitError(node.errorSummary)) {
+        node.status = "created";
+        this.recordProviderFailure(node, "task_split", node.errorSummary);
+        this.requestPause("provider_backoff");
+      } else {
+        node.status = "blocked";
+        this.emitDurableEvent("error", node.id, { stage: "task_split", reason: node.errorSummary });
+      }
       this.emitNodeStatusChanged(node);
       this.writeCheckpoint(`split_failed:${node.id}`);
       this.emitTreeUpdated();
@@ -754,7 +891,7 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     this.writeCheckpoint(`post_split:${node.id}`);
 
     // Bug 3 fix: detect self-similar split that would cause infinite recursion
-    if (splitResult.subTasks.length === 0) {
+    if (splitResult.shouldSplit === false || splitResult.subTasks.length === 0) {
       this.emitDurableEvent("task_split", node.id, { subTaskCount: 0, note: "cannot meaningfully split, executing directly" });
       await this.executeWithVerification(node);
       return;
@@ -846,6 +983,63 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
     this.emitTreeUpdated();
   }
 
+  private async collectExistingChildren(node: RecursiveSwarmNode): Promise<void> {
+    node.status = "collecting";
+    this.emitNodeStatusChanged(node);
+    this.writeCheckpoint(`pre_collect:${node.id}`);
+    const freshChildren = Object.values(this.tree.nodes).filter((candidate) =>
+      candidate.parentId === node.id && candidate.kind === "task_agent"
+    );
+    const collectResult = await this.collector.collect(freshChildren, node.goalEnvelope.originalGoal, { pack: node.evidencePack });
+    node.collectResult = collectResult;
+    node.outputSummary = collectResult.mergedOutput;
+    this.writeCheckpoint(`post_collect:${node.id}`);
+    const collectorNode = Object.values(this.tree.nodes).find((candidate) =>
+      candidate.parentId === node.id && candidate.kind === "collector"
+    );
+    if (collectResult.unresolvedErrors.length > 0 && this.runOptions.enableErrorRecovery && collectorNode) {
+      await this.createRepairAgent(node, collectorNode, collectResult);
+    }
+    node.status = "verifying";
+    this.emitNodeStatusChanged(node);
+    await this.checkGoalAt(node, "pre_accept");
+    if (collectorNode) {
+      collectorNode.status = "succeeded";
+      collectorNode.outputSummary = collectResult.mergedOutput;
+      this.emitNodeStatusChanged(collectorNode);
+    }
+    node.status = collectResult.unresolvedErrors.length > 0 ? "failed" : "succeeded";
+    if (collectResult.unresolvedErrors.length > 0) {
+      node.errorSummary = `Unresolved errors: ${collectResult.unresolvedErrors.join("; ")}`;
+    }
+    this.emitDurableEvent("collect_completed", node.id, {
+      childCount: freshChildren.length,
+      errors: collectResult.unresolvedErrors.length
+    });
+    this.emitNodeStatusChanged(node);
+    this.emitTreeUpdated();
+  }
+
+  private throwIfPauseRequested(phase: string): void {
+    if (!this.pauseRequested) return;
+    this.runtimeStatus = "paused";
+    this.runState.runtimeStatus = "paused";
+    this.writeCheckpoint(phase, true);
+    throw new RecursiveRunPausedError(phase);
+  }
+
+  private validateFinalDeliverableContract(rootNode: RecursiveSwarmNode): void {
+    const contractText = `${rootNode.goalEnvelope.originalGoal}\n${rootNode.goalEnvelope.expandedGoal ?? ""}\n${rootNode.goalEnvelope.expandedGoalSpec?.deliverableContract ?? ""}`;
+    if (!isArtifactDeliverableGoal(contractText)) return;
+    const hasArtifact = Object.values(this.tree.nodes).some((node) => node.structuredOutput?.kind === "generated_artifact"
+      && node.structuredOutput.content.trim().length > 0);
+    if (hasArtifact) return;
+    rootNode.status = "failed";
+    rootNode.errorSummary = "artifact_required_but_missing: final collector received summary-only output for an artifact contract.";
+    this.emitDurableEvent("error", rootNode.id, { stage: "final_collect", reason: rootNode.errorSummary });
+    this.emitNodeStatusChanged(rootNode);
+  }
+
   private async executeChildren(children: RecursiveSwarmNode[], parentSplitResult: import("./RecursiveSwarmModels.js").SplitResult): Promise<void> {
     // Build child ID by subtask index and subtask ID
     const indexToChildId: string[] = parentSplitResult.subTasks.map((st, i) => children[i]?.id ?? "");
@@ -876,9 +1070,13 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
       childIdToResolvedDeps.set(childId, resolved);
     }
 
-    const executed = new Set<string>();
-    let remaining = children.map((c) => c.id);
+    const terminalChildIds = new Set(children
+      .filter((child) => ["succeeded", "superseded", "failed", "blocked", "escalated"].includes(child.status))
+      .map((child) => child.id));
+    const executed = new Set<string>(terminalChildIds);
+    let remaining = children.filter((child) => !terminalChildIds.has(child.id)).map((c) => c.id);
     while (remaining.length > 0) {
+      this.throwIfPauseRequested("before_child_batch");
       const ready = remaining.filter((childId) => {
         const deps = childIdToResolvedDeps.get(childId) ?? [];
         return deps.every((depId) => executed.has(depId));
@@ -916,6 +1114,7 @@ Return { isAtomic, score, rationale, failures } where failures lists which atomi
   }
 
   private async executeWithVerification(node: RecursiveSwarmNode): Promise<void> {
+    this.throwIfPauseRequested(`before_execute:${node.id}`);
     this.totalExecutions++;
     node.status = "executing";
     this.emitNodeStatusChanged(node);
@@ -1013,8 +1212,15 @@ Return valid JSON with a "kind" field matching one of the above.`;
           node.structuredOutput = output;
           node.outputSummary = summary;
         } catch (error2) {
-          node.status = "failed";
           node.errorSummary = `Execution error: ${error2 instanceof Error ? error2.message : String(error2)}`;
+          if (isProviderFailureMessage(node.errorSummary)) {
+            node.status = "created";
+            this.recordProviderFailure(node, "node_execution", node.errorSummary);
+            this.requestPause("provider_backoff");
+          } else {
+            node.status = "failed";
+            this.emitDurableEvent("error", node.id, { stage: "node_execution", reason: node.errorSummary });
+          }
           this.emitNodeStatusChanged(node);
           this.emitTreeUpdated();
           return;
@@ -1029,6 +1235,8 @@ Return valid JSON with a "kind" field matching one of the above.`;
       return;
     }
 
+    // A provider call may finish after an operator requests pause. Stop at this boundary.
+    this.throwIfPauseRequested(`after_provider:${node.id}`);
     // Verify after execution
     node.status = "verifying";
     this.emitNodeStatusChanged(node);
@@ -1042,6 +1250,13 @@ Return valid JSON with a "kind" field matching one of the above.`;
   }
 
   private async createRepairAgent(parent: RecursiveSwarmNode, collectorNode: RecursiveSwarmNode, collectResult: { unresolvedErrors: string[]; mergedOutput: string }): Promise<void> {
+    if (collectResult.unresolvedErrors.some(isProviderFailureMessage)) {
+      this.emitDurableEvent("provider_backoff", parent.id, {
+        stage: "repair_suppressed",
+        reason: "Provider failure was grouped; repair fan-out is paused until the provider recovers."
+      });
+      return;
+    }
     const repairNode = this.createNode({
       name: `Repair Agent (${parent.name})`,
       kind: "repair_agent",
@@ -1101,6 +1316,21 @@ Return valid JSON with a "kind" field matching one of the above.`;
         node.status = "created";
         this.emitNodeStatusChanged(node);
       }
+    }
+  }
+
+  private recordProviderFailure(node: RecursiveSwarmNode, stage: string, reason: string): void {
+    const key = reason.replace(/\brecursive_node_[a-f0-9-]+\b/gi, "node").trim().slice(0, 240);
+    const count = (this.providerFailureGroups.get(key) ?? 0) + 1;
+    this.providerFailureGroups.set(key, count);
+    if (count === 1) {
+      this.emitDurableEvent("provider_backoff", node.id, {
+        stage,
+        reason,
+        failureGroup: key,
+        groupedCount: count,
+        action: "pause_fan_out"
+      });
     }
   }
 
@@ -1336,6 +1566,18 @@ function isProviderRateLimitError(value: string | undefined): boolean {
   return /\b(429|rate limit|too many requests|provider.*unreachable|temporar(?:y|ily))\b/i.test(value ?? "");
 }
 
+function isProviderFailureMessage(value: string | undefined): boolean {
+  return /provider_(?:failed|unavailable)|provider.*(?:failed|unavailable|rate limit)|\b429\b|rate limit/i.test(value ?? "");
+}
+
+function isArtifactDeliverableGoal(value: string): boolean {
+  return /(?:generated artifact|complete (?:self[- ]contained )?file|single[- ]file|playable game|index\.html|produce code|source artifact)/i.test(value);
+}
+
+function emptyActivityCounters(): RunActivityProjection["counters"] {
+  return { thoughts: 0, filesViewed: 0, commandsRun: 0, agentsActive: 0, agentsDone: 0, agentsFailed: 0 };
+}
+
 function buildRecursiveRunCheckpoint(input: {
   sessionId: string;
   tree: RecursiveSwarmTree;
@@ -1344,6 +1586,13 @@ function buildRecursiveRunCheckpoint(input: {
   activityProjection: RunActivityProjection;
   lastStablePhase: string;
   resumable: boolean;
+  runtimeStatus: RecursiveRuntimeRunStatus;
+  goalEnvelope?: GoalEnvelope;
+  durableEvents?: DurableSwarmEvent[];
+  contextSourceCounts?: ContextSourceCounts;
+  goalCheckHistory?: GoalCheckResult[];
+  totalSplits?: number;
+  totalExecutions?: number;
 }): RecursiveRunCheckpoint {
   const nodes = Object.values(input.tree.nodes);
   const pendingStatuses = new Set<RecursiveSwarmNode["status"]>([
@@ -1376,17 +1625,33 @@ function buildRecursiveRunCheckpoint(input: {
     pendingQueue: nodes.filter((node) => pendingStatuses.has(node.status)).map((node) => node.id),
     completedNodeIds: nodes.filter((node) => node.status === "succeeded" || node.status === "superseded").map((node) => node.id),
     failedNodeIds: nodes.filter((node) => node.status === "failed" || node.status === "blocked" || node.status === "escalated").map((node) => node.id),
-    generatedArtifacts: nodes
+    generatedArtifacts: cloneJson(nodes
       .filter((node) => node.structuredOutput?.kind === "generated_artifact")
-      .map((node) => node.structuredOutput),
+      .map((node) => node.structuredOutput)),
     durableActivityRows: input.activityProjection.durableRows,
     lastStablePhase: input.lastStablePhase,
     resumable: input.resumable,
+    runtimeStatus: input.runtimeStatus,
+    tree: cloneJson(input.tree),
+    goalEnvelope: input.goalEnvelope ? cloneJson(input.goalEnvelope) : undefined,
+    durableEvents: input.durableEvents ? cloneJson(input.durableEvents) : undefined,
+    contextSourceCounts: input.contextSourceCounts ? cloneJson(input.contextSourceCounts) : undefined,
+    goalCheckHistory: input.goalCheckHistory ? cloneJson(input.goalCheckHistory) : undefined,
+    totalSplits: input.totalSplits,
+    totalExecutions: input.totalExecutions,
     createdAt: new Date().toISOString()
   };
 }
 
-function buildActivityProjection(tree: RecursiveSwarmTree, durableEvents: DurableSwarmEvent[]): RunActivityProjection {
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildActivityProjection(
+  tree: RecursiveSwarmTree,
+  durableEvents: DurableSwarmEvent[],
+  runtimeStatus: RecursiveRuntimeRunStatus = "running"
+): RunActivityProjection {
   const rows: DurableActivityRow[] = durableEvents
     .filter((event) => isActivityEvent(event))
     .slice(-96)
@@ -1395,7 +1660,15 @@ function buildActivityProjection(tree: RecursiveSwarmTree, durableEvents: Durabl
   const activeNode = nodes.find((node) => ["executing", "splitting", "collecting", "verifying", "assessing", "waiting_children", "queued"].includes(node.status));
   return {
     durableRows: rows,
-    ephemeralStatus: activeNode ? {
+    ephemeralStatus: runtimeStatus === "paused" ? {
+      text: "Paused at checkpoint. Resume to continue...",
+      phase: "idle",
+      updatedAt: tree.updatedAt
+    } : runtimeStatus === "pausing" ? {
+      text: "Pausing at the next stable boundary...",
+      phase: "syncing",
+      updatedAt: tree.updatedAt
+    } : activeNode ? {
       text: ephemeralTextForNode(activeNode),
       phase: ephemeralPhaseForNode(activeNode),
       nodeId: activeNode.id,
@@ -1426,6 +1699,9 @@ function isActivityEvent(event: DurableSwarmEvent): boolean {
     "node_completed",
     "run_completed",
     "checkpoint_written",
+    "run_pausing",
+    "run_paused",
+    "run_resuming",
     "provider_backoff",
     "error"
   ].includes(event.type);
@@ -1510,6 +1786,36 @@ function activityRowFromEvent(event: DurableSwarmEvent): DurableActivityRow {
         title: "Checkpoint saved",
         summary: `${String(event.data.lastStablePhase ?? "runtime")} | ${event.data.pendingNodes ?? 0} pending node(s).`,
         status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "run_pausing":
+      return {
+        id: event.id,
+        kind: "checkpoint",
+        title: "Pause requested",
+        summary: String(event.data.reason ?? "The run will pause at the next stable boundary."),
+        status: "queued",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "run_paused":
+      return {
+        id: event.id,
+        kind: "checkpoint",
+        title: "Run paused",
+        summary: `Checkpoint is ready at ${String(event.data.lastStablePhase ?? "runtime")}.`,
+        status: "completed",
+        nodeId: event.nodeId,
+        createdAt: event.createdAt
+      };
+    case "run_resuming":
+      return {
+        id: event.id,
+        kind: "checkpoint",
+        title: "Run resuming",
+        summary: `Hydrating from ${String(event.data.hydratedFrom ?? event.data.lastStablePhase ?? "checkpoint")}.`,
+        status: "running",
         nodeId: event.nodeId,
         createdAt: event.createdAt
       };

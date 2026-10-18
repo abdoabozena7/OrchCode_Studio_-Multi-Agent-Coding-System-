@@ -64,7 +64,7 @@ Provider-backed swarm and recursive workers keep their own provider-required con
 
 Recursive executor outputs may use `generated_artifact` for complete provider-authored deliverables such as a self-contained HTML file. The runtime may deterministically convert that artifact content into a reviewable create-file `PatchProposal`, but it must not write the file directly or synthesize missing content locally.
 
-Recursive swarm runs now start with an `ExpandedGoalSpec`. The provider preserves the exact original prompt, expands short goals into a concrete spec, and extracts requirements from detailed prompts without replacing them with a short summary. Every recursive child prompt must carry the original prompt, expanded goal/spec, deliverable contract, parent task, local child task, expected output, and child acceptance criteria.
+Recursive swarm runs now start with an `ExpandedGoalSpec`. The runtime preserves the exact original prompt deterministically, while the provider expands short goals into a concrete spec and extracts requirements from detailed prompts without replacing them with a short summary. Every recursive child prompt must carry the original prompt, expanded goal/spec, deliverable contract, parent task, local child task, expected output, and child acceptance criteria.
 
 Recursive splitting is governed by a deterministic `RecursiveRunBudget`. The hard maximum remains capacity only; the soft budget, maximum children per parent, and maximum depth control ordinary decomposition. A parent split must include a child-count rationale, expected outputs, dependencies, stop conditions, and useful work for every child. Low-value retrieve/check-again children and oversized fan-outs are clamped before child nodes are created.
 

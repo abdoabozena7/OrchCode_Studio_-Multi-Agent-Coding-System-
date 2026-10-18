@@ -1,0 +1,58 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Toggle sidebar" [ref=e6] [cursor=pointer]
+      - img "Hivo Studio" [ref=e9]
+    - generic [ref=e10]:
+      - button "Latest Unknown" [ref=e11] [cursor=pointer]
+      - button "Settings" [ref=e18] [cursor=pointer]
+  - generic [ref=e23]:
+    - complementary [ref=e24]:
+      - button "New chat" [ref=e26] [cursor=pointer]
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - textbox "D:\\\\projects\\\\my-app" [ref=e32]
+          - button "Pick workspace folder" [ref=e33] [cursor=pointer]
+        - generic [ref=e36]:
+          - generic [ref=e37]: Projects
+          - generic [ref=e38]:
+            - button "Collapse all projects" [ref=e39] [cursor=pointer]
+            - button "Start a new chat" [ref=e42] [cursor=pointer]
+        - generic [ref=e45]: Your active workspace will appear here.
+      - generic [ref=e46]:
+        - button "Archive" [ref=e47] [cursor=pointer]
+        - button "Settings" [ref=e52] [cursor=pointer]
+    - button "Resize sidebar" [ref=e57]
+    - main [ref=e58]:
+      - generic [ref=e59]:
+        - button "Select workspace" [ref=e61] [cursor=pointer]
+        - generic [ref=e69]:
+          - button "Toggle details panel" [ref=e70] [cursor=pointer]
+          - button "Toggle diff panel" [ref=e74] [cursor=pointer]
+          - button "Toggle terminal" [ref=e76] [cursor=pointer]
+          - button "Explore workspace files" [disabled] [ref=e80]
+      - generic [ref=e86]:
+        - generic [ref=e87]:
+          - paragraph [ref=e88]: Open a workspace to begin
+          - heading "Hivo Studio" [level=1] [ref=e90]
+          - paragraph [ref=e91]: stop paying, stop thinking, stop prompting
+        - generic [ref=e92]:
+          - generic [ref=e93]:
+            - textbox "Ask Hivo to create or edit a project with Ollama..." [ref=e94]
+            - generic [ref=e95]:
+              - button "Full Access" [ref=e98] [cursor=pointer]
+              - generic [ref=e105]:
+                - button "RTL" [ref=e106] [cursor=pointer]
+                - button "Write a message first" [disabled] [ref=e112]
+          - generic [ref=e115]:
+            - button "Open workspace" [ref=e116] [cursor=pointer]
+            - button "Details" [ref=e120] [cursor=pointer]
+            - button "Plan mode" [ref=e126] [cursor=pointer]
+          - generic [ref=e131]:
+            - generic [ref=e132]:
+              - strong [ref=e133]: Full Access is on
+              - generic [ref=e134]: Validated file changes apply automatically, and requested setup/dev/test/network/background commands can run without another prompt.
+            - button "Dismiss full access notice" [ref=e135] [cursor=pointer]
+        - generic [ref=e139]:
+          - button "Explain this project to me" [ref=e140] [cursor=pointer]
+          - button "Analyze the workspace and suggest the safest first change" [ref=e145] [cursor=pointer]

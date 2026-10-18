@@ -146,6 +146,7 @@ For single-file games or generated artifacts, include final assembly and validat
       return {
         subTasks,
         rationale: parsed.rationale ?? "Task split by provider.",
+        shouldSplit: parsed.shouldSplit !== false,
         desiredChildCount: Number.isFinite(Number(parsed.desiredChildCount)) ? Number(parsed.desiredChildCount) : subTasks.length,
         splitReason: typeof parsed.splitReason === "string" ? parsed.splitReason : parsed.rationale ?? "Task split by provider.",
         stopConditions: Array.isArray(parsed.stopConditions) ? parsed.stopConditions.map((item: unknown) => String(item)) : []

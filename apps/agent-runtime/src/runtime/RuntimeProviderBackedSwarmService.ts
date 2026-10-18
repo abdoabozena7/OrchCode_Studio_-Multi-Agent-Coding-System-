@@ -54,7 +54,8 @@ export class RuntimeProviderBackedSwarmService {
       providerFactory: () => provider,
       providerName: session.providerConfig?.providerName,
       modelName: session.providerConfig?.selectedModel,
-      responseLanguage
+      responseLanguage,
+      providerReadOnlyPreflight: true
     });
     const result = await swarm.run(swarmGoal);
     const workResults = await loadSwarmWorkResults(result.workItems);

@@ -1,4 +1,18 @@
-import type { ProviderPipelineStage, ReasoningStage } from "@hivo/protocol";
+import type { ProviderFailureDetails, ProviderPipelineStage, ReasoningStage } from "@hivo/protocol";
+
+export type StructuredRetryPolicy = {
+  maxKernelRepairAttempts?: number;
+};
+
+export class ProviderFailureError extends Error {
+  readonly providerFailure: ProviderFailureDetails;
+
+  constructor(message: string, providerFailure: ProviderFailureDetails) {
+    super(message);
+    this.name = "ProviderFailureError";
+    this.providerFailure = providerFailure;
+  }
+}
 
 export type LlmRequest = {
   systemPrompt: string;
@@ -11,6 +25,7 @@ export type LlmRequest = {
   maxContextChars?: number;
   responseFormat?: "json";
   structuredSchema?: unknown;
+  structuredMode?: "native" | "json";
 };
 
 export type EmbeddingRequest = {
@@ -24,6 +39,7 @@ export type EmbeddingResponse = {
 };
 
 export interface LlmProvider {
+  readonly structuredRetryPolicy?: StructuredRetryPolicy;
   generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T>;
   generateText(input: LlmRequest): Promise<string>;
   embed?(input: EmbeddingRequest): Promise<EmbeddingResponse>;

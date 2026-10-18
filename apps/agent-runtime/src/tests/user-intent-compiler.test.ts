@@ -38,6 +38,36 @@ test("UserIntentCompiler saves a ready fixed intent contract when provider outpu
   }
 });
 
+test("UserIntentCompiler preserves the exact original request when provider returns semantic fields only", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "intent-compiler-semantic-only-"));
+  try {
+    const originalRequest = "Build a single-file game.\nReturn only the complete code.";
+    const output = { ...validIntentOutput(originalRequest) } as Record<string, unknown>;
+    delete output.original_user_request;
+    output.assumptions = [""];
+    const provider = new IntentContractProvider({ originalRequest, output });
+    const result = await new UserIntentCompiler().compile({
+      workspacePath: workspace,
+      runId: "run_semantic_only",
+      runKind: "runtime_session",
+      artifactsPath: path.join(workspace, ".agent_memory", "runtime_intents", "run_semantic_only"),
+      originalRequest,
+      provider
+    });
+
+    assert.equal(result.ready, true);
+    assert.equal(result.contract.original_user_request, originalRequest);
+    assert.deepEqual(result.contract.assumptions, []);
+    assert.equal(result.contract.status, "ready");
+    assert.equal(provider.requests.length, 1);
+    assert.equal(provider.requests[0]?.maxOutputTokens, 3_072);
+    assert.equal(JSON.stringify(provider.requests[0]?.context ?? {}).includes(originalRequest), false);
+    assert.equal(provider.requests[0]?.userPrompt.includes("BEGIN QUOTED SOURCE REQUEST"), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("UserIntentCompiler marks blocking missing questions as needs_clarification", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "intent-compiler-clarify-"));
   try {
@@ -129,6 +159,39 @@ test("UserIntentCompiler repairs an invalid provider contract with a second prov
     const initialErrors = result.contract.metadata_json.initial_validation_errors;
     assert.equal(Array.isArray(initialErrors), true);
     assert.equal((initialErrors as string[]).some((error) => error.includes("precise_rewrite")), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UserIntentCompiler repairs numeric priorities into provider-authored priority objects", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "intent-compiler-priority-repair-"));
+  try {
+    const originalRequest = "Build a polished browser game.";
+    const invalidOutput = { ...validIntentOutput(originalRequest) } as Record<string, unknown>;
+    invalidOutput.priorities = Object.fromEntries(
+      Object.entries(invalidOutput.priorities as Record<string, { score: number }>).map(([key, value]) => [key, value.score])
+    );
+    const provider = new IntentContractProvider({
+      originalRequest,
+      outputs: [invalidOutput, validIntentOutput(originalRequest)]
+    });
+
+    const result = await new UserIntentCompiler().compile({
+      workspacePath: workspace,
+      runId: "run_priority_repair",
+      runKind: "runtime_session",
+      artifactsPath: path.join(workspace, ".agent_memory", "runtime_intents", "run_priority_repair"),
+      originalRequest,
+      provider
+    });
+
+    assert.equal(result.ready, true);
+    assert.equal(provider.requests.length, 2);
+    assert.equal(provider.requests[1]?.maxOutputTokens, 2_048);
+    assert.equal(result.contract.priorities.quality.score, 85);
+    assert.equal(result.contract.priorities.quality.rationale.length > 0, true);
+    assert.equal(result.validationErrors.length, 0);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -299,6 +362,37 @@ test("UserIntentCompiler treats runtime environment choice as a safe default que
       runId: "run_runtime_default",
       runKind: "core",
       artifactsPath: path.join(workspace, ".agent_memory", "runs", "run_runtime_default"),
+      originalRequest,
+      provider
+    });
+
+    assert.equal(result.ready, true);
+    assert.equal(result.contract.status, "ready");
+    assert.deepEqual(result.blockingQuestions, []);
+    assert.equal(result.contract.missing_questions[0]?.blocking, false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("UserIntentCompiler treats grid dimensions as a safe default question", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "intent-compiler-grid-default-"));
+  try {
+    const originalRequest = "Build a browser game with tile-based movement.";
+    const output = {
+      ...validIntentOutput(originalRequest),
+      missing_questions: [{
+        question: "What are the exact dimensions in world units for a single tile/grid unit?",
+        reason: "Movement and collision implementation need a scale.",
+        blocking: true
+      }]
+    };
+    const provider = new IntentContractProvider({ originalRequest, output });
+    const result = await new UserIntentCompiler().compile({
+      workspacePath: workspace,
+      runId: "run_grid_default",
+      runKind: "runtime_session",
+      artifactsPath: path.join(workspace, ".agent_memory", "runtime_intents", "run_grid_default"),
       originalRequest,
       provider
     });

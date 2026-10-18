@@ -15,6 +15,7 @@ import { decideIntentBeforeRetrieval, prepareWorkspacePromptForUnderstanding } f
 import { classifyRunIntent } from "../runtime/ProjectIntake.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import { inferWorkspaceIntent } from "../runtime/WorkspaceReasoningPipeline.js";
+import { CROSSY_SINGLE_FILE_PROMPT } from "./fixtures/crossySingleFilePrompt.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -38,6 +39,13 @@ test("ConversationRouter sends deep architecture questions to read-only swarm an
   assert.equal(routeConversation("Refactor auth, database, and frontend state across many files").route, "recursive_factory");
   assert.equal(routeConversation("Audit the whole repo read-only with swarm scouts").route, "swarm_readonly");
   assert.notEqual(routeConversation("Review this component quickly").route, "swarm_readonly");
+});
+
+test("ConversationRouter keeps the full Crossy single-file contract on orchestrated one-writer routing", () => {
+  const routed = routeConversation(CROSSY_SINGLE_FILE_PROMPT);
+  assert.equal(routed.route, "orchestrated_run");
+  assert.equal(routed.confidence, "high");
+  assert.equal(routed.workspacePrompt.includes("index.html"), true);
 });
 
 test("ConversationRouter treats tech-stack requests as workspace questions", () => {

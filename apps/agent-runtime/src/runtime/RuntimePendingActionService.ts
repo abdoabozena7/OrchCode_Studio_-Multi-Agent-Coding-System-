@@ -212,6 +212,7 @@ export function buildRecursiveCheckpointResumePrompt(session: AgentRuntimeSessio
 }
 
 function isContinuationRequest(message: string, normalized: string): boolean {
+  if (/^(?:\u0643\u0645\u0644|\u0643\u0645\u0651\u0644)(?:\s+\u0645\u0646\s+\u0647\u0646\u0627|\s+\u0627\u0644\u0644\u064a\s+\u0643\u0646\u062a\s+\u0628\u062a\u0639\u0645\u0644\u0647)?$/u.test(message.trim())) return true;
   const compact = normalized.replace(/[.!؟?،,\s]+/g, " ").trim();
   if (/^(continue|resume|go on|keep going|carry on|continue from here|resume from here)$/i.test(compact)) return true;
   return /^(كمل|كمّل|كمل من هنا|كمّل من هنا|كمل اللي كنت بتعمله|كمّل اللي كنت بتعمله)$/i.test(message.trim());
@@ -220,5 +221,6 @@ function isContinuationRequest(message: string, normalized: string): boolean {
 function stripContinuationWords(message: string): string {
   return message
     .replace(/^\s*(continue|resume|go on|keep going|carry on|continue from here|resume from here)\b[:\s-]*/i, "")
+    .replace(/^\s*(?:\u0643\u0645\u0644|\u0643\u0645\u0651\u0644)(?:\s+\u0645\u0646\s+\u0647\u0646\u0627|\s+\u0627\u0644\u0644\u064a\s+\u0643\u0646\u062a\s+\u0628\u062a\u0639\u0645\u0644\u0647)?[:\s-]*/u, "")
     .replace(/^\s*(كمل|كمّل)(\s+من\s+هنا|\s+اللي\s+كنت\s+بتعمله)?[:\s-]*/i, "");
 }

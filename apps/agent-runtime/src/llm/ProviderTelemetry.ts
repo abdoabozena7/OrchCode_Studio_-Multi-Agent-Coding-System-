@@ -5,7 +5,7 @@ import type {
   ProviderTruthTelemetry,
   SanitizedProviderConfig
 } from "@hivo/protocol";
-import type { EmbeddingRequest, EmbeddingResponse, LlmProvider, LlmRequest } from "./LlmProvider.js";
+import { ProviderFailureError, type EmbeddingRequest, type EmbeddingResponse, type LlmProvider, type LlmRequest } from "./LlmProvider.js";
 
 type ProviderTelemetryInput = {
   mode: AgentRuntimeMode;
@@ -27,6 +27,7 @@ export class ProviderTelemetryRecorder {
   private totalProviderContextChars = 0;
   private perPromptProviderLatencyMs: ProviderPromptLatency[] = [];
   private lastError: string | undefined;
+  private lastFailure: ProviderTruthTelemetry["lastFailure"];
   private finalResponseSource: ProviderTruthTelemetry["finalResponseSource"] = "none";
   private terminalFailure: string | undefined;
 
@@ -51,10 +52,12 @@ export class ProviderTelemetryRecorder {
         maxOutputTokens: request.maxOutputTokens
       });
       this.providerResponseCount += 1;
+      this.lastFailure = undefined;
       if (!this.terminalFailure) this.lastError = undefined;
       return result;
     } catch (error) {
       this.markProviderError(error);
+      if (error instanceof ProviderFailureError) this.lastFailure = error.providerFailure;
       const timeout = isProviderTimeout(error);
       this.recordLatency({
         requestId,
@@ -111,6 +114,7 @@ export class ProviderTelemetryRecorder {
       providerRequestRefs: this.perPromptProviderLatencyMs.map((entry) => entry.requestId),
       finalResponseSource: this.finalResponseSource,
       terminalFailure: this.terminalFailure,
+      lastFailure: this.lastFailure,
       modelCertification: this.input.modelCertification ?? {
         status: "uncertified",
         routerModel: this.input.providerConfig?.routerModel ?? modelName,
@@ -149,6 +153,10 @@ export class TelemetryLlmProvider implements LlmProvider {
     private readonly inner: LlmProvider,
     private readonly recorder: ProviderTelemetryRecorder
   ) {}
+
+  get structuredRetryPolicy() {
+    return this.inner.structuredRetryPolicy;
+  }
 
   generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
     return this.recorder.measure("structured", input, () => this.inner.generateStructured<T>(input, schema));

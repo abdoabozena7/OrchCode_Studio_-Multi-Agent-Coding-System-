@@ -14,6 +14,7 @@ import { createSimpleDelegationDecision } from "../runtime/delegation.js";
 import { EventBus } from "../runtime/EventBus.js";
 import { SessionManager } from "../runtime/SessionManager.js";
 import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
+import { CROSSY_SINGLE_FILE_PROMPT } from "./fixtures/crossySingleFilePrompt.js";
 
 const validProviderConfig: SanitizedProviderConfig = {
   providerType: "ollama",
@@ -319,6 +320,87 @@ test("orchestrated build handoff continues through local run when provider swarm
 
   await rm(workspace, { recursive: true, force: true });
   await rm(storageDir, { recursive: true, force: true });
+});
+
+test("RunEngine respects cloud retry policy through telemetry without outer plan repairs", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-run-engine-cloud-policy-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-run-engine-cloud-policy-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  try {
+    const provider = new CloudPolicyRunPlanFailureProvider();
+    const sessionManager = new SessionManager(storageDir, new EventBus());
+    await sessionManager.load();
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => provider
+    });
+    const prompt = "Create app.ts with one exported greeting function.";
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "simple_mode",
+      accessProfile: "full_access",
+      userPrompt: prompt
+    });
+
+    const turn = await runtime.runTurn(created.sessionId, prompt);
+    const session = runtime.getSession(created.sessionId);
+
+    assert.equal(turn.status, "failed");
+    assert.equal(provider.runPlanCalls, 1);
+    assert.equal(session?.providerTelemetry?.repairAttempts, 0);
+    assert.match(provider.runPlanRequest?.userPrompt ?? "", /BEGIN QUOTED SOURCE REQUEST[\s\S]*Create app\.ts[\s\S]*END QUOTED SOURCE REQUEST/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("full Crossy single-file request uses read-only preflight and proposes only index.html", async () => {
+  const workspace = path.join(os.tmpdir(), `hivo-crossy-single-file-${Date.now()}`);
+  const storageDir = path.join(os.tmpdir(), `hivo-crossy-single-file-storage-${Date.now()}`);
+  await mkdir(workspace, { recursive: true });
+  try {
+    const provider = new SingleFileCrossyProvider();
+    const sessionManager = new SessionManager(storageDir, new EventBus());
+    await sessionManager.load();
+    const runtime = new AgentRuntime({ ...loadConfig(), storageDir }, sessionManager, {
+      providerFactory: () => provider
+    });
+    const created = await runtime.createSession({
+      workspacePath: workspace,
+      mode: "real_provider",
+      providerConfig: validProviderConfig,
+      executionMode: "auto_mode",
+      accessProfile: "full_access",
+      userPrompt: CROSSY_SINGLE_FILE_PROMPT
+    });
+
+    const turn = await runtime.runTurn(created.sessionId, CROSSY_SINGLE_FILE_PROMPT);
+    const session = runtime.getSession(created.sessionId);
+    const proposal = session?.patchProposals[0];
+
+    assert.equal(turn.status, "needs_approval", JSON.stringify({
+      sessionStatus: session?.status,
+      lastMessage: session?.messages.at(-1)?.content,
+      terminalFailure: session?.providerTelemetry?.terminalFailure,
+      lastError: session?.providerTelemetry?.lastError,
+      runSummary: session?.runSummary
+    }));
+    assert.equal(session?.resolvedExecutionMode, "orchestrated_mode");
+    assert.equal(session?.agentName, "Provider-Backed Swarm + Local Run");
+    assert.deepEqual(proposal?.filesChanged.map((file) => file.path), ["index.html"]);
+    assert.deepEqual(proposal?.artifacts?.map((artifact) => artifact.path), ["index.html"]);
+    assert.match(proposal?.artifacts?.[0]?.content ?? "", /three@0\.160\.0\/build\/three\.min\.js/);
+    const diffWithoutAllowedCdn = (proposal?.unifiedDiff ?? "").replaceAll("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js", "");
+    assert.doesNotMatch(diffWithoutAllowedCdn, /package\.json|src\/main\.js|src\/styles\.css|README\.md|\bnpm\b|\bvite\b/i);
+    assert.equal(session?.orchestration?.agentRuns.some((agent) => /Executor|Integrator/i.test(agent.role)), false);
+    assert.ok(session?.runSummary?.gates.some((gate) => gate.name === "Read-only swarm handoff"));
+    assert.ok(provider.calls.some((call) => call.systemPrompt.includes("sole write-author")));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(storageDir, { recursive: true, force: true });
+  }
 });
 
 test("provider-backed swarm records artifact evidence without local inventory synthesis", async () => {
@@ -735,6 +817,38 @@ class SwarmHandoffBuildProvider implements LlmProvider {
   }
 }
 
+class CloudPolicyRunPlanFailureProvider extends ScriptedProvider {
+  readonly structuredRetryPolicy = { maxKernelRepairAttempts: 0 };
+  runPlanCalls = 0;
+  runPlanRequest?: LlmRequest;
+
+  override async generateStructured<T>(input: LlmRequest, schema: unknown): Promise<T> {
+    if (autoTestSchemaName(schema) === "run-plan") {
+      this.runPlanCalls += 1;
+      this.runPlanRequest = input;
+      throw new Error("real_provider.invalid_json: forced run-plan failure");
+    }
+    return super.generateStructured<T>(input, schema);
+  }
+}
+
+class SingleFileCrossyProvider extends SwarmHandoffBuildProvider {
+  override async generateText(input: LlmRequest): Promise<string> {
+    if (!input.systemPrompt.includes("sole write-author")) return super.generateText(input);
+    this.calls.push(input);
+    return [
+      "BEGIN HIVO ARTIFACT: index.html",
+      "<!doctype html>",
+      "<html><head><meta charset=\"utf-8\"><style>html,body,canvas{margin:0;width:100%;height:100%}</style></head>",
+      "<body><canvas id=\"game\"></canvas>",
+      "<script src=\"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js\"></script>",
+      "<script>const canvas=document.getElementById('game');canvas.dataset.smoke=String(Boolean(window.THREE));</script>",
+      "</body></html>",
+      "END HIVO ARTIFACT"
+    ].join("\n");
+  }
+}
+
 class ProviderSimpleRouteNewFileProvider implements LlmProvider {
   private readonly delegate = new ScriptedProvider();
   calls: LlmRequest[] = [];
@@ -988,6 +1102,8 @@ function extractAutoTestOriginalRequest(input: LlmRequest) {
     : undefined;
   const original = context?.original_user_request;
   if (typeof original === "string" && original.trim()) return original.trim();
+  const quotedMatch = input.userPrompt.match(/BEGIN QUOTED SOURCE REQUEST\s*([\s\S]*?)\s*END QUOTED SOURCE REQUEST/i);
+  if (quotedMatch?.[1]?.trim()) return quotedMatch[1].trim();
   const reasoningMatch = input.userPrompt.match(/Understand this user turn and choose its first reasoning step:\s*([\s\S]*?)\n\nReturn \{ understanding, step \}\./i);
   if (reasoningMatch?.[1]?.trim()) return reasoningMatch[1].trim();
   const userRequestMatch = input.userPrompt.match(/User request:\s*([\s\S]*?)(?:\n(?:Unified intent understanding|Workspace snapshot|Project intake|Plan|Context pack):|$)/i);

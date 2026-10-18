@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentRuntimeSession, SanitizedProviderConfig } from "@hivo/protocol";
 import { loadConfig } from "../config.js";
-import { userPromptWithContext, type LlmProvider, type LlmRequest } from "../llm/LlmProvider.js";
+import { ProviderFailureError, userPromptWithContext, type LlmProvider, type LlmRequest } from "../llm/LlmProvider.js";
 import { OllamaProvider } from "../llm/OllamaProvider.js";
 import { ScriptedProvider } from "./fixtures/ScriptedProvider.js";
 import { TelemetryLlmProvider, createProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
@@ -77,6 +77,193 @@ test("Ollama provider uses configured provider timeout as the local request floo
   }
 });
 
+test("Ollama local structured calls use bounded JSON mode and the requested output budget", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  try {
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({ message: { content: '{"answer":"ok"}' } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "gemma4:e4b", 20_000, undefined, 16_384);
+    const result = await provider.generateStructured(
+      { systemPrompt: "Return JSON.", userPrompt: "Return answer=ok.", maxOutputTokens: 64 },
+      {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"]
+      }
+    );
+
+    const options = requestBody?.options as Record<string, unknown> | undefined;
+    assert.deepEqual(result, { answer: "ok" });
+    assert.equal(requestBody?.format, "json");
+    assert.equal(options?.num_predict, 64);
+    assert.ok(Number(options?.num_ctx) <= 16_384);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Ollama cloud-tagged structured calls retain native schema mode", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  try {
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({ message: { content: '{"answer":"ok"}' } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "gpt-oss:120b-cloud", 20_000, undefined, 16_384);
+    const result = await provider.generateStructured(
+      { systemPrompt: "Return JSON.", userPrompt: "Return answer=ok.", maxOutputTokens: 64 },
+      {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"]
+      }
+    );
+
+    assert.deepEqual(result, { answer: "ok" });
+    assert.equal(typeof requestBody?.format, "object");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Ollama cloud structured repair makes at most one JSON repair request", async () => {
+  const originalFetch = globalThis.fetch;
+  const requestBodies: Array<Record<string, unknown>> = [];
+  let calls = 0;
+  try {
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      const content = calls === 1 ? "{\"answer\":\"broken" : "{\"answer\":\"ok\"}";
+      return new Response(JSON.stringify({ message: { content } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "gpt-oss:120b-cloud", 20_000);
+    const result = await provider.generateStructured(
+      { systemPrompt: "Return JSON.", userPrompt: "Return answer=ok.", maxOutputTokens: 64 },
+      {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"]
+      }
+    );
+
+    assert.deepEqual(result, { answer: "ok" });
+    assert.equal(calls, 2);
+    assert.equal(typeof requestBodies[0]?.format, "object");
+    assert.equal(requestBodies[1]?.format, "json");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Ollama cloud malformed JSON fails after the bounded repair without a long backoff", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const startedAt = Date.now();
+  try {
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ message: { content: "{\"answer\":\"broken" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "gpt-oss:120b-cloud", 20_000);
+    await assert.rejects(
+      () => provider.generateStructured(
+        { systemPrompt: "Return JSON.", userPrompt: "Return answer=ok.", maxOutputTokens: 64 },
+        { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] }
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof ProviderFailureError);
+        assert.equal(error.providerFailure.failureClass, "invalid_json");
+        assert.equal(error.providerFailure.attempts, 2);
+        assert.equal(error.providerFailure.retryable, true);
+        return true;
+      }
+    );
+    assert.equal(calls, 2);
+    assert.ok(Date.now() - startedAt < 1_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Ollama cloud transport failures do not fan out into automatic retries", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error("network unavailable");
+    }) as typeof fetch;
+
+    const provider = new OllamaProvider("http://127.0.0.1:11434", "gpt-oss:120b-cloud", 20_000);
+    await assert.rejects(
+      () => provider.generateStructured(
+        { systemPrompt: "Return JSON.", userPrompt: "Return answer=ok.", maxOutputTokens: 64 },
+        { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] }
+      ),
+      /network unavailable/
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("provider telemetry exposes actionable structured failure details", async () => {
+  class FailedProvider implements LlmProvider {
+    async generateStructured<T>(): Promise<T> {
+      throw new ProviderFailureError("real_provider.invalid_json: malformed", {
+        failureClass: "invalid_json",
+        stage: "route",
+        attempts: 1,
+        elapsedMs: 1234,
+        responseExcerpt: "{broken",
+        retryable: true
+      });
+    }
+
+    async generateText(): Promise<string> {
+      throw new Error("not used");
+    }
+  }
+
+  const recorder = createProviderTelemetryRecorder({
+    mode: "real_provider",
+    providerConfig: validOllamaConfig,
+    activeProviderSource: "explicit_cli"
+  });
+  const provider = new TelemetryLlmProvider(new FailedProvider(), recorder);
+  await assert.rejects(provider.generateStructured({ systemPrompt: "system", userPrompt: "route" }, { type: "object" }));
+  assert.deepEqual(recorder.snapshot().lastFailure, {
+    failureClass: "invalid_json",
+    stage: "route",
+    attempts: 1,
+    elapsedMs: 1234,
+    responseExcerpt: "{broken",
+    retryable: true
+  });
+});
+
 test("provider telemetry records prompt context and response character volume", async () => {
   const recorder = createProviderTelemetryRecorder({
     mode: "real_provider",
@@ -131,6 +318,7 @@ test("provider telemetry clears recovered last errors after a later provider suc
   assert.equal(snapshot.providerFailureCount, 1);
   assert.equal(snapshot.providerResponseCount, 1);
   assert.equal(snapshot.lastError, undefined);
+  assert.equal(snapshot.lastFailure, undefined);
   assert.equal(snapshot.perPromptProviderLatencyMs.some((entry) => entry.status === "failure"), true);
 });
 

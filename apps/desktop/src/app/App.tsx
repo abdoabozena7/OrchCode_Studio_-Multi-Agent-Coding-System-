@@ -48,6 +48,7 @@ import type {
   ModelProviderConfig,
   ModelProviderType,
   PatchChangeStats,
+  ProviderFailureDetails,
   RunMode,
   RunPhase,
   SafetySettings,
@@ -56,7 +57,7 @@ import type {
   WorkspaceInfo
 } from "@hivo/protocol";
 import { accessProfileDefaults, defaultSafetySettings } from "@hivo/protocol";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   approveRuntimePatch,
   assertRuntimeAvailable,
@@ -101,6 +102,7 @@ import {
 } from "../lib/tauri";
 import { canAutoRunRuntimeCommand, executeRuntimeCommandRequest } from "../lib/terminalOrchestrator";
 import { buildPrimaryActivityItems, describeCurrentStep, describeNextProgressStep, type ActivityStreamItem, type ActiveRuntimeCommand } from "./activityStream";
+import { buildReasoningTimeline, isArabicReasoningSession, type ReasoningTimelineItem } from "./reasoningTimeline";
 import { SwarmDock } from "./SwarmDock";
 
 type ProviderPreset = {
@@ -1285,6 +1287,16 @@ export function App() {
     await submitPrompt();
   }
 
+  async function retryProviderTurn() {
+    if (agentBusy || !runtimeSession) return;
+    const lastUserMessage = [...runtimeSession.messages].reverse().find((message) => message.role === "user");
+    if (!lastUserMessage?.content) {
+      setMessage("There is no user request to retry.");
+      return;
+    }
+    await submitPrompt(lastUserMessage.content);
+  }
+
   async function refreshRuntimeSession() {
     if (!runtimeSession) return;
     try {
@@ -2075,6 +2087,7 @@ export function App() {
                       setAgentPanelOpen(true);
                     }
                   }}
+                  onStartNewSession={handleNewChat}
                 />
               ) : hasAgentSidePanel ? (
                 <AgentIconRow
@@ -2143,6 +2156,7 @@ export function App() {
                 canReconnect={Boolean(runtimeSessionToken || getPersistedSessionToken(sessionTokens, runtimeSession.id)?.token)}
                 activeRuntimeCommand={activeRuntimeCommand}
                 agentBusy={agentBusy}
+                onRetryProvider={() => void retryProviderTurn()}
                 onOpenActivity={() => setActivityOpen(true)}
                 onOpenDiff={() => setBottomView("diff")}
                 onQuickReply={submitPrompt}
@@ -2408,9 +2422,9 @@ export function App() {
               </button>
             </div>
 
-            <DrawerSection title="Live Progress">
+            <DrawerSection title="Reasoning steps">
               {runtimeSession ? (
-                <LiveProgressDrawer session={runtimeSession} />
+                <LiveProgressDrawer session={runtimeSession} activeCommand={activeRuntimeCommand} />
               ) : (
                 <p className="muted">No active run progress yet.</p>
               )}
@@ -2469,7 +2483,7 @@ export function App() {
                   <dd>{getReasoningTraceSummary(runtimeSession).budgetLabel}</dd>
                   <dt>Final Source</dt>
                   <dd>{runtimeSession.providerTelemetry?.finalResponseSource ?? "none"}</dd>
-                  <dt>Request Count</dt>
+                  <dt>Outer Runtime Calls</dt>
                   <dd>{runtimeSession.providerTelemetry?.providerRequestCount ?? 0}</dd>
                   <dt>Planning Provider</dt>
                   <dd>{describePlanningProviderRequest(runtimeSession)}</dd>
@@ -2925,12 +2939,16 @@ function SessionTruthStrip({
   session,
   connectionState,
   sseState,
-  canReconnect
+  canReconnect,
+  onRetryProvider,
+  retryDisabled
 }: {
   session: AgentRuntimeSession;
   connectionState: "connected" | "disconnected";
   sseState: RuntimeEventSubscriptionState;
   canReconnect: boolean;
+  onRetryProvider: () => void;
+  retryDisabled: boolean;
 }) {
   const provider = session.providerTelemetry;
   const certification = getProviderCertification(provider);
@@ -2944,6 +2962,12 @@ function SessionTruthStrip({
           <strong>{status.label}</strong>
           <span>{describeSseState(sseState, canReconnect)}</span>
         </div>
+        {provider?.lastFailure?.retryable && status.kind === "failed" ? (
+          <button className="thread-status-retry" type="button" onClick={onRetryProvider} disabled={retryDisabled}>
+            <RefreshCw size={14} aria-hidden="true" />
+            {retryDisabled ? "Retrying..." : "Retry provider"}
+          </button>
+        ) : null}
       </div>
       <div className="thread-status-meta">
         <span>Runtime {connectionState === "connected" ? "connected" : "disconnected"}</span>
@@ -2957,7 +2981,7 @@ function SessionTruthStrip({
         <span>Router {certification.routerModel}</span>
         <span>Certification {certification.status}</span>
         <span>Gates {certification.certifiedGates.join(", ") || "none"}</span>
-        <span>Requests {provider?.providerRequestCount ?? 0}</span>
+        <span>Runtime Calls {provider?.providerRequestCount ?? 0}</span>
         <span>Reasoning {provider?.reasoningAttempts ?? 0}</span>
         <span>Repairs {provider?.repairAttempts ?? 0}</span>
         <span>Tools {reasoning.toolRounds}</span>
@@ -2968,6 +2992,7 @@ function SessionTruthStrip({
         <span>Verifier {reasoning.verifierVerdict}</span>
         <span>Final {provider?.finalResponseSource ?? "none"}</span>
         {provider?.lastError ? <span>Error {truncateLabel(provider.lastError, 64)}</span> : null}
+        {provider?.lastFailure ? <span title={provider.lastFailure.responseExcerpt}>Failure {describeProviderFailure(provider.lastFailure)}</span> : null}
       </div>
     </section>
   );
@@ -2980,6 +3005,7 @@ function ThreadFeed({
   canReconnect,
   activeRuntimeCommand,
   agentBusy,
+  onRetryProvider,
   onOpenActivity,
   onOpenDiff,
   onQuickReply,
@@ -2995,6 +3021,7 @@ function ThreadFeed({
   canReconnect: boolean;
   activeRuntimeCommand: ActiveRuntimeCommand | null;
   agentBusy: boolean;
+  onRetryProvider: () => void;
   onOpenActivity: () => void;
   onOpenDiff: () => void;
   onQuickReply: (message: string) => void | Promise<void>;
@@ -3009,8 +3036,6 @@ function ThreadFeed({
   const lastAssistantMessageIndex = findLastMessageIndex(session.messages, "assistant");
   const latestAssistantMessageId =
     lastAssistantMessageIndex >= 0 ? session.messages[lastAssistantMessageIndex]?.id ?? "" : "";
-  const waitingForAssistant = agentBusy && lastUserMessageIndex > lastAssistantMessageIndex;
-  const currentActivityStep = describeCurrentStep(session, connectionState, activeRuntimeCommand);
   const workspaceMismatch = Boolean(
     activeWorkspacePath
       && normalizeWorkspacePath(activeWorkspacePath) !== normalizeWorkspacePath(session.workspacePath)
@@ -3049,7 +3074,14 @@ function ThreadFeed({
 
   return (
     <div ref={threadFeedRef} className={`thread-feed ${rtlTextMode ? "rtl-text-mode" : ""}`}>
-      <SessionTruthStrip session={session} connectionState={connectionState} sseState={sseState} canReconnect={canReconnect} />
+      <SessionTruthStrip
+        session={session}
+        connectionState={connectionState}
+        sseState={sseState}
+        canReconnect={canReconnect}
+        onRetryProvider={onRetryProvider}
+        retryDisabled={agentBusy}
+      />
       {workspaceMismatch ? (
         <section className="workspace-mismatch-banner">
           <strong>Different workspace chat</strong>
@@ -3059,8 +3091,7 @@ function ThreadFeed({
           <small title={session.workspacePath}>{session.workspacePath}</small>
         </section>
       ) : null}
-      <RecursiveThoughtChain session={session} onOpenActivity={onOpenActivity} />
-      {session.messages.map((message) => {
+      {session.messages.map((message, messageIndex) => {
         const isUserMessage = message.role === "user";
         const shouldAnimateAssistantMessage =
           message.role === "assistant"
@@ -3069,43 +3100,44 @@ function ThreadFeed({
           && isFreshMessage(message.createdAt)
           && !animatedAssistantMessageIdsRef.current.has(message.id);
         return (
-          <div key={message.id} className={`thread-entry ${message.role}`}>
-            {!isUserMessage ? (
-              <div className="thread-entry-header">
-                <div className="thread-entry-label">{message.role === "assistant" ? session.agentName : "System"}</div>
+          <Fragment key={message.id}>
+            <div className={`thread-entry ${message.role}`}>
+              {!isUserMessage ? (
+                <div className="thread-entry-header">
+                  <div className="thread-entry-label">{message.role === "assistant" ? session.agentName : "System"}</div>
+                </div>
+              ) : null}
+              {isUserMessage ? (
+                <div className="thread-entry-bubble user-bubble">
+                  <MessageMarkdown text={message.content} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
+                </div>
+              ) : (
+                <AnimatedMessageMarkdown
+                  text={message.content}
+                  workspacePath={session.workspacePath}
+                  onOpenFileReference={onOpenFileReference}
+                  animate={shouldAnimateAssistantMessage}
+                  onAnimationComplete={() => {
+                    animatedAssistantMessageIdsRef.current.add(message.id);
+                  }}
+                />
+              )}
+              <div className="thread-entry-footer">
+                <span>{formatMessageTime(message.createdAt)}</span>
+                <CopyMessageButton text={message.content} />
               </div>
-            ) : null}
-            {isUserMessage ? (
-              <div className="thread-entry-bubble user-bubble">
-                <MessageMarkdown text={message.content} workspacePath={session.workspacePath} onOpenFileReference={onOpenFileReference} />
-              </div>
-            ) : (
-              <AnimatedMessageMarkdown
-                text={message.content}
-                workspacePath={session.workspacePath}
-                onOpenFileReference={onOpenFileReference}
-                animate={shouldAnimateAssistantMessage}
-                onAnimationComplete={() => {
-                  animatedAssistantMessageIdsRef.current.add(message.id);
-                }}
-              />
-            )}
-            <div className="thread-entry-footer">
-              <span>{formatMessageTime(message.createdAt)}</span>
-              <CopyMessageButton text={message.content} />
             </div>
-          </div>
+            {messageIndex === lastUserMessageIndex ? (
+              <ReasoningTimelineView
+                session={session}
+                activeCommand={activeRuntimeCommand}
+                mode="inline"
+                onOpenActivity={onOpenActivity}
+              />
+            ) : null}
+          </Fragment>
         );
       })}
-
-      {waitingForAssistant ? (
-        <div className="thread-entry assistant pending-assistant-entry">
-          <div className="thread-entry-header">
-            <div className="thread-entry-label">{session.agentName}</div>
-          </div>
-          <LiveRunStatus item={currentActivityStep} onOpenActivity={onOpenActivity} />
-        </div>
-      ) : null}
 
       {!isExplainOnly ? (
         <>
@@ -3308,6 +3340,192 @@ function LiveRunStatus({
       </div>
     </div>
   );
+}
+
+type ReasoningTimelineViewProps = {
+  session: AgentRuntimeSession;
+  activeCommand?: ActiveRuntimeCommand | null;
+  mode: "inline" | "drawer";
+  onOpenActivity?: () => void;
+};
+
+function ReasoningTimelineView({ session, activeCommand, mode, onOpenActivity }: ReasoningTimelineViewProps) {
+  const timeline = useMemo(() => buildReasoningTimeline(session, activeCommand), [
+    activeCommand?.requestId,
+    activeCommand?.sessionId,
+    session.id,
+    session.status,
+    session.progressEvents,
+    session.reasoningSummaries,
+    session.latestDecisionPipeline,
+    session.swarmState,
+    session.recursiveSwarmRunState,
+    session.runSummary
+  ]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setExpandedIds(new Set());
+  }, [session.id]);
+
+  useEffect(() => {
+    if (!timeline.active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [timeline.active]);
+
+  if (!timeline.items.length && session.status !== "running") return null;
+
+  const limit = mode === "drawer" ? 36 : 10;
+  const currentId = timeline.current.id;
+  const durableItems = timeline.items.filter((item) => item.id !== currentId || item.children.length > 0);
+  const flattened = flattenReasoningTimelineItems(durableItems, expandedIds);
+  const visibleRows = limitTimelineRows(flattened, limit);
+  const hiddenCount = Math.max(0, flattened.length - visibleRows.length);
+  const elapsed = timeline.active ? formatElapsedSince(timeline.startedAt, now) : null;
+
+  function toggleRow(itemId: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
+
+  return (
+    <section className={`reasoning-timeline ${mode}`} aria-label={timeline.title}>
+      <header className="reasoning-timeline-header">
+        <div className="reasoning-timeline-heading">
+          <span className="reasoning-timeline-eyebrow">
+            {elapsed ? `Working for ${elapsed}` : timeline.title}
+          </span>
+          <strong>{timeline.title}</strong>
+          <span>{timeline.subtitle}</span>
+        </div>
+        {mode === "inline" && onOpenActivity ? (
+          <button className="activity-link" onClick={onOpenActivity} type="button">Details</button>
+        ) : null}
+      </header>
+
+      <div className="reasoning-timeline-list">
+        {visibleRows.map(({ item, depth }) => (
+          <ReasoningTimelineRow
+            key={item.id}
+            item={item}
+            depth={depth}
+            expanded={expandedIds.has(item.id)}
+            onToggle={() => toggleRow(item.id)}
+            arabic={isArabicReasoningSession(session)}
+          />
+        ))}
+        {hiddenCount ? (
+          <div className="reasoning-timeline-more">
+            +{hiddenCount} {isArabicReasoningSession(session) ? "خطوة مخفية" : "more step(s)"}
+          </div>
+        ) : null}
+        <div className={`reasoning-timeline-current ${timeline.active ? "running" : "completed"}`} aria-live="polite">
+          <span className="reasoning-timeline-current-icon"><Bot size={14} /></span>
+          <div>
+            <strong>{timeline.current.title}</strong>
+            <span>{timeline.current.summary}</span>
+            {timeline.nextStepTitle ? (
+              <small>{isArabicReasoningSession(session) ? "التالي" : "Next"}: {timeline.nextStepTitle}</small>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReasoningTimelineRow({
+  item,
+  depth,
+  expanded,
+  onToggle,
+  arabic
+}: {
+  item: ReasoningTimelineItem;
+  depth: number;
+  expanded: boolean;
+  onToggle: () => void;
+  arabic: boolean;
+}) {
+  const expandable = Boolean(item.children.length || item.facts.length || item.targetFiles.length || item.rationale);
+  return (
+    <div className={`reasoning-timeline-item ${item.status}`} style={{ "--reasoning-depth": depth } as CSSProperties}>
+      <button
+        className="reasoning-timeline-row"
+        onClick={expandable ? onToggle : undefined}
+        type="button"
+        disabled={!expandable}
+        aria-expanded={expandable ? expanded : undefined}
+      >
+        {item.children.length ? (
+          expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+        ) : (
+          <span className="reasoning-timeline-spacer" />
+        )}
+        <span className={`reasoning-timeline-status ${item.status}`} />
+        <span className="reasoning-timeline-copy">
+          <strong>{item.title}</strong>
+          <small>{formatReasoningItemMeta(item, arabic)}</small>
+        </span>
+      </button>
+      {expanded ? (
+        <div className="reasoning-timeline-detail">
+          <p>{item.rationale ?? item.summary}</p>
+          <div className="reasoning-timeline-facts">
+            {item.facts.map((fact) => <span key={fact}>{fact}</span>)}
+            {item.targetFiles.slice(0, 6).map((file) => <span key={file}>{file}</span>)}
+            {item.children.length ? (
+              <span>{item.children.length} {arabic ? "مهمة فرعية" : "child task(s)"}</span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function flattenReasoningTimelineItems(
+  items: ReasoningTimelineItem[],
+  expandedIds: Set<string>,
+  depth = 0
+): Array<{ item: ReasoningTimelineItem; depth: number }> {
+  const result: Array<{ item: ReasoningTimelineItem; depth: number }> = [];
+  for (const item of items) {
+    result.push({ item, depth });
+    if (expandedIds.has(item.id)) {
+      result.push(...flattenReasoningTimelineItems(item.children, expandedIds, depth + 1));
+    }
+  }
+  return result;
+}
+
+function limitTimelineRows<T>(rows: T[], limit: number) {
+  if (rows.length <= limit) return rows;
+  return [rows[0]!, ...rows.slice(-(limit - 1))];
+}
+
+function formatReasoningItemMeta(item: ReasoningTimelineItem, arabic: boolean) {
+  const metrics: string[] = [];
+  if (item.subtitle) metrics.push(item.subtitle);
+  if (item.thoughtCount) metrics.push(arabic ? `تفكير ${item.thoughtCount} مرة` : `Thought ${item.thoughtCount} time(s)`);
+  if (item.fileCount) metrics.push(arabic ? `عرض ${item.fileCount} ملف` : `Viewed ${item.fileCount} file(s)`);
+  if (item.commandCount) metrics.push(arabic ? `شغّل ${item.commandCount} أمر` : `Ran ${item.commandCount} command(s)`);
+  return metrics.join(" | ") || item.summary;
+}
+
+function formatElapsedSince(startedAt: string | undefined, now: number) {
+  const parsed = startedAt ? Date.parse(startedAt) : Number.NaN;
+  if (!Number.isFinite(parsed)) return "0s";
+  const elapsedSeconds = Math.max(0, Math.floor((now - parsed) / 1_000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
+  const minutes = Math.floor(elapsedSeconds / 60);
+  return `${minutes}m ${String(elapsedSeconds % 60).padStart(2, "0")}s`;
 }
 
 function stripProgressRationalePrefix(text: string) {
@@ -4610,41 +4828,14 @@ function ProgressHoverRail({
   );
 }
 
-function LiveProgressDrawer({ session }: { session: AgentRuntimeSession }) {
-  const events = session.progressEvents;
-  if (!events.length) {
-    return (
-      <div className="timeline-list drawer-progress-list">
-        <div className="timeline-item running">
-          <span className="timeline-dot" />
-          <div>
-            <strong>Starting local run</strong>
-            <span>Starting local run...</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="timeline-list drawer-progress-list">
-      {events.map((event) => (
-        <div key={event.id} className={`timeline-item ${event.status}`}>
-          <span className="timeline-dot" />
-          <div>
-            <strong>{event.taskTitle ?? event.stage}</strong>
-            <span>
-              {event.agentName ? `${event.agentName} | ` : ""}
-              {event.summary}
-            </span>
-            <small>
-              {event.stage}
-              {event.targetFiles.length ? ` | ${event.targetFiles.slice(0, 4).join(", ")}` : ""}
-            </small>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function LiveProgressDrawer({
+  session,
+  activeCommand
+}: {
+  session: AgentRuntimeSession;
+  activeCommand?: ActiveRuntimeCommand | null;
+}) {
+  return <ReasoningTimelineView session={session} activeCommand={activeCommand} mode="drawer" />;
 }
 
 function AgentIconRow({
@@ -6069,6 +6260,8 @@ export function isTerminalOrOperatorHeldSession(session: Pick<AgentRuntimeSessio
     || session.status === "failed_provider"
     || session.status === "blocked"
     || session.status === "needs_approval"
+    || session.status === "paused"
+    || session.status === "pausing"
     || session.status === "expired"
     || session.lifecycleStage === "BLOCKED"
     || session.lifecycleStage === "FAILED"
@@ -6124,6 +6317,8 @@ function humanSessionStatus(
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
     return "Needs attention";
   }
+  if (session.status === "paused" || session.status === "pausing") return "Paused at checkpoint";
+  if (session.status === "resuming") return "Resuming from checkpoint";
   if (session.status === "needs_approval") return "Waiting for operator review";
   if (session.status === "completed") return "Done";
   if (session.status === "running") return "Working on your request";
@@ -6144,6 +6339,9 @@ function describeOperatorHeadline(session: AgentRuntimeSession, connectionState:
   }
   if (session.status === "blocked" || session.lifecycleStage === "BLOCKED") {
     return session.runToGreen?.blockerReason ?? "The run needs attention before it can continue.";
+  }
+  if (session.status === "paused" || session.status === "pausing") {
+    return "The recursive run is held at a durable checkpoint. Continue resumes its pending queue.";
   }
   if (session.status === "failed_provider") {
     return "The real provider failed or was unavailable, and no mock response was used.";
@@ -6252,7 +6450,12 @@ function describeVerificationState(session: AgentRuntimeSession) {
 function describeProviderTruth(session: AgentRuntimeSession) {
   const truth = session.providerTelemetry;
   if (!truth) return "No provider telemetry recorded yet.";
-  return `provider | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | reasoning ${truth.reasoningAttempts} | repairs ${truth.repairAttempts} | final ${truth.finalResponseSource} | prompt ${formatCount(truth.totalProviderPromptChars ?? 0)} chars | response ${formatCount(truth.totalProviderResponseChars ?? 0)} chars`;
+  return `provider | ${truth.providerName}${truth.modelName ? `/${truth.modelName}` : ""} | outer calls ${truth.providerRequestCount}/${truth.providerResponseCount}/${truth.providerFailureCount}/${truth.providerTimeoutCount} req/res/err/timeout | reasoning ${truth.reasoningAttempts} | repairs ${truth.repairAttempts} | final ${truth.finalResponseSource} | prompt ${formatCount(truth.totalProviderPromptChars ?? 0)} chars | response ${formatCount(truth.totalProviderResponseChars ?? 0)} chars`;
+}
+
+function describeProviderFailure(failure: ProviderFailureDetails) {
+  const stage = failure.stage ? ` at ${failure.stage}` : "";
+  return `${failure.failureClass}${stage}, ${failure.attempts} attempt${failure.attempts === 1 ? "" : "s"}, ${formatCount(failure.elapsedMs)}ms`;
 }
 
 function describePlanningProviderRequest(session: AgentRuntimeSession) {
@@ -6299,6 +6502,8 @@ function sessionStatusTruth(session: AgentRuntimeSession): { label: string; kind
   if (session.status === "failed") return { label: "Session failed", kind: "failed" };
   if (session.status === "expired") return { label: "Session expired", kind: "failed" };
   if (session.status === "blocked") return { label: "Session blocked", kind: "blocked" };
+  if (session.status === "paused" || session.status === "pausing") return { label: "Session paused", kind: "blocked" };
+  if (session.status === "resuming") return { label: "Session resuming", kind: "running" };
   if (session.status === "needs_approval") return { label: "Review required", kind: "blocked" };
   if (session.status === "running") return { label: "Session running", kind: "running" };
   return { label: `Session ${humanizeRuntimeStatus(session.status)}`, kind: "running" };
@@ -6330,6 +6535,12 @@ function humanizeRuntimeStatus(status: string) {
       return "completed";
     case "running":
       return "running";
+    case "pausing":
+      return "pausing";
+    case "paused":
+      return "paused at checkpoint";
+    case "resuming":
+      return "resuming";
     case "failed":
       return "failed";
     case "expired":

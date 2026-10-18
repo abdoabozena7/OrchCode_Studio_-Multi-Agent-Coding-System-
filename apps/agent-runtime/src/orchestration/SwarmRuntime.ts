@@ -45,6 +45,7 @@ export type SwarmRuntimeOptions = {
   providerName?: string;
   modelName?: string;
   responseLanguage?: "ar" | "en";
+  providerReadOnlyPreflight?: boolean;
 };
 
 export type SwarmPlanResult = {
@@ -67,6 +68,7 @@ export class SwarmAutopilotRuntime {
   private readonly providerName?: string;
   private readonly modelName?: string;
   private readonly responseLanguage?: "ar" | "en";
+  private readonly providerReadOnlyPreflight: boolean;
 
   constructor(options: SwarmRuntimeOptions) {
     this.workspacePath = path.resolve(options.workspacePath);
@@ -80,6 +82,7 @@ export class SwarmAutopilotRuntime {
     this.providerName = options.providerName;
     this.modelName = options.modelName;
     this.responseLanguage = options.responseLanguage;
+    this.providerReadOnlyPreflight = options.providerReadOnlyPreflight === true;
   }
 
   async plan(userGoal: string): Promise<SwarmPlanResult> {
@@ -98,7 +101,7 @@ export class SwarmAutopilotRuntime {
     const memory = await this.loadOrRebuildIndex(run);
     const previousFailures = await getFailedAttempts(this.workspacePath, this.memoryDir);
     await this.transition(run, "complexity_estimation", "Estimating complexity and repository scope for internal swarm staffing.");
-    const staffingPlan = new SwarmStaffingPlanner().createPlan({
+    const proposedStaffingPlan = new SwarmStaffingPlanner().createPlan({
       swarmRunId: run.id,
       userGoal: planningGoal,
       mode: this.mode,
@@ -107,6 +110,9 @@ export class SwarmAutopilotRuntime {
       previousFailures,
       explicitAgentLimit: this.explicitAgentLimit
     });
+    const staffingPlan = this.providerReadOnlyPreflight
+      ? asProviderReadOnlyPreflightStaffingPlan(proposedStaffingPlan)
+      : proposedStaffingPlan;
 
     await this.transition(run, "staffing_plan", "Internal swarm staffing plan created.");
     const staffingPlanRef = await this.artifactStore.saveStaffingPlan(staffingPlan);
@@ -1012,6 +1018,39 @@ function buildFinalReport(input: {
     `- Provider-backed read-only workers were used for eligible non-writing work items; write-capable work remains guarded by approval and validation gates.`,
     `- Any high-risk write path still requires approval and validation before integration.`
   ].join("\n");
+}
+
+function asProviderReadOnlyPreflightStaffingPlan(plan: StaffingPlan): StaffingPlan {
+  const removedWriteRoles = plan.executor_count > 0 || plan.integrator_count > 0;
+  const specialistAgents = plan.specialist_agents.filter((specialist) => specialist.read_only);
+  const roleCounts: StaffingPlan["role_counts"] = {
+    ...plan.role_counts,
+    ExecutorAgent: 0,
+    IntegratorAgent: 0
+  };
+  for (const specialist of plan.specialist_agents) {
+    if (!specialist.read_only) roleCounts[specialist.role] = 0;
+  }
+  const totalReadOnlyAgents = Math.max(1, Object.values(roleCounts).reduce((sum, count) => sum + Math.max(0, count), 0));
+  return {
+    ...plan,
+    recommended_total_logical_agents: totalReadOnlyAgents,
+    max_parallel_agents: Math.max(1, Math.min(plan.max_parallel_agents, totalReadOnlyAgents)),
+    executor_count: 0,
+    integrator_count: 0,
+    specialist_agents: specialistAgents,
+    role_counts: roleCounts,
+    executor_limit: 0,
+    read_only_ratio: 1,
+    write_agent_limit: 0,
+    requires_human_approval: true,
+    reasoning: removedWriteRoles
+      ? [
+          ...plan.reasoning,
+          "This provider-backed swarm is a read-only preflight; Executor and Integrator work is reserved for the separately gated workspace writer before scheduling."
+        ]
+      : plan.reasoning
+  };
 }
 
 async function optional<T>(loader: () => Promise<T>): Promise<T | undefined> {

@@ -332,6 +332,66 @@ test("generated artifact outputs become real create-file patch proposals", () =>
   assert.equal(bridged.patchCandidates[0]?.artifacts?.find((artifact) => artifact.path === targetPath)?.content, html);
 });
 
+test("recursive pause writes a hydrateable checkpoint and resume skips completed work", async () => {
+  const base = recursiveProvider();
+  const provider: LlmProvider & { requests: LlmRequest[] } = {
+    requests: base.requests,
+    async generateStructured<T>(request: LlmRequest, schema: unknown): Promise<T> {
+      const name = schema && typeof schema === "object" && "name" in schema
+        ? String((schema as { name: unknown }).name)
+        : "";
+      if (name === "atomicity_assessment") await new Promise((resolve) => setTimeout(resolve, 12));
+      return base.generateStructured<T>(request, schema);
+    },
+    generateText: base.generateText
+  };
+  const orchestrator = new RecursiveSwarmOrchestrator({
+    provider,
+    options: { maxDepth: 3, maxAgents: 8, enableGoalKeeper: false, enableParallelExecution: false }
+  });
+  await orchestrator.createRootAndGoalKeeper("Complete a small task", "session_pause");
+  const running = orchestrator.run("Complete a small task", "session_pause");
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  orchestrator.requestPause("test_pause");
+  const paused = await running;
+  assert.equal(paused.runState.runtimeStatus, "paused");
+  assert.equal(paused.runState.checkpoint?.resumable, true);
+  assert.ok(paused.runState.checkpoint?.tree);
+
+  const resumed = new RecursiveSwarmOrchestrator({
+    provider,
+    options: { maxDepth: 3, maxAgents: 8, enableGoalKeeper: false, enableParallelExecution: false }
+  });
+  resumed.hydrateFromCheckpoint(paused.runState.checkpoint!);
+  const completed = await resumed.run("ignored after hydration", "session_pause");
+  assert.equal(completed.runState.runtimeStatus, "completed");
+  assert.ok(completed.totalExecutions >= 1);
+});
+
+test("final collector rejects summary-only output for an artifact contract", async () => {
+  const provider = recursiveProvider();
+  const result = await new RecursiveSwarmOrchestrator({
+    provider,
+    options: { maxDepth: 2, maxAgents: 8, enableGoalKeeper: false, enableParallelExecution: false }
+  }).run("Create a complete single-file index.html artifact", "session_artifact_contract");
+  assert.equal(result.tree.status, "failed");
+  assert.match(result.unresolvedErrors.join("\n"), /artifact_required_but_missing/);
+});
+
+test("provider failures are grouped and do not fan out repair calls", async () => {
+  const provider = recursiveProvider();
+  const children = [
+    makeTestNode({ id: "failed_a", status: "failed", errorSummary: "429 rate limit from provider" }),
+    makeTestNode({ id: "failed_b", status: "failed", errorSummary: "429 rate limit from provider" })
+  ];
+  const result = await new HierarchicalCollector({ provider, enableErrorRecovery: true }).collect(
+    children,
+    "Review the current implementation"
+  );
+  assert.equal(result.unresolvedErrors.length, 1);
+  assert.equal(provider.requests.length, 0);
+});
+
 test("orchestrator self-similar provider split detection executes atomically", async () => {
   const orchestrator = new RecursiveSwarmOrchestrator({
     provider: recursiveProvider({

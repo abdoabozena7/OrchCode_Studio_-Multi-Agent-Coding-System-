@@ -122,6 +122,21 @@ export async function runRuntimeTurn(sessionId: string, message: string, session
   });
 }
 
+export async function pauseRuntimeSession(sessionId: string, sessionToken?: string) {
+  return runtimeFetch<AgentRuntimeSession>(`/sessions/${sessionId}/recursive/pause`, {
+    method: "POST",
+    sessionToken
+  });
+}
+
+export async function resumeRuntimeSession(sessionId: string, message = "continue", sessionToken?: string) {
+  return runtimeFetch<{ sessionId: string; status: AgentRuntimeSession["status"] }>(`/sessions/${sessionId}/recursive/resume`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+    sessionToken
+  });
+}
+
 export async function sendRuntimeAgentMessage(sessionId: string, agentId: string, message: string, sessionToken?: string) {
   return runtimeFetch<AgentScopedMessageResponse>(`/sessions/${sessionId}/agents/${encodeURIComponent(agentId)}/messages`, {
     method: "POST",
@@ -310,7 +325,10 @@ export function subscribeRuntimeEvents(
     source.onopen = () => {
       lastError = undefined;
       const state = emitState("connected");
-      if (reconnecting) handlers.onReconnect?.(state);
+      if (reconnecting) {
+        void getRuntimeSession(sessionId, sessionToken).then((session) => handlers.onSession?.(session)).catch(() => undefined);
+        handlers.onReconnect?.(state);
+      }
     };
     source.onmessage = (raw) => {
       try {

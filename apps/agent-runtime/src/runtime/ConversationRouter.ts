@@ -33,6 +33,7 @@ type RouteSignals = {
   hasRiskyMultiFileScope: boolean;
   hasSmallChangeCue: boolean;
   hasRecursiveFactoryCue: boolean;
+  hasSingleFileArtifactContract: boolean;
 };
 
 export function routeConversation(message: string): ConversationRouteDecision {
@@ -51,6 +52,10 @@ export function routeConversation(message: string): ConversationRouteDecision {
 
   if (signals.hasDeepArchitectureQuestion && !signals.hasCodeAction) {
     return decision("swarm_readonly", "high", language, normalizedPrompt, workspacePrompt, "The request asks about orchestration, agents, or runtime architecture and should use read-only multi-agent evidence.");
+  }
+
+  if (signals.hasSingleFileArtifactContract) {
+    return decision("orchestrated_run", "high", language, normalizedPrompt, workspacePrompt, "The request creates one constrained artifact and needs read-only orchestration followed by one gated writer.");
   }
 
   if (signals.hasRecursiveFactoryCue || (signals.hasCodeAction && signals.hasProjectObject && signals.tokenCount >= 70)) {
@@ -118,7 +123,8 @@ function collectRouteSignals(text: string): RouteSignals {
       hasDeepArchitectureQuestion: true,
       hasRiskyMultiFileScope: false,
       hasSmallChangeCue: false,
-      hasRecursiveFactoryCue: false
+      hasRecursiveFactoryCue: false,
+      hasSingleFileArtifactContract: false
     };
   }
   const hasQuestion = /[?\u061fطں]/.test(text)
@@ -153,6 +159,12 @@ function collectRouteSignals(text: string): RouteSignals {
   const hasRecursiveFactoryCue =
     /\b(recursive factory|recursive execution|multi[- ]step|staged approval|product spec|product specification|technical plan first|plan before execution|large feature|large project|end[- ]to[- ]end feature)\b/i.test(text)
     || (hasCodeAction && hasRiskyMultiFileScope && /\b(build|implement|fix|refactor|migrate|create)\b/i.test(text));
+  const hasSingleFileArtifactContract = hasCodeAction
+    && /\bindex\.html\b/i.test(text)
+    && (
+      /\b(?:single|one|only one)[ -](?:self-contained[ -])?(?:html[ -])?file\b/i.test(text)
+      || /\bno (?:external )?project structure\b|\bno separate (?:js|javascript|css|files?)\b|\bno npm\b/i.test(text)
+    );
   return {
     tokenCount,
     hasQuestion,
@@ -166,7 +178,8 @@ function collectRouteSignals(text: string): RouteSignals {
     hasDeepArchitectureQuestion,
     hasRiskyMultiFileScope,
     hasSmallChangeCue,
-    hasRecursiveFactoryCue
+    hasRecursiveFactoryCue,
+    hasSingleFileArtifactContract
   };
 }
 

@@ -49,7 +49,7 @@ export class HierarchicalCollector {
       if (child.errorSummary) {
         errors.push(`[${child.name}] ${child.errorSummary}`);
       }
-      if (child.status === "failed") {
+      if (child.status === "failed" && !isProviderFailureMessage(child.errorSummary ?? "")) {
         errors.push(`[${child.name}] Failed with status: failed`);
       }
       if (child.collectResult?.unresolvedErrors) {
@@ -57,7 +57,12 @@ export class HierarchicalCollector {
       }
     }
 
-    for (const error of errors) {
+    const uniqueErrors = [...new Set(errors)];
+    const providerErrors = uniqueErrors.filter(isProviderFailureMessage);
+    if (providerErrors.length > 0) {
+      unresolvedErrors.push(`provider_failure_group: ${providerErrors.length} provider-related node error(s); repair fan-out suppressed. ${providerErrors[0]}`);
+    }
+    for (const error of uniqueErrors.filter((candidate) => !isProviderFailureMessage(candidate))) {
       if (this.enableErrorRecovery) {
         const resolution = await this.tryResolveError(error, parentGoal);
         if (resolution) {
@@ -270,4 +275,8 @@ Can this error be resolved automatically? If yes, describe the resolution. If no
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isProviderFailureMessage(value: string): boolean {
+  return /provider_(?:failed|unavailable)|provider.*(?:failed|unavailable|rate limit)|\b429\b|rate limit/i.test(value);
 }

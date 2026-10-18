@@ -10,11 +10,95 @@ import type {
 } from "@hivo/protocol";
 import type { LlmProvider, LlmRequest } from "../llm/LlmProvider.js";
 import { userPromptWithContext } from "../llm/LlmProvider.js";
+import { TelemetryLlmProvider, createProviderTelemetryRecorder } from "../llm/ProviderTelemetry.js";
 import { rebuildRepoIndex } from "../memory/RepoIndexer.js";
 import { EvidenceStore } from "../runtime/EvidenceStore.js";
-import { ReasoningKernelFailure, runAdaptiveReasoningTurn } from "../runtime/ReasoningKernel.js";
+import { ReasoningKernelFailure, runAdaptiveReasoningTurn, understandAndDirectTurn } from "../runtime/ReasoningKernel.js";
 import { ReasoningToolDispatcher } from "../runtime/ReasoningToolDispatcher.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
+import { CROSSY_SINGLE_FILE_PROMPT } from "./fixtures/crossySingleFilePrompt.js";
+
+test("provider retry policy prevents the reasoning kernel from adding a second cloud repair loop", async () => {
+  class FastCloudFailureProvider implements LlmProvider {
+    readonly structuredRetryPolicy = { maxKernelRepairAttempts: 0 };
+    structuredCalls = 0;
+
+    async generateStructured<T>(): Promise<T> {
+      this.structuredCalls += 1;
+      throw new Error("real_provider.invalid_json: malformed structured JSON");
+    }
+
+    async generateText(): Promise<string> {
+      throw new Error("generateText should not be reached");
+    }
+  }
+
+  const inner = new FastCloudFailureProvider();
+  const recorder = createProviderTelemetryRecorder({ mode: "real_provider" });
+  const provider = new TelemetryLlmProvider(inner, recorder);
+  await assert.rejects(
+    () => runAdaptiveReasoningTurn({
+      provider,
+      message: "Build the requested workspace artifact.",
+      sessionId: "session_fast_cloud_failure"
+    }),
+    /reasoning_kernel\.provider_failed_after_retries/
+  );
+  assert.equal(inner.structuredCalls, 1);
+  assert.equal(recorder.snapshot().providerRequestCount, 1);
+  assert.equal(recorder.snapshot().repairAttempts, 0);
+});
+
+test("full Crossy request remains quoted routing data and is restored after provider validation", async () => {
+  class CapturingRouteProvider implements LlmProvider {
+    requests: LlmRequest[] = [];
+
+    async generateStructured<T>(input: LlmRequest): Promise<T> {
+      this.requests.push(input);
+      return {
+        understanding: {
+          originalRequest: "__HIVO_SOURCE_REQUEST__",
+          cleanedRequest: "Build one self-contained index.html Three.js game through the workspace workflow.",
+          language: "english",
+          intentKind: "workspace_action",
+          route: "orchestrated_run",
+          needsWorkspace: true,
+          goal: "Create one validated index.html artifact.",
+          ambiguities: [],
+          requiredEvidence: ["workspace state"],
+          risk: "medium",
+          confidence: "high",
+          rationale: "The request creates a constrained workspace artifact."
+        },
+        step: {
+          id: "route_single_file_artifact",
+          kind: "final",
+          rationale: "Hand off to orchestrated execution.",
+          toolRequests: [],
+          missingFacts: [],
+          successCriteria: ["One index.html patch is proposed."]
+        }
+      } as T;
+    }
+
+    async generateText(): Promise<string> {
+      throw new Error("generateText should not be reached");
+    }
+  }
+
+  const provider = new CapturingRouteProvider();
+  const result = await understandAndDirectTurn({ provider, message: CROSSY_SINGLE_FILE_PROMPT });
+  const prompt = provider.requests[0]?.userPrompt ?? "";
+  const quotedStart = prompt.indexOf("BEGIN QUOTED SOURCE REQUEST");
+  const quotedEnd = prompt.indexOf("END QUOTED SOURCE REQUEST");
+
+  assert.equal(result.understanding.originalRequest, CROSSY_SINGLE_FILE_PROMPT);
+  assert.equal(result.understanding.cleanedRequest.includes("Return ONLY"), false);
+  assert.ok(quotedStart >= 0 && quotedEnd > quotedStart);
+  assert.equal(prompt.slice(0, quotedStart).includes("Return ONLY the final complete code"), false);
+  assert.equal(prompt.slice(quotedStart, quotedEnd).includes("Return ONLY the final complete code"), true);
+  assert.equal(prompt.match(/BEGIN QUOTED SOURCE REQUEST/g)?.length, 1);
+});
 
 test("adaptive reasoning executes provider-requested search and read tools before final answer", async () => {
   const workspace = await fixture();
